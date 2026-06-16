@@ -1,0 +1,11 @@
+CC ?= i686-w64-mingw32-gcc
+CFLAGS ?= -std=c99 -O2 -Wall -Wextra -mwindows
+LIBS = -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs
+
+all: pexcraft.exe
+
+pexcraft.exe: main.c $(wildcard src/*/*.c) src/common/common.h
+	$(CC) $(CFLAGS) main.c -o $@ $(LIBS)
+
+clean:
+	rm -f pexcraft.exe
