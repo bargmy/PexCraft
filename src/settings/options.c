@@ -14,10 +14,12 @@ static void set_default_options(void) {
     g_opts.invert_mouse = 0;
     g_opts.render_distance = 0;
     g_opts.view_bobbing = 1;
-    g_opts.anaglyph = 0;
-    g_opts.limit_framerate = 0;
+    g_opts.anaglyph = 0; /* V-Sync */
+    g_opts.max_fps = 0;  /* unlimited */
     g_opts.difficulty = 2;
     g_opts.fancy_graphics = 1;
+    g_opts.fullscreen = 0;
+    g_opts.show_fps = 0;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "Default");
     g_opts.last_server[0] = 0;
     for (int i = 0; i < 10; i++) g_opts.keys[i] = default_keys[i];
@@ -49,9 +51,12 @@ static void load_options(void) {
         else if (!strcmp(k, "viewDistance")) g_opts.render_distance = atoi(v) & 3;
         else if (!strcmp(k, "bobView")) g_opts.view_bobbing = !strcmp(v, "true");
         else if (!strcmp(k, "anaglyph3d")) g_opts.anaglyph = !strcmp(v, "true");
-        else if (!strcmp(k, "limitFramerate")) g_opts.limit_framerate = !strcmp(v, "true");
+        else if (!strcmp(k, "limitFramerate")) { if (!strcmp(v, "true")) g_opts.max_fps = 60; }
+        else if (!strcmp(k, "maxFps")) g_opts.max_fps = atoi(v);
         else if (!strcmp(k, "difficulty")) g_opts.difficulty = atoi(v) & 3;
         else if (!strcmp(k, "fancyGraphics")) g_opts.fancy_graphics = !strcmp(v, "true");
+        else if (!strcmp(k, "fullscreen") || !strcmp(k, "enableFullscreen")) g_opts.fullscreen = !strcmp(v, "true");
+        else if (!strcmp(k, "showFps") || !strcmp(k, "showFPSCounter")) g_opts.show_fps = !strcmp(v, "true");
         else if (!strcmp(k, "skin")) snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", v);
         else if (!strcmp(k, "lastServer")) snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", v);
         else if (!strncmp(k, "key_", 4)) {
@@ -77,9 +82,11 @@ static void save_options(void) {
     fprintf(f, "viewDistance:%d\n", g_opts.render_distance);
     fprintf(f, "bobView:%s\n", g_opts.view_bobbing ? "true" : "false");
     fprintf(f, "anaglyph3d:%s\n", g_opts.anaglyph ? "true" : "false");
-    fprintf(f, "limitFramerate:%s\n", g_opts.limit_framerate ? "true" : "false");
+    fprintf(f, "maxFps:%d\n", g_opts.max_fps);
     fprintf(f, "difficulty:%d\n", g_opts.difficulty);
     fprintf(f, "fancyGraphics:%s\n", g_opts.fancy_graphics ? "true" : "false");
+    fprintf(f, "fullscreen:%s\n", g_opts.fullscreen ? "true" : "false");
+    fprintf(f, "showFps:%s\n", g_opts.show_fps ? "true" : "false");
     fprintf(f, "skin:%s\n", g_opts.skin);
     fprintf(f, "lastServer:%s\n", g_opts.last_server);
     const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};
@@ -91,6 +98,13 @@ static float get_option_float(OptionId opt) {
     if (opt == OPT_MUSIC) return g_opts.music;
     if (opt == OPT_SOUND) return g_opts.sound;
     if (opt == OPT_SENSITIVITY) return g_opts.sensitivity;
+    if (opt == OPT_LIMIT_FRAMERATE) {
+        if (g_opts.max_fps <= 0) return 1.0f;
+        float v = (float)(g_opts.max_fps - 1) / 9999.0f;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 0.9999f) v = 0.9999f;
+        return v;
+    }
     return 0.0f;
 }
 
@@ -100,6 +114,14 @@ static void set_option_float(OptionId opt, float v) {
     if (opt == OPT_MUSIC) g_opts.music = v;
     else if (opt == OPT_SOUND) g_opts.sound = v;
     else if (opt == OPT_SENSITIVITY) g_opts.sensitivity = v;
+    else if (opt == OPT_LIMIT_FRAMERATE) {
+        if (v >= 0.9999f) g_opts.max_fps = 0; /* unlimited at slider end */
+        else {
+            g_opts.max_fps = 1 + (int)(v * 9999.0f + 0.5f);
+            if (g_opts.max_fps < 1) g_opts.max_fps = 1;
+            if (g_opts.max_fps > 10000) g_opts.max_fps = 10000;
+        }
+    }
     save_options();
 }
 
@@ -111,6 +133,9 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
             if (v <= 0.0f) snprintf(out, cap, "%s: *yawn*", name);
             else if (v >= 1.0f) snprintf(out, cap, "%s: HYPERSPEED!!!", name);
             else snprintf(out, cap, "%s: %d%%", name, (int)(v * 200.0f));
+        } else if (opt == OPT_LIMIT_FRAMERATE) {
+            if (g_opts.max_fps <= 0) snprintf(out, cap, "%s: Unlimited", name);
+            else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
         } else {
             if (v <= 0.0f) snprintf(out, cap, "%s: OFF", name);
             else snprintf(out, cap, "%s: %d%%", name, (int)(v * 100.0f));
@@ -120,7 +145,9 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
         if (opt == OPT_INVERT_MOUSE) val = g_opts.invert_mouse;
         else if (opt == OPT_VIEW_BOBBING) val = g_opts.view_bobbing;
         else if (opt == OPT_ANAGLYPH) val = g_opts.anaglyph;
-        else if (opt == OPT_LIMIT_FRAMERATE) val = g_opts.limit_framerate;
+        /* Max FPS is a slider, not boolean. */
+        else if (opt == OPT_FULLSCREEN) val = g_opts.fullscreen;
+        else if (opt == OPT_SHOW_FPS) val = g_opts.show_fps;
         snprintf(out, cap, "%s: %s", name, val ? "ON" : "OFF");
     } else if (opt == OPT_RENDER_DISTANCE) {
         snprintf(out, cap, "%s: %s", name, render_distance_names[g_opts.render_distance & 3]);
@@ -135,10 +162,11 @@ static void bump_option(OptionId opt, int delta) {
     if (opt == OPT_INVERT_MOUSE) g_opts.invert_mouse = !g_opts.invert_mouse;
     else if (opt == OPT_RENDER_DISTANCE) g_opts.render_distance = (g_opts.render_distance + delta) & 3;
     else if (opt == OPT_VIEW_BOBBING) g_opts.view_bobbing = !g_opts.view_bobbing;
-    else if (opt == OPT_ANAGLYPH) g_opts.anaglyph = !g_opts.anaglyph;
-    else if (opt == OPT_LIMIT_FRAMERATE) g_opts.limit_framerate = !g_opts.limit_framerate;
+    else if (opt == OPT_ANAGLYPH) { g_opts.anaglyph = !g_opts.anaglyph; apply_vsync_setting(); }
     else if (opt == OPT_DIFFICULTY) g_opts.difficulty = (g_opts.difficulty + delta) & 3;
     else if (opt == OPT_GRAPHICS) g_opts.fancy_graphics = !g_opts.fancy_graphics;
+    else if (opt == OPT_FULLSCREEN) { set_fullscreen_enabled(!g_opts.fullscreen); return; }
+    else if (opt == OPT_SHOW_FPS) g_opts.show_fps = !g_opts.show_fps;
     save_options();
 }
 

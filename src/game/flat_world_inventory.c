@@ -515,6 +515,8 @@ static void reset_flat_player_spawn(void) {
     g_player_pitch = g_player_prev_pitch = 0.0f;
     g_player_on_ground = 1;
     g_distance_walked = g_prev_distance_walked = 0.0f;
+    g_limb_swing = g_prev_limb_swing = 0.0f;
+    g_limb_swing_amount = g_prev_limb_swing_amount = 0.0f;
     g_camera_yaw = g_prev_camera_yaw = 0.0f;
     g_camera_pitch = g_prev_camera_pitch = 0.0f;
     g_hand_swing = g_prev_hand_swing = 0.0f;

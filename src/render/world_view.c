@@ -1,5 +1,7 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+static void draw_source_item_3d_from_atlas(int tile);
+
 static void draw_sky_only(void) {
     draw_gradient(0, 0, g_gui_w, g_gui_h, 0xFF78A7FF, 0xFFC8E6FF);
     draw_gradient(0, g_gui_h / 2, g_gui_w, g_gui_h, 0x00FFFFFF, 0x30FFFFFF);
@@ -58,11 +60,35 @@ static void apply_player_camera(float partial) {
     float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, partial);
     float pitch = g_player_prev_pitch + (g_player_pitch - g_player_prev_pitch) * partial;
 
-    apply_view_bobbing(partial);
-    glTranslatef(0.0f, 0.0f, -0.1f); /* first-person camera nudge from kq.java */
-    glRotatef(pitch, 1.0f, 0.0f, 0.0f);
-    glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);
-    glTranslatef(-x, -y, -z);
+    /* Sneaking lowers the player camera/eye a bit, like the earlier patch. */
+    if (key_down_vk(g_opts.keys[5])) y -= 0.18f;
+
+    if (g_third_person_view) {
+        /* Source reference: B1.0.0 kq.java::g(float), toggled by F5 in
+           Minecraft.java when key 63 is pressed.  The source uses a 4 block
+           third-person distance behind the player's view direction. */
+        float yaw_rad = yaw * (float)M_PI / 180.0f;
+        float pitch_rad = pitch * (float)M_PI / 180.0f;
+        float dist = 4.0f;
+
+        float look_x = -sinf(yaw_rad) * cosf(pitch_rad);
+        float look_y = -sinf(pitch_rad);
+        float look_z =  cosf(yaw_rad) * cosf(pitch_rad);
+
+        float cam_x = x - look_x * dist;
+        float cam_y = y - look_y * dist;
+        float cam_z = z - look_z * dist;
+
+        glRotatef(pitch, 1.0f, 0.0f, 0.0f);
+        glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);
+        glTranslatef(-cam_x, -cam_y, -cam_z);
+    } else {
+        apply_view_bobbing(partial);
+        glTranslatef(0.0f, 0.0f, -0.1f); /* first-person camera nudge from kq.java */
+        glRotatef(pitch, 1.0f, 0.0f, 0.0f);
+        glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);
+        glTranslatef(-x, -y, -z);
+    }
 }
 
 static void terrain_tile_uv(int tile, float *u0, float *v0, float *u1, float *v1) {
@@ -233,8 +259,6 @@ static void draw_break_overlay_cube(float x, float y, float z, int stage) {
 }
 
 static void draw_dropped_items(void) {
-    if (!tex_terrain.id) return;
-    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &g_drops[i];
         if (!e->active) continue;
@@ -242,11 +266,22 @@ static void draw_dropped_items(void) {
         float y = e->prev_y + (e->y - e->prev_y) * g_frame_partial;
         float z = e->prev_z + (e->z - e->prev_z) * g_frame_partial;
         float bob = sinf(((float)e->age + g_frame_partial) / 10.0f + e->rot) * 0.1f + 0.1f;
+
         glPushMatrix();
         glTranslatef(x, y + bob, z);
         glRotatef((((float)e->age + g_frame_partial) / 20.0f + e->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
-        glScalef(0.25f, 0.25f, 0.25f);
-        draw_world_block_id(e->stack.id, -0.5f, -0.5f, -0.5f);
+
+        if ((e->stack.id == BLOCK_GRASS || e->stack.id == BLOCK_DIRT || e->stack.id == BLOCK_BEDROCK) && tex_terrain.id) {
+            glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+            glScalef(0.25f, 0.25f, 0.25f);
+            draw_world_block_id(e->stack.id, -0.5f, -0.5f, -0.5f);
+        } else if (tex_items.id) {
+            /* Source-style dropped non-block item: use the same extruded
+               ItemRenderer geometry as held tools, not terrain cube rendering. */
+            glScalef(0.18f, 0.18f, 0.18f);
+            draw_source_item_3d_from_atlas(item_icon_tile(e->stack.id));
+        }
+
         glPopMatrix();
     }
 }
@@ -372,6 +407,68 @@ static void rebuild_flat_world_geometry_list(void) {
     g_flat_world_geometry_dirty = 0;
 }
 
+
+static void draw_third_person_player(void) {
+    if (!g_third_person_view || !tex_steve.id) return;
+
+    float x = g_player_prev_x + (g_player_x - g_player_prev_x) * g_frame_partial;
+    float eye_y = g_player_prev_y + (g_player_y - g_player_prev_y) * g_frame_partial;
+    float z = g_player_prev_z + (g_player_z - g_player_prev_z) * g_frame_partial;
+    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, g_frame_partial);
+    float pitch = g_player_prev_pitch + (g_player_pitch - g_player_prev_pitch) * g_frame_partial;
+    float feet_y = eye_y - 1.62f;
+
+    /* Source reference: dh.java model animation:
+       arms/legs use cos(limbSwing*0.6662) with opposite phase. */
+    float move = g_prev_limb_swing_amount + (g_limb_swing_amount - g_prev_limb_swing_amount) * g_frame_partial;
+    if (move < 0.0f) move = 0.0f;
+    if (move > 1.0f) move = 1.0f;
+    float limb = g_prev_limb_swing + (g_limb_swing - g_prev_limb_swing) * g_frame_partial;
+    float idle = (float)g_ingame_ticks + g_frame_partial;
+
+    float right_arm_pitch = cosf(limb * 0.6662f + (float)M_PI) * 2.0f * move * 0.5f * 57.29578f;
+    float left_arm_pitch  = cosf(limb * 0.6662f) * 2.0f * move * 0.5f * 57.29578f;
+    float right_leg_pitch = cosf(limb * 0.6662f) * 1.4f * move * 57.29578f;
+    float left_leg_pitch  = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move * 57.29578f;
+
+    float right_arm_roll = (cosf(idle * 0.09f) * 0.05f + 0.05f) * 57.29578f;
+    float left_arm_roll = -right_arm_roll;
+    right_arm_pitch += sinf(idle * 0.067f) * 0.05f * 57.29578f;
+    left_arm_pitch -= sinf(idle * 0.067f) * 0.05f * 57.29578f;
+
+    glPushMatrix();
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_steve.id);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
+
+    /* RenderLiving/ei.java style transform used by the inventory model too:
+       translate to entity feet, rotate 180-yaw, scale model, offset by 24px. */
+    glTranslatef(x, feet_y, z);
+    glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
+    glScalef(-1.0f, -1.0f, 1.0f);
+    glTranslatef(0.0f, -24.0f * 0.0625f - 0.0078125f, 0.0f);
+
+    glColor4f(1, 1, 1, 1);
+    steve_part(16, 16, 0, 0, 0, -4, 0, -2, 8, 12, 4, 0.0f, 0, 0, 0, 0);
+    steve_part(40, 16, -5, 2, 0, -3, -2, -2, 4, 12, 4, 0.0f, 0, right_arm_pitch, 0, right_arm_roll);
+    steve_part(40, 16,  5, 2, 0, -1, -2, -2, 4, 12, 4, 0.0f, 1, left_arm_pitch, 0, left_arm_roll);
+    steve_part(0, 16, -2, 12, 0, -2, 0, -2, 4, 12, 4, 0.0f, 0, right_leg_pitch, 0, 0);
+    steve_part(0, 16,  2, 12, 0, -2, 0, -2, 4, 12, 4, 0.0f, 1, left_leg_pitch, 0, 0);
+    steve_part(0, 0, 0, 0, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, pitch, 0, 0);
+    steve_part(32, 0, 0, 0, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
+
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(1, 1, 1, 1);
+    glPopMatrix();
+}
+
+
 static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
 
@@ -396,6 +493,7 @@ static void draw_flat_test_world(void) {
         glCallList(g_flat_world_display_list);
     }
 
+    draw_third_person_player();
     draw_block_selection_border();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -591,7 +689,7 @@ static void draw_first_person_hand(void) {
 static void draw_ingame_world_view(int with_hand) {
     draw_sky_only();
     draw_flat_test_world();
-    if (with_hand) draw_first_person_hand();
+    if (with_hand && !g_third_person_view) draw_first_person_hand();
     setup_gui_projection();
 }
 

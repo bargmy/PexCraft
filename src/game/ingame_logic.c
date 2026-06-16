@@ -76,6 +76,8 @@ static void ingame_tick(void) {
     g_player_prev_yaw = g_player_yaw;
     g_player_prev_pitch = g_player_pitch;
     g_prev_distance_walked = g_distance_walked;
+    g_prev_limb_swing = g_limb_swing;
+    g_prev_limb_swing_amount = g_limb_swing_amount;
     g_prev_camera_yaw = g_camera_yaw;
     g_prev_camera_pitch = g_camera_pitch;
 
@@ -174,6 +176,16 @@ static void ingame_tick(void) {
     float dz = g_player_z - g_player_prev_z;
     float horizontal = sqrtf(dx * dx + dz * dz);
     g_distance_walked += horizontal * 0.6f;
+
+    /* Source-style smoother limb animation:
+       EntityLiving/ModelBiped receives limb swing and limb amount as smoothed
+       values, not raw one-frame position delta.  The earlier F5 model used the
+       raw delta, which made walking animation jitter/chop. */
+    float target_limb = horizontal * 4.0f;
+    if (target_limb > 1.0f) target_limb = 1.0f;
+    if (!g_player_on_ground) target_limb = 0.0f;
+    g_limb_swing_amount += (target_limb - g_limb_swing_amount) * 0.4f;
+    g_limb_swing += g_limb_swing_amount;
 
     /* eh.java cameraYaw/cameraPitch smoothing used by kq.java view bobbing. */
     float target_yaw = sqrtf(g_player_motion_x * g_player_motion_x + g_player_motion_z * g_player_motion_z);

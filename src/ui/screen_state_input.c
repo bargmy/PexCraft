@@ -252,6 +252,7 @@ static void key_to_control(int vk) {
 }
 
 static void handle_keydown(WPARAM vk) {
+    if (vk == VK_F11) { toggle_fullscreen(); return; }
     if (g_screen == SCREEN_CONTROLS && g_waiting_key >= 0) { key_to_control((int)vk); return; }
 
     if (g_screen == SCREEN_CHAT) {
@@ -276,6 +277,8 @@ static void handle_keydown(WPARAM vk) {
 
     if (g_screen == SCREEN_INGAME) {
         if (vk == VK_ESCAPE) { set_screen(SCREEN_PAUSE); return; }
+        if (vk == VK_F3) { g_debug_menu_shown = !g_debug_menu_shown; return; }
+        if (vk == VK_F5) { g_third_person_view = !g_third_person_view; return; }
         if ((int)vk == g_opts.keys[6]) { inventory_drop_selected_one(); return; }
         if ((int)vk == g_opts.keys[7]) { set_screen(SCREEN_INVENTORY); return; }
         if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; set_screen(SCREEN_CHAT); return; }

@@ -104,6 +104,8 @@ typedef enum OptionId {
     OPT_LIMIT_FRAMERATE,
     OPT_DIFFICULTY,
     OPT_GRAPHICS,
+    OPT_FULLSCREEN,
+    OPT_SHOW_FPS,
     OPT_COUNT
 } OptionId;
 
@@ -126,10 +128,12 @@ typedef struct Options {
     int invert_mouse;
     int render_distance;
     int view_bobbing;
-    int anaglyph;
-    int limit_framerate;
+    int anaglyph; /* repurposed: V-Sync */
+    int max_fps;  /* 1..10000, 0 = unlimited */
     int difficulty;
     int fancy_graphics;
+    int fullscreen;
+    int show_fps;
     char skin[64];
     char last_server[64];
     int keys[10];
@@ -141,6 +145,10 @@ static HDC g_hdc;
 static HGLRC g_glrc;
 static int g_win_w = 854, g_win_h = 480;
 static int g_gui_w = 427, g_gui_h = 240, g_gui_scale = 2;
+static int g_fullscreen_active = 0;
+static DWORD g_windowed_style = 0;
+static DWORD g_windowed_exstyle = 0;
+static RECT g_windowed_rect = {0, 0, 854, 480};
 static int g_mouse_x = 0, g_mouse_y = 0;
 static int g_mouse_down = 0;
 static int g_running = 1;
@@ -256,9 +264,20 @@ static float g_player_yaw = 0.0f, g_player_pitch = 0.0f;
 static float g_player_prev_yaw = 0.0f, g_player_prev_pitch = 0.0f;
 static int g_player_on_ground = 1;
 static float g_distance_walked = 0.0f, g_prev_distance_walked = 0.0f;
+static float g_limb_swing = 0.0f, g_prev_limb_swing = 0.0f;
+static float g_limb_swing_amount = 0.0f, g_prev_limb_swing_amount = 0.0f;
 static float g_camera_yaw = 0.0f, g_prev_camera_yaw = 0.0f;
 static float g_camera_pitch = 0.0f, g_prev_camera_pitch = 0.0f;
 static float g_frame_partial = 0.0f;
+
+/* F3 debug stats and F5 third-person toggle. */
+static int g_debug_fps = 0;
+static int g_debug_min_fps = 0;
+static int g_debug_max_fps = 0;
+static int g_debug_frame_counter = 0;
+static double g_debug_fps_last_time = 0.0;
+static int g_third_person_view = 0;
+static int g_debug_menu_shown = 0;
 static int g_mouse_grabbed = 0;
 static int g_cursor_hidden = 0;
 static int g_recentering_mouse = 0;
@@ -293,10 +312,11 @@ static int title_inited = 0;
 static const char *FONT_CHARS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~";
 static const char *opt_names[OPT_COUNT] = {
     "Music", "Sound", "Invert Mouse", "Sensitivity", "Render Distance",
-    "View Bobbing", "3D Anaglyph", "Limit Framerate", "Difficulty", "Graphics"
+    "View Bobbing", "V-Sync", "Max FPS", "Difficulty", "Graphics",
+    "Enable Fullscreen", "Show FPS Counter"
 };
-static const int opt_is_slider[OPT_COUNT] = {1,1,0,1,0,0,0,0,0,0};
-static const int opt_is_boolean[OPT_COUNT] = {0,0,1,0,0,1,1,1,0,0};
+static const int opt_is_slider[OPT_COUNT] = {1,1,0,1,0,0,0,1,0,0,0,0};
+static const int opt_is_boolean[OPT_COUNT] = {0,0,1,0,0,1,1,0,0,0,1,1};
 static const char *render_distance_names[4] = {"Far", "Normal", "Short", "Tiny"};
 static const char *difficulty_names[4] = {"Peaceful", "Easy", "Normal", "Hard"};
 static const char *key_action_names[10] = {"Forward", "Left", "Back", "Right", "Jump", "Sneak", "Drop", "Inventory", "Chat", "Toggle Fog"};
@@ -313,6 +333,9 @@ static void hud_add_chat(const char *msg);
 static void reset_flat_player_spawn(void);
 static void start_air_swing_once(void);
 static void set_mouse_grabbed(int grabbed);
+static void apply_vsync_setting(void);
+static void set_fullscreen_enabled(int enabled);
+static void toggle_fullscreen(void);
 static void handle_grabbed_mouse_move(int px, int py);
 static void flat_world_reset_blocks(void);
 static void inventory_reset(void);

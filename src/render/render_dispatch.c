@@ -1,6 +1,33 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+static void draw_fps_counter(void) {
+    if (!g_opts.show_fps || g_debug_menu_shown) return;
+    char line[32];
+    snprintf(line, sizeof(line), "FPS: %d", g_debug_fps);
+    draw_text(line, 2, 12, 14737632);
+}
+
+static void update_debug_fps_counter(void) {
+    double t = now_seconds();
+    if (g_debug_fps_last_time <= 0.0) {
+        g_debug_fps_last_time = t;
+        g_debug_frame_counter = 0;
+    }
+
+    g_debug_frame_counter++;
+    double span = t - g_debug_fps_last_time;
+    if (span >= 1.0) {
+        int fps = (int)((double)g_debug_frame_counter / span + 0.5);
+        g_debug_fps = fps;
+        if (g_debug_min_fps == 0 || fps < g_debug_min_fps) g_debug_min_fps = fps;
+        if (fps > g_debug_max_fps) g_debug_max_fps = fps;
+        g_debug_frame_counter = 0;
+        g_debug_fps_last_time = t;
+    }
+}
+
 static void render(float partial) {
+    update_debug_fps_counter();
     g_frame_partial = partial;
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     setup_gui_projection();
@@ -20,5 +47,6 @@ static void render(float partial) {
         case SCREEN_CHAT: draw_chat_screen(); break;
         case SCREEN_NOTICE: draw_notice(); break;
     }
+    draw_fps_counter();
     SwapBuffers(g_hdc);
 }

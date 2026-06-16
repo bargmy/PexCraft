@@ -1,5 +1,96 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+typedef BOOL (WINAPI *PFNWGLSWAPINTERVALEXTPROC_LOCAL)(int interval);
+static PFNWGLSWAPINTERVALEXTPROC_LOCAL g_wgl_swap_interval_ext = NULL;
+static int g_wgl_swap_interval_loaded = 0;
+
+static void apply_vsync_setting(void) {
+    if (!g_wgl_swap_interval_loaded) {
+        g_wgl_swap_interval_ext = (PFNWGLSWAPINTERVALEXTPROC_LOCAL)wglGetProcAddress("wglSwapIntervalEXT");
+        g_wgl_swap_interval_loaded = 1;
+    }
+    if (g_wgl_swap_interval_ext) {
+        g_wgl_swap_interval_ext(g_opts.anaglyph ? 1 : 0);
+    }
+}
+
+static void refresh_window_size_after_mode_change(void) {
+    if (!g_hwnd) return;
+    RECT rc;
+    GetClientRect(g_hwnd, &rc);
+    g_win_w = rc.right - rc.left;
+    g_win_h = rc.bottom - rc.top;
+    if (g_win_w < 1) g_win_w = 1;
+    if (g_win_h < 1) g_win_h = 1;
+    setup_scale();
+    rebuild_screen();
+    if (g_screen == SCREEN_INGAME) set_mouse_grabbed(1);
+}
+
+static void set_fullscreen_enabled(int enabled) {
+    enabled = enabled ? 1 : 0;
+    g_opts.fullscreen = enabled;
+
+    if (!g_hwnd) {
+        save_options();
+        return;
+    }
+    if (enabled == g_fullscreen_active) {
+        save_options();
+        return;
+    }
+
+    set_mouse_grabbed(0);
+
+    if (enabled) {
+        MONITORINFO mi;
+        memset(&mi, 0, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        if (!GetWindowRect(g_hwnd, &g_windowed_rect)) {
+            g_windowed_rect.left = 0;
+            g_windowed_rect.top = 0;
+            g_windowed_rect.right = 854;
+            g_windowed_rect.bottom = 480;
+        }
+        g_windowed_style = (DWORD)GetWindowLongA(g_hwnd, GWL_STYLE);
+        g_windowed_exstyle = (DWORD)GetWindowLongA(g_hwnd, GWL_EXSTYLE);
+
+        if (GetMonitorInfoA(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+            DWORD style = g_windowed_style;
+            DWORD exstyle = g_windowed_exstyle;
+            style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+            style |= WS_POPUP;
+            exstyle &= ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE);
+            SetWindowLongA(g_hwnd, GWL_STYLE, (LONG)style);
+            SetWindowLongA(g_hwnd, GWL_EXSTYLE, (LONG)exstyle);
+            SetWindowPos(g_hwnd, HWND_TOP,
+                         mi.rcMonitor.left, mi.rcMonitor.top,
+                         mi.rcMonitor.right - mi.rcMonitor.left,
+                         mi.rcMonitor.bottom - mi.rcMonitor.top,
+                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            g_fullscreen_active = 1;
+        } else {
+            g_opts.fullscreen = 0;
+        }
+    } else {
+        SetWindowLongA(g_hwnd, GWL_STYLE, (LONG)g_windowed_style);
+        SetWindowLongA(g_hwnd, GWL_EXSTYLE, (LONG)g_windowed_exstyle);
+        SetWindowPos(g_hwnd, NULL,
+                     g_windowed_rect.left, g_windowed_rect.top,
+                     g_windowed_rect.right - g_windowed_rect.left,
+                     g_windowed_rect.bottom - g_windowed_rect.top,
+                     SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        g_fullscreen_active = 0;
+    }
+
+    refresh_window_size_after_mode_change();
+    save_options();
+}
+
+static void toggle_fullscreen(void) {
+    set_fullscreen_enabled(!g_opts.fullscreen);
+}
+
 static int init_gl(HWND hwnd) {
     PIXELFORMATDESCRIPTOR pfd;
     memset(&pfd, 0, sizeof(pfd));
@@ -26,6 +117,7 @@ static int init_gl(HWND hwnd) {
     if (!load_default_textures()) return 0;
     if (g_selected_texpack > 0) apply_texture_pack_index(g_selected_texpack);
     else init_font_widths();
+    apply_vsync_setting();
     return 1;
 }
 
@@ -98,7 +190,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             }
             return 0;
         case WM_KEYDOWN:
-            handle_keydown(wparam);
+            if (wparam != VK_F11 || ((lparam & (1L << 30)) == 0)) handle_keydown(wparam);
             return 0;
         case WM_CHAR:
             handle_char(wparam);
@@ -115,6 +207,21 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
     return DefWindowProcA(hwnd, msg, wparam, lparam);
 }
 
+static void sleep_for_max_fps(double frame_start_time) {
+    if (g_opts.max_fps <= 0) {
+        Sleep(1);
+        return;
+    }
+    double target = 1.0 / (double)g_opts.max_fps;
+    for (;;) {
+        double elapsed = now_seconds() - frame_start_time;
+        double remaining = target - elapsed;
+        if (remaining <= 0.0) break;
+        if (remaining > 0.003) Sleep((DWORD)(remaining * 1000.0) - 1);
+        else Sleep(0);
+    }
+}
+
 static void main_loop(void) {
     MSG msg;
     g_last_time = now_seconds();
@@ -125,7 +232,8 @@ static void main_loop(void) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
-        double t = now_seconds();
+        double frame_start_time = now_seconds();
+        double t = frame_start_time;
         double dt = t - g_last_time;
         if (dt < 0) dt = 0;
         if (dt > 0.25) dt = 0.25;
@@ -140,7 +248,7 @@ static void main_loop(void) {
         }
         float partial = (float)tick_accum;
         render(partial);
-        Sleep(g_opts.limit_framerate ? 16 : 1);
+        sleep_for_max_fps(frame_start_time);
     }
 }
 
@@ -174,6 +282,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
         MessageBoxA(g_hwnd, "PEXCRAFT was unable to start because it failed to initialize OpenGL or load assets.", APP_TITLE, MB_ICONERROR);
         return 3;
     }
+    if (g_opts.fullscreen) set_fullscreen_enabled(1);
     set_screen(SCREEN_TITLE);
     main_loop();
     set_mouse_grabbed(0);

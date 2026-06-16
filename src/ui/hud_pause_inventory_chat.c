@@ -32,19 +32,29 @@ static void draw_hud(void) {
         }
     }
     draw_text(VERSION_TEXT, 2, 2, 16777215);
-    if (GetAsyncKeyState(VK_F3) & 0x8000) {
-        char line[128];
-        snprintf(line, sizeof(line), "Flat 100x100x64 world: %s", g_loaded_world_name[0] ? g_loaded_world_name : "World");
-        draw_text(line, 2, 12, 14737632);
-        char posline[96];
-        snprintf(posline, sizeof(posline), "x: %.2f", g_player_x);
-        draw_text(posline, 2, 64, 14737632);
-        snprintf(posline, sizeof(posline), "y: %.2f", g_player_y);
-        draw_text(posline, 2, 72, 14737632);
-        snprintf(posline, sizeof(posline), "z: %.2f", g_player_z);
-        draw_text(posline, 2, 80, 14737632);
-        snprintf(posline, sizeof(posline), "yaw: %.1f pitch: %.1f", g_player_yaw, g_player_pitch);
-        draw_text(posline, 2, 88, 14737632);
+    if (g_debug_menu_shown) {
+        char line[160];
+        int fps = g_debug_fps;
+        int min_fps = g_debug_min_fps ? g_debug_min_fps : fps;
+        int max_fps = g_debug_max_fps ? g_debug_max_fps : fps;
+
+        int y0 = g_opts.show_fps ? 22 : 12;
+        snprintf(line, sizeof(line), "FPS %d/%d/%d", fps, min_fps, max_fps);
+        draw_text(line, 2, y0, 14737632);
+
+        snprintf(line, sizeof(line), "Position %.2f %.2f %.2f", g_player_x, g_player_y, g_player_z);
+        draw_text(line, 2, y0 + 10, 14737632);
+
+        MEMORYSTATUSEX mem;
+        memset(&mem, 0, sizeof(mem));
+        mem.dwLength = sizeof(mem);
+        unsigned long long used_mb = 0, total_mb = 0;
+        if (GlobalMemoryStatusEx(&mem)) {
+            used_mb = (unsigned long long)((mem.ullTotalPhys - mem.ullAvailPhys) / (1024ULL * 1024ULL));
+            total_mb = (unsigned long long)(mem.ullTotalPhys / (1024ULL * 1024ULL));
+        }
+        snprintf(line, sizeof(line), "Memory usage %lluMB/%lluMB", used_mb, total_mb);
+        draw_text(line, 2, y0 + 20, 14737632);
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);
 }
