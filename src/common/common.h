@@ -10,8 +10,8 @@
 #include <initguid.h>
 #include <wincodec.h>
 #include <shellapi.h>
-#include <gl/gl.h>
-#include <gl/glu.h>
+#include <GL/gl.h>
+#include <GL/glu.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -188,7 +188,10 @@ static int g_ingame_ticks = 0;
 #define BLOCK_GRASS 2
 #define BLOCK_DIRT 3
 #define BLOCK_BEDROCK 7
+#define ITEM_STONE_SWORD 272
 #define ITEM_STONE_SHOVEL 273
+#define ITEM_STONE_PICKAXE 274
+#define ITEM_STONE_AXE 275
 
 typedef struct ItemStack {
     int id;
@@ -230,6 +233,7 @@ static int g_block_hit_delay = 0;
 static float g_hand_swing = 0.0f;
 static float g_prev_hand_swing = 0.0f;
 static int g_hand_swing_ticks = 0;
+static float g_hand_swing_progress = 0.0f;
 static int g_hand_swing_active = 0;
 /* Air-click one-shot swing from the current branch:
    clicking air starts one swing, holding does not loop it. */
@@ -239,6 +243,8 @@ static int g_air_swing_consumed = 0;
 /* Block-breaking swing one-shot while LMB is held: play one full cycle, do not loop/flicker. */
 static int g_break_swing_consumed = 0;
 static int g_break_swing_holding = 0;
+/* Consecutive shovel bonus: first dirt/grass block 50%, second+ 60% while holding. */
+static int g_shovel_combo_count = 0;
 
 /* Minimal Beta 1.0 player/camera state for the flat 100x100x64 in-game test world.
    Names mirror the decompiled fields conceptually:
@@ -320,6 +326,7 @@ static void draw_carried_stack(void);
 static void update_breaking(void);
 static void update_dropped_items(void);
 static int flat_player_aabb_collides(float px, float py, float pz);
+static int flat_player_has_sneak_support(float px, float py, float pz);
 static int flat_block_intersects_player(int bx, int by, int bz);
 static void trigger_hand_swing(void);
 static int item_icon_tile(int id);

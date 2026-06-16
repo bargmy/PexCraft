@@ -23,11 +23,13 @@ static void ingame_tick(void) {
         g_air_swing_ticks++;
         if (g_air_swing_ticks <= 8) {
             g_hand_swing_active = 1;
+            g_hand_swing_progress = (float)g_air_swing_ticks;
             g_hand_swing_ticks = g_air_swing_ticks;
             g_hand_swing = (float)g_air_swing_ticks / 8.0f;
         } else {
             g_air_swing_playing = 0;
             g_air_swing_ticks = 0;
+            g_hand_swing_progress = 0.0f;
             g_hand_swing_ticks = 0;
             g_hand_swing = 0.0f;
             g_prev_hand_swing = 0.0f;
@@ -35,23 +37,35 @@ static void ingame_tick(void) {
     } else if (g_hand_swing_active) {
         g_air_swing_playing = 0;
         g_air_swing_ticks = 0;
-        g_hand_swing_ticks++;
-        if (g_hand_swing_ticks <= 8) {
-            g_hand_swing = (float)g_hand_swing_ticks / 8.0f;
-        } else if (g_break_swing_holding) {
-            /* Keep swinging forever while the player is still mining a block.
-               Reset prev/current together at the loop boundary, so no snap-back interpolation. */
-            g_hand_swing_ticks = 0;
-            g_hand_swing = 0.0f;
-            g_prev_hand_swing = 0.0f;
+
+        if (g_break_swing_holding) {
+            /* Breaking-only: 25% faster, and while looping skip the final 10%
+               of the cycle by looping at 0.90. */
+            g_hand_swing_progress += 1.25f;
+            const float loop_end = 8.0f * 0.90f;
+            if (g_hand_swing_progress >= loop_end) {
+                while (g_hand_swing_progress >= loop_end) g_hand_swing_progress -= loop_end;
+                g_prev_hand_swing = g_hand_swing_progress / 8.0f;
+            }
+            g_hand_swing_ticks = (int)floorf(g_hand_swing_progress);
+            g_hand_swing = g_hand_swing_progress / 8.0f;
         } else {
-            /* Mouse was released: finish the current cycle, then stop cleanly. */
-            g_hand_swing_ticks = 0;
-            g_hand_swing_active = 0;
-            g_hand_swing = 0.0f;
-            g_prev_hand_swing = 0.0f;
+            /* Release/place/air: finish a full normal cycle, then stop cleanly. */
+            g_hand_swing_progress += 1.0f;
+            g_hand_swing_ticks = (int)floorf(g_hand_swing_progress);
+            if (g_hand_swing_ticks <= 8) {
+                g_hand_swing = g_hand_swing_progress / 8.0f;
+                if (g_hand_swing > 1.0f) g_hand_swing = 1.0f;
+            } else {
+                g_hand_swing_progress = 0.0f;
+                g_hand_swing_ticks = 0;
+                g_hand_swing_active = 0;
+                g_hand_swing = 0.0f;
+                g_prev_hand_swing = 0.0f;
+            }
         }
     } else {
+        g_hand_swing_progress = 0.0f;
         g_hand_swing_ticks = 0;
         g_hand_swing = 0.0f;
     }
@@ -80,7 +94,7 @@ static void ingame_tick(void) {
 
     if (jumping && g_player_on_ground) {
         /* hp.java::I() jump impulse in this era. */
-        g_player_motion_y = 0.60f; /* requested jump height */
+        g_player_motion_y = 0.50f; /* requested jump height */
         g_player_on_ground = 0;
     }
 
@@ -100,6 +114,25 @@ static void ingame_tick(void) {
     }
 
     g_player_motion_y -= 0.08f;
+
+    if (sneaking && flat_player_has_sneak_support(g_player_x, g_player_y, g_player_z)) {
+        /* B1.0.0 source behavior (mm.java:249-273): while sneaking, reduce
+           attempted horizontal movement in 0.05 steps until the bounding box
+           still has floor one block below. This acts like a wall at the actual
+           block edge and also catches jump-then-sneak while still close above
+           the ground. */
+        const float step = 0.05f;
+        while (fabsf(g_player_motion_x) > 0.00001f &&
+               !flat_player_has_sneak_support(g_player_x + g_player_motion_x, g_player_y, g_player_z)) {
+            if (fabsf(g_player_motion_x) <= step) g_player_motion_x = 0.0f;
+            else g_player_motion_x += (g_player_motion_x > 0.0f) ? -step : step;
+        }
+        while (fabsf(g_player_motion_z) > 0.00001f &&
+               !flat_player_has_sneak_support(g_player_x, g_player_y, g_player_z + g_player_motion_z)) {
+            if (fabsf(g_player_motion_z) <= step) g_player_motion_z = 0.0f;
+            else g_player_motion_z += (g_player_motion_z > 0.0f) ? -step : step;
+        }
+    }
 
     float old_x = g_player_x;
     g_player_x += g_player_motion_x;

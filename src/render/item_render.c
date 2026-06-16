@@ -3,7 +3,16 @@
 static int item_icon_tile(int id) {
     if (id == BLOCK_GRASS) return 3;
     if (id == BLOCK_DIRT) return 2;
-    if (id == ITEM_STONE_SHOVEL) return 81; /* source ed.java: stone shovel .a(1,5) */
+
+    /* Source ed.java:
+       stone sword  .a(1,4) => tile 65,  item id 272
+       stone shovel .a(1,5) => tile 81,  item id 273
+       stone pick   .a(1,6) => tile 97,  item id 274
+       stone axe    .a(1,7) => tile 113, item id 275 */
+    if (id == ITEM_STONE_SWORD) return 65;
+    if (id == ITEM_STONE_SHOVEL) return 81;
+    if (id == ITEM_STONE_PICKAXE) return 97;
+    if (id == ITEM_STONE_AXE) return 113;
     return 0;
 }
 

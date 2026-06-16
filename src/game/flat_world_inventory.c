@@ -6,7 +6,12 @@ static void stack_clear(ItemStack *s) { if (s) memset(s, 0, sizeof(*s)); }
 
 static int stack_same_item(const ItemStack *a, const ItemStack *b) { return !stack_empty(a) && !stack_empty(b) && a->id == b->id && a->damage == b->damage; }
 
-static int stack_limit_for_id(int id) { if (id == ITEM_STONE_SHOVEL) return 1; (void)id; return ITEM_MAX_STACK; }
+static int stack_limit_for_id(int id) {
+    if (id == ITEM_STONE_SWORD || id == ITEM_STONE_SHOVEL ||
+        id == ITEM_STONE_PICKAXE || id == ITEM_STONE_AXE) return 1;
+    (void)id;
+    return ITEM_MAX_STACK;
+}
 
 static ItemStack make_stack(int id, int count, int damage) { ItemStack s; s.id = id; s.count = count; s.damage = damage; s.pop_time = 0; return s; }
 
@@ -52,12 +57,14 @@ static void flat_world_reset_blocks(void) {
     g_block_hit_delay = 0;
     g_hand_swing = g_prev_hand_swing = 0.0f;
     g_hand_swing_ticks = 0;
+    g_hand_swing_progress = 0.0f;
     g_hand_swing_active = 0;
     g_air_swing_playing = 0;
     g_air_swing_ticks = 0;
     g_air_swing_consumed = 0;
     g_break_swing_consumed = 0;
     g_break_swing_holding = 0;
+    g_shovel_combo_count = 0;
     g_flat_world_geometry_dirty = 1;
 }
 
@@ -83,7 +90,7 @@ static float block_relative_strength(int block_id) {
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (!stack_empty(held) && held->id == ITEM_STONE_SHOVEL &&
         (block_id == BLOCK_DIRT || block_id == BLOCK_GRASS)) {
-        strength *= 1.50f; /* stone shovel: dirt/grass mines 50% faster */
+        strength *= (g_shovel_combo_count <= 0) ? 1.50f : 1.60f; /* only shovel boosts mining */
     }
     return strength;
 }
@@ -95,6 +102,7 @@ static void trigger_hand_swing(void) {
     if (!g_hand_swing_active && g_hand_swing_ticks == 0) {
         g_hand_swing_active = 1;
         g_hand_swing_ticks = 0;
+        g_hand_swing_progress = 0.0f;
         g_hand_swing = 0.0f;
     }
 }
@@ -112,6 +120,30 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
             for (int x = x0; x <= x1; x++) {
                 if (flat_get_block(x, y, z) != 0) return 1;
             }
+        }
+    }
+    return 0;
+}
+
+static int flat_player_has_sneak_support(float px, float py, float pz) {
+    /* Source-style sneaking edge check from B1.0.0 mm.java:249-273.
+       The source reduces X/Z motion in 0.05 steps while the player's bounding
+       box offset downward by 1.0 has no collision. This checks for ANY floor
+       under the current player footprint, so the invisible wall is at the real
+       block edge, not too early. */
+    float feet = py - 1.62f;
+    int floor_y = (int)floorf(feet - 1.0f + 0.001f);
+
+    float minx = px - 0.30f, maxx = px + 0.30f;
+    float minz = pz - 0.30f, maxz = pz + 0.30f;
+    int x0 = (int)floorf(minx + 0.001f);
+    int x1 = (int)floorf(maxx - 0.001f);
+    int z0 = (int)floorf(minz + 0.001f);
+    int z1 = (int)floorf(maxz - 0.001f);
+
+    for (int z = z0; z <= z1; z++) {
+        for (int x = x0; x <= x1; x++) {
+            if (flat_get_block(x, floor_y, z) != 0) return 1;
         }
     }
     return 0;
@@ -148,8 +180,14 @@ static void inventory_reset(void) {
     memset(g_inventory, 0, sizeof(g_inventory));
     stack_clear(&g_carried_stack);
 
-    /* Start inventory: 10 stone shovels, one per slot, so they can be moved
-       into the hotbar. Stone shovel id is 273 in classic Minecraft IDs. */
+    /* Start hotbar stone tool set. Only the stone shovel gets the dirt/grass
+       mining boost; sword/pickaxe/axe are added as usable visible items only. */
+    g_inventory[0] = make_stack(ITEM_STONE_SWORD, 1, 0);
+    g_inventory[1] = make_stack(ITEM_STONE_PICKAXE, 1, 0);
+    g_inventory[2] = make_stack(ITEM_STONE_AXE, 1, 0);
+    g_inventory[3] = make_stack(ITEM_STONE_SHOVEL, 1, 0);
+
+    /* Keep the earlier requested reserve of 10 stone shovels in the main inventory. */
     for (int i = 0; i < 10; i++) {
         g_inventory[9 + i] = make_stack(ITEM_STONE_SHOVEL, 1, 0);
     }
@@ -347,14 +385,20 @@ static void break_target_block(void) {
     flat_set_block(g_break_x, g_break_y, g_break_z, 0);
     int drop = block_drop_id(id);
     if (drop > 0) spawn_item_stack((float)g_break_x + 0.5f, (float)g_break_y + 0.7f, (float)g_break_z + 0.5f, make_stack(drop, 1, 0), 1);
+
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    if (!stack_empty(held) && held->id == ITEM_STONE_SHOVEL &&
+        (id == BLOCK_DIRT || id == BLOCK_GRASS)) {
+        g_shovel_combo_count++;
+    }
 }
 
 static void update_breaking(void) {
     g_prev_break_damage = g_break_damage;
     if (g_block_hit_delay > 0) g_block_hit_delay--;
-    if (!key_down_vk(VK_LBUTTON)) { reset_breaking_state(); return; }
+    if (!key_down_vk(VK_LBUTTON)) { reset_breaking_state(); g_shovel_combo_count = 0; return; }
     FlatRayHit hit = flat_raycast();
-    if (!hit.hit) { reset_breaking_state(); return; }
+    if (!hit.hit) { reset_breaking_state(); g_shovel_combo_count = 0; return; }
     g_break_swing_holding = 1;
     if (!g_hand_swing_active && g_hand_swing_ticks == 0) {
         trigger_hand_swing();
@@ -377,7 +421,7 @@ static void update_breaking(void) {
     }
 }
 
-static void world_left_mouse_released(void) { reset_breaking_state(); g_break_swing_consumed = 0; g_break_swing_holding = 0; }
+static void world_left_mouse_released(void) { reset_breaking_state(); g_break_swing_consumed = 0; g_break_swing_holding = 0; g_shovel_combo_count = 0; }
 
 static void ingame_right_click(void) {
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
@@ -475,11 +519,13 @@ static void reset_flat_player_spawn(void) {
     g_camera_pitch = g_prev_camera_pitch = 0.0f;
     g_hand_swing = g_prev_hand_swing = 0.0f;
     g_hand_swing_ticks = 0;
+    g_hand_swing_progress = 0.0f;
     g_hand_swing_active = 0;
     g_air_swing_playing = 0;
     g_air_swing_ticks = 0;
     g_air_swing_consumed = 0;
     g_break_swing_consumed = 0;
     g_break_swing_holding = 0;
+    g_shovel_combo_count = 0;
 }
 
