@@ -1,6 +1,7 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
 static void rebuild_screen(void);
+
 static void set_screen(ScreenId s) {
     g_screen = s;
     g_waiting_key = -1;
@@ -159,7 +160,7 @@ static void on_button(Button *b) {
         else if (b->id == 0) {
             snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", g_multiplayer_ip);
             save_options();
-            open_notice("Play Multiplayer", "PEXCRAFT Multiplayer is currently not finished, but there", "is some buggy early testing going on.");
+            open_notice("Play Multiplayer", "Minecraft Multiplayer is currently not finished, but there", "is some buggy early testing going on.");
         }
     } else if (g_screen == SCREEN_TEXPACK) {
         if (b->id == 5) ShellExecuteA(NULL, "open", g_texpack_dir, NULL, NULL, SW_SHOWNORMAL);
@@ -197,7 +198,6 @@ static void texpack_mouse_drag(int my) {
     }
 }
 
-
 static void mouse_right_down(int mx, int my) {
     if (g_screen == SCREEN_INVENTORY) { inventory_mouse_click(mx, my, 1); return; }
     if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); ingame_right_click(); return; }
@@ -207,7 +207,12 @@ static void mouse_right_down(int mx, int my) {
 static void mouse_down(int mx, int my) {
     g_mouse_down = 1;
     if (g_screen == SCREEN_INVENTORY) { inventory_mouse_click(mx, my, 0); return; }
-    if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); return; }
+    if (g_screen == SCREEN_INGAME) {
+        set_mouse_grabbed(1);
+        FlatRayHit hit = flat_raycast();
+        if (!hit.hit) start_air_swing_once();
+        return;
+    }
     int hit_button = 0;
     for (int i = 0; i < g_button_count; i++) {
         Button *b = &g_buttons[i];
@@ -227,7 +232,10 @@ static void mouse_down(int mx, int my) {
 
 static void mouse_up(int mx, int my) {
     (void)mx; (void)my;
-    if (g_screen == SCREEN_INGAME) world_left_mouse_released();
+    if (g_screen == SCREEN_INGAME) {
+        world_left_mouse_released();
+        g_air_swing_consumed = 0;
+    }
     g_mouse_down = 0;
     if (g_drag_slider) g_drag_slider->dragging = 0;
     g_drag_slider = NULL;
@@ -330,3 +338,4 @@ static void handle_char(WPARAM ch) {
 static void draw_all_buttons(void) {
     for (int i = 0; i < g_button_count; i++) draw_button(&g_buttons[i]);
 }
+

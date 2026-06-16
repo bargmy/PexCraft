@@ -50,12 +50,12 @@ static void start_world_generation(int slot) {
     } else {
         /* Flat test-world mode: keep the Beta loading flow, but do not run the
            heavy chunk generator.  The in-game renderer below ignores chunk files
-           and displays a fixed 5x5 grass platform using /terrain.png, while this
+           and displays a fixed 100x100x64 grass world using /terrain.png, while this
            still creates a save folder/session/level.dat so the world slot exists. */
         if (dir_exists(g_worldgen.world_dir)) delete_recursive(g_worldgen.world_dir);
         make_dir_recursive(g_worldgen.world_dir);
         write_session_lock(g_worldgen.world_dir);
-        write_level_dat(g_worldgen.world_dir, g_worldgen.world_name, g_worldgen.seed, 0, 1, 0, 0);
+        write_level_dat(g_worldgen.world_dir, g_worldgen.world_name, g_worldgen.seed, 50, 5, 50, 0);
         g_worldgen.existing_world = 1;
         snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
@@ -89,10 +89,11 @@ static void worldgen_tick(void) {
     if (g_worldgen.progress < 100) {
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Saving level");
         unsigned long long sz = world_dir_size_quick(g_worldgen.world_dir);
-        write_level_dat(g_worldgen.world_dir, g_worldgen.world_name, g_worldgen.seed, 0, 1, 0, (long long)sz);
+        write_level_dat(g_worldgen.world_dir, g_worldgen.world_name, g_worldgen.seed, 50, 5, 50, (long long)sz);
         g_worldgen.progress = 100;
         return;
     }
     snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Done!");
     if (++g_worldgen.done_ticks > 12) { enter_world_from_job(); }
 }
+

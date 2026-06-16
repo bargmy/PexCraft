@@ -34,7 +34,7 @@ static void draw_hud(void) {
     draw_text(VERSION_TEXT, 2, 2, 16777215);
     if (GetAsyncKeyState(VK_F3) & 0x8000) {
         char line[128];
-        snprintf(line, sizeof(line), "Flat 5x5 grass world: %s", g_loaded_world_name[0] ? g_loaded_world_name : "World");
+        snprintf(line, sizeof(line), "Flat 100x100x64 world: %s", g_loaded_world_name[0] ? g_loaded_world_name : "World");
         draw_text(line, 2, 12, 14737632);
         char posline[96];
         snprintf(posline, sizeof(posline), "x: %.2f", g_player_x);
@@ -64,7 +64,6 @@ static void draw_pause_screen(void) {
     draw_centered_text("Game menu", g_gui_w / 2, 40, 16777215);
     draw_all_buttons();
 }
-
 
 static void steve_color_for_normal(float nx, float ny, float nz) {
     float shade = 0.82f;
@@ -196,7 +195,7 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
     glDisable(GL_CULL_FACE);
 
     /* char.png has transparent pixels in the second head layer (helmet/hat).
-       PEXCRAFT renders those through the alpha test.  The previous patch
+       Minecraft renders those through the alpha test.  The previous patch
        drew the overlay with blending disabled, so the transparent RGB=0 pixels
        became a solid black cube over Steve's head. */
     glEnable(GL_BLEND);
@@ -286,3 +285,4 @@ static void draw_notice(void) {
     draw_text(g_notice_line2, g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 69, 10526880);
     draw_all_buttons();
 }
+

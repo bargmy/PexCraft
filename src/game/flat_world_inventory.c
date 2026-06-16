@@ -1,30 +1,49 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
 static int stack_empty(const ItemStack *s) { return !s || s->id <= 0 || s->count <= 0; }
+
 static void stack_clear(ItemStack *s) { if (s) memset(s, 0, sizeof(*s)); }
+
 static int stack_same_item(const ItemStack *a, const ItemStack *b) { return !stack_empty(a) && !stack_empty(b) && a->id == b->id && a->damage == b->damage; }
-static int stack_limit_for_id(int id) { (void)id; return ITEM_MAX_STACK; }
+
+static int stack_limit_for_id(int id) { if (id == ITEM_STONE_SHOVEL) return 1; (void)id; return ITEM_MAX_STACK; }
+
 static ItemStack make_stack(int id, int count, int damage) { ItemStack s; s.id = id; s.count = count; s.damage = damage; s.pop_time = 0; return s; }
 
 static int flat_index(int coord) { return coord - FLAT_WORLD_MIN; }
+
 static int flat_y_index(int y) { return y - FLAT_WORLD_Y_MIN; }
+
 static int flat_in_bounds(int x, int y, int z) {
     return y >= FLAT_WORLD_Y_MIN && y <= FLAT_WORLD_Y_MAX &&
            x >= FLAT_WORLD_MIN && x <= FLAT_WORLD_MAX &&
            z >= FLAT_WORLD_MIN && z <= FLAT_WORLD_MAX;
 }
+
 static int flat_get_block(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return 0;
     return g_flat_blocks[flat_y_index(y)][flat_index(z)][flat_index(x)];
 }
+
 static void flat_set_block(int x, int y, int z, int id) {
-    if (flat_in_bounds(x, y, z)) g_flat_blocks[flat_y_index(y)][flat_index(z)][flat_index(x)] = id;
+    if (!flat_in_bounds(x, y, z)) return;
+    int *cell = &g_flat_blocks[flat_y_index(y)][flat_index(z)][flat_index(x)];
+    if (*cell != id) {
+        *cell = id;
+        g_flat_world_geometry_dirty = 1;
+    }
 }
+
 static void flat_world_reset_blocks(void) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     for (int z = 0; z < FLAT_WORLD_SIZE; z++) {
         for (int x = 0; x < FLAT_WORLD_SIZE; x++) {
-            g_flat_blocks[flat_y_index(-1)][z][x] = BLOCK_GRASS;
+            /* 100x100x64 world:
+               y=0 bedrock, y=1..2 dirt, y=3 grass, y=4..63 air. */
+            g_flat_blocks[flat_y_index(0)][z][x] = BLOCK_BEDROCK;
+            g_flat_blocks[flat_y_index(1)][z][x] = BLOCK_DIRT;
+            g_flat_blocks[flat_y_index(2)][z][x] = BLOCK_DIRT;
+            g_flat_blocks[flat_y_index(3)][z][x] = BLOCK_GRASS;
         }
     }
     memset(g_drops, 0, sizeof(g_drops));
@@ -34,23 +53,39 @@ static void flat_world_reset_blocks(void) {
     g_hand_swing = g_prev_hand_swing = 0.0f;
     g_hand_swing_ticks = 0;
     g_hand_swing_active = 0;
+    g_air_swing_playing = 0;
+    g_air_swing_ticks = 0;
+    g_air_swing_consumed = 0;
+    g_break_swing_consumed = 0;
+    g_break_swing_holding = 0;
+    g_flat_world_geometry_dirty = 1;
 }
 
 static int block_drop_id(int block_id) {
     /* ph.java grass drops dirt via of.v.a(0, random). */
     if (block_id == BLOCK_GRASS) return BLOCK_DIRT;
+    if (block_id == BLOCK_BEDROCK) return 0;
     return block_id;
 }
+
 static float block_hardness(int block_id) {
+    if (block_id == BLOCK_BEDROCK) return -1.0f;
     if (block_id == BLOCK_GRASS) return 0.6f; /* of.u.c(0.6F) */
     if (block_id == BLOCK_DIRT) return 0.5f;  /* of.v.c(0.5F) */
     return 1.0f;
 }
+
 static float block_relative_strength(int block_id) {
     float h = block_hardness(block_id);
     if (h < 0.0f) return 0.0f;
     /* of.a(eh): canHarvest grass/dirt with empty hand, strength = 1/hardness/30. */
-    return 1.0f / h / 30.0f;
+    float strength = 1.0f / h / 30.0f;
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    if (!stack_empty(held) && held->id == ITEM_STONE_SHOVEL &&
+        (block_id == BLOCK_DIRT || block_id == BLOCK_GRASS)) {
+        strength *= 1.50f; /* stone shovel: dirt/grass mines 50% faster */
+    }
+    return strength;
 }
 
 static void trigger_hand_swing(void) {
@@ -112,7 +147,14 @@ static int flat_item_aabb_collides(float px, float py, float pz) {
 static void inventory_reset(void) {
     memset(g_inventory, 0, sizeof(g_inventory));
     stack_clear(&g_carried_stack);
+
+    /* Start inventory: 10 stone shovels, one per slot, so they can be moved
+       into the hotbar. Stone shovel id is 273 in classic Minecraft IDs. */
+    for (int i = 0; i < 10; i++) {
+        g_inventory[9 + i] = make_stack(ITEM_STONE_SHOVEL, 1, 0);
+    }
 }
+
 static int inventory_add_stack(ItemStack st) {
     if (stack_empty(&st)) return 1;
     for (int i = 0; i < 36 && st.count > 0; i++) {
@@ -134,6 +176,7 @@ static int inventory_add_stack(ItemStack st) {
     }
     return st.count <= 0;
 }
+
 static void inventory_tick(void) {
     for (int i = 0; i < 36; i++) if (g_inventory[i].pop_time > 0) g_inventory[i].pop_time--;
 }
@@ -281,26 +324,41 @@ static FlatRayHit flat_raycast(void) {
     return h;
 }
 
+static void start_air_swing_once(void) {
+    if (g_air_swing_consumed || g_air_swing_playing) return;
+    g_air_swing_consumed = 1;
+    g_air_swing_playing = 1;
+    g_air_swing_ticks = 0;
+    g_prev_hand_swing = 0.0f;
+    g_hand_swing = 0.0f;
+    g_hand_swing_ticks = 0;
+}
+
 static void reset_breaking_state(void) {
     g_breaking_block = 0;
     g_break_damage = 0.0f;
     g_prev_break_damage = 0.0f;
     g_break_sound_counter = 0.0f;
 }
+
 static void break_target_block(void) {
     int id = flat_get_block(g_break_x, g_break_y, g_break_z);
-    if (id == 0) return;
+    if (id == 0 || id == BLOCK_BEDROCK) return;
     flat_set_block(g_break_x, g_break_y, g_break_z, 0);
     int drop = block_drop_id(id);
-    spawn_item_stack((float)g_break_x + 0.5f, (float)g_break_y + 0.7f, (float)g_break_z + 0.5f, make_stack(drop, 1, 0), 1);
+    if (drop > 0) spawn_item_stack((float)g_break_x + 0.5f, (float)g_break_y + 0.7f, (float)g_break_z + 0.5f, make_stack(drop, 1, 0), 1);
 }
+
 static void update_breaking(void) {
     g_prev_break_damage = g_break_damage;
     if (g_block_hit_delay > 0) g_block_hit_delay--;
     if (!key_down_vk(VK_LBUTTON)) { reset_breaking_state(); return; }
     FlatRayHit hit = flat_raycast();
     if (!hit.hit) { reset_breaking_state(); return; }
-    if (!g_hand_swing_active && g_hand_swing_ticks == 0) trigger_hand_swing();
+    g_break_swing_holding = 1;
+    if (!g_hand_swing_active && g_hand_swing_ticks == 0) {
+        trigger_hand_swing();
+    }
     if (!g_breaking_block || hit.bx != g_break_x || hit.by != g_break_y || hit.bz != g_break_z) {
         g_breaking_block = 1;
         g_break_x = hit.bx; g_break_y = hit.by; g_break_z = hit.bz; g_break_face = hit.face;
@@ -309,7 +367,7 @@ static void update_breaking(void) {
     }
     if (g_block_hit_delay > 0) return;
     int id = flat_get_block(g_break_x, g_break_y, g_break_z);
-    if (id == 0) { reset_breaking_state(); return; }
+    if (id == 0 || id == BLOCK_BEDROCK) { reset_breaking_state(); return; }
     g_break_damage += block_relative_strength(id);
     g_break_sound_counter += 1.0f;
     if (g_break_damage >= 1.0f) {
@@ -318,7 +376,8 @@ static void update_breaking(void) {
         g_block_hit_delay = 5; /* pv.java hit delay after block removal. */
     }
 }
-static void world_left_mouse_released(void) { reset_breaking_state(); }
+
+static void world_left_mouse_released(void) { reset_breaking_state(); g_break_swing_consumed = 0; g_break_swing_holding = 0; }
 
 static void ingame_right_click(void) {
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
@@ -402,10 +461,11 @@ static void update_dropped_items(void) {
         }
     }
 }
+
 static void reset_flat_player_spawn(void) {
-    g_player_x = g_player_prev_x = 0.5f;
-    g_player_y = g_player_prev_y = 1.62f;
-    g_player_z = g_player_prev_z = 0.5f;
+    g_player_x = g_player_prev_x = 50.5f;
+    g_player_y = g_player_prev_y = 5.62f;
+    g_player_z = g_player_prev_z = 50.5f;
     g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
     g_player_yaw = g_player_prev_yaw = 0.0f;
     g_player_pitch = g_player_prev_pitch = 0.0f;
@@ -416,4 +476,10 @@ static void reset_flat_player_spawn(void) {
     g_hand_swing = g_prev_hand_swing = 0.0f;
     g_hand_swing_ticks = 0;
     g_hand_swing_active = 0;
+    g_air_swing_playing = 0;
+    g_air_swing_ticks = 0;
+    g_air_swing_consumed = 0;
+    g_break_swing_consumed = 0;
+    g_break_swing_holding = 0;
 }
+

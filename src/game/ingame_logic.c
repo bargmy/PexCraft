@@ -1,6 +1,5 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
-
 static void hud_add_chat(const char *msg) {
     if (!msg || !msg[0]) return;
     memmove(&g_chat_lines[1], &g_chat_lines[0], sizeof(ChatLine) * (MAX_CHAT_LINES - 1));
@@ -14,15 +13,44 @@ static void ingame_tick(void) {
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
     inventory_tick();
     update_dropped_items();
+    g_break_swing_holding = 0;
     g_prev_hand_swing = g_hand_swing;
     update_breaking();
-    if (g_hand_swing_active) {
-        g_hand_swing_ticks++;
-        if (g_hand_swing_ticks >= 8) {
-            g_hand_swing_ticks = key_down_vk(VK_LBUTTON) ? 0 : 0;
-            g_hand_swing_active = key_down_vk(VK_LBUTTON) ? 1 : 0;
+
+    if (g_air_swing_playing && !g_hand_swing_active) {
+        /* One air swing only. This advances for 8 ticks, then stops even if
+           the left mouse button is still held. */
+        g_air_swing_ticks++;
+        if (g_air_swing_ticks <= 8) {
+            g_hand_swing_active = 1;
+            g_hand_swing_ticks = g_air_swing_ticks;
+            g_hand_swing = (float)g_air_swing_ticks / 8.0f;
+        } else {
+            g_air_swing_playing = 0;
+            g_air_swing_ticks = 0;
+            g_hand_swing_ticks = 0;
+            g_hand_swing = 0.0f;
+            g_prev_hand_swing = 0.0f;
         }
-        g_hand_swing = g_hand_swing_active ? ((float)g_hand_swing_ticks / 8.0f) : 0.0f;
+    } else if (g_hand_swing_active) {
+        g_air_swing_playing = 0;
+        g_air_swing_ticks = 0;
+        g_hand_swing_ticks++;
+        if (g_hand_swing_ticks <= 8) {
+            g_hand_swing = (float)g_hand_swing_ticks / 8.0f;
+        } else if (g_break_swing_holding) {
+            /* Keep swinging forever while the player is still mining a block.
+               Reset prev/current together at the loop boundary, so no snap-back interpolation. */
+            g_hand_swing_ticks = 0;
+            g_hand_swing = 0.0f;
+            g_prev_hand_swing = 0.0f;
+        } else {
+            /* Mouse was released: finish the current cycle, then stop cleanly. */
+            g_hand_swing_ticks = 0;
+            g_hand_swing_active = 0;
+            g_hand_swing = 0.0f;
+            g_prev_hand_swing = 0.0f;
+        }
     } else {
         g_hand_swing_ticks = 0;
         g_hand_swing = 0.0f;
@@ -52,7 +80,7 @@ static void ingame_tick(void) {
 
     if (jumping && g_player_on_ground) {
         /* hp.java::I() jump impulse in this era. */
-        g_player_motion_y = 0.42f;
+        g_player_motion_y = 0.60f; /* requested jump height */
         g_player_on_ground = 0;
     }
 
@@ -123,3 +151,4 @@ static void ingame_tick(void) {
     g_camera_yaw += (target_yaw - g_camera_yaw) * 0.4f;
     g_camera_pitch += (target_pitch - g_camera_pitch) * 0.8f;
 }
+

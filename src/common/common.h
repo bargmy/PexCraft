@@ -177,16 +177,18 @@ static int g_player_armor = 0;
 static int g_ingame_ticks = 0;
 
 
-#define FLAT_WORLD_MIN -2
-#define FLAT_WORLD_MAX 2
-#define FLAT_WORLD_SIZE 5
-#define FLAT_WORLD_Y_MIN -1
-#define FLAT_WORLD_Y_MAX 3
+#define FLAT_WORLD_MIN 0
+#define FLAT_WORLD_MAX 99
+#define FLAT_WORLD_SIZE 100
+#define FLAT_WORLD_Y_MIN 0
+#define FLAT_WORLD_Y_MAX 63
 #define FLAT_WORLD_HEIGHT (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN + 1)
 #define MAX_DROP_ENTITIES 64
 #define ITEM_MAX_STACK 64
 #define BLOCK_GRASS 2
 #define BLOCK_DIRT 3
+#define BLOCK_BEDROCK 7
+#define ITEM_STONE_SHOVEL 273
 
 typedef struct ItemStack {
     int id;
@@ -214,6 +216,8 @@ typedef struct FlatRayHit {
 } FlatRayHit;
 
 static int g_flat_blocks[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT_WORLD_SIZE];
+static GLuint g_flat_world_display_list = 0;
+static int g_flat_world_geometry_dirty = 1;
 static ItemStack g_inventory[36];
 static ItemStack g_carried_stack;
 static FlatDroppedItem g_drops[MAX_DROP_ENTITIES];
@@ -227,12 +231,20 @@ static float g_hand_swing = 0.0f;
 static float g_prev_hand_swing = 0.0f;
 static int g_hand_swing_ticks = 0;
 static int g_hand_swing_active = 0;
+/* Air-click one-shot swing from the current branch:
+   clicking air starts one swing, holding does not loop it. */
+static int g_air_swing_playing = 0;
+static int g_air_swing_ticks = 0;
+static int g_air_swing_consumed = 0;
+/* Block-breaking swing one-shot while LMB is held: play one full cycle, do not loop/flicker. */
+static int g_break_swing_consumed = 0;
+static int g_break_swing_holding = 0;
 
-/* Minimal Beta 1.0 player/camera state for the flat 5x5 in-game test world.
+/* Minimal Beta 1.0 player/camera state for the flat 100x100x64 in-game test world.
    Names mirror the decompiled fields conceptually:
    yaw/pitch = Entity rotationYaw/rotationPitch, distance_walked/camera_* feed view bobbing. */
-static float g_player_x = 0.5f, g_player_y = 1.62f, g_player_z = 0.5f;
-static float g_player_prev_x = 0.5f, g_player_prev_y = 1.62f, g_player_prev_z = 0.5f;
+static float g_player_x = 50.5f, g_player_y = 5.62f, g_player_z = 50.5f;
+static float g_player_prev_x = 50.5f, g_player_prev_y = 5.62f, g_player_prev_z = 50.5f;
 static float g_player_motion_x = 0.0f, g_player_motion_y = 0.0f, g_player_motion_z = 0.0f;
 static float g_player_yaw = 0.0f, g_player_pitch = 0.0f;
 static float g_player_prev_yaw = 0.0f, g_player_prev_pitch = 0.0f;
@@ -293,6 +305,7 @@ static void enter_world_from_job(void);
 static void ingame_tick(void);
 static void hud_add_chat(const char *msg);
 static void reset_flat_player_spawn(void);
+static void start_air_swing_once(void);
 static void set_mouse_grabbed(int grabbed);
 static void handle_grabbed_mouse_move(int px, int py);
 static void flat_world_reset_blocks(void);
@@ -309,6 +322,7 @@ static void update_dropped_items(void);
 static int flat_player_aabb_collides(float px, float py, float pz);
 static int flat_block_intersects_player(int bx, int by, int bz);
 static void trigger_hand_swing(void);
+static int item_icon_tile(int id);
 static int write_level_dat(const char *world_dir, const char *world_name, long long seed, int spawn_x, int spawn_y, int spawn_z, long long size_on_disk);
 static int write_session_lock(const char *world_dir);
 

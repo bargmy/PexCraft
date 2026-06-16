@@ -25,7 +25,6 @@ static void draw_chat_lines(int force_visible) {
     }
 }
 
-
 static void setup_world_projection(void) {
     glViewport(0, 0, g_win_w, g_win_h);
     glMatrixMode(GL_PROJECTION);
@@ -65,7 +64,6 @@ static void apply_player_camera(float partial) {
     glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);
     glTranslatef(-x, -y, -z);
 }
-
 
 static void terrain_tile_uv(int tile, float *u0, float *v0, float *u1, float *v1) {
     float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
@@ -147,7 +145,6 @@ static void draw_grass_block(float x, float y, float z) {
     glEnd();
 }
 
-
 static void draw_dirt_block(float x, float y, float z) {
     float x0 = x, x1 = x + 1.0f;
     float y0 = y, y1 = y + 1.0f;
@@ -173,10 +170,44 @@ static void draw_dirt_block(float x, float y, float z) {
     world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
     glEnd();
 }
+
+static void draw_textured_cube_tile(float x, float y, float z, int tile) {
+    float x0 = x, x1 = x + 1.0f;
+    float y0 = y, y1 = y + 1.0f;
+    float z0 = z, z1 = z + 1.0f;
+    float u0,v0,u1,v1;
+    terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+    world_set_shade(1.0f);
+    glBegin(GL_QUADS);
+    world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
+    glEnd();
+    world_set_shade(0.80f);
+    glBegin(GL_QUADS);
+    world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+    world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+    glEnd();
+    world_set_shade(0.60f);
+    glBegin(GL_QUADS);
+    world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+    world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+    glEnd();
+    world_set_shade(0.50f);
+    glBegin(GL_QUADS);
+    world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+    glEnd();
+}
+
+static void draw_bedrock_block(float x, float y, float z) {
+    /* Beta terrain.png bedrock tile is index 17. */
+    draw_textured_cube_tile(x, y, z, 17);
+}
+
 static void draw_world_block_id(int id, float x, float y, float z) {
     if (id == BLOCK_GRASS) draw_grass_block(x, y, z);
     else if (id == BLOCK_DIRT) draw_dirt_block(x, y, z);
+    else if (id == BLOCK_BEDROCK) draw_bedrock_block(x, y, z);
 }
+
 static void draw_break_overlay_cube(float x, float y, float z, int stage) {
     if (stage < 0) return;
     if (stage > 9) stage = 9;
@@ -200,6 +231,7 @@ static void draw_break_overlay_cube(float x, float y, float z, int stage) {
     glDepthMask(GL_TRUE);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
+
 static void draw_dropped_items(void) {
     if (!tex_terrain.id) return;
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -219,6 +251,127 @@ static void draw_dropped_items(void) {
     }
 }
 
+static void draw_block_selection_border(void) {
+    FlatRayHit hit = flat_raycast();
+    if (!hit.hit || flat_get_block(hit.bx, hit.by, hit.bz) == 0) return;
+
+    float e = 0.002f;
+    float x0 = (float)hit.bx - e;
+    float y0 = (float)hit.by - e;
+    float z0 = (float)hit.bz - e;
+    float x1 = (float)hit.bx + 1.0f + e;
+    float y1 = (float)hit.by + 1.0f + e;
+    float z1 = (float)hit.bz + 1.0f + e;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_TEXTURE_2D);
+    glDepthMask(GL_FALSE);
+    glLineWidth(2.0f);
+    glColor4f(0.0f, 0.0f, 0.0f, 0.45f);
+
+    glBegin(GL_LINE_STRIP);
+    glVertex3f(x0,y0,z0); glVertex3f(x1,y0,z0); glVertex3f(x1,y0,z1); glVertex3f(x0,y0,z1); glVertex3f(x0,y0,z0);
+    glEnd();
+
+    glBegin(GL_LINE_STRIP);
+    glVertex3f(x0,y1,z0); glVertex3f(x1,y1,z0); glVertex3f(x1,y1,z1); glVertex3f(x0,y1,z1); glVertex3f(x0,y1,z0);
+    glEnd();
+
+    glBegin(GL_LINES);
+    glVertex3f(x0,y0,z0); glVertex3f(x0,y1,z0);
+    glVertex3f(x1,y0,z0); glVertex3f(x1,y1,z0);
+    glVertex3f(x1,y0,z1); glVertex3f(x1,y1,z1);
+    glVertex3f(x0,y0,z1); glVertex3f(x0,y1,z1);
+    glEnd();
+
+    glLineWidth(1.0f);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_TEXTURE_2D);
+    glColor4f(1,1,1,1);
+}
+
+
+static int flat_face_exposed(int x, int y, int z, int face) {
+    if (face == 0) {
+        if (y <= FLAT_WORLD_Y_MIN) return 0; /* bottom of bedrock never needs drawing */
+        return flat_get_block(x, y - 1, z) == 0;
+    }
+    if (face == 1) return flat_get_block(x, y + 1, z) == 0;
+    if (face == 2) return flat_get_block(x, y, z - 1) == 0;
+    if (face == 3) return flat_get_block(x, y, z + 1) == 0;
+    if (face == 4) return flat_get_block(x - 1, y, z) == 0;
+    if (face == 5) return flat_get_block(x + 1, y, z) == 0;
+    return 0;
+}
+
+static void world_face_style(int id, int face, int *tile) {
+    float shade = 1.0f;
+    if (face == 0) shade = 0.50f;
+    else if (face == 2 || face == 3) shade = 0.80f;
+    else if (face == 4 || face == 5) shade = 0.60f;
+
+    if (id == BLOCK_GRASS) {
+        if (face == 1) { *tile = 0; world_set_color_shade(0x6FAD3A, shade); return; }
+        if (face == 0) { *tile = 2; world_set_shade(shade); return; }
+        *tile = 3; world_set_shade(shade); return;
+    }
+    if (id == BLOCK_BEDROCK) { *tile = 17; world_set_shade(shade); return; }
+    *tile = 2;
+    world_set_shade(shade);
+}
+
+static void draw_world_block_face(int id, int x, int y, int z, int face) {
+    float x0 = (float)x, x1 = (float)x + 1.0f;
+    float y0 = (float)y, y1 = (float)y + 1.0f;
+    float z0 = (float)z, z1 = (float)z + 1.0f;
+    float u0,v0,u1,v1;
+    int tile = 2;
+    world_face_style(id, face, &tile);
+    terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+    glBegin(GL_QUADS);
+    if (face == 1) { /* top */
+        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
+    } else if (face == 0) { /* bottom */
+        world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+    } else if (face == 2) { /* north z- */
+        world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+    } else if (face == 3) { /* south z+ */
+        world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+    } else if (face == 4) { /* west x- */
+        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+    } else if (face == 5) { /* east x+ */
+        world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+    }
+    glEnd();
+}
+
+static void draw_world_block_exposed(int id, int x, int y, int z) {
+    if (id == 0) return;
+    for (int face = 0; face < 6; face++) {
+        if (flat_face_exposed(x, y, z, face)) draw_world_block_face(id, x, y, z, face);
+    }
+}
+
+static void rebuild_flat_world_geometry_list(void) {
+    if (!tex_terrain.id) return;
+    if (g_flat_world_display_list == 0) g_flat_world_display_list = glGenLists(1);
+    if (g_flat_world_display_list == 0) return;
+
+    glNewList(g_flat_world_display_list, GL_COMPILE);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+        for (int z = FLAT_WORLD_MIN; z <= FLAT_WORLD_MAX; z++) {
+            for (int x = FLAT_WORLD_MIN; x <= FLAT_WORLD_MAX; x++) {
+                int id = flat_get_block(x, y, z);
+                if (id) draw_world_block_exposed(id, x, y, z);
+            }
+        }
+    }
+    glEndList();
+    g_flat_world_geometry_dirty = 0;
+}
+
 static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
 
@@ -233,14 +386,19 @@ static void draw_flat_test_world(void) {
 
     apply_player_camera(g_frame_partial);
 
-    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
-        for (int z = FLAT_WORLD_MIN; z <= FLAT_WORLD_MAX; z++) {
-            for (int x = FLAT_WORLD_MIN; x <= FLAT_WORLD_MAX; x++) {
-                int id = flat_get_block(x, y, z);
-                if (id) draw_world_block_id(id, (float)x, (float)y, (float)z);
-            }
-        }
+    /* Optimized path: the 100x100x64 world no longer walks and draws every
+       solid cube every frame.  We compile only exposed faces into one legacy
+       OpenGL display list and rebuild that list only when blocks change. */
+    if (g_flat_world_geometry_dirty || g_flat_world_display_list == 0) {
+        rebuild_flat_world_geometry_list();
     }
+    if (g_flat_world_display_list != 0) {
+        glCallList(g_flat_world_display_list);
+    }
+
+    draw_block_selection_border();
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     draw_dropped_items();
     if (g_breaking_block && flat_get_block(g_break_x, g_break_y, g_break_z) != 0) {
         float dmg = g_prev_break_damage + (g_break_damage - g_prev_break_damage) * g_frame_partial;
@@ -251,6 +409,88 @@ static void draw_flat_test_world(void) {
     glColor4f(1,1,1,1);
     glEnable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
+}
+
+
+static void draw_source_item_3d_from_atlas(int tile) {
+    /* Port of uploaded source lk.java lines 16-118 for non-block items.
+       Source does: bind /gui/items.png, compute icon UVs, translate down,
+       scale 1.5, rotate Y=50/Z=335, translate -0.9375/-0.0625, then draw
+       front, back, and 16-strip side thickness with depth 1/16. */
+    float tw = tex_items.w ? (float)tex_items.w : 256.0f;
+    float th = tex_items.h ? (float)tex_items.h : 256.0f;
+    float u0 = (float)((tile & 15) * 16 + 0.0f) / tw;
+    float u1 = (float)((tile & 15) * 16 + 15.99f) / tw;
+    float v0 = (float)((tile >> 4) * 16 + 0.0f) / th;
+    float v1 = (float)((tile >> 4) * 16 + 15.99f) / th;
+    float w = 1.0f;
+    float depth = 0.0625f;
+
+    glBindTexture(GL_TEXTURE_2D, tex_items.id);
+    glPushMatrix();
+    glTranslatef(-0.0f, -0.3f, 0.0f);
+    glScalef(1.5f, 1.5f, 1.5f);
+    glRotatef(50.0f, 0.0f, 1.0f, 0.0f);
+    glRotatef(335.0f, 0.0f, 0.0f, 1.0f);
+    glTranslatef(-0.9375f, -0.0625f, 0.0f);
+
+    glColor4f(1, 1, 1, 1);
+
+    glBegin(GL_QUADS);
+    /* front */
+    glTexCoord2f(u1, v1); glVertex3f(0.0f, 0.0f, 0.0f);
+    glTexCoord2f(u0, v1); glVertex3f(w,    0.0f, 0.0f);
+    glTexCoord2f(u0, v0); glVertex3f(w,    1.0f, 0.0f);
+    glTexCoord2f(u1, v0); glVertex3f(0.0f, 1.0f, 0.0f);
+
+    /* back */
+    glTexCoord2f(u1, v0); glVertex3f(0.0f, 1.0f, -depth);
+    glTexCoord2f(u0, v0); glVertex3f(w,    1.0f, -depth);
+    glTexCoord2f(u0, v1); glVertex3f(w,    0.0f, -depth);
+    glTexCoord2f(u1, v1); glVertex3f(0.0f, 0.0f, -depth);
+    glEnd();
+
+    /* left/right thickness: source uses 16 strips for pixel-thick sides. */
+    glBegin(GL_QUADS);
+    for (int i = 0; i < 16; i++) {
+        float a = (float)i / 16.0f;
+        float uu = u1 + (u0 - u1) * a - 0.001953125f;
+        float x = w * a;
+        glTexCoord2f(uu, v1); glVertex3f(x, 0.0f, -depth);
+        glTexCoord2f(uu, v1); glVertex3f(x, 0.0f, 0.0f);
+        glTexCoord2f(uu, v0); glVertex3f(x, 1.0f, 0.0f);
+        glTexCoord2f(uu, v0); glVertex3f(x, 1.0f, -depth);
+    }
+    for (int i = 0; i < 16; i++) {
+        float a = (float)i / 16.0f;
+        float uu = u1 + (u0 - u1) * a - 0.001953125f;
+        float x = w * a + 0.0625f;
+        glTexCoord2f(uu, v0); glVertex3f(x, 1.0f, -depth);
+        glTexCoord2f(uu, v0); glVertex3f(x, 1.0f, 0.0f);
+        glTexCoord2f(uu, v1); glVertex3f(x, 0.0f, 0.0f);
+        glTexCoord2f(uu, v1); glVertex3f(x, 0.0f, -depth);
+    }
+    for (int i = 0; i < 16; i++) {
+        float a = (float)i / 16.0f;
+        float vv = v1 + (v0 - v1) * a - 0.001953125f;
+        float y = w * a + 0.0625f;
+        glTexCoord2f(u1, vv); glVertex3f(0.0f, y, 0.0f);
+        glTexCoord2f(u0, vv); glVertex3f(w,    y, 0.0f);
+        glTexCoord2f(u0, vv); glVertex3f(w,    y, -depth);
+        glTexCoord2f(u1, vv); glVertex3f(0.0f, y, -depth);
+    }
+    for (int i = 0; i < 16; i++) {
+        float a = (float)i / 16.0f;
+        float vv = v1 + (v0 - v1) * a - 0.001953125f;
+        float y = w * a;
+        glTexCoord2f(u0, vv); glVertex3f(w,    y, 0.0f);
+        glTexCoord2f(u1, vv); glVertex3f(0.0f, y, 0.0f);
+        glTexCoord2f(u1, vv); glVertex3f(0.0f, y, -depth);
+        glTexCoord2f(u0, vv); glVertex3f(w,    y, -depth);
+    }
+    glEnd();
+
+    glPopMatrix();
 }
 
 static void draw_first_person_hand(void) {
@@ -293,12 +533,31 @@ static void draw_first_person_hand(void) {
                      sinf(sqrtf(swing) * (float)M_PI * 2.0f) * 0.2f,
                      -swing_sin * 0.2f);
         glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
-        glRotatef(-swing_sin * 20.0f, 0.0f, 1.0f, 0.0f);
+        float swing_y = sinf(swing * swing * (float)M_PI);
+        glRotatef(-swing_y * 20.0f, 0.0f, 1.0f, 0.0f);
         glRotatef(-swing_sqrt_sin * 20.0f, 0.0f, 0.0f, 1.0f);
         glRotatef(-swing_sqrt_sin * 80.0f, 1.0f, 0.0f, 0.0f);
         glScalef(0.40f, 0.40f, 0.40f);
         glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
         draw_world_block_id(held->id, -0.5f, -0.5f, -0.5f);
+        glPopMatrix();
+    } else if (!stack_empty(held) && tex_items.id) {
+        /* Non-block first-person item branch, using uploaded source lk.java
+           lines 16-118 for the actual extruded item geometry. */
+        int tile = item_icon_tile(held->id);
+        glPushMatrix();
+        float s = 0.8f;
+        glTranslatef(-swing_sqrt_sin * 0.4f,
+                     sinf(sqrtf(swing) * (float)M_PI * 2.0f) * 0.2f,
+                     -swing_sin * 0.2f);
+        glTranslatef(0.7f * s, -0.65f * s, -0.9f * s);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+        float swing_y = sinf(swing * swing * (float)M_PI);
+        glRotatef(-swing_y * 20.0f, 0.0f, 1.0f, 0.0f);
+        glRotatef(-swing_sqrt_sin * 20.0f, 0.0f, 0.0f, 1.0f);
+        glRotatef(-swing_sqrt_sin * 80.0f, 1.0f, 0.0f, 0.0f);
+        glScalef(0.40f, 0.40f, 0.40f);
+        draw_source_item_3d_from_atlas(tile);
         glPopMatrix();
     } else {
         glBindTexture(GL_TEXTURE_2D, tex_steve.id);
@@ -328,6 +587,7 @@ static void draw_first_person_hand(void) {
     glEnable(GL_BLEND);
     glColor4f(1,1,1,1);
 }
+
 static void draw_ingame_world_view(int with_hand) {
     draw_sky_only();
     draw_flat_test_world();
