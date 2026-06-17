@@ -210,6 +210,9 @@ static int load_default_textures(void) {
     load_mcrw(&tex_unknown_pack, "unknown_pack.mcrw", 0);
     ok = load_mcrw(&tex_icons, "gui_icons.mcrw", 0) && ok;
     ok = load_mcrw(&tex_inventory, "gui_inventory.mcrw", 0) && ok;
+    load_mcrw(&tex_workbench, "gui_crafting_table.mcrw", 0);
+    load_mcrw(&tex_furnace_gui, "gui_furnace.mcrw", 0);
+    load_mcrw(&tex_chest_gui, "gui_chest.mcrw", 0);
     load_mcrw(&tex_items, "gui_items.mcrw", 0);
     ok = load_mcrw(&tex_steve, "mob_char.mcrw", 0) && ok;
     return ok;

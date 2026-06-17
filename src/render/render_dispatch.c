@@ -37,6 +37,7 @@ static void render(float partial) {
         case SCREEN_CONTROLS: draw_controls_screen(); break;
         case SCREEN_WORLD_SELECT:
         case SCREEN_WORLD_DELETE: draw_world_screen(); break;
+        case SCREEN_WORLD_TYPE: draw_world_type_screen(); break;
         case SCREEN_CONFIRM_DELETE: draw_confirm_delete(); break;
         case SCREEN_MULTIPLAYER: draw_multiplayer(); break;
         case SCREEN_TEXPACK: draw_texpack(); break;
@@ -44,6 +45,10 @@ static void render(float partial) {
         case SCREEN_INGAME: draw_ingame_screen(); break;
         case SCREEN_PAUSE: draw_pause_screen(); break;
         case SCREEN_INVENTORY: draw_inventory_screen(); break;
+        case SCREEN_WORKBENCH: draw_workbench_screen(); break;
+        case SCREEN_FURNACE: draw_furnace_screen(); break;
+        case SCREEN_CHEST: draw_chest_screen(); break;
+        case SCREEN_DEATH: draw_death_screen(); break;
         case SCREEN_CHAT: draw_chat_screen(); break;
         case SCREEN_NOTICE: draw_notice(); break;
     }

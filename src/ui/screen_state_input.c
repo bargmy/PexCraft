@@ -46,8 +46,9 @@ static void rebuild_screen(void) {
             b->opt = (OptionId)i;
             if (b->kind == BUTTON_SLIDER) b->slider_value = get_option_float((OptionId)i);
         }
-        add_button(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 + 12, "Controls...");
-        add_button(200, g_gui_w / 2 - 100, g_gui_h / 6 + 168, "Done");
+        /* 12 options = 6 rows, so Controls goes below the last row. */
+        add_button(100, g_gui_w / 2 - 100, g_gui_h / 6 + 144, "Controls...");
+        add_button(200, g_gui_w / 2 - 100, g_gui_h / 6 + 188, "Done");
     } else if (g_screen == SCREEN_CONTROLS) {
         int x0 = g_gui_w / 2 - 155;
         for (int i = 0; i < 10; i++) {
@@ -56,6 +57,10 @@ static void rebuild_screen(void) {
             add_button_full(i, x0 + (i % 2) * 160, g_gui_h / 6 + 24 * (i >> 1), 70, 20, label, BUTTON_NORMAL);
         }
         add_button(200, g_gui_w / 2 - 100, g_gui_h / 6 + 168, "Done");
+    } else if (g_screen == SCREEN_WORLD_TYPE) {
+        add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 48, "Flat (100x100x64)");
+        add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 72, "Normal");
+        add_button(2, g_gui_w / 2 - 100, g_gui_h / 4 + 108, "Cancel");
     } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
         for (int i = 0; i < 5; i++) {
             char dir[MAX_PATHBUF], label[MAX_LABEL];
@@ -87,6 +92,9 @@ static void rebuild_screen(void) {
         add_button(4, g_gui_w / 2 - 100, g_gui_h / 4 + 24, "Back to game");
         add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 48, "Save and quit to title");
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Options...");
+    } else if (g_screen == SCREEN_DEATH) {
+        add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 72, "Respawn");
+        add_button(2, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Title menu");
     } else if (g_screen == SCREEN_NOTICE) {
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 120 + 12, "Back to title screen");
     }
@@ -138,9 +146,24 @@ static void on_button(Button *b) {
         }
     } else if (g_screen == SCREEN_WORLD_SELECT) {
         if (b->id < 5) {
-            start_world_generation(b->id + 1);
+            char dir[MAX_PATHBUF];
+            snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, b->id + 1);
+            if (dir_exists(dir)) {
+                g_pending_world_type = read_world_type_for_dir(dir);
+                start_world_generation(b->id + 1);
+            } else {
+                g_pending_world_slot = b->id + 1;
+                g_pending_world_type = 0;
+                set_screen(SCREEN_WORLD_TYPE);
+            }
         } else if (b->id == 5) set_screen(SCREEN_WORLD_DELETE);
         else if (b->id == 6) set_screen(g_parent_screen);
+    } else if (g_screen == SCREEN_WORLD_TYPE) {
+        if (b->id == 0 || b->id == 1) {
+            g_pending_world_type = b->id;
+            if (g_pending_world_slot <= 0) g_pending_world_slot = 1;
+            start_world_generation(g_pending_world_slot);
+        } else if (b->id == 2) set_screen(SCREEN_WORLD_SELECT);
     } else if (g_screen == SCREEN_WORLD_DELETE) {
         if (b->id < 5) {
             char dir[MAX_PATHBUF];
@@ -169,6 +192,9 @@ static void on_button(Button *b) {
         if (b->id == 4) set_screen(SCREEN_INGAME);
         else if (b->id == 0) { g_parent_screen = SCREEN_PAUSE; set_screen(SCREEN_OPTIONS); }
         else if (b->id == 1) leave_world_to_title();
+    } else if (g_screen == SCREEN_DEATH) {
+        if (b->id == 1) player_respawn();
+        else if (b->id == 2) leave_world_to_title();
     } else if (g_screen == SCREEN_NOTICE) {
         set_screen(SCREEN_TITLE);
     }
@@ -199,14 +225,16 @@ static void texpack_mouse_drag(int my) {
 }
 
 static void mouse_right_down(int mx, int my) {
-    if (g_screen == SCREEN_INVENTORY) { inventory_mouse_click(mx, my, 1); return; }
+    if (g_screen == SCREEN_DEATH) return;
+
+    if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 1); return; }
     if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); ingame_right_click(); return; }
     (void)mx; (void)my;
 }
 
 static void mouse_down(int mx, int my) {
     g_mouse_down = 1;
-    if (g_screen == SCREEN_INVENTORY) { inventory_mouse_click(mx, my, 0); return; }
+    if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 0); return; }
     if (g_screen == SCREEN_INGAME) {
         set_mouse_grabbed(1);
         FlatRayHit hit = flat_raycast();
@@ -281,12 +309,12 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_F5) { g_third_person_view = !g_third_person_view; return; }
         if ((int)vk == g_opts.keys[6]) { inventory_drop_selected_one(); return; }
         if ((int)vk == g_opts.keys[7]) { set_screen(SCREEN_INVENTORY); return; }
-        if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; set_screen(SCREEN_CHAT); return; }
+        if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 1; set_screen(SCREEN_CHAT); return; }
         if (vk >= '1' && vk <= '9') { g_selected_hotbar_slot = (int)(vk - '1'); return; }
         return;
     }
 
-    if (g_screen == SCREEN_INVENTORY) {
+    if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) {
         if (vk == VK_ESCAPE || (int)vk == g_opts.keys[7]) { set_screen(SCREEN_INGAME); return; }
         return;
     }
@@ -297,6 +325,7 @@ static void handle_keydown(WPARAM vk) {
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_WORLD_SELECT) set_screen(g_parent_screen);
+        else if (g_screen == SCREEN_WORLD_TYPE) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_WORLD_DELETE) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_CONFIRM_DELETE) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_MULTIPLAYER) set_screen(g_parent_screen);
@@ -317,6 +346,7 @@ static void handle_keydown(WPARAM vk) {
 
 static void handle_char(WPARAM ch) {
     if (g_screen == SCREEN_CHAT) {
+        if (g_suppress_next_chat_char) { g_suppress_next_chat_char = 0; return; }
         if (ch == 13 || ch == 8 || ch == 27) return;
         const char *allowed = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~";
         if (strchr(allowed, (char)ch) && strlen(g_chat_input) < 100) {

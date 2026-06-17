@@ -12,7 +12,7 @@ static void set_default_options(void) {
     g_opts.sound = 1.0f;
     g_opts.sensitivity = 0.5f;
     g_opts.invert_mouse = 0;
-    g_opts.render_distance = 0;
+    g_opts.render_distance = 8;
     g_opts.view_bobbing = 1;
     g_opts.anaglyph = 0; /* V-Sync */
     g_opts.max_fps = 0;  /* unlimited */
@@ -48,7 +48,7 @@ static void load_options(void) {
         else if (!strcmp(k, "sound")) g_opts.sound = parse_float_java(v);
         else if (!strcmp(k, "mouseSensitivity")) g_opts.sensitivity = parse_float_java(v);
         else if (!strcmp(k, "invertYMouse")) g_opts.invert_mouse = !strcmp(v, "true");
-        else if (!strcmp(k, "viewDistance")) g_opts.render_distance = atoi(v) & 3;
+        else if (!strcmp(k, "viewDistance")) g_opts.render_distance = atoi(v);
         else if (!strcmp(k, "bobView")) g_opts.view_bobbing = !strcmp(v, "true");
         else if (!strcmp(k, "anaglyph3d")) g_opts.anaglyph = !strcmp(v, "true");
         else if (!strcmp(k, "limitFramerate")) { if (!strcmp(v, "true")) g_opts.max_fps = 60; }
@@ -68,6 +68,11 @@ static void load_options(void) {
         }
     }
     fclose(f);
+    if (g_opts.render_distance < 2) g_opts.render_distance = 8;
+    if (g_opts.render_distance > 32) g_opts.render_distance = 32;
+    if (g_opts.max_fps < 0) g_opts.max_fps = 0;
+    if (g_opts.max_fps > MAX_FPS_CAP) g_opts.max_fps = MAX_FPS_CAP;
+    if (g_opts.max_fps <= 0) g_opts.anaglyph = 0;
 }
 
 static void save_options(void) {
@@ -98,11 +103,22 @@ static float get_option_float(OptionId opt) {
     if (opt == OPT_MUSIC) return g_opts.music;
     if (opt == OPT_SOUND) return g_opts.sound;
     if (opt == OPT_SENSITIVITY) return g_opts.sensitivity;
+    if (opt == OPT_RENDER_DISTANCE) {
+        int c = g_opts.render_distance;
+        if (c < 2) c = 2;
+        if (c > 32) c = 32;
+        return (float)(c - 2) / 30.0f;
+    }
     if (opt == OPT_LIMIT_FRAMERATE) {
         if (g_opts.max_fps <= 0) return 1.0f;
-        float v = (float)(g_opts.max_fps - 1) / 9999.0f;
+        int fps = g_opts.max_fps;
+        if (fps < 1) fps = 1;
+        if (fps > MAX_FPS_CAP) fps = MAX_FPS_CAP;
+        /* Keep the hard-right slider stop for Unlimited. 200 FPS sits just
+           before it, so the setting reads naturally as 1..200..Unlimited. */
+        float v = (float)(fps - 1) / (float)MAX_FPS_CAP;
         if (v < 0.0f) v = 0.0f;
-        if (v > 0.9999f) v = 0.9999f;
+        if (v > 0.995f) v = 0.995f;
         return v;
     }
     return 0.0f;
@@ -114,13 +130,17 @@ static void set_option_float(OptionId opt, float v) {
     if (opt == OPT_MUSIC) g_opts.music = v;
     else if (opt == OPT_SOUND) g_opts.sound = v;
     else if (opt == OPT_SENSITIVITY) g_opts.sensitivity = v;
+    else if (opt == OPT_RENDER_DISTANCE) g_opts.render_distance = 2 + (int)(v * 30.0f + 0.5f);
     else if (opt == OPT_LIMIT_FRAMERATE) {
-        if (v >= 0.9999f) g_opts.max_fps = 0; /* unlimited at slider end */
-        else {
-            g_opts.max_fps = 1 + (int)(v * 9999.0f + 0.5f);
+        if (v >= FPS_UNLIMITED_SLIDER_VALUE) {
+            g_opts.max_fps = 0; /* hard-right slider stop = truly uncapped */
+            g_opts.anaglyph = 0; /* Unlimited FPS must not leave swap-interval/vsync on. */
+        } else {
+            g_opts.max_fps = 1 + (int)(v * (float)MAX_FPS_CAP);
             if (g_opts.max_fps < 1) g_opts.max_fps = 1;
-            if (g_opts.max_fps > 10000) g_opts.max_fps = 10000;
+            if (g_opts.max_fps > MAX_FPS_CAP) g_opts.max_fps = MAX_FPS_CAP;
         }
+        apply_vsync_setting();
     }
     save_options();
 }
@@ -129,7 +149,12 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
     const char *name = opt_names[opt];
     if (opt_is_slider[opt]) {
         float v = get_option_float(opt);
-        if (opt == OPT_SENSITIVITY) {
+        if (opt == OPT_RENDER_DISTANCE) {
+            int c = g_opts.render_distance;
+            if (c < 2) c = 2;
+            if (c > 32) c = 32;
+            snprintf(out, cap, "%s: %d chunks", name, c);
+        } else if (opt == OPT_SENSITIVITY) {
             if (v <= 0.0f) snprintf(out, cap, "%s: *yawn*", name);
             else if (v >= 1.0f) snprintf(out, cap, "%s: HYPERSPEED!!!", name);
             else snprintf(out, cap, "%s: %d%%", name, (int)(v * 200.0f));
@@ -150,7 +175,7 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
         else if (opt == OPT_SHOW_FPS) val = g_opts.show_fps;
         snprintf(out, cap, "%s: %s", name, val ? "ON" : "OFF");
     } else if (opt == OPT_RENDER_DISTANCE) {
-        snprintf(out, cap, "%s: %s", name, render_distance_names[g_opts.render_distance & 3]);
+        snprintf(out, cap, "%s: %d chunks", name, g_opts.render_distance);
     } else if (opt == OPT_DIFFICULTY) {
         snprintf(out, cap, "%s: %s", name, difficulty_names[g_opts.difficulty & 3]);
     } else if (opt == OPT_GRAPHICS) {
@@ -160,7 +185,7 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
 
 static void bump_option(OptionId opt, int delta) {
     if (opt == OPT_INVERT_MOUSE) g_opts.invert_mouse = !g_opts.invert_mouse;
-    else if (opt == OPT_RENDER_DISTANCE) g_opts.render_distance = (g_opts.render_distance + delta) & 3;
+    else if (opt == OPT_RENDER_DISTANCE) { g_opts.render_distance += delta; if (g_opts.render_distance < 2) g_opts.render_distance = 2; if (g_opts.render_distance > 32) g_opts.render_distance = 32; }
     else if (opt == OPT_VIEW_BOBBING) g_opts.view_bobbing = !g_opts.view_bobbing;
     else if (opt == OPT_ANAGLYPH) { g_opts.anaglyph = !g_opts.anaglyph; apply_vsync_setting(); }
     else if (opt == OPT_DIFFICULTY) g_opts.difficulty = (g_opts.difficulty + delta) & 3;

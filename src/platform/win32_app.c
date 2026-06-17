@@ -10,7 +10,8 @@ static void apply_vsync_setting(void) {
         g_wgl_swap_interval_loaded = 1;
     }
     if (g_wgl_swap_interval_ext) {
-        g_wgl_swap_interval_ext(g_opts.anaglyph ? 1 : 0);
+        int interval = (g_opts.anaglyph && g_opts.max_fps > 0) ? 1 : 0;
+        g_wgl_swap_interval_ext(interval);
     }
 }
 
@@ -183,7 +184,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             ReleaseCapture();
             return 0;
         case WM_MOUSEWHEEL:
-            if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT) {
+            if (g_screen == SCREEN_INGAME) {
                 int delta = GET_WHEEL_DELTA_WPARAM(wparam);
                 if (delta > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
                 else if (delta < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
@@ -196,10 +197,12 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             handle_char(wparam);
             return 0;
         case WM_CLOSE:
+            save_current_world_state();
             set_mouse_grabbed(0);
             PostQuitMessage(0);
             return 0;
         case WM_DESTROY:
+            save_current_world_state();
             set_mouse_grabbed(0);
             PostQuitMessage(0);
             return 0;
@@ -209,7 +212,9 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
 
 static void sleep_for_max_fps(double frame_start_time) {
     if (g_opts.max_fps <= 0) {
-        Sleep(1);
+        /* Unlimited must mean uncapped.  Sleep(1) often becomes a ~15.6 ms
+           scheduler wait on Windows, which feels exactly like a 60 FPS/vsync
+           cap even when swap interval is disabled. */
         return;
     }
     double target = 1.0 / (double)g_opts.max_fps;
@@ -239,13 +244,19 @@ static void main_loop(void) {
         if (dt > 0.25) dt = 0.25;
         g_last_time = t;
         tick_accum += dt * 20.0;
-        while (tick_accum >= 1.0) {
+        int ticks_this_frame = 0;
+        while (tick_accum >= 1.0 && ticks_this_frame < 3) {
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
             if (g_screen == SCREEN_GENERATING) worldgen_tick();
-            if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT) ingame_tick();
+            if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
+                g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+                g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
+                g_screen == SCREEN_DEATH) ingame_tick();
             tick_accum -= 1.0;
+            ticks_this_frame++;
         }
+        if (ticks_this_frame >= 3 && tick_accum > 1.0) tick_accum = 1.0;
         float partial = (float)tick_accum;
         render(partial);
         sleep_for_max_fps(frame_start_time);

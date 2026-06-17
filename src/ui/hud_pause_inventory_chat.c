@@ -1,5 +1,43 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+
+typedef struct PexProcessMemoryCounters {
+    DWORD cb;
+    DWORD PageFaultCount;
+    SIZE_T PeakWorkingSetSize;
+    SIZE_T WorkingSetSize;
+    SIZE_T QuotaPeakPagedPoolUsage;
+    SIZE_T QuotaPagedPoolUsage;
+    SIZE_T QuotaPeakNonPagedPoolUsage;
+    SIZE_T QuotaNonPagedPoolUsage;
+    SIZE_T PagefileUsage;
+    SIZE_T PeakPagefileUsage;
+} PexProcessMemoryCounters;
+
+typedef BOOL (WINAPI *PexGetProcessMemoryInfoFn)(HANDLE, PexProcessMemoryCounters*, DWORD);
+
+static void get_app_memory_mb(unsigned long long *used_mb, unsigned long long *peak_mb) {
+    *used_mb = 0;
+    *peak_mb = 0;
+
+    HMODULE psapi = LoadLibraryA("psapi.dll");
+    if (!psapi) psapi = LoadLibraryA("kernel32.dll");
+    if (!psapi) return;
+
+    PexGetProcessMemoryInfoFn fn =
+        (PexGetProcessMemoryInfoFn)GetProcAddress(psapi, "GetProcessMemoryInfo");
+    if (!fn) return;
+
+    PexProcessMemoryCounters pmc;
+    memset(&pmc, 0, sizeof(pmc));
+    pmc.cb = sizeof(pmc);
+    if (fn(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        *used_mb = (unsigned long long)(pmc.WorkingSetSize / (1024ULL * 1024ULL));
+        *peak_mb = (unsigned long long)(pmc.PeakWorkingSetSize / (1024ULL * 1024ULL));
+    }
+}
+
+
 static void draw_hud(void) {
     int w = g_gui_w;
     int h = g_gui_h;
@@ -45,15 +83,9 @@ static void draw_hud(void) {
         snprintf(line, sizeof(line), "Position %.2f %.2f %.2f", g_player_x, g_player_y, g_player_z);
         draw_text(line, 2, y0 + 10, 14737632);
 
-        MEMORYSTATUSEX mem;
-        memset(&mem, 0, sizeof(mem));
-        mem.dwLength = sizeof(mem);
-        unsigned long long used_mb = 0, total_mb = 0;
-        if (GlobalMemoryStatusEx(&mem)) {
-            used_mb = (unsigned long long)((mem.ullTotalPhys - mem.ullAvailPhys) / (1024ULL * 1024ULL));
-            total_mb = (unsigned long long)(mem.ullTotalPhys / (1024ULL * 1024ULL));
-        }
-        snprintf(line, sizeof(line), "Memory usage %lluMB/%lluMB", used_mb, total_mb);
+        unsigned long long used_mb = 0, peak_mb = 0;
+        get_app_memory_mb(&used_mb, &peak_mb);
+        snprintf(line, sizeof(line), "Memory usage %lluMB/%lluMB", used_mb, peak_mb);
         draw_text(line, 2, y0 + 20, 14737632);
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);
@@ -261,8 +293,112 @@ static void draw_inventory_screen(void) {
         draw_item_stack_gui(&g_inventory[slot], x + 8 + col * 18, y + 84 + row * 18);
     }
     for (int col = 0; col < 9; col++) draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 142);
-    draw_text("Crafting", x + 86, y + 16, 4210752);
+
+    /* Move label above the 2x2 grid and add a shadow so it is readable. */
+    draw_text("Crafting", x + 87, y + 7, 0x000000);
+    draw_text("Crafting", x + 86, y + 6, 0x404040);
+    for (int row = 0; row < 2; row++) for (int col = 0; col < 2; col++) {
+        int slot = col + row * 2;
+        draw_item_stack_gui(&g_craft_grid[slot], x + 88 + col * 18, y + 26 + row * 18);
+    }
+    ItemStack craft_out = inventory_crafting_output();
+    draw_item_stack_gui(&craft_out, x + 144, y + 36);
+
     draw_carried_stack();
+}
+
+
+static void draw_container_player_inventory_stacks(int x, int y) {
+    for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
+        int slot = 9 + col + row * 9;
+        draw_item_stack_gui(&g_inventory[slot], x + 8 + col * 18, y + 84 + row * 18);
+    }
+    for (int col = 0; col < 9; col++) draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 142);
+}
+
+static void draw_workbench_screen(void) {
+    draw_ingame_world_view(0);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
+    int x = (g_gui_w - 176) / 2;
+    int y = (g_gui_h - 166) / 2;
+    if (tex_workbench.id) draw_textured_rect_tex(&tex_workbench, x, y, 0, 0, 176, 166, 0xFFFFFF);
+    else draw_rect(x, y, x + 176, y + 166, 0xFFc6c6c6);
+
+    draw_text("Crafting", x + 28, y + 6, 4210752);
+    for (int row = 0; row < 3; row++) for (int col = 0; col < 3; col++) {
+        int slot = col + row * 3;
+        draw_item_stack_gui(&g_workbench_grid[slot], x + 30 + col * 18, y + 17 + row * 18);
+    }
+
+    ItemStack out = inventory_crafting_output();
+    draw_item_stack_gui(&out, x + 124, y + 35);
+
+    draw_text("Inventory", x + 8, y + 72, 4210752);
+    draw_container_player_inventory_stacks(x, y);
+    draw_carried_stack();
+}
+
+
+static void draw_chest_screen(void) {
+    draw_ingame_world_view(0);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
+    int x = (g_gui_w - 176) / 2;
+    int y = (g_gui_h - 166) / 2;
+
+    /* Clean single-chest UI.  The imported pack's generic_54 sheet can differ
+       in layout between packs, so draw the classic container frame ourselves. */
+    draw_rect(x, y, x + 176, y + 166, 0xFFC6C6C6);
+    draw_rect(x + 3, y + 3, x + 173, y + 163, 0xFFE0E0E0);
+    draw_text("Chest", x + 8, y + 6, 4210752);
+    draw_text("Inventory", x + 8, y + 72, 4210752);
+
+    for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
+        int sx = x + 7 + col * 18;
+        int sy = y + 17 + row * 18;
+        draw_rect(sx, sy, sx + 18, sy + 18, 0xFF373737);
+        draw_rect(sx + 1, sy + 1, sx + 17, sy + 17, 0xFF8B8B8B);
+        draw_item_stack_gui(&g_chest_slots[col + row * 9], sx + 1, sy + 1);
+    }
+
+    for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
+        int sx = x + 7 + col * 18;
+        int sy = y + 83 + row * 18;
+        draw_rect(sx, sy, sx + 18, sy + 18, 0xFF373737);
+        draw_rect(sx + 1, sy + 1, sx + 17, sy + 17, 0xFF8B8B8B);
+        draw_item_stack_gui(&g_inventory[9 + col + row * 9], sx + 1, sy + 1);
+    }
+    for (int col = 0; col < 9; col++) {
+        int sx = x + 7 + col * 18;
+        int sy = y + 141;
+        draw_rect(sx, sy, sx + 18, sy + 18, 0xFF373737);
+        draw_rect(sx + 1, sy + 1, sx + 17, sy + 17, 0xFF8B8B8B);
+        draw_item_stack_gui(&g_inventory[col], sx + 1, sy + 1);
+    }
+
+    draw_carried_stack();
+}
+
+static void draw_furnace_screen(void) {
+    draw_ingame_world_view(0);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
+    int x = (g_gui_w - 176) / 2;
+    int y = (g_gui_h - 166) / 2;
+    if (tex_furnace_gui.id) draw_textured_rect_tex(&tex_furnace_gui, x, y, 0, 0, 176, 166, 0xFFFFFF);
+    else draw_rect(x, y, x + 176, y + 166, 0xFFc6c6c6);
+    draw_text("Furnace", x + 60, y + 6, 4210752);
+    draw_text("Inventory", x + 8, y + 72, 4210752);
+    draw_container_player_inventory_stacks(x, y);
+    draw_carried_stack();
+}
+
+
+
+static void draw_death_screen(void) {
+    draw_ingame_world_view(0);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, 1615855616, -1602211792);
+    draw_centered_text("Game over!", g_gui_w / 2, 30, 16777215);
+    draw_centered_text("Score: &e0", g_gui_w / 2, 100, 16777215);
+    draw_all_buttons();
 }
 
 static void draw_chat_screen(void) {
@@ -271,6 +407,14 @@ static void draw_chat_screen(void) {
     snprintf(field, sizeof(field), "> %s%s", g_chat_input, (g_ingame_ticks / 6 % 2 == 0) ? "_" : "");
     draw_rect(2, g_gui_h - 14, g_gui_w - 2, g_gui_h - 2, (int)0x80000000u);
     draw_text(field, 4, g_gui_h - 12, 14737632);
+}
+
+
+static void draw_world_type_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Create new world", g_gui_w / 2, 40, 16777215);
+    draw_centered_text("Choose terrain type", g_gui_w / 2, 64, 10526880);
+    draw_all_buttons();
 }
 
 static void draw_generating_screen(void) {
