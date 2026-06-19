@@ -233,7 +233,11 @@ static int psp_gu_init(void) {
     sceGuDepthRange(65535, 0);
     sceGuScissor(0, 0, PEX_PSP_SCR_WIDTH, PEX_PSP_SCR_HEIGHT);
     sceGuEnable(GU_SCISSOR_TEST);
-    sceGuDepthFunc(GU_LEQUAL);
+    /* PSP depth is configured with sceGuDepthRange(65535, 0) and sceGuClearDepth(0),
+       so visible 3D geometry must pass with GEQUAL. Using LEQUAL makes normal
+       world geometry fail depth against the cleared depth buffer, leaving the
+       HUD/UI visible over a black world. */
+    sceGuDepthFunc(GU_GEQUAL);
     sceGuFrontFace(GU_CW);
     sceGuDisable(GU_CULL_FACE);
     sceGuEnable(GU_TEXTURE_2D);
@@ -282,7 +286,13 @@ static void glClear(GLbitfield mask){ (void)mask; sceGuClearColor(g_psp_clear_co
 static void glEnable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=1; else if(cap==GL_BLEND)g_psp_blend_enabled=1; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=1; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=1; else if(cap==GL_CULL_FACE)g_psp_cull_enabled=1; }
 static void glDisable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=0; else if(cap==GL_BLEND)g_psp_blend_enabled=0; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=0; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=0; else if(cap==GL_CULL_FACE)g_psp_cull_enabled=0; }
 static void glBlendFunc(GLenum s, GLenum d){ (void)s; (void)d; }
-static void glDepthFunc(GLenum f){ if(f==GL_LESS) sceGuDepthFunc(GU_LESS); else sceGuDepthFunc(GU_LEQUAL); }
+static void glDepthFunc(GLenum f){
+    (void)f;
+    /* PSP uses a reversed depth range in this shim: clear depth is 0 and
+       nearer geometry produces larger depth values. Force GEQUAL so 3D world
+       geometry is not rejected while HUD/menu drawing still works normally. */
+    sceGuDepthFunc(GU_GEQUAL);
+}
 static void glDepthMask(GLboolean flag){ sceGuDepthMask(flag?GU_FALSE:GU_TRUE); }
 static void glAlphaFunc(GLenum func, GLfloat ref){ (void)func; sceGuAlphaFunc(GU_GREATER, (int)(ref*255.0f), 0xff); }
 static void glLineWidth(GLfloat w){ (void)w; }
