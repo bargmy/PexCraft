@@ -27,7 +27,10 @@ jobs:
           set -euxo pipefail
           mkdir -p logs build dist
           python3 -m pip install --user pillow
-          python3 tools/prepare_psp_assets.py build/psp_generated/assets src/assets/psp_embedded_classic_pack.c src/assets/psp_embedded_mcrw_assets.c 2>&1 | tee logs/prepare-psp-assets.log
+          python3 tools/prepare_psp_assets.py build/psp_generated/assets src/assets/psp_embedded_classic_pack.c build/psp_generated/psp_mcrw_assets.pak build/psp_generated/psp_mcrw_assets.S 2>&1 | tee logs/prepare-psp-assets.log
+          echo "Generated compact PSP asset pak summary:" | tee -a logs/prepare-psp-assets.log
+          ls -lh build/psp_generated/psp_mcrw_assets.pak build/psp_generated/psp_mcrw_assets.S | tee -a logs/prepare-psp-assets.log
+          python3 -c 'import pathlib, struct, sys; p=pathlib.Path("build/psp_generated/psp_mcrw_assets.pak").read_bytes(); magic=p[:8]; count=struct.unpack_from("<I", p, 8)[0] if len(p)>=12 and magic==b"PXCMCRW1" else 0; print("embedded_pak_magic", magic, "asset_count", count, "pak_bytes", len(p)); sys.exit(0 if count > 0 else "no PSP MCRW assets were packed")'
 
       - name: Build EBOOT.PBP with PSPSDK
         shell: bash

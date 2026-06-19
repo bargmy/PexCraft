@@ -16,12 +16,11 @@ static int file_exists(const char *path) {
 }
 
 #if defined(PEX_PLATFORM_PSP)
-#ifndef PEX_PSP_EMBEDDED_ASSET_TYPE_DEFINED
-#define PEX_PSP_EMBEDDED_ASSET_TYPE_DEFINED
-typedef struct PexPspEmbeddedAsset { const char *name; const unsigned char *data; unsigned int len; } PexPspEmbeddedAsset;
-#endif
-extern const PexPspEmbeddedAsset pexcraft_psp_embedded_assets[];
-extern const unsigned int pexcraft_psp_embedded_asset_count;
+/* Generated in GitHub Actions as build/psp_generated/psp_mcrw_assets.pak
+   and embedded into EBOOT.PBP through build/psp_generated/psp_mcrw_assets.S.
+   This avoids committing a giant generated 0xNN C-array file. */
+extern const unsigned char pexcraft_psp_mcrw_assets_pak_start[];
+extern const unsigned char pexcraft_psp_mcrw_assets_pak_end[];
 #endif
 
 static void free_texture(Texture *t) {
@@ -60,25 +59,122 @@ static const char *pex_basename_asset(const char *path) {
 }
 
 static int load_mcrw_memory(Texture *t, const unsigned char *data, unsigned int len, int repeat) {
-    if (!data || len < 12 || memcmp(data, "MCRW", 4) != 0) return 0;
+    if (!data || len < 12) { PEX_PSP_LOGF("MCRW memory reject: null/short len=%u", len); return 0; }
+    if (memcmp(data, "MCRW", 4) != 0) { PEX_PSP_LOGF("MCRW memory reject: bad magic %02x %02x %02x %02x", data[0], data[1], data[2], data[3]); return 0; }
     int w = read_u32_le_mem(data + 4);
     int h = read_u32_le_mem(data + 8);
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { PEX_PSP_LOGF("MCRW memory reject: bad dims %dx%d len=%u", w, h, len); return 0; }
     size_t n = (size_t)w * (size_t)h * 4;
-    if ((size_t)len < 12 + n) return 0;
+    if ((size_t)len < 12 + n) { PEX_PSP_LOGF("MCRW memory reject: truncated %dx%d need=%u got=%u", w, h, (unsigned)(12+n), len); return 0; }
     unsigned char *rgba = (unsigned char*)malloc(n);
-    if (!rgba) return 0;
+    if (!rgba) { PEX_PSP_LOGF("MCRW memory reject: malloc failed bytes=%u", (unsigned)n); return 0; }
     memcpy(rgba, data + 12, n);
-    return upload_rgba_texture(t, w, h, rgba, repeat);
+    int ok = upload_rgba_texture(t, w, h, rgba, repeat);
+    PEX_PSP_LOGF("MCRW upload %dx%d repeat=%d -> tex=%u ok=%d", w, h, repeat, (unsigned)(t ? t->id : 0), ok);
+    return ok;
+}
+
+static int psp_make_fallback_texture(Texture *t, const char *name, int w, int h, int repeat) {
+    if (w <= 0) w = 16;
+    if (h <= 0) h = 16;
+    size_t n = (size_t)w * (size_t)h * 4;
+    unsigned char *rgba = (unsigned char*)malloc(n);
+    if (!rgba) { PEX_PSP_LOGF("fallback texture malloc failed for %s bytes=%u", name ? name : "?", (unsigned)n); return 0; }
+    unsigned int seed = 2166136261u;
+    if (name) for (const unsigned char *p=(const unsigned char*)name; *p; ++p) seed = (seed ^ *p) * 16777619u;
+    unsigned char r = (unsigned char)(96u + (seed & 0x7fu));
+    unsigned char g = (unsigned char)(96u + ((seed >> 8) & 0x7fu));
+    unsigned char b = (unsigned char)(96u + ((seed >> 16) & 0x7fu));
+    for (int y=0; y<h; ++y) {
+        for (int x=0; x<w; ++x) {
+            int k = (y*w + x) * 4;
+            int checker = ((x >> 3) ^ (y >> 3)) & 1;
+            rgba[k+0] = checker ? r : (unsigned char)(r/2);
+            rgba[k+1] = checker ? g : (unsigned char)(g/2);
+            rgba[k+2] = checker ? b : (unsigned char)(b/2);
+            rgba[k+3] = 255;
+        }
+    }
+    int ok = upload_rgba_texture(t, w, h, rgba, repeat);
+    PEX_PSP_LOGF("fallback texture %s %dx%d -> tex=%u ok=%d", name ? name : "?", w, h, (unsigned)(t ? t->id : 0), ok);
+    return ok;
+}
+
+static const unsigned char *psp_mcrw_pak_data(size_t *out_len) {
+    const unsigned char *start = pexcraft_psp_mcrw_assets_pak_start;
+    const unsigned char *end = pexcraft_psp_mcrw_assets_pak_end;
+    size_t len = 0;
+    if (end >= start) len = (size_t)(end - start);
+    if (out_len) *out_len = len;
+    return start;
+}
+
+static unsigned int psp_embedded_mcrw_count(void) {
+    size_t len = 0;
+    const unsigned char *pak = psp_mcrw_pak_data(&len);
+    if (!pak || len < 12) return 0;
+    if (memcmp(pak, "PXCMCRW1", 8) != 0) return 0;
+    return (unsigned int)read_u32_le_mem(pak + 8);
+}
+
+static int psp_ascii_ieq_len(const char *a, const unsigned char *b, unsigned int blen) {
+    if (!a || !b) return 0;
+    unsigned int i = 0;
+    for (; i < blen; ++i) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = b[i];
+        if (!ca) return 0;
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+    }
+    return a[i] == '\0';
+}
+
+static int psp_find_embedded_mcrw(const char *base, const unsigned char **out_data, unsigned int *out_len) {
+    size_t len = 0;
+    const unsigned char *pak = psp_mcrw_pak_data(&len);
+    if (out_data) *out_data = NULL;
+    if (out_len) *out_len = 0;
+    if (!pak || len < 12) { PEX_PSP_LOGF("MCRW pak missing/short len=%u", (unsigned)len); return 0; }
+    if (memcmp(pak, "PXCMCRW1", 8) != 0) { PEX_PSP_LOGF("MCRW pak bad magic len=%u", (unsigned)len); return 0; }
+    unsigned int count = (unsigned int)read_u32_le_mem(pak + 8);
+    size_t pos = 12;
+    for (unsigned int i = 0; i < count; ++i) {
+        if (pos + 12 > len) { PEX_PSP_LOGF("MCRW pak truncated entry header i=%u pos=%u len=%u", i, (unsigned)pos, (unsigned)len); return 0; }
+        unsigned int name_len = (unsigned int)read_u32_le_mem(pak + pos + 0);
+        unsigned int data_len = (unsigned int)read_u32_le_mem(pak + pos + 4);
+        unsigned int data_off = (unsigned int)read_u32_le_mem(pak + pos + 8);
+        pos += 12;
+        if (name_len > 255 || pos + name_len > len) { PEX_PSP_LOGF("MCRW pak bad name i=%u name_len=%u", i, name_len); return 0; }
+        const unsigned char *name = pak + pos;
+        pos += name_len;
+        if ((size_t)data_off > len || (size_t)data_len > len || (size_t)data_off + (size_t)data_len > len) {
+            PEX_PSP_LOGF("MCRW pak bad data i=%u off=%u len=%u pak=%u", i, data_off, data_len, (unsigned)len);
+            return 0;
+        }
+        if (psp_ascii_ieq_len(base, name, name_len)) {
+            if (out_data) *out_data = pak + data_off;
+            if (out_len) *out_len = data_len;
+            PEX_PSP_LOGF("MCRW pak hit[%u]: %s len=%u", i, base ? base : "?", data_len);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int load_embedded_mcrw(Texture *t, const char *filename, int repeat) {
     const char *base = pex_basename_asset(filename);
-    for (unsigned int i = 0; i < pexcraft_psp_embedded_asset_count; ++i) {
-        if (pexcraft_psp_embedded_assets[i].name && lstrcmpiA(pexcraft_psp_embedded_assets[i].name, base) == 0) {
-            return load_mcrw_memory(t, pexcraft_psp_embedded_assets[i].data, pexcraft_psp_embedded_assets[i].len, repeat);
-        }
+    unsigned int count = psp_embedded_mcrw_count();
+    size_t pak_len = 0;
+    (void)psp_mcrw_pak_data(&pak_len);
+    PEX_PSP_LOGF("embedded pak lookup: %s base=%s count=%u pak_len=%u", filename ? filename : "?", base ? base : "?", count, (unsigned)pak_len);
+    const unsigned char *data = NULL;
+    unsigned int len = 0;
+    if (psp_find_embedded_mcrw(base, &data, &len)) {
+        return load_mcrw_memory(t, data, len, repeat);
     }
+    PEX_PSP_LOGF("embedded pak miss: %s", base ? base : "?");
     return 0;
 }
 #endif
@@ -420,6 +516,35 @@ static void scan_texture_packs(void) {
 }
 
 static int load_default_textures(void) {
+#if defined(PEX_PLATFORM_PSP)
+    /* PSP must never stop booting just because an embedded texture is missing.
+       Log every asset, then create a tiny fallback texture so we can reach the
+       menu and debug the renderer/input on real hardware/PPSSPP. */
+    int missing = 0;
+#define PEX_PSP_LOAD_REQ(tex, file, repeat, fw, fh) do {         PEX_PSP_LOGF("LOAD_REQ %s", file);         if (!load_mcrw((tex), (file), (repeat))) {             ++missing;             PEX_PSP_LOGF("LOAD_REQ failed: %s; using fallback", file);             psp_make_fallback_texture((tex), (file), (fw), (fh), (repeat));         }     } while (0)
+#define PEX_PSP_LOAD_OPT(tex, file, repeat, fw, fh) do {         PEX_PSP_LOGF("LOAD_OPT %s", file);         if (!load_mcrw((tex), (file), (repeat))) {             PEX_PSP_LOGF("LOAD_OPT missing: %s; using fallback", file);             psp_make_fallback_texture((tex), (file), (fw), (fh), (repeat));         }     } while (0)
+    PEX_PSP_LOAD_REQ(&tex_bg, "gui_background.mcrw", 1, 16, 16);
+    PEX_PSP_LOAD_REQ(&tex_gui, "gui_gui.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_REQ(&tex_font, "font_default.mcrw", 0, 128, 128);
+    PEX_PSP_LOAD_REQ(&tex_terrain, "terrain.mcrw", 1, 128, 128);
+    PEX_PSP_LOAD_REQ(&tex_black, "title_black.mcrw", 1, 16, 16);
+    PEX_PSP_LOAD_OPT(&tex_pack, "pack.mcrw", 0, 32, 32);
+    PEX_PSP_LOAD_OPT(&tex_default_pack_icon, "pack.mcrw", 0, 32, 32);
+    PEX_PSP_LOAD_OPT(&tex_unknown_pack, "unknown_pack.mcrw", 0, 32, 32);
+    PEX_PSP_LOAD_REQ(&tex_icons, "gui_icons.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_REQ(&tex_inventory, "gui_inventory.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_workbench, "gui_crafting_table.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_furnace_gui, "gui_furnace.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_chest_gui, "gui_chest.mcrw", 0, 256, 256);
+    free_texture(&tex_chest_entity);
+    free_texture(&tex_large_chest_entity);
+    PEX_PSP_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
+    PEX_PSP_LOGF("load_default_textures PSP done: missing_required=%d embedded_count=%u", missing, psp_embedded_mcrw_count());
+#undef PEX_PSP_LOAD_REQ
+#undef PEX_PSP_LOAD_OPT
+    return 1;
+#else
     int ok = 1;
     ok = load_mcrw(&tex_bg, "gui_background.mcrw", 1) && ok;
     ok = load_mcrw(&tex_gui, "gui_gui.mcrw", 0) && ok;
@@ -439,6 +564,7 @@ static int load_default_textures(void) {
     load_mcrw(&tex_items, "gui_items.mcrw", 0);
     ok = load_mcrw(&tex_steve, "mob_char.mcrw", 0) && ok;
     return ok;
+#endif
 }
 
 static void try_pack_texture(TexturePackEntry *e, Texture *tex, const char *rel, int repeat) {

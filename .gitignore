@@ -15,3 +15,7 @@ build/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Generated PSP asset embedding source/object inputs
+src/assets/psp_embedded_mcrw_assets.c
+build/psp_generated/

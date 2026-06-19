@@ -1,5 +1,5 @@
 TARGET = PEXCRAFT
-OBJS = main_psp.o
+OBJS = main_psp.o build/psp_generated/psp_mcrw_assets.o
 
 # GitHub Actions Docker shells do not always export PSPDEV/PSPSDK.
 # Keep this Makefile usable both locally and inside pspdev/pspdev.
@@ -20,5 +20,8 @@ LDFLAGS += -Wl,-Map,PEXCRAFT.map
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PEXCRAFT
+
+build/psp_generated/psp_mcrw_assets.o: build/psp_generated/psp_mcrw_assets.S build/psp_generated/psp_mcrw_assets.pak
+	$(CC) $(ASFLAGS) -c $< -o $@
 
 include $(PSPSDK)/lib/build.mak
