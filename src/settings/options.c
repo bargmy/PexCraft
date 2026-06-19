@@ -53,7 +53,11 @@ static int parse_renderer_backend(const char *s) {
 }
 
 static int renderer_backend_supported(int backend) {
+#ifdef PEX_PLATFORM_SDL2
+    return backend == RENDERER_OPENGL;
+#else
     return backend == RENDERER_OPENGL || backend == RENDERER_D3D9 || backend == RENDERER_D3D11;
+#endif
 }
 
 static const char *renderer_backend_label(int backend) {
@@ -253,9 +257,14 @@ static void bump_option(OptionId opt, int delta) {
     else if (opt == OPT_FULLSCREEN) { set_fullscreen_enabled(!g_opts.fullscreen); return; }
     else if (opt == OPT_SHOW_FPS) g_opts.show_fps = !g_opts.show_fps;
     else if (opt == OPT_RENDERER) {
+#ifdef PEX_PLATFORM_SDL2
+        (void)delta;
+        g_selected_renderer_backend = RENDERER_OPENGL;
+#else
         g_selected_renderer_backend += delta;
         if (g_selected_renderer_backend < 0) g_selected_renderer_backend = RENDERER_COUNT - 1;
         if (g_selected_renderer_backend >= RENDERER_COUNT) g_selected_renderer_backend = 0;
+#endif
         return; /* restart-required setting is saved only from the confirmation screen */
     }
     save_options();

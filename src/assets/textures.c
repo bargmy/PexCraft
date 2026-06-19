@@ -60,6 +60,34 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
     return load_mcrw_path(t, path, repeat);
 }
 
+#ifdef PEX_PLATFORM_SDL2
+static int ensure_wic(void) { return 1; }
+
+static int load_png_texture(Texture *t, const char *path, int repeat) {
+    if (!file_exists(path)) return 0;
+    char norm[MAX_PATHBUF];
+    pex_normalize_path(norm, sizeof(norm), path);
+    SDL_Surface *surf = IMG_Load(norm);
+    if (!surf) {
+        log_msg("Failed to load PNG texture: %s", norm);
+        return 0;
+    }
+    SDL_Surface *rgba_surf = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_FreeSurface(surf);
+    if (!rgba_surf) return 0;
+    int w = rgba_surf->w;
+    int h = rgba_surf->h;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { SDL_FreeSurface(rgba_surf); return 0; }
+    size_t bytes = (size_t)w * (size_t)h * 4;
+    unsigned char *rgba = (unsigned char*)malloc(bytes);
+    if (!rgba) { SDL_FreeSurface(rgba_surf); return 0; }
+    unsigned char *src = (unsigned char*)rgba_surf->pixels;
+    for (int y = 0; y < h; ++y) memcpy(rgba + (size_t)y * (size_t)w * 4, src + (size_t)y * (size_t)rgba_surf->pitch, (size_t)w * 4);
+    SDL_FreeSurface(rgba_surf);
+    log_msg("Loaded PNG texture: %s (%dx%d)", norm, w, h);
+    return upload_rgba_texture(t, w, h, rgba, repeat);
+}
+#else
 static int ensure_wic(void) {
     if (g_wic_factory) return 1;
     HRESULT hr = CoInitialize(NULL);
@@ -118,6 +146,7 @@ fail:
     log_msg("Failed to load PNG texture: %s", path);
     return 0;
 }
+#endif
 
 static int load_png_asset(Texture *t, const char *rel, int repeat) {
     char path[MAX_PATHBUF];
@@ -147,6 +176,13 @@ static int load_custom_skin_path(const char *path, int persist) {
 }
 
 static int choose_and_import_skin(void) {
+#ifdef PEX_PLATFORM_SDL2
+    char path[MAX_PATHBUF];
+    snprintf(path, sizeof(path), "%s/custom.png", g_skin_dir);
+    if (load_custom_skin_path(path, 1)) return 1;
+    open_notice("Skins", "Linux/SDL2 has no native file dialog here.", "Copy your PNG to ~/.pexcraft/skins/custom.png first.");
+    return 0;
+#else
     char chosen[MAX_PATHBUF] = "";
     OPENFILENAMEA ofn;
     memset(&ofn, 0, sizeof(ofn));
@@ -167,6 +203,7 @@ static int choose_and_import_skin(void) {
         return 0;
     }
     return load_custom_skin_path(dst, 1);
+#endif
 }
 
 

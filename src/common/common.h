@@ -3,6 +3,9 @@
 
 // PEXCRAFT Beta 1.0 title/options/world UI port to C/Win32/OpenGL.
 // Build with MinGW32: gcc -std=c99 -O2 -mwindows main.c -o pexcraft.exe -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lwinmm
+#ifdef PEX_PLATFORM_SDL2
+#include "../platform/sdl2_compat.h"
+#else
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -24,6 +27,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <direct.h>
+#endif
 
 #include "net_protocol.h"
 
@@ -247,10 +251,17 @@ typedef struct FlatFallingBlock {
     double path_start_time;
 } FlatFallingBlock;
 
+#ifdef PEX_PLATFORM_SDL2
+static HINSTANCE g_inst;
+static SDL_Window *g_hwnd;
+static HDC g_hdc;
+static SDL_GLContext g_glrc;
+#else
 static HINSTANCE g_inst;
 static HWND g_hwnd;
 static HDC g_hdc;
 static HGLRC g_glrc;
+#endif
 static int g_win_w = 854, g_win_h = 480;
 static int g_render_w = 854, g_render_h = 480; /* current framebuffer target; can be smaller than window */
 static int g_gui_w = 427, g_gui_h = 240, g_gui_scale = 2;
@@ -281,7 +292,11 @@ static int g_renderer_prompt_target_screen = SCREEN_TITLE;
 static int g_renderer_backend_unavailable_notice = 0;
 static int g_texpack_drag_anchor = -1;
 static char g_current_texpack[MAX_LABEL] = "Default";
+#ifndef PEX_PLATFORM_SDL2
 static IWICImagingFactory *g_wic_factory = NULL;
+#else
+static void *g_wic_factory = NULL;
+#endif
 static char g_notice_title[MAX_LABEL] = "";
 static char g_notice_line1[MAX_LABEL] = "";
 static char g_notice_line2[MAX_LABEL] = "";
@@ -941,7 +956,11 @@ static const char *opt_names[OPT_COUNT] = {
 };
 static const int opt_is_slider[OPT_COUNT] = {1,1,0,1,1,0,0,1,1,0,0,0,0,0};
 static const int opt_is_boolean[OPT_COUNT] = {0,0,1,0,0,1,1,0,0,0,0,1,1,0};
+#ifdef PEX_PLATFORM_SDL2
+static const char *renderer_backend_names[RENDERER_COUNT] = {"SDL2/OpenGL", "Direct3D 9", "Direct3D 11"};
+#else
 static const char *renderer_backend_names[RENDERER_COUNT] = {"OpenGL", "Direct3D 9", "Direct3D 11"};
+#endif
 static const char *renderer_backend_keys[RENDERER_COUNT] = {"opengl", "d3d9", "d3d11"};
 static const char *render_distance_names[4] = {"Far", "Normal", "Short", "Tiny"};
 static const char *difficulty_names[4] = {"Peaceful", "Easy", "Normal", "Hard"};
