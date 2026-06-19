@@ -61,9 +61,26 @@ jobs:
                 test -f "$PSPSDK/lib/build.mak"
                 make -f Makefile.psp clean || true
                 make -f Makefile.psp -j2
+                psp-size PEXCRAFT.elf || true
+                ls -lh PEXCRAFT.elf EBOOT.PBP || true
+                if [ -f PEXCRAFT.map ]; then tail -80 PEXCRAFT.map || true; fi
               '
             test -f EBOOT.PBP
             file EBOOT.PBP || true
+            python3 - <<'PBPVERIFY'
+            import struct, pathlib, sys
+            p = pathlib.Path('EBOOT.PBP').read_bytes()
+            if len(p) < 40 or p[:4] != b'\0PBP':
+                raise SystemExit('EBOOT.PBP is not a valid PBP header')
+            ver = struct.unpack_from('<I', p, 4)[0]
+            offs = struct.unpack_from('<8I', p, 8)
+            data_psp = offs[6]
+            data_psar = offs[7]
+            magic = p[data_psp:data_psp+4]
+            print('PBP version=0x%08x DATA.PSP offset=%d size=%d magic=%r' % (ver, data_psp, data_psar-data_psp, magic))
+            if magic != b'\x7fELF':
+                raise SystemExit('DATA.PSP inside EBOOT.PBP does not start with ELF magic; PBP would not boot')
+            PBPVERIFY
           } 2>&1 | tee logs/build-psp.log
 
       - name: Package PSP zip

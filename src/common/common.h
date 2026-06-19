@@ -396,16 +396,27 @@ static PexSystemInfo g_system_info;
 static double g_system_info_last_time = -10.0;
 
 
-#define FLAT_WORLD_MIN (-(FLAT_WORLD_SIZE / 2))
-#define FLAT_WORLD_MAX ((FLAT_WORLD_SIZE / 2) - 1)
-/* Active in-memory terrain window. 512 keeps enough chunks generated for
-   higher render distances without the huge memory cost of a full 32-chunk radius. */
+/* Active in-memory terrain window.
+   PC builds keep the larger 512x256x512 world window.
+   PSP cannot load an ELF with the PC-sized static terrain arrays: the three
+   flat-world arrays alone are about 201 MB at 512*256*512.  Keep a separate
+   low-memory PSP window so PPSSPP/real PSP can actually load the EBOOT. */
+#if defined(PEX_PLATFORM_PSP)
+#define FLAT_WORLD_SIZE 128
+#define FLAT_WORLD_Y_MIN 0
+#define FLAT_WORLD_Y_MAX 127
+#define MAX_DROP_ENTITIES 64
+#define MAX_FALLING_BLOCK_ENTITIES 64
+#else
 #define FLAT_WORLD_SIZE 512
 #define FLAT_WORLD_Y_MIN 0
 #define FLAT_WORLD_Y_MAX 255
-#define FLAT_WORLD_HEIGHT (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN + 1)
 #define MAX_DROP_ENTITIES 256
 #define MAX_FALLING_BLOCK_ENTITIES PEX_NET_MAX_FALLING_BLOCKS
+#endif
+#define FLAT_WORLD_MIN (-(FLAT_WORLD_SIZE / 2))
+#define FLAT_WORLD_MAX ((FLAT_WORLD_SIZE / 2) - 1)
+#define FLAT_WORLD_HEIGHT (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN + 1)
 #define ITEM_MAX_STACK 64
 /* Block and item IDs from the uploaded deobfuscated Java client. */
 #define BLOCK_STONE 1
@@ -650,28 +661,44 @@ typedef struct FlatDroppedItem {
     int pickup_delay;
 } FlatDroppedItem;
 
+#if defined(PEX_PLATFORM_PSP)
+#define MAX_CHEST_TILES 64
+#else
 #define MAX_CHEST_TILES 1024
+#endif
 typedef struct ChestTile {
     int active;
     int x, y, z;
     ItemStack slots[27];
 } ChestTile;
 
+#if defined(PEX_PLATFORM_PSP)
+#define MAX_BUTTON_TIMERS 32
+#else
 #define MAX_BUTTON_TIMERS 128
+#endif
 typedef struct ButtonTimer {
     int active;
     int x, y, z;
     int ticks_left;
 } ButtonTimer;
 
+#if defined(PEX_PLATFORM_PSP)
+#define MAX_PRESSURE_PLATE_TIMERS 32
+#else
 #define MAX_PRESSURE_PLATE_TIMERS 128
+#endif
 typedef struct PressurePlateTimer {
     int active;
     int x, y, z;
     int ticks_left;
 } PressurePlateTimer;
 
+#if defined(PEX_PLATFORM_PSP)
+#define MAX_FURNACE_TILES 64
+#else
 #define MAX_FURNACE_TILES 1024
+#endif
 typedef struct FurnaceTile {
     int active;
     int x, y, z;
@@ -823,7 +850,11 @@ static PexSaveSnapshot *g_save_queue_head = NULL;
 static PexSaveSnapshot *g_save_queue_tail = NULL;
 static CRITICAL_SECTION g_save_cs;
 
+#if defined(PEX_PLATFORM_PSP)
+#define MAX_DIG_PARTICLES 96
+#else
 #define MAX_DIG_PARTICLES 384
+#endif
 typedef struct DigParticle {
     int active;
     int tile;

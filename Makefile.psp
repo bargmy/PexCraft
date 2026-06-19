@@ -12,10 +12,11 @@ ifeq ($(wildcard $(PSPSDK)/lib/build.mak),)
   endif
 endif
 
-CFLAGS = -std=c99 -O2 -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -Isrc
+CFLAGS = -std=c99 -Os -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -DPEX_PSP_LOW_MEMORY=1 -Isrc
 CXXFLAGS = $(CFLAGS)
 ASFLAGS = $(CFLAGS)
 LIBS = -lpspgum -lpspgu -lpsppower -lpsprtc -lz -lm
+LDFLAGS += -Wl,-Map,PEXCRAFT.map
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PEXCRAFT
