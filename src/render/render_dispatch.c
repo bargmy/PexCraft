@@ -77,6 +77,7 @@ static void draw_current_screen(float partial) {
         case SCREEN_TITLE: draw_title_screen(partial); break;
         case SCREEN_OPTIONS: draw_options_screen(); break;
         case SCREEN_OPTIONS_MORE: draw_options_more_screen(); break;
+        case SCREEN_SYSTEM_INFO: draw_system_info_screen(); break;
         case SCREEN_SKINS: draw_skins_screen(); break;
         case SCREEN_CONTROLS: draw_controls_screen(); break;
         case SCREEN_WORLD_SELECT:
@@ -128,6 +129,7 @@ static void render(float partial) {
     setup_gui_projection();
     double render_start_time = now_seconds();
     draw_current_screen(partial);
+    draw_gamepad_virtual_cursor();
     draw_fps_counter();
     pex_renderer_present();
     g_render_ms_last = (now_seconds() - render_start_time) * 1000.0;

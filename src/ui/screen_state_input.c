@@ -8,6 +8,8 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
     g_waiting_key = -1;
+    g_gamepad_menu_index = 0;
+    g_gamepad_virtual_cursor_active = 0;
     if (s == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) classic_resource_size_start_fetch();
     set_mouse_grabbed(s == SCREEN_INGAME);
     clear_buttons();
@@ -68,8 +70,11 @@ static void rebuild_screen(void) {
         Button *renderer = add_button_full(21, g_gui_w / 2 - 100, g_gui_h / 4 + 40, 200, 20, renderer_label, BUTTON_NORMAL);
         renderer->opt = OPT_RENDERER;
         add_button(10, g_gui_w / 2 - 100, g_gui_h / 4 + 72, tr("Skins..."));
+        add_button(22, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Info...");
         add_button_full(199, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Back"), BUTTON_NORMAL);
         add_button_full(200, g_gui_w / 2 + 2, g_gui_h - 52, 98, 20, tr("Done"), BUTTON_NORMAL);
+    } else if (g_screen == SCREEN_SYSTEM_INFO) {
+        add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 24, 200, 20, tr("Back"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SKINS) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h - 76, tr("Import Skin..."));
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Use Default"), BUTTON_NORMAL);
@@ -193,12 +198,15 @@ static void on_button(Button *b) {
         else if (b->id == 300) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         if (b->id == 10) set_screen(SCREEN_SKINS);
+        else if (b->id == 22) set_screen(SCREEN_SYSTEM_INFO);
         else if (b->id == 21) {
             bump_option(OPT_RENDERER, 1);
             get_option_label(OPT_RENDERER, b->label, sizeof(b->label));
         }
         else if (b->id == 199) set_screen(SCREEN_OPTIONS);
         else if (b->id == 200) finish_options_to(g_parent_screen);
+    } else if (g_screen == SCREEN_SYSTEM_INFO) {
+        if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_SKINS) {
         if (b->id == 1) { if (choose_and_import_skin()) set_screen(SCREEN_SKINS); }
         else if (b->id == 2) {
@@ -465,6 +473,7 @@ static void handle_keydown(WPARAM vk) {
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
+        else if (g_screen == SCREEN_SYSTEM_INFO) set_screen(SCREEN_OPTIONS_MORE);
         else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS_MORE);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_WORLD_SELECT) set_screen(g_parent_screen);

@@ -228,6 +228,7 @@ static void main_loop(void) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) sdl2_handle_event(&e);
         pex_profile_add(PROF_PUMP, prof_start);
+        pex_gamepad_update();
         if (g_mp_connected || pex_net_is_connecting()) {
             prof_start = pex_profile_begin();
             pex_net_poll();
@@ -271,7 +272,7 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -316,6 +317,7 @@ int main(int argc, char **argv) {
     free_texture(&tex_black); free_texture(&tex_pack); free_texture(&tex_default_pack_icon); free_texture(&tex_unknown_pack);
     free_texture(&tex_icons); free_texture(&tex_inventory); free_texture(&tex_items); free_texture(&tex_steve);
     free_texture(&tex_chest_entity); free_texture(&tex_large_chest_entity); free_texture_pack_icons();
+    pex_gamepad_shutdown();
     pex_renderer_shutdown();
     if (g_glrc) { SDL_GL_DeleteContext(g_glrc); g_glrc = NULL; }
     pex_join_save_thread_for_exit();

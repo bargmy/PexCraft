@@ -108,6 +108,7 @@ typedef enum ScreenId {
     SCREEN_TITLE,
     SCREEN_OPTIONS,
     SCREEN_OPTIONS_MORE,
+    SCREEN_SYSTEM_INFO,
     SCREEN_SKINS,
     SCREEN_CONTROLS,
     SCREEN_WORLD_SELECT,
@@ -197,6 +198,43 @@ typedef struct Options {
     char username[32];
     int keys[10];
 } Options;
+
+#define PEX_GAMEPAD_MAX 8
+#define PEX_GAMEPAD_DEADZONE 0.20f
+
+typedef struct PexGamepadState {
+    int connected;
+    int slot;
+    char name[128];
+    char kind[48];
+    int is_xbox;
+    int is_dualshock;
+    float lx, ly, rx, ry, lt, rt;
+    int a, b, x, y;
+    int lb, rb, back, start, guide;
+    int ls, rs;
+    int dpad_up, dpad_down, dpad_left, dpad_right;
+    int prev_a, prev_b, prev_x, prev_y;
+    int prev_lb, prev_rb, prev_back, prev_start;
+    int prev_lt, prev_rt;
+    int prev_dpad_up, prev_dpad_down, prev_dpad_left, prev_dpad_right;
+} PexGamepadState;
+
+typedef struct PexSystemInfo {
+    char client_version[64];
+    char platform[64];
+    char renderer_backend[64];
+    char gpu_vendor[128];
+    char gpu_renderer[160];
+    char gpu_version[128];
+    char display_name[128];
+    int display_refresh_hz;
+    int screen_w, screen_h;
+    unsigned long long ram_total_mb;
+    unsigned long long ram_available_mb;
+    int network_available;
+} PexSystemInfo;
+
 
 typedef struct PexNetRenderPlayerState {
     int active;
@@ -339,6 +377,21 @@ static int g_player_health = 20;
 static int g_player_prev_health = 20;
 static int g_player_armor = 0;
 static int g_ingame_ticks = 0;
+
+static PexGamepadState g_gamepads[PEX_GAMEPAD_MAX];
+static int g_gamepad_count = 0;
+static int g_gamepad_primary = -1;
+static int g_gamepad_vk_state[512];
+static float g_gamepad_virtual_cursor_x = 213.0f;
+static float g_gamepad_virtual_cursor_y = 120.0f;
+static int g_gamepad_virtual_cursor_active = 0;
+static int g_gamepad_menu_index = 0;
+static double g_gamepad_nav_last_time = 0.0;
+static double g_gamepad_slider_last_time = 0.0;
+static double g_gamepad_click_last_time = 0.0;
+static double g_gamepad_probe_last_time = -10.0;
+static PexSystemInfo g_system_info;
+static double g_system_info_last_time = -10.0;
 
 
 #define FLAT_WORLD_MIN (-(FLAT_WORLD_SIZE / 2))

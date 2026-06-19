@@ -57,6 +57,7 @@ static void handle_grabbed_mouse_move(int px, int py) {
 }
 
 static int key_down_vk(int vk) {
+    if (vk >= 0 && vk < (int)ARRAY_COUNT(g_gamepad_vk_state) && g_gamepad_vk_state[vk]) return 1;
     if (vk == VK_LBUTTON) return g_sdl2_mouse_buttons[1] != 0;
     int idx = sdl2_vk_index(vk);
     return idx ? g_sdl2_key_state[idx] : 0;

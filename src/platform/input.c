@@ -87,6 +87,7 @@ static void handle_grabbed_mouse_move(int px, int py) {
 
 static int key_down_vk(int vk) {
     if (vk <= 0) return 0;
+    if (vk >= 0 && vk < (int)ARRAY_COUNT(g_gamepad_vk_state) && g_gamepad_vk_state[vk]) return 1;
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 

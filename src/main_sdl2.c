@@ -66,5 +66,6 @@ static void steve_set_tint(float r, float g, float b);
 #include "render/world_view.c"
 #include "render/item_render.c"
 #include "ui/gui.c"
+#include "platform/gamepad.c"
 #include "render/render_dispatch.c"
 #include "platform/sdl2_app.c"

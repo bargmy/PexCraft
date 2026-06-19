@@ -309,6 +309,7 @@ static void main_loop(void) {
             DispatchMessageA(&msg);
         }
         pex_profile_add(PROF_PUMP, prof_start);
+        pex_gamepad_update();
         if (g_mp_connected || pex_net_is_connecting()) {
             prof_start = pex_profile_begin();
             pex_net_poll();
@@ -418,6 +419,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     free_texture(&tex_chest_entity);
     free_texture(&tex_large_chest_entity);
     free_texture_pack_icons();
+    pex_gamepad_shutdown();
     pex_renderer_shutdown();
     if (g_wic_factory) { IWICImagingFactory_Release(g_wic_factory); g_wic_factory = NULL; }
     CoUninitialize();
