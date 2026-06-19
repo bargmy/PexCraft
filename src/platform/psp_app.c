@@ -39,6 +39,7 @@ static void psp_boot_debug_stagef(const char *fmt, ...) {
     char line[96];
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
+    PEX_PSP_LOGF("BOOT STAGE %03d: %s", g_psp_boot_debug_stage + 1, line);
     snprintf(g_psp_boot_debug_lines[g_psp_boot_debug_count % 18], 96, "%s", line);
     g_psp_boot_debug_count++;
     g_psp_boot_debug_stage++;
@@ -52,6 +53,7 @@ static void psp_boot_debug_pause(const char *footer, int usec) {
 }
 
 static void psp_boot_debug_hold(const char *footer) {
+    PEX_PSP_LOGF("DEBUG HOLD: %s", footer ? footer : "PSP debug hold");
     char line[160];
     snprintf(line, sizeof(line), "%s\n\nDebug hold: START+SELECT+L+R exits.", footer ? footer : "PSP debug hold");
     for (;;) {
@@ -166,13 +168,21 @@ static void sleep_for_max_fps(double frame_start_time) {
 
 static void main_loop(void) {
     psp_boot_debug_stagef("main loop entered");
+    PEX_PSP_LOGF("MAIN_LOOP enter: screen=%d running=%d", g_screen, g_running);
     g_last_time = now_seconds();
     double tick_accum = 0.0;
     int psp_debug_first_frame = 1;
+    unsigned int psp_verbose_frame = 0;
     while (g_running) {
+        psp_verbose_frame++;
+        if (psp_verbose_frame <= 120 || (psp_verbose_frame % 60u) == 0u) {
+            PEX_PSP_LOGF("FRAME %u begin: screen=%d ticks=%llu", psp_verbose_frame, g_screen, (unsigned long long)g_ticks);
+        }
         pex_profile_frame_begin();
         double prof_start = pex_profile_begin();
+        if (psp_verbose_frame <= 20) PEX_PSP_LOGF("FRAME %u: pex_gamepad_update begin", psp_verbose_frame);
         pex_gamepad_update();
+        if (psp_verbose_frame <= 20) PEX_PSP_LOGF("FRAME %u: pex_gamepad_update end", psp_verbose_frame);
         pex_profile_add(PROF_PUMP, prof_start);
 
         double frame_start_time = now_seconds();
@@ -184,12 +194,15 @@ static void main_loop(void) {
         tick_accum += dt * 20.0;
         int ticks_this_frame = 0;
         while (tick_accum >= 1.0 && ticks_this_frame < 2) {
+            if (psp_verbose_frame <= 60) PEX_PSP_LOGF("FRAME %u: tick begin screen=%d", psp_verbose_frame, g_screen);
             double tick_start = pex_profile_begin();
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
             if (g_screen == SCREEN_GENERATING) {
                 double t_worldgen = pex_profile_begin();
+                PEX_PSP_LOGF("FRAME %u: worldgen_tick begin", psp_verbose_frame);
                 worldgen_tick();
+                PEX_PSP_LOGF("FRAME %u: worldgen_tick end", psp_verbose_frame);
                 pex_profile_add(PROF_WORLDGEN_TICK, t_worldgen);
             }
             if (g_screen == SCREEN_TEXPACK_INSTALL) classic_pack_install_tick();
@@ -200,9 +213,12 @@ static void main_loop(void) {
             pex_profile_add(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
+            if (psp_verbose_frame <= 60) PEX_PSP_LOGF("FRAME %u: tick end ticks=%llu", psp_verbose_frame, (unsigned long long)g_ticks);
         }
         if (ticks_this_frame >= 2 && tick_accum > 1.0) tick_accum = 1.0;
+        if (psp_verbose_frame <= 120 || (psp_verbose_frame % 60u) == 0u) PEX_PSP_LOGF("FRAME %u: render begin alpha=%.3f screen=%d", psp_verbose_frame, (double)tick_accum, g_screen);
         render((float)tick_accum);
+        if (psp_verbose_frame <= 120 || (psp_verbose_frame % 60u) == 0u) PEX_PSP_LOGF("FRAME %u: render end", psp_verbose_frame);
         if (psp_debug_first_frame) {
             psp_debug_first_frame = 0;
             psp_boot_debug_stagef("first frame rendered");
@@ -210,42 +226,84 @@ static void main_loop(void) {
         }
         sleep_for_max_fps(frame_start_time);
         pex_profile_frame_end();
+        if (psp_verbose_frame <= 120 || (psp_verbose_frame % 60u) == 0u) PEX_PSP_LOGF("FRAME %u end: running=%d screen=%d", psp_verbose_frame, g_running, g_screen);
     }
+    PEX_PSP_LOGF("MAIN_LOOP exit: running=%d screen=%d ticks=%llu", g_running, g_screen, (unsigned long long)g_ticks);
     psp_boot_debug_stagef("main loop exited: running=%d screen=%d ticks=%llu", g_running, g_screen, (unsigned long long)g_ticks);
     psp_boot_debug_hold("Game loop ended without a PSP exception.");
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    PEX_PSP_LOGF("main() entered");
     pspDebugScreenInit();
+    PEX_PSP_LOGF("pspDebugScreenInit done");
+    psp_boot_debug_stagef("module loaded / main entered");
+    PEX_PSP_LOGF("psp_setup_callbacks begin");
     psp_setup_callbacks();
+    PEX_PSP_LOGF("psp_setup_callbacks end");
+    psp_boot_debug_stagef("exit callback registered");
+    PEX_PSP_LOGF("init_dirs begin");
     init_dirs();
+    PEX_PSP_LOGF("init_dirs end: exe=%s data=%s saves=%s", g_exe_dir, g_data_dir, g_saves_dir);
+    psp_boot_debug_stagef("memory-only dirs initialized");
+    PEX_PSP_LOGF("load_options begin");
     load_options();
+    PEX_PSP_LOGF("load_options end: user=%s fps=%d renderer=%d", g_opts.username, g_opts.max_fps, g_selected_renderer_backend);
+    psp_boot_debug_stagef("RAM options loaded");
+    PEX_PSP_LOGF("embedded classic pack prepare begin");
     psp_install_embedded_classic_pack_if_needed();
+    PEX_PSP_LOGF("embedded classic pack prepare end");
+    psp_boot_debug_stagef("embedded classic pack ready");
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username[0] ? g_opts.username : "Player");
+    PEX_PSP_LOGF("username set: %s", g_multiplayer_username);
     g_hwnd = (HWND)1;
     g_win_w = 480; g_win_h = 272; g_render_w = 480; g_render_h = 272; g_gui_w = 480; g_gui_h = 272; g_gui_scale = 1;
+    PEX_PSP_LOGF("setup_scale begin");
     setup_scale();
+    PEX_PSP_LOGF("setup_scale end: gui=%dx%d scale=%d", g_gui_w, g_gui_h, g_gui_scale);
+    psp_boot_debug_stagef("screen scale set");
+    PEX_PSP_LOGF("InitializeCriticalSection begin");
     InitializeCriticalSection(&g_save_cs);
+    PEX_PSP_LOGF("InitializeCriticalSection end");
+    psp_boot_debug_stagef("save lock initialized");
+    PEX_PSP_LOGF("pex_renderer_backend_init begin");
     if (!pex_renderer_backend_init(g_hwnd)) {
+        PEX_PSP_LOGF("pex_renderer_backend_init FAILED");
         psp_boot_debug_hold("PEXCRAFT failed to initialize PSP GU or assets.");
         return 1;
     }
+    PEX_PSP_LOGF("pex_renderer_backend_init end OK");
+    psp_boot_debug_stagef("renderer/backend initialized");
+    PEX_PSP_LOGF("set_screen(SCREEN_TITLE) begin");
     set_screen(SCREEN_TITLE);
+    PEX_PSP_LOGF("set_screen(SCREEN_TITLE) end: screen=%d", g_screen);
+    psp_boot_debug_stagef("title screen selected");
+    PEX_PSP_LOGF("calling main_loop");
     main_loop();
+    PEX_PSP_LOGF("main_loop returned; cleanup begin");
     set_mouse_grabbed(0);
+    PEX_PSP_LOGF("save_world_state_for_exit begin");
     save_world_state_for_exit();
+    PEX_PSP_LOGF("save_world_state_for_exit end");
+    PEX_PSP_LOGF("async_section_mesh_shutdown begin");
     async_section_mesh_shutdown();
+    PEX_PSP_LOGF("async_section_mesh_shutdown end");
+    PEX_PSP_LOGF("free textures begin");
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);
     free_texture(&tex_black); free_texture(&tex_pack); free_texture(&tex_default_pack_icon); free_texture(&tex_unknown_pack);
     free_texture(&tex_icons); free_texture(&tex_inventory); free_texture(&tex_items); free_texture(&tex_steve);
     free_texture(&tex_chest_entity); free_texture(&tex_large_chest_entity); free_texture_pack_icons();
+    PEX_PSP_LOGF("free textures end");
     pex_gamepad_shutdown();
+    PEX_PSP_LOGF("pex_renderer_shutdown begin");
     pex_renderer_shutdown();
+    PEX_PSP_LOGF("pex_renderer_shutdown end");
     pex_join_save_thread_for_exit();
     DeleteCriticalSection(&g_save_cs);
+    PEX_PSP_LOGF("cleanup finished; entering hold");
     psp_boot_debug_hold("Cleanup finished. The game would normally call sceKernelExitGame now.");
     return 0;
 }

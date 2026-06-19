@@ -25,6 +25,7 @@ static GLenum g_psp_begin_mode = 0;
 static int g_psp_begin_active = 0;
 static float g_psp_cur_u = 0.0f, g_psp_cur_v = 0.0f;
 static int g_psp_viewport[4] = {0,0,480,272};
+static unsigned int g_psp_verbose_frame_counter = 0;
 
 typedef struct PspImmVertex { float u, v; unsigned int color; float x, y, z; } PspImmVertex;
 static PspImmVertex g_psp_imm[PEX_PSP_MAX_IMM_VERTS];
@@ -107,15 +108,29 @@ static void psp_flush_immediate(void) {
 }
 
 static int psp_gu_init(void) {
+    PEX_PSP_LOGF("GU_INIT enter");
+    PEX_PSP_LOGF("GU_INIT before sceKernelDcacheWritebackInvalidateAll");
     sceKernelDcacheWritebackInvalidateAll();
+    PEX_PSP_LOGF("GU_INIT after sceKernelDcacheWritebackInvalidateAll");
+    PEX_PSP_LOGF("GU_INIT before sceGuInit");
     sceGuInit();
+    PEX_PSP_LOGF("GU_INIT after sceGuInit");
     g_psp_drawbuf = (void*)0;
     g_psp_dispbuf = (void*)0x88000;
     g_psp_depthbuf = (void*)0x110000;
+    PEX_PSP_LOGF("GU_INIT buffers draw=%p disp=%p depth=%p list=%p", g_psp_drawbuf, g_psp_dispbuf, g_psp_depthbuf, g_psp_gu_list);
+    PEX_PSP_LOGF("GU_INIT before sceGuStart");
     sceGuStart(GU_DIRECT, g_psp_gu_list);
+    PEX_PSP_LOGF("GU_INIT after sceGuStart");
+    PEX_PSP_LOGF("GU_INIT before sceGuDrawBuffer");
     sceGuDrawBuffer(GU_PSM_8888, g_psp_drawbuf, PEX_PSP_FB_WIDTH);
+    PEX_PSP_LOGF("GU_INIT after sceGuDrawBuffer");
+    PEX_PSP_LOGF("GU_INIT before sceGuDispBuffer");
     sceGuDispBuffer(PEX_PSP_SCR_WIDTH, PEX_PSP_SCR_HEIGHT, g_psp_dispbuf, PEX_PSP_FB_WIDTH);
+    PEX_PSP_LOGF("GU_INIT after sceGuDispBuffer");
+    PEX_PSP_LOGF("GU_INIT before sceGuDepthBuffer");
     sceGuDepthBuffer(g_psp_depthbuf, PEX_PSP_FB_WIDTH);
+    PEX_PSP_LOGF("GU_INIT after sceGuDepthBuffer");
     sceGuOffset(2048 - (PEX_PSP_SCR_WIDTH/2), 2048 - (PEX_PSP_SCR_HEIGHT/2));
     sceGuViewport(2048, 2048, PEX_PSP_SCR_WIDTH, PEX_PSP_SCR_HEIGHT);
     sceGuDepthRange(65535, 0);
@@ -126,19 +141,37 @@ static int psp_gu_init(void) {
     sceGuEnable(GU_TEXTURE_2D);
     sceGuEnable(GU_BLEND);
     sceGuEnable(GU_DEPTH_TEST);
+    PEX_PSP_LOGF("GU_INIT state commands submitted");
+    PEX_PSP_LOGF("GU_INIT before sceGuFinish");
     sceGuFinish();
+    PEX_PSP_LOGF("GU_INIT after sceGuFinish");
+    PEX_PSP_LOGF("GU_INIT before sceGuSync");
     sceGuSync(0,0);
+    PEX_PSP_LOGF("GU_INIT after sceGuSync");
+    PEX_PSP_LOGF("GU_INIT before sceDisplayWaitVblankStart");
     sceDisplayWaitVblankStart();
+    PEX_PSP_LOGF("GU_INIT after sceDisplayWaitVblankStart");
+    PEX_PSP_LOGF("GU_INIT before sceGuDisplay(TRUE)");
     sceGuDisplay(GU_TRUE);
+    PEX_PSP_LOGF("GU_INIT after sceGuDisplay(TRUE)");
     sceGumMatrixMode(GU_PROJECTION); sceGumLoadIdentity(); sceGumPerspective(70.0f, 480.0f/272.0f, 0.05f, 1024.0f);
     sceGumMatrixMode(GU_VIEW); sceGumLoadIdentity();
     sceGumMatrixMode(GU_MODEL); sceGumLoadIdentity();
+    PEX_PSP_LOGF("GU_INIT matrices initialized; return OK");
     return 1;
 }
 
-static void psp_gu_shutdown(void) { sceGuTerm(); }
-static void psp_gu_begin_frame(void) { sceGuStart(GU_DIRECT, g_psp_gu_list); sceGuClearColor(g_psp_clear_color); sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT); }
-static void psp_gu_end_frame(void) { sceGuFinish(); sceGuSync(0,0); sceDisplayWaitVblankStart(); sceGuSwapBuffers(); }
+static void psp_gu_shutdown(void) { PEX_PSP_LOGF("GU_SHUTDOWN sceGuTerm"); sceGuTerm(); }
+static void psp_gu_begin_frame(void) {
+    g_psp_verbose_frame_counter++;
+    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u begin", g_psp_verbose_frame_counter);
+    sceGuStart(GU_DIRECT, g_psp_gu_list); sceGuClearColor(g_psp_clear_color); sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
+}
+static void psp_gu_end_frame(void) {
+    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u before finish/sync/swap", g_psp_verbose_frame_counter);
+    sceGuFinish(); sceGuSync(0,0); sceDisplayWaitVblankStart(); sceGuSwapBuffers();
+    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u after swap", g_psp_verbose_frame_counter);
+}
 
 static void glClearColor(float r,float g,float b,float a){ g_psp_clear_color=psp_rgba_to_abgr(r,g,b,a); }
 static void glClear(GLbitfield mask){ (void)mask; sceGuClearColor(g_psp_clear_color); sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT); }

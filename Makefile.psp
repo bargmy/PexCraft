@@ -12,7 +12,7 @@ ifeq ($(wildcard $(PSPSDK)/lib/build.mak),)
   endif
 endif
 
-CFLAGS = -std=c99 -Os -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -DPEX_PSP_LOW_MEMORY=1 -DPEX_PSP_MEMORY_ONLY=1 -DPEX_PSP_BOOT_DEBUG=1 -Isrc
+CFLAGS = -std=c99 -Os -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -DPEX_PSP_LOW_MEMORY=1 -DPEX_PSP_MEMORY_ONLY=1 -DPEX_PSP_BOOT_DEBUG=1 -DPEX_PSP_VERBOSE=1 -Isrc
 CXXFLAGS = $(CFLAGS)
 ASFLAGS = $(CFLAGS)
 LIBS = -lpspgum -lpspgu -lpsppower -lpsprtc -lz -lm

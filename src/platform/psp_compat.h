@@ -32,6 +32,33 @@
 #include <time.h>
 #include <limits.h>
 
+#ifndef PEX_PSP_VERBOSE
+#define PEX_PSP_VERBOSE 1
+#endif
+
+#if PEX_PSP_VERBOSE
+static inline void pex_psp_logf(const char *fmt, ...) {
+    char msg[384];
+    char out[448];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt ? fmt : "", ap);
+    va_end(ap);
+    snprintf(out, sizeof(out), "[PEXPSP %08u] %s\n", (unsigned)sceKernelGetSystemTimeLow(), msg);
+    fputs(out, stdout);
+    fflush(stdout);
+    fputs(out, stderr);
+    fflush(stderr);
+    sceIoWrite(1, out, (SceSize)strlen(out));
+    sceIoWrite(2, out, (SceSize)strlen(out));
+}
+#define PEX_PSP_LOGF(...) pex_psp_logf(__VA_ARGS__)
+#else
+static inline void pex_psp_logf(const char *fmt, ...) { (void)fmt; }
+#define PEX_PSP_LOGF(...) do { } while (0)
+#endif
+
+
 /* OpenGL-ish constants/types consumed by the shared renderer code.  The PSP
    backend below implements the small fixed-function subset PEXCraft uses. */
 typedef unsigned int GLenum;
