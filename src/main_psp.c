@@ -35,6 +35,7 @@ static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot
 
 #include "render/psp_gu_renderer.c"
 #include "platform/psp_filesystem.c"
+#include "assets/psp_embedded_mcrw_assets.c"
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"

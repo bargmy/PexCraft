@@ -27,7 +27,7 @@ jobs:
           set -euxo pipefail
           mkdir -p logs build dist
           python3 -m pip install --user pillow
-          python3 tools/prepare_psp_assets.py build/psp_generated/assets src/assets/psp_embedded_classic_pack.c 2>&1 | tee logs/prepare-psp-assets.log
+          python3 tools/prepare_psp_assets.py build/psp_generated/assets src/assets/psp_embedded_classic_pack.c src/assets/psp_embedded_mcrw_assets.c 2>&1 | tee logs/prepare-psp-assets.log
 
       - name: Build EBOOT.PBP with PSPSDK
         shell: bash
@@ -73,7 +73,6 @@ jobs:
           rm -rf build/package
           mkdir -p build/package/PSP/GAME/PEXCRAFT
           cp EBOOT.PBP build/package/PSP/GAME/PEXCRAFT/EBOOT.PBP
-          cp -a build/psp_generated/assets build/package/PSP/GAME/PEXCRAFT/assets
           cat > build/package/PSP/GAME/PEXCRAFT/options.txt <<'OPT'
           music:1
           sound:1
@@ -107,6 +106,7 @@ jobs:
           OPT
           cat > build/package/PSP/GAME/PEXCRAFT/PSP_CONTROLS.txt <<'TXT'
           PEXCraft PSP controls
+          Assets are embedded in EBOOT.PBP. No external assets folder is required.
           Analog stick: move
           Square/Triangle/Cross/Circle: hold to move camera left/right/down/up
           Select: jump

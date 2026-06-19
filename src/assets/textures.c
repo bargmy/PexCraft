@@ -6,10 +6,23 @@ static int read_u32_le(FILE *f) {
     return (int)(b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24));
 }
 
+static int read_u32_le_mem(const unsigned char *p) {
+    return (int)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
+}
+
 static int file_exists(const char *path) {
     DWORD attr = GetFileAttributesA(path);
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
+
+#if defined(PEX_PLATFORM_PSP)
+#ifndef PEX_PSP_EMBEDDED_ASSET_TYPE_DEFINED
+#define PEX_PSP_EMBEDDED_ASSET_TYPE_DEFINED
+typedef struct PexPspEmbeddedAsset { const char *name; const unsigned char *data; unsigned int len; } PexPspEmbeddedAsset;
+#endif
+extern const PexPspEmbeddedAsset pexcraft_psp_embedded_assets[];
+extern const unsigned int pexcraft_psp_embedded_asset_count;
+#endif
 
 static void free_texture(Texture *t) {
     if (!t) return;
@@ -37,6 +50,39 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     return t->id != 0;
 }
 
+#if defined(PEX_PLATFORM_PSP)
+static const char *pex_basename_asset(const char *path) {
+    const char *base = path;
+    for (const char *p = path; p && *p; ++p) {
+        if (*p == '/' || *p == '\\') base = p + 1;
+    }
+    return base;
+}
+
+static int load_mcrw_memory(Texture *t, const unsigned char *data, unsigned int len, int repeat) {
+    if (!data || len < 12 || memcmp(data, "MCRW", 4) != 0) return 0;
+    int w = read_u32_le_mem(data + 4);
+    int h = read_u32_le_mem(data + 8);
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
+    size_t n = (size_t)w * (size_t)h * 4;
+    if ((size_t)len < 12 + n) return 0;
+    unsigned char *rgba = (unsigned char*)malloc(n);
+    if (!rgba) return 0;
+    memcpy(rgba, data + 12, n);
+    return upload_rgba_texture(t, w, h, rgba, repeat);
+}
+
+static int load_embedded_mcrw(Texture *t, const char *filename, int repeat) {
+    const char *base = pex_basename_asset(filename);
+    for (unsigned int i = 0; i < pexcraft_psp_embedded_asset_count; ++i) {
+        if (pexcraft_psp_embedded_assets[i].name && lstrcmpiA(pexcraft_psp_embedded_assets[i].name, base) == 0) {
+            return load_mcrw_memory(t, pexcraft_psp_embedded_assets[i].data, pexcraft_psp_embedded_assets[i].len, repeat);
+        }
+    }
+    return 0;
+}
+#endif
+
 static int load_mcrw_path(Texture *t, const char *path, int repeat) {
     FILE *f = fopen(path, "rb");
     if (!f) return 0;
@@ -53,10 +99,19 @@ static int load_mcrw_path(Texture *t, const char *path, int repeat) {
 }
 
 static int load_mcrw(Texture *t, const char *filename, int repeat) {
+#if defined(PEX_PLATFORM_PSP)
+    if (load_embedded_mcrw(t, filename, repeat)) return 1;
+#endif
     char path[MAX_PATHBUF];
+#if defined(PEX_PLATFORM_PSP)
+    snprintf(path, sizeof(path), "assets/%s", filename);
+    if (load_mcrw_path(t, path, repeat)) return 1;
+    snprintf(path, sizeof(path), "./assets/%s", filename);
+#else
     snprintf(path, sizeof(path), "assets\\%s", filename);
     if (load_mcrw_path(t, path, repeat)) return 1;
     snprintf(path, sizeof(path), ".\\assets\\%s", filename);
+#endif
     return load_mcrw_path(t, path, repeat);
 }
 
