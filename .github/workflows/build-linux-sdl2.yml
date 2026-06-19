@@ -9,7 +9,10 @@ permissions:
   contents: read
 
 env:
-  CHAT_ID: :contentReference[oaicite:0]{index=0}  build-linux-sdl2:
+  CHAT_ID: '-1004462705182'
+
+jobs:
+  build-linux-sdl2:
     runs-on: ubuntu-latest
 
     env:
@@ -19,8 +22,10 @@ env:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux SDL2 dependencies
+      - name: Install dependencies
+        shell: bash
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -33,30 +38,60 @@ env:
             curl
 
       - name: Build SDL2 client
+        shell: bash
         run: |
-          chmod +x ./build_linux_sdl2.sh
-          ./build_linux_sdl2.sh
+          set -o pipefail
+          bash ./build_linux_sdl2.sh
 
-      - name: Upload GitHub artifact
+      - name: Print build logs
+        if: always()
+        shell: bash
+        run: |
+          echo "===== logs directory ====="
+          ls -la logs || true
+          echo
+          for f in logs/*.log; do
+            [ -f "$f" ] || continue
+            echo "===== $f ====="
+            cat "$f"
+            echo
+          done
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-client-linux-sdl2-logs
+          path: logs/*.log
+          if-no-files-found: warn
+
+      - name: Upload client zip artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-client-linux-sdl2-x64
           path: dist/pexcraft-client-linux-sdl2-x64.zip
+          if-no-files-found: error
 
-      - name: Send build to Telegram
+      - name: Send client zip to Telegram
+        if: success()
         shell: bash
         run: |
+          set -euo pipefail
+
           if [ -z "${TOKEN}" ]; then
             echo "TOKEN secret is missing; skipping Telegram upload."
             exit 0
           fi
 
-          if [ ! -f "dist/pexcraft-client-linux-sdl2-x64.zip" ]; then
-            echo "Build zip not found."
+          ZIP="dist/pexcraft-client-linux-sdl2-x64.zip"
+          if [ ! -f "$ZIP" ]; then
+            echo "Missing $ZIP"
             exit 1
           fi
 
-          curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
+          curl --fail-with-body -sS \
+            -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
             -F "chat_id=${CHAT_ID}" \
             -F "caption=PEXCraft client Linux SDL2 x64 build" \
-            -F "document=@dist/pexcraft-client-linux-sdl2-x64.zip"
+            -F "document=@${ZIP}"
