@@ -67,20 +67,7 @@ jobs:
               '
             test -f EBOOT.PBP
             file EBOOT.PBP || true
-            python3 - <<'PBPVERIFY'
-            import struct, pathlib, sys
-            p = pathlib.Path('EBOOT.PBP').read_bytes()
-            if len(p) < 40 or p[:4] != b'\0PBP':
-                raise SystemExit('EBOOT.PBP is not a valid PBP header')
-            ver = struct.unpack_from('<I', p, 4)[0]
-            offs = struct.unpack_from('<8I', p, 8)
-            data_psp = offs[6]
-            data_psar = offs[7]
-            magic = p[data_psp:data_psp+4]
-            print('PBP version=0x%08x DATA.PSP offset=%d size=%d magic=%r' % (ver, data_psp, data_psar-data_psp, magic))
-            if magic != b'\x7fELF':
-                raise SystemExit('DATA.PSP inside EBOOT.PBP does not start with ELF magic; PBP would not boot')
-            PBPVERIFY
+            python3 -c $'import struct, pathlib\np = pathlib.Path("EBOOT.PBP").read_bytes()\nif len(p) < 40 or p[:4] != b"\\0PBP":\n    raise SystemExit("EBOOT.PBP is not a valid PBP header")\nver = struct.unpack_from("<I", p, 4)[0]\noffs = struct.unpack_from("<8I", p, 8)\ndata_psp = offs[6]\ndata_psar = offs[7]\nmagic = p[data_psp:data_psp+4]\nprint("PBP version=0x%08x DATA.PSP offset=%d size=%d magic=%r" % (ver, data_psp, data_psar-data_psp, magic))\nif magic != b"\\x7fELF":\n    raise SystemExit("DATA.PSP inside EBOOT.PBP does not start with ELF magic; PBP would not boot")'
           } 2>&1 | tee logs/build-psp.log
 
       - name: Package PSP zip
@@ -90,51 +77,51 @@ jobs:
           rm -rf build/package
           mkdir -p build/package/PSP/GAME/PEXCRAFT
           cp EBOOT.PBP build/package/PSP/GAME/PEXCRAFT/EBOOT.PBP
-          cat > build/package/PSP/GAME/PEXCRAFT/options.txt <<'OPT'
-          music:1
-          sound:1
-          invertYMouse:false
-          mouseSensitivity:0.5
-          viewDistance:4
-          bobView:true
-          anaglyph3d:false
-          maxFps:60
-          fov:70
-          difficulty:2
-          fancyGraphics:false
-          fullscreen:false
-          showFps:false
-          renderer:opengl
-          ignoreClassicResourcesWarning:true
-          skin:Minecraft Classic
-          skinPath:
-          lastServer:
-          username:Player
-          key_key.forward:17
-          key_key.left:30
-          key_key.back:31
-          key_key.right:32
-          key_key.jump:57
-          key_key.sneak:42
-          key_key.drop:16
-          key_key.inventory:23
-          key_key.chat:20
-          key_key.fog:33
-          OPT
-          cat > build/package/PSP/GAME/PEXCRAFT/PSP_CONTROLS.txt <<'TXT'
-          PEXCraft PSP controls
-          Assets are embedded in EBOOT.PBP. No external assets folder is required.
-          Analog stick: move
-          Square/Triangle/Cross/Circle: hold to move camera left/right/down/up
-          Select: jump
-          Start: pause
-          L: place/use
-          R: break/attack
-          D-pad left/right: previous/next hotbar slot
-          D-pad up: inventory
-          D-pad down: sneak/shift
-          Inventory/crafting/furnace/chest: virtual cursor, Cross click, Square right-click, Circle back
-          TXT
+          {
+            printf '%s\n' 'music:1'
+            printf '%s\n' 'sound:1'
+            printf '%s\n' 'invertYMouse:false'
+            printf '%s\n' 'mouseSensitivity:0.5'
+            printf '%s\n' 'viewDistance:4'
+            printf '%s\n' 'bobView:true'
+            printf '%s\n' 'anaglyph3d:false'
+            printf '%s\n' 'maxFps:60'
+            printf '%s\n' 'fov:70'
+            printf '%s\n' 'difficulty:2'
+            printf '%s\n' 'fancyGraphics:false'
+            printf '%s\n' 'fullscreen:false'
+            printf '%s\n' 'showFps:false'
+            printf '%s\n' 'renderer:psp_gu'
+            printf '%s\n' 'ignoreClassicResourcesWarning:true'
+            printf '%s\n' 'skin:Minecraft Classic'
+            printf '%s\n' 'skinPath:'
+            printf '%s\n' 'lastServer:'
+            printf '%s\n' 'username:Player'
+            printf '%s\n' 'key_key.forward:17'
+            printf '%s\n' 'key_key.left:30'
+            printf '%s\n' 'key_key.back:31'
+            printf '%s\n' 'key_key.right:32'
+            printf '%s\n' 'key_key.jump:57'
+            printf '%s\n' 'key_key.sneak:42'
+            printf '%s\n' 'key_key.drop:16'
+            printf '%s\n' 'key_key.inventory:23'
+            printf '%s\n' 'key_key.chat:20'
+            printf '%s\n' 'key_key.fog:33'
+          } > build/package/PSP/GAME/PEXCRAFT/options.txt
+          {
+            printf '%s\n' 'PEXCraft PSP controls'
+            printf '%s\n' 'Assets are embedded in EBOOT.PBP. No external assets folder is required.'
+            printf '%s\n' 'Analog stick: move'
+            printf '%s\n' 'Square/Triangle/Cross/Circle: hold to move camera left/right/down/up'
+            printf '%s\n' 'Select: jump'
+            printf '%s\n' 'Start: pause'
+            printf '%s\n' 'L: place/use'
+            printf '%s\n' 'R: break/attack'
+            printf '%s\n' 'D-pad left/right: previous/next hotbar slot'
+            printf '%s\n' 'D-pad up: inventory'
+            printf '%s\n' 'D-pad down: sneak/shift'
+            printf '%s\n' 'Inventory/crafting/furnace/chest: virtual cursor, Cross click, Square right-click, Circle back'
+          } > build/package/PSP/GAME/PEXCRAFT/PSP_CONTROLS.txt
           (cd build/package && zip -r ../../dist/pexcraft-psp-eboot.zip PSP)
           ls -lh dist/pexcraft-psp-eboot.zip
 
@@ -179,28 +166,4 @@ jobs:
             exit 0
           fi
           test -f "$ZIP_PATH"
-          python3 - <<'PY'
-          import os, sys, uuid, mimetypes, urllib.request
-          token = os.environ['TOKEN']
-          chat_id = os.environ['CHAT_ID']
-          zip_path = os.environ['ZIP_PATH']
-          caption = os.environ['CAPTION'] + f"\nRepo: {os.environ.get('GITHUB_REPOSITORY','')}\nCommit: {os.environ.get('GITHUB_SHA','')[:12]}"
-          boundary = '----pexcraft-' + uuid.uuid4().hex
-          parts = []
-          def field(name, value):
-              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
-          def filefield(name, path):
-              filename = os.path.basename(path)
-              ctype = mimetypes.guess_type(filename)[0] or 'application/zip'
-              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {ctype}\r\n\r\n'.encode())
-              with open(path, 'rb') as f:
-                  parts.append(f.read())
-              parts.append(b'\r\n')
-          field('chat_id', chat_id)
-          field('caption', caption)
-          filefield('document', zip_path)
-          parts.append(f'--{boundary}--\r\n'.encode())
-          req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendDocument', data=b''.join(parts), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
-          with urllib.request.urlopen(req, timeout=180) as r:
-              sys.stdout.write(r.read().decode('utf-8', 'replace'))
-          PY
+          python3 -c $'import os, sys, uuid, mimetypes, urllib.request\ntoken = os.environ["TOKEN"]\nchat_id = os.environ["CHAT_ID"]\nzip_path = os.environ["ZIP_PATH"]\ncaption = os.environ["CAPTION"] + "\\nRepo: " + os.environ.get("GITHUB_REPOSITORY", "") + "\\nCommit: " + os.environ.get("GITHUB_SHA", "")[:12]\nboundary = "----pexcraft-" + uuid.uuid4().hex\nparts = []\ndef field(name, value):\n    parts.append(("--%s\\r\\nContent-Disposition: form-data; name=\\"%s\\"\\r\\n\\r\\n%s\\r\\n" % (boundary, name, value)).encode())\ndef filefield(name, path):\n    filename = os.path.basename(path)\n    ctype = mimetypes.guess_type(filename)[0] or "application/zip"\n    parts.append(("--%s\\r\\nContent-Disposition: form-data; name=\\"%s\\"; filename=\\"%s\\"\\r\\nContent-Type: %s\\r\\n\\r\\n" % (boundary, name, filename, ctype)).encode())\n    with open(path, "rb") as f:\n        parts.append(f.read())\n    parts.append(b"\\r\\n")\nfield("chat_id", chat_id)\nfield("caption", caption)\nfilefield("document", zip_path)\nparts.append(("--%s--\\r\\n" % boundary).encode())\nreq = urllib.request.Request("https://api.telegram.org/bot%s/sendDocument" % token, data=b"".join(parts), headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})\nwith urllib.request.urlopen(req, timeout=180) as r:\n    sys.stdout.write(r.read().decode("utf-8", "replace"))'
