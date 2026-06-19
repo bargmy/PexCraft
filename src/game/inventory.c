@@ -231,6 +231,9 @@ static int flat_chunk_buf_index(int lx, int y, int lz) {
 }
 
 static void flat_chunk_delta_path_current(int cx, int cz, char *out, size_t cap, int create_dir) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)cx; (void)cz; (void)create_dir; if (cap) out[0] = 0; return;
+#endif
     if (!g_loaded_world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -245,6 +248,9 @@ static void flat_chunk_delta_path_current(int cx, int cz, char *out, size_t cap,
 }
 
 static void flat_chunk_delta_path_legacy(int cx, int cz, char *out, size_t cap) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)cx; (void)cz; if (cap) out[0] = 0; return;
+#endif
     if (!g_loaded_world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -371,6 +377,9 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
 }
 
 static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)cx; (void)cz; return;
+#endif
     if (!g_loaded_world_dir[0]) return;
     char path[MAX_PATHBUF];
     flat_chunk_delta_path_current(cx, cz, path, sizeof(path), 0);
@@ -451,6 +460,9 @@ static void flat_chunk_delta_path_legacy_for_dir(const char *world_dir, int cx, 
 
 static void load_modified_flat_chunk_delta_into_buffers_for_dir(const char *world_dir, int cx, int cz,
                                                                 unsigned char *buf, unsigned char *meta) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)world_dir; (void)cx; (void)cz; (void)buf; (void)meta; return;
+#endif
     if (!world_dir || !world_dir[0] || !buf || !meta) return;
     char path[MAX_PATHBUF];
     flat_chunk_delta_path_current_for_dir(world_dir, cx, cz, path, sizeof(path), 0);
@@ -504,6 +516,10 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    if (lcz >= 0 && lcz < FLAT_RENDER_CHUNKS && lcx >= 0 && lcx < FLAT_RENDER_CHUNKS) g_flat_world_chunk_modified[lcz][lcx] = 0;
+    return;
+#endif
     if (!g_loaded_world_dir[0]) return;
     if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) return;
     if (!g_flat_world_chunk_modified[lcz][lcx]) return;
@@ -560,6 +576,10 @@ static void save_one_modified_flat_chunk(int lcx, int lcz) {
 }
 
 static void save_modified_flat_chunks_sync(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
+    return;
+#endif
     if (!g_loaded_world_dir[0]) return;
     for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++) {
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++) {

@@ -636,6 +636,9 @@ static int pex_save_enqueue_snapshot(PexSaveSnapshot *ss) {
 }
 
 static void pex_request_modified_chunk_save_async(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    return;
+#endif
     if (!g_loaded_world_dir[0]) return;
 
     PexSaveSnapshot *ss = pex_save_snapshot_create(0);
@@ -653,6 +656,12 @@ static void pex_request_modified_chunk_save_async(void) {
 }
 
 static void save_current_world_state_sync(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    g_save_dirty = 0;
+    g_last_autosave_tick = g_ingame_ticks;
+    g_save_message_ticks = 0;
+    return;
+#endif
     if (!g_loaded_world_dir[0]) return;
 
     /* Terrain comes from the seed + generator kind.  Only edited chunks are
@@ -776,6 +785,12 @@ static void save_current_world_state_sync(void) {
 }
 
 static void save_current_world_state(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    g_save_dirty = 0;
+    g_last_autosave_tick = g_ingame_ticks;
+    g_save_message_ticks = 0;
+    return;
+#endif
     if (!g_loaded_world_dir[0]) return;
 
     PexSaveSnapshot *ss = pex_save_snapshot_create(1);
@@ -796,6 +811,9 @@ static void save_current_world_state(void) {
 
 static int load_current_world_state(void) {
     g_last_load_state_had_terrain = 0;
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    return 0;
+#endif
     if (!g_loaded_world_dir[0]) return 0;
 
     FILE *f = open_current_world_state_file();
@@ -1091,10 +1109,12 @@ static void leave_world_to_title(void) {
     if (g_mp_connected) {
         pex_net_disconnect();
     }
+#if !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY)
     if (!g_mp_connected && g_loaded_world_dir[0]) {
         save_current_world_state();
         write_session_lock(g_loaded_world_dir);
     }
+#endif
     g_loaded_world_dir[0] = 0;
     g_loaded_world_name[0] = 0;
     g_chat_input[0] = 0;
@@ -1111,7 +1131,11 @@ static void start_world_generation(int slot) {
     g_world_seed = g_worldgen.seed;
     g_world_type = g_pending_world_type;
     snprintf(g_worldgen.world_name, sizeof(g_worldgen.world_name), "World%d", slot);
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/World%d", slot);
+#else
     snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s\\World%d", g_save_dir, slot);
+#endif
     snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating level");
     snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
     g_worldgen.progress = 0;
@@ -1120,6 +1144,12 @@ static void start_world_generation(int slot) {
     g_worldgen.terrain_total = 0;
     g_worldgen.terrain_done = 0;
 
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    /* PSP test port: no Memory Stick persistence.  Generate into RAM only. */
+    g_worldgen.existing_world = 0;
+    snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating RAM world");
+    snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
+#else
     char level_path[MAX_PATHBUF];
     snprintf(level_path, sizeof(level_path), "%s\\level.dat", g_worldgen.world_dir);
     if (file_exists(level_path)) {
@@ -1139,6 +1169,7 @@ static void start_world_generation(int slot) {
         snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
     }
+#endif
     set_screen(SCREEN_GENERATING);
 }
 
@@ -1152,6 +1183,11 @@ static void worldgen_tick(void) {
         snprintf(g_loaded_world_dir, sizeof(g_loaded_world_dir), "%s", g_worldgen.world_dir);
         snprintf(g_loaded_world_name, sizeof(g_loaded_world_name), "%s",
                  g_worldgen.world_name[0] ? g_worldgen.world_name : "World");
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+        g_world_type = g_pending_world_type;
+        g_world_seed = g_worldgen.seed;
+        g_worldgen.loaded_state = 0;
+#else
         g_world_type = read_world_type_for_dir(g_loaded_world_dir);
         {
             long long seed = 0;
@@ -1163,6 +1199,7 @@ static void worldgen_tick(void) {
         g_load_state_skip_terrain_rebuild = 1;
         g_worldgen.loaded_state = load_current_world_state();
         g_load_state_skip_terrain_rebuild = 0;
+#endif
 
         if (!g_worldgen.loaded_state) {
             inventory_reset();

@@ -28,8 +28,8 @@ static void set_default_options(void) {
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
 #else
     g_opts.ignore_classic_resources_warning = 0;
-#endif
     snprintf(g_opts.skin, sizeof(g_opts.skin), "Default");
+#endif
     g_opts.skin_path[0] = 0;
     g_opts.last_server[0] = 0;
     snprintf(g_opts.username, sizeof(g_opts.username), "Player");
@@ -77,6 +77,14 @@ static const char *renderer_backend_label(int backend) {
 
 static void load_options(void) {
     set_default_options();
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    /* PSP has no required Memory Stick writes; options live in RAM for this run. */
+    g_opts.renderer_backend = RENDERER_OPENGL;
+    g_selected_renderer_backend = RENDERER_OPENGL;
+    g_opts.ignore_classic_resources_warning = 1;
+    snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
+    return;
+#endif
     char path[MAX_PATHBUF];
     path_join(path, sizeof(path), g_mc_dir, "options.txt");
     FILE *f = fopen(path, "r");
@@ -135,6 +143,14 @@ static void load_options(void) {
 }
 
 static void save_options(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    /* Memory-only PSP mode: menu changes apply immediately but are not persisted. */
+    g_opts.renderer_backend = RENDERER_OPENGL;
+    g_selected_renderer_backend = RENDERER_OPENGL;
+    g_opts.ignore_classic_resources_warning = 1;
+    snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
+    return;
+#endif
     char path[MAX_PATHBUF];
     path_join(path, sizeof(path), g_mc_dir, "options.txt");
     FILE *f = fopen(path, "w");

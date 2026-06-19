@@ -77,51 +77,8 @@ jobs:
           rm -rf build/package
           mkdir -p build/package/PSP/GAME/PEXCRAFT
           cp EBOOT.PBP build/package/PSP/GAME/PEXCRAFT/EBOOT.PBP
-          {
-            printf '%s\n' 'music:1'
-            printf '%s\n' 'sound:1'
-            printf '%s\n' 'invertYMouse:false'
-            printf '%s\n' 'mouseSensitivity:0.5'
-            printf '%s\n' 'viewDistance:4'
-            printf '%s\n' 'bobView:true'
-            printf '%s\n' 'anaglyph3d:false'
-            printf '%s\n' 'maxFps:60'
-            printf '%s\n' 'fov:70'
-            printf '%s\n' 'difficulty:2'
-            printf '%s\n' 'fancyGraphics:false'
-            printf '%s\n' 'fullscreen:false'
-            printf '%s\n' 'showFps:false'
-            printf '%s\n' 'renderer:psp_gu'
-            printf '%s\n' 'ignoreClassicResourcesWarning:true'
-            printf '%s\n' 'skin:Minecraft Classic'
-            printf '%s\n' 'skinPath:'
-            printf '%s\n' 'lastServer:'
-            printf '%s\n' 'username:Player'
-            printf '%s\n' 'key_key.forward:17'
-            printf '%s\n' 'key_key.left:30'
-            printf '%s\n' 'key_key.back:31'
-            printf '%s\n' 'key_key.right:32'
-            printf '%s\n' 'key_key.jump:57'
-            printf '%s\n' 'key_key.sneak:42'
-            printf '%s\n' 'key_key.drop:16'
-            printf '%s\n' 'key_key.inventory:23'
-            printf '%s\n' 'key_key.chat:20'
-            printf '%s\n' 'key_key.fog:33'
-          } > build/package/PSP/GAME/PEXCRAFT/options.txt
-          {
-            printf '%s\n' 'PEXCraft PSP controls'
-            printf '%s\n' 'Assets are embedded in EBOOT.PBP. No external assets folder is required.'
-            printf '%s\n' 'Analog stick: move'
-            printf '%s\n' 'Square/Triangle/Cross/Circle: hold to move camera left/right/down/up'
-            printf '%s\n' 'Select: jump'
-            printf '%s\n' 'Start: pause'
-            printf '%s\n' 'L: place/use'
-            printf '%s\n' 'R: break/attack'
-            printf '%s\n' 'D-pad left/right: previous/next hotbar slot'
-            printf '%s\n' 'D-pad up: inventory'
-            printf '%s\n' 'D-pad down: sneak/shift'
-            printf '%s\n' 'Inventory/crafting/furnace/chest: virtual cursor, Cross click, Square right-click, Circle back'
-          } > build/package/PSP/GAME/PEXCRAFT/PSP_CONTROLS.txt
+          # Runtime is memory-only: no options.txt, saves, texturepacks, or assets folder.
+          # The workflow embeds the converted Classic assets directly into EBOOT.PBP.
           (cd build/package && zip -r ../../dist/pexcraft-psp-eboot.zip PSP)
           ls -lh dist/pexcraft-psp-eboot.zip
 

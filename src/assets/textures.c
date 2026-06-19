@@ -306,6 +306,9 @@ static void classic_pack_path(char *out, size_t cap) {
 }
 
 static int classic_pack_installed(void) {
+#if defined(PEX_PLATFORM_PSP)
+    return 1;
+#endif
     char dir[MAX_PATHBUF], terrain[MAX_PATHBUF], gui[MAX_PATHBUF], font[MAX_PATHBUF];
     classic_pack_path(dir, sizeof(dir));
     snprintf(terrain, sizeof(terrain), "%s\\terrain.png", dir);
@@ -315,6 +318,9 @@ static int classic_pack_installed(void) {
 }
 
 static int classic_pack_missing_required_textures(void) {
+#if defined(PEX_PLATFORM_PSP)
+    return 0;
+#endif
     char dir[MAX_PATHBUF], items[MAX_PATHBUF], terrain[MAX_PATHBUF];
     if (!classic_pack_installed()) return 0;
     classic_pack_path(dir, sizeof(dir));
@@ -377,6 +383,14 @@ static void scan_texture_packs(void) {
     d->is_default = 1;
 
     add_builtin_classic_texture_pack(&wanted);
+
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    /* PSP assets are linked into EBOOT.PBP; do not scan or create texturepack folders. */
+    g_selected_texpack = wanted;
+    snprintf(g_current_texpack, sizeof(g_current_texpack), "%s", g_texpacks[g_selected_texpack].name);
+    clamp_texpack_scroll();
+    return;
+#endif
 
     ensure_dir(g_texpack_dir);
     char pattern[MAX_PATHBUF];
@@ -441,6 +455,13 @@ static void apply_texture_pack_index(int index) {
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", g_texpacks[index].name);
     save_options();
     if (!g_texpacks[index].is_default) {
+#if defined(PEX_PLATFORM_PSP)
+        /* The PSP build already uses CI-converted Classic .mcrw assets as its
+           default embedded textures.  No PNG texturepack files are needed. */
+        init_font_widths();
+        log_msg("Applied embedded PSP texture pack: %s", g_current_texpack);
+        return;
+#else
         TexturePackEntry *e = &g_texpacks[index];
         try_pack_texture(e, &tex_terrain, "terrain.png", 1);
         try_pack_texture(e, &tex_gui, "gui\\gui.png", 0);
@@ -458,6 +479,7 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_items, "gui\\items.png", 0);
         try_pack_texture(e, &tex_steve, "mob\\char.png", 0);
         try_pack_texture(e, &tex_steve, "char.png", 0);
+#endif
     }
     if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0);
     init_font_widths();

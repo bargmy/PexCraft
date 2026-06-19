@@ -38,7 +38,7 @@ static void pex_renderer_shutdown(void) { psp_gu_shutdown(); }
 static void pex_gl_suppress_immediate(int on) { (void)on; }
 static void apply_vsync_setting(void) { }
 static void refresh_window_size_after_mode_change(void) { }
-static void set_fullscreen_enabled(int enabled) { g_opts.fullscreen = enabled ? 1 : 0; save_options(); }
+static void set_fullscreen_enabled(int enabled) { g_opts.fullscreen = enabled ? 1 : 0; }
 static void toggle_fullscreen(void) { }
 
 static void pex_join_save_thread_for_exit(void) {
@@ -59,8 +59,12 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    pex_join_save_thread_for_exit();
+#else
     pex_join_save_thread_for_exit();
     save_current_world_state_sync();
+#endif
 }
 
 static void sleep_for_max_fps(double frame_start_time) {

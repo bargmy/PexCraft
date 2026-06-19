@@ -186,6 +186,12 @@ typedef char WCHAR;
 #define VK_F11 0x7A
 #define MAPVK_VK_TO_VSC 0
 
+/* PSP build is memory-card optional: gameplay/options/world state stay in RAM.
+   The EBOOT contains its required assets, so we avoid creating ms0:/ folders/files. */
+#ifndef PEX_PSP_MEMORY_ONLY
+#define PEX_PSP_MEMORY_ONLY 1
+#endif
+
 /* Networking is intentionally disabled for the PSP port for now. */
 typedef int SOCKET;
 typedef struct WSADATA { int unused; } WSADATA;
@@ -210,24 +216,61 @@ static inline void pex_normalize_path(char *dst, size_t cap, const char *src) {
     for (; i + 1 < cap && src[i]; ++i) dst[i] = (src[i] == '\\') ? '/' : src[i];
     dst[i] = 0;
 }
+static inline int pex_file_mode_writes(const char *mode) {
+    if (!mode) return 0;
+    return strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+');
+}
+static inline int pex_path_is_memstick(const char *path) {
+    if (!path) return 0;
+    return !strncasecmp(path, "ms0:", 4) || !strncasecmp(path, "ef0:", 4) ||
+           !strncasecmp(path, "disc0:", 6) || !strncasecmp(path, "memory:", 7);
+}
 static inline FILE *pex_fopen_portable(const char *path, const char *mode) {
+#if PEX_PSP_MEMORY_ONLY
+    /* No runtime filesystem dependency on PSP.  Assets/options/world data are
+       memory-backed; writes are ignored and memstick reads are treated absent. */
+    if (pex_file_mode_writes(mode) || pex_path_is_memstick(path)) return NULL;
+#endif
     char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path); return fopen(tmp, mode);
 }
 #define fopen pex_fopen_portable
 
 static inline DWORD GetFileAttributesA(const char *path) {
+#if PEX_PSP_MEMORY_ONLY
+    if (pex_path_is_memstick(path)) return INVALID_FILE_ATTRIBUTES;
+#endif
     char tmp[1024]; struct stat st; pex_normalize_path(tmp, sizeof(tmp), path);
     if (stat(tmp, &st) != 0) return INVALID_FILE_ATTRIBUTES;
     return S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
 }
 static inline BOOL CreateDirectoryA(const char *path, void *security) {
-    (void)security; char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path);
+    (void)security;
+#if PEX_PSP_MEMORY_ONLY
+    (void)path; return TRUE;
+#else
+    char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path);
     if (mkdir(tmp, 0775) == 0 || errno == EEXIST) return TRUE; return FALSE;
+#endif
 }
-static inline BOOL DeleteFileA(const char *path) { char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path); return remove(tmp) == 0; }
-static inline BOOL RemoveDirectoryA(const char *path) { char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path); return rmdir(tmp) == 0; }
+static inline BOOL DeleteFileA(const char *path) {
+#if PEX_PSP_MEMORY_ONLY
+    (void)path; return TRUE;
+#else
+    char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path); return remove(tmp) == 0;
+#endif
+}
+static inline BOOL RemoveDirectoryA(const char *path) {
+#if PEX_PSP_MEMORY_ONLY
+    (void)path; return TRUE;
+#else
+    char tmp[1024]; pex_normalize_path(tmp, sizeof(tmp), path); return rmdir(tmp) == 0;
+#endif
+}
 static inline BOOL SetFileAttributesA(const char *path, DWORD attr) { (void)path; (void)attr; return TRUE; }
 static inline BOOL CopyFileA(const char *src, const char *dst, BOOL fail_if_exists) {
+#if PEX_PSP_MEMORY_ONLY
+    (void)src; (void)dst; (void)fail_if_exists; return FALSE;
+#else
     char s[1024], d[1024]; pex_normalize_path(s, sizeof(s), src); pex_normalize_path(d, sizeof(d), dst);
     if (fail_if_exists && access(d, F_OK) == 0) return FALSE;
     FILE *in = fopen(s, "rb"); if (!in) return FALSE;
@@ -235,6 +278,7 @@ static inline BOOL CopyFileA(const char *src, const char *dst, BOOL fail_if_exis
     char buf[8192]; size_t n; int ok = 1;
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
     fclose(out); fclose(in); return ok ? TRUE : FALSE;
+#endif
 }
 static inline char *lstrcpynA(char *dst, const char *src, int cap) { if (!dst || cap <= 0) return dst; snprintf(dst, (size_t)cap, "%s", src ? src : ""); return dst; }
 static inline int lstrcmpA(const char *a, const char *b) {
@@ -264,6 +308,10 @@ static inline int pex_fill_find_data(HANDLE h, WIN32_FIND_DATAA *fd) {
     return 0;
 }
 static inline HANDLE FindFirstFileA(const char *pattern, WIN32_FIND_DATAA *fd) {
+#if PEX_PSP_MEMORY_ONLY
+    (void)fd;
+    if (pex_path_is_memstick(pattern)) return INVALID_HANDLE_VALUE;
+#endif
     char p[1024], dirp[1024]; pex_normalize_path(p, sizeof(p), pattern); snprintf(dirp, sizeof(dirp), "%s", p);
     char *slash = strrchr(dirp, '/'); if (slash) *slash = 0; else snprintf(dirp, sizeof(dirp), ".");
     DIR *dir = opendir(dirp); if (!dir) return INVALID_HANDLE_VALUE;

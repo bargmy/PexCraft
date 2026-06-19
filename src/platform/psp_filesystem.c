@@ -56,10 +56,22 @@ static int dir_exists(const char *path) {
 }
 
 static void ensure_dir(const char *path) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)path;
+#else
     if (!dir_exists(path)) CreateDirectoryA(path, NULL);
+#endif
 }
 
 static void init_dirs(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    /* Memory-only PSP mode: keep canonical virtual paths for old shared code,
+       but never create ms0:/ directories. */
+    snprintf(g_mc_dir, sizeof(g_mc_dir), "memory:/PEXCRAFT");
+    path_join(g_save_dir, sizeof(g_save_dir), g_mc_dir, "saves");
+    path_join(g_texpack_dir, sizeof(g_texpack_dir), g_mc_dir, "texturepacks");
+    path_join(g_skin_dir, sizeof(g_skin_dir), g_mc_dir, "skins");
+#else
     snprintf(g_mc_dir, sizeof(g_mc_dir), "ms0:/PSP/GAME/PEXCRAFT");
     ensure_dir("ms0:/PSP");
     ensure_dir("ms0:/PSP/GAME");
@@ -70,9 +82,13 @@ static void init_dirs(void) {
     ensure_dir(g_save_dir);
     ensure_dir(g_texpack_dir);
     ensure_dir(g_skin_dir);
+#endif
 }
 
 static void delete_recursive(const char *path) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)path; return;
+#endif
     char norm[MAX_PATHBUF]; pex_normalize_path(norm, sizeof(norm), path);
     DIR *d = opendir(norm);
     if (d) {
@@ -88,6 +104,9 @@ static void delete_recursive(const char *path) {
 }
 
 static unsigned long long dir_size(const char *path) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)path; return 0;
+#endif
     unsigned long long total = 0;
     char norm[MAX_PATHBUF]; pex_normalize_path(norm, sizeof(norm), path);
     DIR *d = opendir(norm); if (!d) return 0;
