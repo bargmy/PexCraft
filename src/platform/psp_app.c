@@ -306,8 +306,17 @@ int main(int argc, char **argv) {
     psp_boot_debug_stagef("memory-only dirs initialized");
     PEX_PSP_LOGF("load_options begin");
     load_options();
-    PEX_PSP_LOGF("load_options end: user=%s fps=%d renderer=%d", g_opts.username, g_opts.max_fps, g_selected_renderer_backend);
-    psp_boot_debug_stagef("RAM options loaded");
+    /* PSP stability defaults: small render distance, no fancy translucent pass,
+       fixed 60 FPS, no filesystem/options persistence. */
+    g_opts.render_distance = 2;
+    g_opts.fancy_graphics = 0;
+    g_opts.max_fps = 60;
+    g_opts.anaglyph = 0;
+    g_opts.show_fps = 0;
+    g_opts.renderer_backend = RENDERER_OPENGL;
+    g_selected_renderer_backend = RENDERER_OPENGL;
+    PEX_PSP_LOGF("load_options end/forced PSP: user=%s fps=%d renderer=%d rd=%d fancy=%d", g_opts.username, g_opts.max_fps, g_selected_renderer_backend, g_opts.render_distance, g_opts.fancy_graphics);
+    psp_boot_debug_stagef("RAM options loaded; PSP-safe graphics forced");
     PEX_PSP_LOGF("embedded classic pack prepare begin");
     psp_install_embedded_classic_pack_if_needed();
     PEX_PSP_LOGF("embedded classic pack prepare end");

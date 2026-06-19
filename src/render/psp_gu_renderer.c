@@ -1,6 +1,7 @@
 /* Sony PSP GU fixed-function renderer shim.
-   This exposes the tiny OpenGL 1.1 immediate-mode subset used by PEXCraft and
-   maps it to pspgu/pspgum. It is intentionally separate from Win32/D3D/SDL. */
+   Stable PSP path: persistent display-list batches + tiny command-list usage.
+   This avoids exhausting GU command-list memory and fixes the earlier one-batch
+   display-list bug that made world/menu rendering corrupt on PPSSPP/PSP. */
 
 #define PEX_PSP_FB_WIDTH 512
 #define PEX_PSP_SCR_WIDTH 480
@@ -8,6 +9,7 @@
 #define PEX_PSP_MAX_TEXTURES 1024
 #define PEX_PSP_MAX_IMM_VERTS 16384
 #define PEX_PSP_LIST_COUNT 4096
+#define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 4096
 
 static unsigned int __attribute__((aligned(16))) g_psp_gu_list[262144];
 static void *g_psp_drawbuf = NULL;
@@ -27,6 +29,7 @@ static int g_psp_begin_active = 0;
 static float g_psp_cur_u = 0.0f, g_psp_cur_v = 0.0f;
 static int g_psp_viewport[4] = {0,0,480,272};
 static unsigned int g_psp_verbose_frame_counter = 0;
+static int g_psp_cull_enabled = 0;
 
 typedef struct PspImmVertex { float u, v; unsigned int color; float x, y, z; } PspImmVertex;
 static PspImmVertex g_psp_imm[PEX_PSP_MAX_IMM_VERTS];
@@ -36,7 +39,20 @@ typedef struct PspTexture { int used; int w, h, stride; unsigned int *pixels; } 
 static PspTexture g_psp_textures[PEX_PSP_MAX_TEXTURES];
 static GLuint g_psp_next_tex = 1;
 
-typedef struct PspList { PspImmVertex *v; int count; GLenum mode; GLuint tex; int texture_enabled; int blend_enabled; int depth_enabled; int alpha_enabled; } PspList;
+typedef struct PspBatch {
+    PspImmVertex *v;
+    int count;
+    GLenum mode;
+    GLuint tex;
+    int texture_enabled;
+    int blend_enabled;
+    int depth_enabled;
+    int alpha_enabled;
+    int cull_enabled;
+    struct PspBatch *next;
+} PspBatch;
+
+typedef struct PspList { PspBatch *first; PspBatch *last; int batch_count; } PspList;
 static PspList g_psp_lists[PEX_PSP_LIST_COUNT];
 static GLuint g_psp_next_list = 1;
 static int g_psp_compiling = 0;
@@ -44,23 +60,38 @@ static GLuint g_psp_compile_list = 0;
 
 static unsigned int psp_rgba_to_abgr(float r, float g, float b, float a) {
     int ri=(int)(r*255.0f+0.5f), gi=(int)(g*255.0f+0.5f), bi=(int)(b*255.0f+0.5f), ai=(int)(a*255.0f+0.5f);
-    if(ri<0)ri=0; if(ri>255)ri=255; if(gi<0)gi=0; if(gi>255)gi=255; if(bi<0)bi=0; if(bi>255)bi=255; if(ai<0)ai=0; if(ai>255)ai=255;
+    if(ri<0)ri=0; if(ri>255)ri=255;
+    if(gi<0)gi=0; if(gi>255)gi=255;
+    if(bi<0)bi=0; if(bi>255)bi=255;
+    if(ai<0)ai=0; if(ai>255)ai=255;
+    /* GU_COLOR_8888 is stored in memory as RGBA bytes on little-endian PSP. */
     return (unsigned int)(ri | (gi<<8) | (bi<<16) | (ai<<24));
 }
 
-static void psp_apply_state(void) {
-    if (g_psp_texture_enabled && g_psp_bound_tex && g_psp_bound_tex < PEX_PSP_MAX_TEXTURES && g_psp_textures[g_psp_bound_tex].used) {
-        PspTexture *t=&g_psp_textures[g_psp_bound_tex];
+static void psp_apply_state_values(GLuint tex, int tex_enabled, int blend_enabled, int depth_enabled, int alpha_enabled, int cull_enabled) {
+    if (tex_enabled && tex && tex < PEX_PSP_MAX_TEXTURES && g_psp_textures[tex].used) {
+        PspTexture *t=&g_psp_textures[tex];
         sceGuEnable(GU_TEXTURE_2D);
         sceGuTexMode(GU_PSM_8888,0,0,0);
         sceGuTexImage(0,t->w,t->h,t->stride,t->pixels);
         sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
         sceGuTexFilter(GU_NEAREST,GU_NEAREST);
         sceGuTexWrap(GU_REPEAT,GU_REPEAT);
-    } else sceGuDisable(GU_TEXTURE_2D);
-    if (g_psp_blend_enabled) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0); } else sceGuDisable(GU_BLEND);
-    if (g_psp_depth_enabled) sceGuEnable(GU_DEPTH_TEST); else sceGuDisable(GU_DEPTH_TEST);
-    if (g_psp_alpha_enabled) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0x08, 0xff); } else sceGuDisable(GU_ALPHA_TEST);
+        sceGuTexScale(1.0f, 1.0f);
+        sceGuTexOffset(0.0f, 0.0f);
+    } else {
+        sceGuDisable(GU_TEXTURE_2D);
+    }
+    if (blend_enabled) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0); }
+    else sceGuDisable(GU_BLEND);
+    if (depth_enabled) sceGuEnable(GU_DEPTH_TEST); else sceGuDisable(GU_DEPTH_TEST);
+    if (alpha_enabled) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0x08, 0xff); }
+    else sceGuDisable(GU_ALPHA_TEST);
+    if (cull_enabled) sceGuEnable(GU_CULL_FACE); else sceGuDisable(GU_CULL_FACE);
+}
+
+static void psp_apply_state(void) {
+    psp_apply_state_values(g_psp_bound_tex, g_psp_texture_enabled, g_psp_blend_enabled, g_psp_depth_enabled, g_psp_alpha_enabled, g_psp_cull_enabled);
 }
 
 static int psp_prim_from_gl(GLenum mode) {
@@ -73,66 +104,130 @@ static int psp_prim_from_gl(GLenum mode) {
     return GU_TRIANGLES;
 }
 
-static void psp_draw_vertex_array(const PspImmVertex *src, int count, GLenum mode) {
+static void psp_list_free(GLuint list) {
+    if (list == 0 || list >= PEX_PSP_LIST_COUNT) return;
+    PspBatch *b = g_psp_lists[list].first;
+    while (b) {
+        PspBatch *n = b->next;
+        free(b->v);
+        free(b);
+        b = n;
+    }
+    memset(&g_psp_lists[list], 0, sizeof(g_psp_lists[list]));
+}
+
+static PspBatch *psp_batch_create(const PspImmVertex *src, int count, GLenum mode) {
+    if (!src || count <= 0) return NULL;
+    int out_count = count;
+    GLenum out_mode = mode;
+    if (mode == GL_QUADS) {
+        int q = count / 4;
+        if (q <= 0) return NULL;
+        out_count = q * 6;
+        out_mode = GL_TRIANGLES;
+    }
+    PspBatch *b = (PspBatch*)calloc(1, sizeof(PspBatch));
+    if (!b) return NULL;
+    b->v = (PspImmVertex*)memalign(16, (size_t)out_count * sizeof(PspImmVertex));
+    if (!b->v) { free(b); return NULL; }
+    b->count = out_count;
+    b->mode = out_mode;
+    b->tex = g_psp_bound_tex;
+    b->texture_enabled = g_psp_texture_enabled;
+    b->blend_enabled = g_psp_blend_enabled;
+    b->depth_enabled = g_psp_depth_enabled;
+    b->alpha_enabled = g_psp_alpha_enabled;
+    b->cull_enabled = g_psp_cull_enabled;
+    if (mode == GL_QUADS) {
+        int n = 0;
+        int q = count / 4;
+        for (int i=0;i<q;i++) {
+            const PspImmVertex *v = src + i*4;
+            b->v[n++]=v[0]; b->v[n++]=v[1]; b->v[n++]=v[2];
+            b->v[n++]=v[0]; b->v[n++]=v[2]; b->v[n++]=v[3];
+        }
+    } else {
+        memcpy(b->v, src, (size_t)count * sizeof(PspImmVertex));
+    }
+    sceKernelDcacheWritebackInvalidateRange(b->v, (SceSize)((size_t)b->count * sizeof(PspImmVertex)));
+    return b;
+}
+
+static void psp_list_append_batch(GLuint list, PspBatch *b) {
+    if (!b || list == 0 || list >= PEX_PSP_LIST_COUNT) { if (b) { free(b->v); free(b); } return; }
+    PspList *l = &g_psp_lists[list];
+    if (!l->first) l->first = b;
+    else l->last->next = b;
+    l->last = b;
+    l->batch_count++;
+}
+
+static void psp_draw_persistent_batch(const PspBatch *b) {
+    if (!b || !b->v || b->count <= 0) return;
+    psp_apply_state_values(b->tex, b->texture_enabled, b->blend_enabled, b->depth_enabled, b->alpha_enabled, b->cull_enabled);
+    sceKernelDcacheWritebackInvalidateRange((void*)b->v, (SceSize)((size_t)b->count * sizeof(PspImmVertex)));
+    sceGumDrawArray(psp_prim_from_gl(b->mode), GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D, b->count, 0, b->v);
+}
+
+static void psp_draw_vertex_array_immediate(const PspImmVertex *src, int count, GLenum mode) {
     if (!src || count <= 0) return;
     psp_apply_state();
     if (mode == GL_QUADS) {
-        int q = count / 4;
-        if (q <= 0) return;
-        PspImmVertex *out = (PspImmVertex*)sceGuGetMemory((q * 6) * sizeof(PspImmVertex));
-        if (!out) return;
-        int n=0;
-        for (int i=0;i<q;i++) {
-            const PspImmVertex *v = src + i*4;
-            out[n++]=v[0]; out[n++]=v[1]; out[n++]=v[2];
-            out[n++]=v[0]; out[n++]=v[2]; out[n++]=v[3];
+        int q_total = count / 4;
+        int q_pos = 0;
+        while (q_pos < q_total) {
+            int q = q_total - q_pos;
+            int max_q = PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS / 6;
+            if (q > max_q) q = max_q;
+            PspImmVertex *out = (PspImmVertex*)sceGuGetMemory((q * 6) * sizeof(PspImmVertex));
+            if (!out) return;
+            int n=0;
+            for (int i=0;i<q;i++) {
+                const PspImmVertex *v = src + (q_pos + i)*4;
+                out[n++]=v[0]; out[n++]=v[1]; out[n++]=v[2];
+                out[n++]=v[0]; out[n++]=v[2]; out[n++]=v[3];
+            }
+            sceGumDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D, n, 0, out);
+            q_pos += q;
         }
-        sceGumDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D, n, 0, out);
     } else {
-        PspImmVertex *out = (PspImmVertex*)sceGuGetMemory(count * sizeof(PspImmVertex));
-        if (!out) return;
-        memcpy(out, src, count * sizeof(PspImmVertex));
-        sceGumDrawArray(psp_prim_from_gl(mode), GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D, count, 0, out);
+        int pos = 0;
+        while (pos < count) {
+            int n = count - pos;
+            if (n > PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS) n = PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS;
+            PspImmVertex *out = (PspImmVertex*)sceGuGetMemory(n * sizeof(PspImmVertex));
+            if (!out) return;
+            memcpy(out, src + pos, (size_t)n * sizeof(PspImmVertex));
+            sceGumDrawArray(psp_prim_from_gl(mode), GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D, n, 0, out);
+            pos += n;
+        }
     }
 }
 
 static void psp_flush_immediate(void) {
     if (g_psp_imm_count <= 0) return;
     if (g_psp_compiling && g_psp_compile_list > 0 && g_psp_compile_list < PEX_PSP_LIST_COUNT) {
-        PspList *lst=&g_psp_lists[g_psp_compile_list];
-        free(lst->v); memset(lst,0,sizeof(*lst));
-        lst->v=(PspImmVertex*)malloc((size_t)g_psp_imm_count*sizeof(PspImmVertex));
-        if (lst->v) { memcpy(lst->v,g_psp_imm,(size_t)g_psp_imm_count*sizeof(PspImmVertex)); lst->count=g_psp_imm_count; }
-        lst->mode=g_psp_begin_mode; lst->tex=g_psp_bound_tex; lst->texture_enabled=g_psp_texture_enabled; lst->blend_enabled=g_psp_blend_enabled; lst->depth_enabled=g_psp_depth_enabled; lst->alpha_enabled=g_psp_alpha_enabled;
-    } else psp_draw_vertex_array(g_psp_imm, g_psp_imm_count, g_psp_begin_mode);
+        PspBatch *b = psp_batch_create(g_psp_imm, g_psp_imm_count, g_psp_begin_mode);
+        psp_list_append_batch(g_psp_compile_list, b);
+    } else {
+        psp_draw_vertex_array_immediate(g_psp_imm, g_psp_imm_count, g_psp_begin_mode);
+    }
     g_psp_imm_count = 0;
 }
 
 static int psp_gu_init(void) {
     PEX_PSP_LOGF("GU_INIT enter");
-    PEX_PSP_LOGF("GU_INIT before sceKernelDcacheWritebackInvalidateAll");
     sceKernelDcacheWritebackInvalidateAll();
-    PEX_PSP_LOGF("GU_INIT after sceKernelDcacheWritebackInvalidateAll");
-    PEX_PSP_LOGF("GU_INIT before sceGuInit");
     sceGuInit();
-    PEX_PSP_LOGF("GU_INIT after sceGuInit");
     g_psp_drawbuf = (void*)0;
     g_psp_dispbuf = (void*)0x88000;
     g_psp_depthbuf = (void*)0x110000;
     g_psp_display_offset = 0x00088000u;
     PEX_PSP_LOGF("GU_INIT buffers draw=%p disp=%p depth=%p list=%p", g_psp_drawbuf, g_psp_dispbuf, g_psp_depthbuf, g_psp_gu_list);
-    PEX_PSP_LOGF("GU_INIT before sceGuStart");
     sceGuStart(GU_DIRECT, g_psp_gu_list);
-    PEX_PSP_LOGF("GU_INIT after sceGuStart");
-    PEX_PSP_LOGF("GU_INIT before sceGuDrawBuffer");
     sceGuDrawBuffer(GU_PSM_8888, g_psp_drawbuf, PEX_PSP_FB_WIDTH);
-    PEX_PSP_LOGF("GU_INIT after sceGuDrawBuffer");
-    PEX_PSP_LOGF("GU_INIT before sceGuDispBuffer");
     sceGuDispBuffer(PEX_PSP_SCR_WIDTH, PEX_PSP_SCR_HEIGHT, g_psp_dispbuf, PEX_PSP_FB_WIDTH);
-    PEX_PSP_LOGF("GU_INIT after sceGuDispBuffer");
-    PEX_PSP_LOGF("GU_INIT before sceGuDepthBuffer");
     sceGuDepthBuffer(g_psp_depthbuf, PEX_PSP_FB_WIDTH);
-    PEX_PSP_LOGF("GU_INIT after sceGuDepthBuffer");
     sceGuOffset(2048 - (PEX_PSP_SCR_WIDTH/2), 2048 - (PEX_PSP_SCR_HEIGHT/2));
     sceGuViewport(2048, 2048, PEX_PSP_SCR_WIDTH, PEX_PSP_SCR_HEIGHT);
     sceGuDepthRange(65535, 0);
@@ -140,54 +235,59 @@ static int psp_gu_init(void) {
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDepthFunc(GU_LEQUAL);
     sceGuFrontFace(GU_CW);
+    sceGuDisable(GU_CULL_FACE);
     sceGuEnable(GU_TEXTURE_2D);
     sceGuEnable(GU_BLEND);
     sceGuEnable(GU_DEPTH_TEST);
-    PEX_PSP_LOGF("GU_INIT state commands submitted");
-    PEX_PSP_LOGF("GU_INIT before sceGuFinish");
+    sceGuClearColor(0xff000000u);
+    sceGuClearDepth(0);
+    sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
     sceGuFinish();
-    PEX_PSP_LOGF("GU_INIT after sceGuFinish");
-    PEX_PSP_LOGF("GU_INIT before sceGuSync");
     sceGuSync(0,0);
-    PEX_PSP_LOGF("GU_INIT after sceGuSync");
-    PEX_PSP_LOGF("GU_INIT before sceDisplayWaitVblankStart");
     sceDisplayWaitVblankStart();
-    PEX_PSP_LOGF("GU_INIT after sceDisplayWaitVblankStart");
-    PEX_PSP_LOGF("GU_INIT before sceGuDisplay(TRUE)");
     sceGuDisplay(GU_TRUE);
-    PEX_PSP_LOGF("GU_INIT after sceGuDisplay(TRUE)");
     sceGumMatrixMode(GU_PROJECTION); sceGumLoadIdentity(); sceGumPerspective(70.0f, 480.0f/272.0f, 0.05f, 1024.0f);
     sceGumMatrixMode(GU_VIEW); sceGumLoadIdentity();
     sceGumMatrixMode(GU_MODEL); sceGumLoadIdentity();
-    PEX_PSP_LOGF("GU_INIT matrices initialized; return OK");
+    PEX_PSP_LOGF("GU_INIT done");
     return 1;
 }
 
 static unsigned int psp_gu_current_display_offset(void) { return g_psp_display_offset; }
-static void psp_gu_shutdown(void) { PEX_PSP_LOGF("GU_SHUTDOWN sceGuTerm"); sceGuTerm(); }
+static void psp_gu_shutdown(void) {
+    PEX_PSP_LOGF("GU_SHUTDOWN sceGuTerm");
+    for (GLuint i=1;i<PEX_PSP_LIST_COUNT;i++) psp_list_free(i);
+    for (GLuint i=1;i<PEX_PSP_MAX_TEXTURES;i++) { free(g_psp_textures[i].pixels); g_psp_textures[i].pixels=NULL; }
+    sceGuTerm();
+}
 static void psp_gu_begin_frame(void) {
     g_psp_verbose_frame_counter++;
-    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u begin", g_psp_verbose_frame_counter);
-    sceGuStart(GU_DIRECT, g_psp_gu_list); sceGuClearColor(g_psp_clear_color); sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
+    if (g_psp_verbose_frame_counter <= 30 || (g_psp_verbose_frame_counter % 120u) == 0u) PEX_PSP_LOGF("GU_FRAME %u begin", g_psp_verbose_frame_counter);
+    sceGuStart(GU_DIRECT, g_psp_gu_list);
+    sceGuClearColor(g_psp_clear_color);
+    sceGuClearDepth(0);
+    sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
 }
 static void psp_gu_end_frame(void) {
-    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u before finish/sync/swap", g_psp_verbose_frame_counter);
-    sceGuFinish(); sceGuSync(0,0); sceDisplayWaitVblankStart(); sceGuSwapBuffers();
+    if (g_psp_verbose_frame_counter <= 30 || (g_psp_verbose_frame_counter % 120u) == 0u) PEX_PSP_LOGF("GU_FRAME %u end/swap", g_psp_verbose_frame_counter);
+    sceGuFinish();
+    sceGuSync(0,0);
+    sceDisplayWaitVblankStart();
+    sceGuSwapBuffers();
     g_psp_display_offset = (g_psp_display_offset == 0u) ? 0x00088000u : 0u;
-    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u after swap; display_offset=0x%06x", g_psp_verbose_frame_counter, g_psp_display_offset);
 }
 
 static void glClearColor(float r,float g,float b,float a){ g_psp_clear_color=psp_rgba_to_abgr(r,g,b,a); }
 static void glClear(GLbitfield mask){ (void)mask; sceGuClearColor(g_psp_clear_color); sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT); }
-static void glEnable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=1; else if(cap==GL_BLEND)g_psp_blend_enabled=1; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=1; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=1; }
-static void glDisable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=0; else if(cap==GL_BLEND)g_psp_blend_enabled=0; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=0; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=0; }
+static void glEnable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=1; else if(cap==GL_BLEND)g_psp_blend_enabled=1; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=1; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=1; else if(cap==GL_CULL_FACE)g_psp_cull_enabled=1; }
+static void glDisable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=0; else if(cap==GL_BLEND)g_psp_blend_enabled=0; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=0; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=0; else if(cap==GL_CULL_FACE)g_psp_cull_enabled=0; }
 static void glBlendFunc(GLenum s, GLenum d){ (void)s; (void)d; }
 static void glDepthFunc(GLenum f){ if(f==GL_LESS) sceGuDepthFunc(GU_LESS); else sceGuDepthFunc(GU_LEQUAL); }
 static void glDepthMask(GLboolean flag){ sceGuDepthMask(flag?GU_FALSE:GU_TRUE); }
 static void glAlphaFunc(GLenum func, GLfloat ref){ (void)func; sceGuAlphaFunc(GU_GREATER, (int)(ref*255.0f), 0xff); }
 static void glLineWidth(GLfloat w){ (void)w; }
 static void glColor4f(float r,float g,float b,float a){ g_psp_cur_color=psp_rgba_to_abgr(r,g,b,a); }
-static void glViewport(GLint x,GLint y,GLsizei w,GLsizei h){ g_psp_viewport[0]=x; g_psp_viewport[1]=y; g_psp_viewport[2]=w; g_psp_viewport[3]=h; sceGuViewport(2048 + x, 2048 + y, w, h); }
+static void glViewport(GLint x,GLint y,GLsizei w,GLsizei h){ g_psp_viewport[0]=x; g_psp_viewport[1]=y; g_psp_viewport[2]=w; g_psp_viewport[3]=h; sceGuViewport(2048 + x + (w/2), 2048 + y + (h/2), w, h); sceGuScissor(x, y, x+w, y+h); }
 static void glMatrixMode(GLenum mode){ if(mode==GL_PROJECTION) sceGumMatrixMode(GU_PROJECTION); else sceGumMatrixMode(GU_MODEL); }
 static void glLoadIdentity(void){ sceGumLoadIdentity(); }
 static void glPushMatrix(void){ sceGumPushMatrix(); }
@@ -208,14 +308,14 @@ static void glBegin(GLenum mode){ g_psp_begin_active=1; g_psp_begin_mode=mode; g
 static void glVertex3f(float x,float y,float z){ if(!g_psp_begin_active||g_psp_imm_count>=PEX_PSP_MAX_IMM_VERTS)return; PspImmVertex *v=&g_psp_imm[g_psp_imm_count++]; v->u=g_psp_cur_u; v->v=g_psp_cur_v; v->color=g_psp_cur_color; v->x=x; v->y=y; v->z=z; }
 static void glVertex2f(float x,float y){ glVertex3f(x,y,0.0f); }
 static void glEnd(void){ g_psp_begin_active=0; psp_flush_immediate(); }
-static GLuint glGenLists(GLsizei range){ GLuint base=g_psp_next_list; g_psp_next_list += range>0?range:1; if(g_psp_next_list>=PEX_PSP_LIST_COUNT)g_psp_next_list=PEX_PSP_LIST_COUNT-1; return base; }
-static void glNewList(GLuint list, GLenum mode){ (void)mode; g_psp_compiling=1; g_psp_compile_list=list; }
+static GLuint glGenLists(GLsizei range){ GLuint base=g_psp_next_list; int r=range>0?range:1; for(int i=0;i<r;i++) if(base+(GLuint)i<PEX_PSP_LIST_COUNT) psp_list_free(base+(GLuint)i); g_psp_next_list += (GLuint)r; if(g_psp_next_list>=PEX_PSP_LIST_COUNT)g_psp_next_list=PEX_PSP_LIST_COUNT-1; return base; }
+static void glNewList(GLuint list, GLenum mode){ (void)mode; if(list>0&&list<PEX_PSP_LIST_COUNT) psp_list_free(list); g_psp_compiling=1; g_psp_compile_list=list; }
 static void glEndList(void){ g_psp_compiling=0; g_psp_compile_list=0; }
-static void glCallList(GLuint list){ if(list>0&&list<PEX_PSP_LIST_COUNT&&g_psp_lists[list].v){ PspList *l=&g_psp_lists[list]; GLuint old=g_psp_bound_tex; int ote=g_psp_texture_enabled, ob=g_psp_blend_enabled, od=g_psp_depth_enabled, oa=g_psp_alpha_enabled; g_psp_bound_tex=l->tex; g_psp_texture_enabled=l->texture_enabled; g_psp_blend_enabled=l->blend_enabled; g_psp_depth_enabled=l->depth_enabled; g_psp_alpha_enabled=l->alpha_enabled; psp_draw_vertex_array(l->v,l->count,l->mode); g_psp_bound_tex=old; g_psp_texture_enabled=ote; g_psp_blend_enabled=ob; g_psp_depth_enabled=od; g_psp_alpha_enabled=oa; } }
-static void glGenTextures(GLsizei n, GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=g_psp_next_tex++; if(id>=PEX_PSP_MAX_TEXTURES)id=1; tex[i]=id; memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } }
+static void glCallList(GLuint list){ if(list>0&&list<PEX_PSP_LIST_COUNT){ for(PspBatch *b=g_psp_lists[list].first;b;b=b->next) psp_draw_persistent_batch(b); } }
+static void glGenTextures(GLsizei n, GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=g_psp_next_tex++; if(id>=PEX_PSP_MAX_TEXTURES)id=1; tex[i]=id; free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } }
 static void glBindTexture(GLenum target, GLuint tex){ (void)target; g_psp_bound_tex=tex; }
 static void glTexParameteri(GLenum target, GLenum pname, GLint param){ (void)target; (void)pname; (void)param; }
-static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){ (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type; if(!g_psp_bound_tex||g_psp_bound_tex>=PEX_PSP_MAX_TEXTURES||!pixels)return; PspTexture *t=&g_psp_textures[g_psp_bound_tex]; free(t->pixels); t->w=w; t->h=h; t->stride=w; t->pixels=(unsigned int*)memalign(16,(size_t)w*h*4); if(t->pixels){ memcpy(t->pixels,pixels,(size_t)w*h*4); sceKernelDcacheWritebackInvalidateRange(t->pixels,(size_t)w*h*4); t->used=1; } }
+static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){ (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type; if(!g_psp_bound_tex||g_psp_bound_tex>=PEX_PSP_MAX_TEXTURES)return; PspTexture *t=&g_psp_textures[g_psp_bound_tex]; free(t->pixels); memset(t,0,sizeof(*t)); if(!pixels||w<=0||h<=0)return; t->w=w; t->h=h; t->stride=w; t->pixels=(unsigned int*)memalign(16,(size_t)w*h*4); if(t->pixels){ memcpy(t->pixels,pixels,(size_t)w*h*4); sceKernelDcacheWritebackInvalidateRange(t->pixels,(SceSize)((size_t)w*h*4)); t->used=1; } }
 static void glDeleteTextures(GLsizei n, const GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=tex[i]; if(id<PEX_PSP_MAX_TEXTURES){ free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } } }
-static void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h){ (void)target;(void)level;(void)xoff;(void)yoff;(void)x;(void)y;(void)w;(void)h; }
+static void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h){ (void)target;(void)level;(void)xoff;(void)yoff;(void)x;(void)y;(void)w;(void)h; /* PSP path avoids backbuffer copies; title snapshot is disabled. */ }
 static const GLubyte *glGetString(GLenum name){ if(name==GL_VENDOR)return (const GLubyte*)"Sony"; if(name==GL_RENDERER)return (const GLubyte*)"PSP Graphics Engine (GU)"; if(name==GL_VERSION)return (const GLubyte*)"PSP GU fixed-function"; return (const GLubyte*)""; }

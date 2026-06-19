@@ -98,6 +98,11 @@ static void title_snapshot_reset_if_size_changed(int title_h) {
 }
 
 static void capture_title_logo_snapshot(int title_h) {
+#if defined(PEX_PLATFORM_PSP)
+    /* PSP GU shim does not support glCopyTexSubImage2D. Keep rendering the 3D logo instead of caching a blank snapshot. */
+    (void)title_h;
+    return;
+#endif
     if (g_title_snapshot_ready || title_h <= 0 || g_render_w <= 0) return;
     if (!g_title_snapshot_tex) {
         glGenTextures(1, &g_title_snapshot_tex);
