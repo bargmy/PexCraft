@@ -1,6 +1,17 @@
 TARGET = PEXCRAFT
 OBJS = main_psp.o
 
+# GitHub Actions Docker shells do not always export PSPDEV/PSPSDK.
+# Keep this Makefile usable both locally and inside pspdev/pspdev.
+PSPDEV ?= /usr/local/pspdev
+PSPSDK ?= $(PSPDEV)/psp/sdk
+ifeq ($(wildcard $(PSPSDK)/lib/build.mak),)
+  ifneq ($(wildcard /opt/pspdev/psp/sdk/lib/build.mak),)
+    PSPDEV := /opt/pspdev
+    PSPSDK := /opt/pspdev/psp/sdk
+  endif
+endif
+
 CFLAGS = -std=c99 -O2 -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -Isrc
 CXXFLAGS = $(CFLAGS)
 ASFLAGS = $(CFLAGS)

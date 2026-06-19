@@ -42,7 +42,26 @@ jobs:
               -v "$PWD:/src" \
               -w /src \
               pspdev/pspdev:latest \
-              /bin/bash -lc 'make -f Makefile.psp clean || true; make -f Makefile.psp -j2'
+              /bin/bash -lc '
+                set -euxo pipefail
+                if [ -z "${PSPDEV:-}" ]; then
+                  if [ -d /usr/local/pspdev ]; then export PSPDEV=/usr/local/pspdev;
+                  elif [ -d /opt/pspdev ]; then export PSPDEV=/opt/pspdev;
+                  else export PSPDEV=$(dirname $(dirname $(command -v psp-gcc))); fi
+                fi
+                if [ -z "${PSPSDK:-}" ]; then
+                  for d in "$PSPDEV/psp/sdk" /usr/local/pspdev/psp/sdk /opt/pspdev/psp/sdk; do
+                    if [ -f "$d/lib/build.mak" ]; then export PSPSDK="$d"; break; fi
+                  done
+                fi
+                export PATH="$PSPDEV/bin:$PSPDEV/psp/bin:$PATH"
+                echo "PSPDEV=$PSPDEV"
+                echo "PSPSDK=$PSPSDK"
+                command -v psp-gcc
+                test -f "$PSPSDK/lib/build.mak"
+                make -f Makefile.psp clean || true
+                make -f Makefile.psp -j2
+              '
             test -f EBOOT.PBP
             file EBOOT.PBP || true
           } 2>&1 | tee logs/build-psp.log
