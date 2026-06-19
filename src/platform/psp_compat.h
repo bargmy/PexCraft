@@ -48,6 +48,7 @@ typedef unsigned char GLboolean;
 #define GL_TRUE 1
 #define GL_POINTS 0x0000
 #define GL_LINES 0x0001
+#define GL_LINE_STRIP 0x0003
 #define GL_TRIANGLES 0x0004
 #define GL_TRIANGLE_STRIP 0x0005
 #define GL_TRIANGLE_FAN 0x0006
@@ -66,6 +67,8 @@ typedef unsigned char GLboolean;
 #define GL_DEPTH_BUFFER_BIT 0x00000100
 #define GL_SRC_ALPHA 0x0302
 #define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_DST_COLOR 0x0306
+#define GL_SRC_COLOR 0x0300
 #define GL_ONE 1
 #define GL_ZERO 0
 #define GL_LEQUAL 0x0203
@@ -156,6 +159,12 @@ typedef char WCHAR;
 #endif
 #ifndef SW_SHOWNORMAL
 #define SW_SHOWNORMAL 1
+#endif
+#ifndef THREAD_PRIORITY_NORMAL
+#define THREAD_PRIORITY_NORMAL 0
+#endif
+#ifndef THREAD_PRIORITY_BELOW_NORMAL
+#define THREAD_PRIORITY_BELOW_NORMAL (-1)
 #endif
 
 #define VK_LBUTTON 0x01
@@ -300,5 +309,16 @@ static inline int GetKeyNameTextA(LONG lparam, char *buf, int cap) { (void)lpara
 static inline DWORD GetModuleFileNameA(void *module, char *buf, DWORD cap) { (void)module; if(buf&&cap){snprintf(buf,cap,"EBOOT.PBP"); return (DWORD)strlen(buf);} return 0; }
 static inline void *ShellExecuteA(void *hwnd, const char *op, const char *file, const char *params, const char *dir, int show) { (void)hwnd; (void)op; (void)file; (void)params; (void)dir; (void)show; return NULL; }
 static inline void PostQuitMessage(int code) { (void)code; }
+
+
+static inline int gluProject(GLdouble objx, GLdouble objy, GLdouble objz,
+                             const GLdouble *model, const GLdouble *proj, const GLint *viewport,
+                             GLdouble *winx, GLdouble *winy, GLdouble *winz) {
+    (void)objx; (void)objy; (void)objz; (void)model; (void)proj;
+    if (winx && viewport) *winx = (GLdouble)(viewport[0] + viewport[2] / 2);
+    if (winy && viewport) *winy = (GLdouble)(viewport[1] + viewport[3] / 2);
+    if (winz) *winz = 0.5;
+    return 0; /* Name-tag projection is disabled on PSP for now. */
+}
 
 #endif /* PEXCRAFT_PSP_COMPAT_H */

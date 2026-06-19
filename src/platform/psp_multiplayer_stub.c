@@ -1,3 +1,4 @@
+static int g_mp_pending_respawn_sync = 0;
 /* PSP network stubs.  Multiplayer is intentionally disabled in the first PSP port. */
 static void pex_net_set_status(const char *msg) { snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "%s", msg ? msg : "Network disabled on PSP."); }
 static int pex_net_connect_to_server(const char *server) { (void)server; pex_net_set_status("Network disabled on PSP."); return 0; }

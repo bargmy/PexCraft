@@ -6,6 +6,21 @@
 extern const unsigned char pexcraft_psp_classic_pack_zip[];
 extern const unsigned int pexcraft_psp_classic_pack_zip_len;
 
+#ifndef CLASSIC_INSTALL_IDLE
+#define CLASSIC_INSTALL_IDLE 0
+#define CLASSIC_INSTALL_DOWNLOADING 1
+#define CLASSIC_INSTALL_EXTRACTING 2
+#define CLASSIC_INSTALL_DONE 3
+#define CLASSIC_INSTALL_ERROR 4
+#endif
+#ifndef CLASSIC_SIZE_UNKNOWN
+#define CLASSIC_SIZE_UNKNOWN 0
+#define CLASSIC_SIZE_FETCHING 1
+#define CLASSIC_SIZE_READY 2
+#define CLASSIC_SIZE_ERROR 3
+#endif
+
+
 static volatile LONG g_classic_install_state = CLASSIC_INSTALL_IDLE;
 static volatile LONG g_classic_install_progress = 0;
 static char g_classic_install_status[MAX_LABEL] = "";
@@ -52,7 +67,7 @@ static void start_classic_pack_install(void) {
     if (!psp_write_embedded_classic_zip(zip_path)) { classic_install_fail("This EBOOT has no embedded Classic pack"); return; }
     delete_recursive(pack_dir);
     ensure_dir(pack_dir);
-    if (!pxc_extract_classic_pack(zip_path, pack_dir, err, sizeof(err))) { classic_install_fail(err[0] ? err : "Could not extract embedded Classic pack"); return; }
+    if (!pxc_extract_zip_file(zip_path, pack_dir, err, sizeof(err))) { classic_install_fail(err[0] ? err : "Could not extract embedded Classic pack"); return; }
     DeleteFileA(zip_path);
     if (!classic_pack_installed() || classic_pack_missing_required_textures()) { classic_install_fail("Embedded Classic pack is missing required textures"); return; }
     classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done");

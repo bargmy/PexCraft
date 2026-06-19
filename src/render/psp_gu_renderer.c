@@ -66,6 +66,7 @@ static int psp_prim_from_gl(GLenum mode) {
     if (mode == GL_TRIANGLE_STRIP) return GU_TRIANGLE_STRIP;
     if (mode == GL_TRIANGLE_FAN) return GU_TRIANGLE_FAN;
     if (mode == GL_LINES) return GU_LINES;
+    if (mode == GL_LINE_STRIP) return GU_LINE_STRIP;
     if (mode == GL_POINTS) return GU_POINTS;
     return GU_TRIANGLES;
 }
