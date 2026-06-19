@@ -13,6 +13,7 @@ static unsigned int __attribute__((aligned(16))) g_psp_gu_list[262144];
 static void *g_psp_drawbuf = NULL;
 static void *g_psp_dispbuf = NULL;
 static void *g_psp_depthbuf = NULL;
+static unsigned int g_psp_display_offset = 0x00088000u;
 
 static int g_psp_texture_enabled = 1;
 static int g_psp_blend_enabled = 1;
@@ -118,6 +119,7 @@ static int psp_gu_init(void) {
     g_psp_drawbuf = (void*)0;
     g_psp_dispbuf = (void*)0x88000;
     g_psp_depthbuf = (void*)0x110000;
+    g_psp_display_offset = 0x00088000u;
     PEX_PSP_LOGF("GU_INIT buffers draw=%p disp=%p depth=%p list=%p", g_psp_drawbuf, g_psp_dispbuf, g_psp_depthbuf, g_psp_gu_list);
     PEX_PSP_LOGF("GU_INIT before sceGuStart");
     sceGuStart(GU_DIRECT, g_psp_gu_list);
@@ -161,6 +163,7 @@ static int psp_gu_init(void) {
     return 1;
 }
 
+static unsigned int psp_gu_current_display_offset(void) { return g_psp_display_offset; }
 static void psp_gu_shutdown(void) { PEX_PSP_LOGF("GU_SHUTDOWN sceGuTerm"); sceGuTerm(); }
 static void psp_gu_begin_frame(void) {
     g_psp_verbose_frame_counter++;
@@ -170,7 +173,8 @@ static void psp_gu_begin_frame(void) {
 static void psp_gu_end_frame(void) {
     if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u before finish/sync/swap", g_psp_verbose_frame_counter);
     sceGuFinish(); sceGuSync(0,0); sceDisplayWaitVblankStart(); sceGuSwapBuffers();
-    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u after swap", g_psp_verbose_frame_counter);
+    g_psp_display_offset = (g_psp_display_offset == 0u) ? 0x00088000u : 0u;
+    if (g_psp_verbose_frame_counter <= 120 || (g_psp_verbose_frame_counter % 60u) == 0u) PEX_PSP_LOGF("GU_FRAME %u after swap; display_offset=0x%06x", g_psp_verbose_frame_counter, g_psp_display_offset);
 }
 
 static void glClearColor(float r,float g,float b,float a){ g_psp_clear_color=psp_rgba_to_abgr(r,g,b,a); }

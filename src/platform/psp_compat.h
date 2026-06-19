@@ -15,6 +15,11 @@
 #include <psputils.h>
 #include <psprtc.h>
 #include <psppower.h>
+
+#ifndef PSP_DISPLAY_PIXEL_FORMAT_8888
+#define PSP_DISPLAY_PIXEL_FORMAT_8888 3
+#endif
+extern void pspDebugScreenInitEx(void *base, int mode, int setup);
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -49,6 +54,9 @@ static inline void pex_psp_logf(const char *fmt, ...) {
     fflush(stdout);
     fputs(out, stderr);
     fflush(stderr);
+    /* PPSSPP usually does not show stdout/stderr from homebrew in the normal
+       UI log, but it does surface kernel printf in verbose/dev logs. */
+    sceKernelPrintf("%s", out);
     sceIoWrite(1, out, (SceSize)strlen(out));
     sceIoWrite(2, out, (SceSize)strlen(out));
 }
