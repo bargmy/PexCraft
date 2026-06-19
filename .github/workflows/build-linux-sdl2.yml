@@ -14,7 +14,6 @@ env:
 jobs:
   build-linux-sdl2:
     runs-on: ubuntu-latest
-
     env:
       TOKEN: ${{ secrets.TOKEN }}
 
@@ -35,13 +34,57 @@ jobs:
             libgl1-mesa-dev \
             libglu1-mesa-dev \
             zip \
-            curl
+            curl \
+            file
 
-      - name: Build SDL2 client
+      - name: Build and package client directly
         shell: bash
         run: |
           set -o pipefail
-          bash ./build_linux_sdl2.sh
+          mkdir -p logs build dist
+
+          {
+            set -eux
+            echo "Workspace: $PWD"
+            echo "Top-level files:"
+            find . -maxdepth 2 -type f | sort
+            echo
+            gcc --version
+            pkg-config --modversion sdl2
+            pkg-config --modversion SDL2_image
+
+            SRC="main_sdl2.c"
+            if [ ! -f "$SRC" ]; then
+              SRC="src/main_sdl2.c"
+            fi
+            if [ ! -f "$SRC" ]; then
+              echo "ERROR: cannot find main_sdl2.c or src/main_sdl2.c"
+              exit 1
+            fi
+
+            SDL_CFLAGS="$(pkg-config --cflags sdl2 SDL2_image)"
+            SDL_LIBS="$(pkg-config --libs sdl2 SDL2_image)"
+
+            echo "Compiling $SRC"
+            gcc -std=c99 -O2 -Wall -Wextra \
+              $SDL_CFLAGS \
+              "$SRC" \
+              -o build/pexcraft_sdl2 \
+              $SDL_LIBS \
+              -lGL -lGLU -lm -pthread
+
+            file build/pexcraft_sdl2
+            ldd build/pexcraft_sdl2 || true
+
+            if [ -d assets ]; then
+              cp -a assets build/assets
+            fi
+
+            cp -a LICENSE build/LICENSE 2>/dev/null || true
+
+            (cd build && zip -r ../dist/pexcraft-client-linux-sdl2-x64.zip .)
+            ls -lh dist/pexcraft-client-linux-sdl2-x64.zip
+          } 2>&1 | tee logs/build-linux-sdl2.log
 
       - name: Print build logs
         if: always()
@@ -85,10 +128,7 @@ jobs:
           fi
 
           ZIP="dist/pexcraft-client-linux-sdl2-x64.zip"
-          if [ ! -f "$ZIP" ]; then
-            echo "Missing $ZIP"
-            exit 1
-          fi
+          test -f "$ZIP"
 
           curl --fail-with-body -sS \
             -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
