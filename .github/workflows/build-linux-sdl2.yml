@@ -87,11 +87,11 @@ jobs:
             fi
             cp -a LICENSE build/LICENSE 2>/dev/null || true
 
-            cat > build/linux-runtime-deps.txt <<'EOS'
-Runtime packages are expected from the Linux system, not bundled in this zip.
-Ubuntu/Debian example:
-  sudo apt install libsdl2-2.0-0 libsdl2-image-2.0-0 libcurl4 zlib1g libgl1 libglu1-mesa
-EOS
+            {
+              echo "Runtime packages are expected from the Linux system, not bundled in this zip."
+              echo "Ubuntu/Debian example:"
+              echo "  sudo apt install libsdl2-2.0-0 libsdl2-image-2.0-0 libcurl4 zlib1g libgl1 libglu1-mesa"
+            } > build/linux-runtime-deps.txt
 
             (cd build && zip -r ../dist/pexcraft-client-linux-sdl2-x64.zip .)
             ls -lh dist/pexcraft-client-linux-sdl2-x64.zip
