@@ -21,7 +21,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build dependencies
         shell: bash
         run: |
           set -euxo pipefail
@@ -33,11 +33,12 @@ jobs:
             libsdl2-image-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev \
+            libcurl4-openssl-dev \
+            zlib1g-dev \
             zip \
-            curl \
             file
 
-      - name: Build and package client directly
+      - name: Build and package self-contained client
         shell: bash
         run: |
           set -o pipefail
@@ -52,6 +53,7 @@ jobs:
             gcc --version
             pkg-config --modversion sdl2
             pkg-config --modversion SDL2_image
+            pkg-config --modversion libcurl || true
 
             SRC="main_sdl2.c"
             if [ ! -f "$SRC" ]; then
@@ -64,23 +66,56 @@ jobs:
 
             SDL_CFLAGS="$(pkg-config --cflags sdl2 SDL2_image)"
             SDL_LIBS="$(pkg-config --libs sdl2 SDL2_image)"
+            CURL_CFLAGS="$(pkg-config --cflags libcurl 2>/dev/null || true)"
+            CURL_LIBS="$(pkg-config --libs libcurl 2>/dev/null || echo -lcurl)"
 
             echo "Compiling $SRC"
             gcc -std=c99 -O2 -Wall -Wextra \
-              $SDL_CFLAGS \
+              $SDL_CFLAGS $CURL_CFLAGS \
               "$SRC" \
               -o build/pexcraft_sdl2 \
+              -Wl,-rpath,'$ORIGIN/lib' \
               $SDL_LIBS \
-              -lGL -lGLU -lm -pthread
+              -lGL -lGLU \
+              $CURL_LIBS \
+              -lz -lm -pthread
 
-            file build/pexcraft_sdl2
-            ldd build/pexcraft_sdl2 || true
+            file build/pexcraft_sdl2 | tee logs/file-pexcraft_sdl2.log
+            ldd build/pexcraft_sdl2 | tee logs/ldd-pexcraft_sdl2-before-bundle.log || true
+
+            mkdir -p build/lib
+            ldd build/pexcraft_sdl2 | awk '($2 == "=>" && $3 ~ /^\//) { print $3 } ($1 ~ /^\//) { print $1 }' | sort -u > logs/dep-paths.txt || true
+
+            while IFS= read -r lib; do
+              [ -f "$lib" ] || continue
+              base="$(basename "$lib")"
+              # Do not bundle the glibc loader/libc family. Everything else gets copied beside the executable.
+              case "$base" in
+                linux-vdso*|ld-linux*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libresolv.so*|libnsl.so*|libutil.so*)
+                  continue
+                  ;;
+              esac
+              cp -Lv "$lib" build/lib/
+            done < logs/dep-paths.txt
+
+            cat > build/run_pexcraft_sdl2.sh <<'EOS'
+          #!/usr/bin/env bash
+          set -e
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH:-}"
+          exec "$DIR/pexcraft_sdl2" "$@"
+          EOS
+            chmod +x build/run_pexcraft_sdl2.sh
 
             if [ -d assets ]; then
               cp -a assets build/assets
             fi
 
             cp -a LICENSE build/LICENSE 2>/dev/null || true
+
+            echo "Bundled Linux libraries:"
+            find build/lib -maxdepth 1 -type f -printf '%f\n' | sort | tee logs/bundled-libs.txt
+            LD_LIBRARY_PATH="$PWD/build/lib" ldd build/pexcraft_sdl2 | tee logs/ldd-pexcraft_sdl2-after-bundle.log || true
 
             (cd build && zip -r ../dist/pexcraft-client-linux-sdl2-x64.zip .)
             ls -lh dist/pexcraft-client-linux-sdl2-x64.zip
@@ -93,7 +128,7 @@ jobs:
           echo "===== logs directory ====="
           ls -la logs || true
           echo
-          for f in logs/*.log; do
+          for f in logs/*.log logs/*.txt; do
             [ -f "$f" ] || continue
             echo "===== $f ====="
             cat "$f"
@@ -105,7 +140,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-client-linux-sdl2-logs
-          path: logs/*.log
+          path: logs/*
           if-no-files-found: warn
 
       - name: Upload client zip artifact
@@ -119,19 +154,38 @@ jobs:
       - name: Send client zip to Telegram
         if: success()
         shell: bash
+        env:
+          ZIP_PATH: dist/pexcraft-client-linux-sdl2-x64.zip
+          CAPTION: PEXCraft client Linux SDL2 x64 build with bundled shared libraries
         run: |
           set -euo pipefail
-
           if [ -z "${TOKEN}" ]; then
             echo "TOKEN secret is missing; skipping Telegram upload."
             exit 0
           fi
-
-          ZIP="dist/pexcraft-client-linux-sdl2-x64.zip"
-          test -f "$ZIP"
-
-          curl --fail-with-body -sS \
-            -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
-            -F "chat_id=${CHAT_ID}" \
-            -F "caption=PEXCraft client Linux SDL2 x64 build" \
-            -F "document=@${ZIP}"
+          test -f "$ZIP_PATH"
+          python3 - <<'PY'
+          import os, sys, uuid, mimetypes, urllib.request
+          token = os.environ['TOKEN']
+          chat_id = os.environ['CHAT_ID']
+          zip_path = os.environ['ZIP_PATH']
+          caption = os.environ['CAPTION']
+          boundary = '----pexcraft-' + uuid.uuid4().hex
+          parts = []
+          def field(name, value):
+              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+          def filefield(name, path):
+              filename = os.path.basename(path)
+              ctype = mimetypes.guess_type(filename)[0] or 'application/zip'
+              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {ctype}\r\n\r\n'.encode())
+              with open(path, 'rb') as f:
+                  parts.append(f.read())
+              parts.append(b'\r\n')
+          field('chat_id', chat_id)
+          field('caption', caption)
+          filefield('document', zip_path)
+          parts.append(f'--{boundary}--\r\n'.encode())
+          req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendDocument', data=b''.join(parts), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+          with urllib.request.urlopen(req, timeout=120) as r:
+              sys.stdout.write(r.read().decode('utf-8', 'replace'))
+          PY

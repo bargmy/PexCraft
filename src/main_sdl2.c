@@ -47,6 +47,7 @@ static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot
 #include "platform/sdl2_filesystem.c"
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
+#include "assets/pxc_zip_extract.c"
 #include "assets/classic_pack_installer_sdl2.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"

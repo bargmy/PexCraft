@@ -1,0 +1,17 @@
+# Build outputs
+*.exe
+*.dll
+*.zip
+*.7z
+*.rar
+*.o
+*.obj
+dist/
+build/
+
+# Local/editor files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -21,11 +21,15 @@ jobs:
           - arch: x86
             msystem: MINGW32
             package: mingw-w64-i686-gcc
+            zlib_package: mingw-w64-i686-zlib
             out_exe: pexcraft-win-x86.exe
+            d3dcompiler_path: /c/Windows/SysWOW64/D3DCompiler_47.dll
           - arch: x64
             msystem: MINGW64
             package: mingw-w64-x86_64-gcc
+            zlib_package: mingw-w64-x86_64-zlib
             out_exe: pexcraft-win-x64.exe
+            d3dcompiler_path: /c/Windows/System32/D3DCompiler_47.dll
 
     steps:
       - name: Checkout
@@ -39,16 +43,44 @@ jobs:
           install: >-
             base-devel
             ${{ matrix.package }}
+            ${{ matrix.zlib_package }}
 
-      - name: Build client
+      - name: Build client and collect runtime DLLs
         shell: msys2 {0}
         run: |
+          set -euxo pipefail
+
           gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o pexcraft.exe \
             -static -static-libgcc \
             -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
-            -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lm
+            -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
 
-      - name: Package zip
+          mkdir -p package_deps
+          objdump -p pexcraft.exe | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > package_deps/imported-dlls.txt || true
+
+          while IFS= read -r dll; do
+            [ -n "$dll" ] || continue
+            lower="$(printf '%s' "$dll" | tr '[:upper:]' '[:lower:]')"
+            case "$lower" in
+              kernel32.dll|user32.dll|gdi32.dll|shell32.dll|ole32.dll|oleaut32.dll|advapi32.dll|msvcrt.dll|ucrtbase.dll|vcruntime*.dll|api-ms-win-*.dll|ext-ms-*.dll|ntdll.dll|ws2_32.dll|winmm.dll|combase.dll|rpcrt4.dll|comdlg32.dll|windowscodecs.dll|d3d11.dll|dxgi.dll|d3d9.dll|opengl32.dll|glu32.dll|imm32.dll|version.dll|setupapi.dll|shlwapi.dll|bcrypt.dll|crypt32.dll|sechost.dll)
+                continue
+                ;;
+            esac
+            found="$(command -v "$dll" || true)"
+            if [ -n "$found" ] && [ -f "$found" ]; then
+              cp -Lv "$found" package_deps/
+            fi
+          done < package_deps/imported-dlls.txt
+
+          # D3DCompiler_47 is often installed on modern Windows, but bundling it avoids launch failures on older machines.
+          if [ -f "${{ matrix.d3dcompiler_path }}" ]; then
+            cp -Lv "${{ matrix.d3dcompiler_path }}" package_deps/d3dcompiler_47.dll
+          fi
+
+          echo "Imported DLLs:" && cat package_deps/imported-dlls.txt || true
+          echo "Bundled DLLs:" && find package_deps -maxdepth 1 -type f -iname '*.dll' -printf '%f\n' | sort || true
+
+      - name: Package zip with bundled DLLs
         shell: pwsh
         run: |
           $arch = '${{ matrix.arch }}'
@@ -60,6 +92,10 @@ jobs:
           Copy-Item 'pexcraft.exe' (Join-Path $packageDir '${{ matrix.out_exe }}') -Force
           if (Test-Path 'assets') {
             Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force
+          }
+          if (Test-Path 'package_deps') {
+            Copy-Item 'package_deps\*.dll' $packageDir -Force -ErrorAction SilentlyContinue
+            Copy-Item 'package_deps\imported-dlls.txt' $packageDir -Force -ErrorAction SilentlyContinue
           }
 
           $zipPath = Join-Path $distRoot "$packageName.zip"
@@ -103,11 +139,34 @@ jobs:
           test -f "$X86_ZIP"
           test -f "$X64_ZIP"
 
-          CAPTION="client Windows builds\nRepo: ${GITHUB_REPOSITORY}\nCommit: ${GITHUB_SHA}"
-          MEDIA="[{\"type\":\"document\",\"media\":\"attach://client_x86\",\"caption\":\"${CAPTION}\"},{\"type\":\"document\",\"media\":\"attach://client_x64\"}]"
-
-          curl --fail -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendMediaGroup" \
-            -F "chat_id=${CHAT_ID}" \
-            -F "media=${MEDIA}" \
-            -F "client_x86=@${X86_ZIP}" \
-            -F "client_x64=@${X64_ZIP}"
+          python3 - <<'PY'
+          import os, sys, json, uuid, mimetypes, urllib.request
+          token = os.environ['TOKEN']
+          chat_id = os.environ['CHAT_ID']
+          x86_zip = 'telegram_upload/client-windows-x86/client-windows-x86.zip'
+          x64_zip = 'telegram_upload/client-windows-x64/client-windows-x64.zip'
+          caption = f"client Windows builds with bundled runtime DLLs\nRepo: {os.environ.get('GITHUB_REPOSITORY','')}\nCommit: {os.environ.get('GITHUB_SHA','')}"
+          media = [
+              {'type': 'document', 'media': 'attach://client_x86', 'caption': caption},
+              {'type': 'document', 'media': 'attach://client_x64'},
+          ]
+          boundary = '----pexcraft-' + uuid.uuid4().hex
+          parts = []
+          def field(name, value):
+              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+          def filefield(name, path):
+              filename = os.path.basename(path)
+              ctype = mimetypes.guess_type(filename)[0] or 'application/zip'
+              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {ctype}\r\n\r\n'.encode())
+              with open(path, 'rb') as f:
+                  parts.append(f.read())
+              parts.append(b'\r\n')
+          field('chat_id', chat_id)
+          field('media', json.dumps(media))
+          filefield('client_x86', x86_zip)
+          filefield('client_x64', x64_zip)
+          parts.append(f'--{boundary}--\r\n'.encode())
+          req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMediaGroup', data=b''.join(parts), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+          with urllib.request.urlopen(req, timeout=120) as r:
+              sys.stdout.write(r.read().decode('utf-8', 'replace'))
+          PY

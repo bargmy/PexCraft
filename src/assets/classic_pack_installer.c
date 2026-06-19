@@ -346,71 +346,13 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
     return 1;
 }
 
-static int write_classic_extract_script(const char *script_path) {
-    FILE *f = fopen(script_path, "wb");
-    if (!f) return 0;
-    fputs("$ErrorActionPreference = 'Stop'\r\n", f);
-    fputs("$zip = $env:PEXCRAFT_CLASSIC_ZIP\r\n", f);
-    fputs("$pack = $env:PEXCRAFT_CLASSIC_PACK\r\n", f);
-    fputs("if (Test-Path -LiteralPath $pack) { Remove-Item -Recurse -Force -LiteralPath $pack }\r\n", f);
-    fputs("New-Item -ItemType Directory -Force -Path $pack | Out-Null\r\n", f);
-    fputs("Expand-Archive -LiteralPath $zip -DestinationPath $pack -Force\r\n", f);
-    fputs("Remove-Item -LiteralPath (Join-Path $pack 'pack.png') -Force -ErrorAction SilentlyContinue\r\n", f);
-    fputs("Remove-Item -Recurse -Force -LiteralPath (Join-Path $pack 'META-INF') -ErrorAction SilentlyContinue\r\n", f);
-    fputs("Get-ChildItem -LiteralPath $pack -Filter '*.class' -File | Remove-Item -Force -ErrorAction SilentlyContinue\r\n", f);
-    fputs("Set-Content -LiteralPath (Join-Path $pack 'pack.txt') -Value @('Minecraft Classic texture pack','Downloaded from client.jar') -Encoding ASCII\r\n", f);
-    fputs("if (!(Test-Path -LiteralPath (Join-Path $pack 'terrain.png'))) { throw 'terrain.png missing after extraction' }\r\n", f);
-    fputs("if (!(Test-Path -LiteralPath (Join-Path $pack 'gui\\gui.png'))) { throw 'gui/gui.png missing after extraction' }\r\n", f);
-    fputs("if (!(Test-Path -LiteralPath (Join-Path $pack 'font\\default.png'))) { throw 'font/default.png missing after extraction' }\r\n", f);
-    fputs("if (!(Test-Path -LiteralPath (Join-Path $pack 'gui\\items.png'))) { throw 'gui/items.png missing after extraction' }\r\n", f);
-    fclose(f);
-    return 1;
-}
-
-static int run_hidden_process_wait(const char *cmdline) {
-    char mutable_cmd[4096];
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    DWORD code = 1;
-
-    lstrcpynA(mutable_cmd, cmdline, sizeof(mutable_cmd));
-    memset(&si, 0, sizeof(si));
-    memset(&pi, 0, sizeof(pi));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-
-    if (!CreateProcessA(NULL, mutable_cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) return 0;
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &code);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return code == 0;
-}
-
 static int classic_extract_downloaded_pack(const char *zip_path, const char *pack_dir) {
-    char script[MAX_PATHBUF];
-    char cmd[4096];
-
-    snprintf(script, sizeof(script), "%s\\classic_pack_extract.ps1", g_mc_dir);
-    if (!write_classic_extract_script(script)) {
-        classic_install_fail("Could not write extraction script");
-        return 0;
-    }
-
-    SetEnvironmentVariableA("PEXCRAFT_CLASSIC_ZIP", zip_path);
-    SetEnvironmentVariableA("PEXCRAFT_CLASSIC_PACK", pack_dir);
+    char err[MAX_LABEL];
     classic_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
+    err[0] = 0;
 
-    snprintf(cmd, sizeof(cmd), "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%s\"", script);
-    int ok = run_hidden_process_wait(cmd);
-
-    SetEnvironmentVariableA("PEXCRAFT_CLASSIC_ZIP", NULL);
-    SetEnvironmentVariableA("PEXCRAFT_CLASSIC_PACK", NULL);
-    DeleteFileA(script);
-
-    if (!ok) {
-        classic_install_fail("Could not extract client.jar");
+    if (!pxc_extract_zip_file(zip_path, pack_dir, err, sizeof(err))) {
+        classic_install_fail(err[0] ? err : "Could not extract client.jar internally");
         return 0;
     }
 

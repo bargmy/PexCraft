@@ -4,7 +4,7 @@
 WIN_CC ?= i686-w64-mingw32-gcc
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra
 LDFLAGS ?= -mwindows
-LIBS = -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lm
+LIBS = -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
 
 TARGET = pexcraft.exe
 
