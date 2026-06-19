@@ -287,7 +287,26 @@ static void glDepthMask(GLboolean flag){ sceGuDepthMask(flag?GU_FALSE:GU_TRUE); 
 static void glAlphaFunc(GLenum func, GLfloat ref){ (void)func; sceGuAlphaFunc(GU_GREATER, (int)(ref*255.0f), 0xff); }
 static void glLineWidth(GLfloat w){ (void)w; }
 static void glColor4f(float r,float g,float b,float a){ g_psp_cur_color=psp_rgba_to_abgr(r,g,b,a); }
-static void glViewport(GLint x,GLint y,GLsizei w,GLsizei h){ g_psp_viewport[0]=x; g_psp_viewport[1]=y; g_psp_viewport[2]=w; g_psp_viewport[3]=h; sceGuViewport(2048 + x + (w/2), 2048 + y + (h/2), w, h); sceGuScissor(x, y, x+w, y+h); }
+static void glViewport(GLint x,GLint y,GLsizei w,GLsizei h){
+    /* OpenGL glViewport uses a bottom-left origin and describes the viewport rect.
+       PSP GU's sceGuViewport wants the viewport *center* in its offset coordinate
+       space. The old shim used 2048+x+w/2 directly, which shifted a fullscreen
+       480x272 viewport by +240,+136. That made every GUI/menu draw down-right
+       and clipped most of the screen. Keep fullscreen centered at 2048,2048. */
+    if (w <= 0) w = PEX_PSP_SCR_WIDTH;
+    if (h <= 0) h = PEX_PSP_SCR_HEIGHT;
+    g_psp_viewport[0]=x; g_psp_viewport[1]=y; g_psp_viewport[2]=w; g_psp_viewport[3]=h;
+    int top_y = PEX_PSP_SCR_HEIGHT - (int)y - (int)h;
+    int cx = 2048 + (int)x + ((int)w / 2) - (PEX_PSP_SCR_WIDTH / 2);
+    int cy = 2048 + top_y + ((int)h / 2) - (PEX_PSP_SCR_HEIGHT / 2);
+    if (w == PEX_PSP_SCR_WIDTH && h == PEX_PSP_SCR_HEIGHT && x == 0 && y == 0) { cx = 2048; cy = 2048; }
+    sceGuViewport(cx, cy, w, h);
+    int sx0 = x; int sy0 = top_y; int sx1 = x + w; int sy1 = top_y + h;
+    if (sx0 < 0) sx0 = 0; if (sy0 < 0) sy0 = 0;
+    if (sx1 > PEX_PSP_SCR_WIDTH) sx1 = PEX_PSP_SCR_WIDTH;
+    if (sy1 > PEX_PSP_SCR_HEIGHT) sy1 = PEX_PSP_SCR_HEIGHT;
+    sceGuScissor(sx0, sy0, sx1, sy1);
+}
 static void glMatrixMode(GLenum mode){ if(mode==GL_PROJECTION) sceGumMatrixMode(GU_PROJECTION); else sceGumMatrixMode(GU_MODEL); }
 static void glLoadIdentity(void){ sceGumLoadIdentity(); }
 static void glPushMatrix(void){ sceGumPushMatrix(); }
