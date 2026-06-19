@@ -49,6 +49,15 @@ static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot
 static void steve_set_texture_dims(const Texture *tex);
 static void steve_set_tint(float r, float g, float b);
 
+/* Unity-build forward declarations for PSP.
+   The PSP entry intentionally keeps the existing PC source files mostly intact,
+   but some files call static helpers that are defined later in the unity build.
+   GCC for PSPSDK treats those old implicit declarations as hard conflicts, so
+   declare the exact static signatures before the include chain reaches gui.c. */
+static void draw_chat_lines(int force_visible);
+static void draw_ingame_world_view(int with_hand);
+static const char *item_display_name(int id);
+
 #include "game/inventory.c"
 #include "platform/psp_multiplayer_stub.c"
 #include "ui/screen_state_input.c"
