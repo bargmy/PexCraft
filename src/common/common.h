@@ -3,7 +3,9 @@
 
 // PEXCRAFT Beta 1.0 title/options/world UI port to C/Win32/OpenGL.
 // Build with MinGW32: gcc -std=c99 -O2 -mwindows main.c -o pexcraft.exe -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lwinmm
-#ifdef PEX_PLATFORM_SDL2
+#if defined(PEX_PLATFORM_PSP)
+#include "../platform/psp_compat.h"
+#elif defined(PEX_PLATFORM_SDL2)
 #include "../platform/sdl2_compat.h"
 #else
 #define COBJMACROS
@@ -330,10 +332,10 @@ static int g_renderer_prompt_target_screen = SCREEN_TITLE;
 static int g_renderer_backend_unavailable_notice = 0;
 static int g_texpack_drag_anchor = -1;
 static char g_current_texpack[MAX_LABEL] = "Default";
-#ifndef PEX_PLATFORM_SDL2
-static IWICImagingFactory *g_wic_factory = NULL;
-#else
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP)
 static void *g_wic_factory = NULL;
+#else
+static IWICImagingFactory *g_wic_factory = NULL;
 #endif
 static char g_notice_title[MAX_LABEL] = "";
 static char g_notice_line1[MAX_LABEL] = "";

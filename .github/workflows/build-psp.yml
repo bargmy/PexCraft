@@ -1,0 +1,170 @@
+name: Build PSP EBOOT
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CHAT_ID: '-1004462705182'
+
+jobs:
+  build-psp:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Java classic assets for PSP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p logs build dist
+          python3 -m pip install --user pillow
+          python3 tools/prepare_psp_assets.py build/psp_generated/assets src/assets/psp_embedded_classic_pack.c 2>&1 | tee logs/prepare-psp-assets.log
+
+      - name: Build EBOOT.PBP with PSPSDK
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p logs build dist
+          {
+            set -eux
+            echo "Generated assets:"
+            find build/psp_generated/assets -maxdepth 1 -type f | sort
+            docker run --rm \
+              -v "$PWD:/src" \
+              -w /src \
+              pspdev/pspdev:latest \
+              /bin/bash -lc 'make -f Makefile.psp clean || true; make -f Makefile.psp -j2'
+            test -f EBOOT.PBP
+            file EBOOT.PBP || true
+          } 2>&1 | tee logs/build-psp.log
+
+      - name: Package PSP zip
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf build/package
+          mkdir -p build/package/PSP/GAME/PEXCRAFT
+          cp EBOOT.PBP build/package/PSP/GAME/PEXCRAFT/EBOOT.PBP
+          cp -a build/psp_generated/assets build/package/PSP/GAME/PEXCRAFT/assets
+          cat > build/package/PSP/GAME/PEXCRAFT/options.txt <<'OPT'
+          music:1
+          sound:1
+          invertYMouse:false
+          mouseSensitivity:0.5
+          viewDistance:4
+          bobView:true
+          anaglyph3d:false
+          maxFps:60
+          fov:70
+          difficulty:2
+          fancyGraphics:false
+          fullscreen:false
+          showFps:false
+          renderer:opengl
+          ignoreClassicResourcesWarning:true
+          skin:Minecraft Classic
+          skinPath:
+          lastServer:
+          username:Player
+          key_key.forward:17
+          key_key.left:30
+          key_key.back:31
+          key_key.right:32
+          key_key.jump:57
+          key_key.sneak:42
+          key_key.drop:16
+          key_key.inventory:23
+          key_key.chat:20
+          key_key.fog:33
+          OPT
+          cat > build/package/PSP/GAME/PEXCRAFT/PSP_CONTROLS.txt <<'TXT'
+          PEXCraft PSP controls
+          Analog stick: move
+          Square/Triangle/Cross/Circle: hold to move camera left/right/down/up
+          Select: jump
+          Start: pause
+          L: place/use
+          R: break/attack
+          D-pad left/right: previous/next hotbar slot
+          D-pad up: inventory
+          D-pad down: sneak/shift
+          Inventory/crafting/furnace/chest: virtual cursor, Cross click, Square right-click, Circle back
+          TXT
+          (cd build/package && zip -r ../../dist/pexcraft-psp-eboot.zip PSP)
+          ls -lh dist/pexcraft-psp-eboot.zip
+
+      - name: Print logs
+        if: always()
+        shell: bash
+        run: |
+          echo "===== logs ====="
+          ls -la logs || true
+          for f in logs/*; do
+            [ -f "$f" ] || continue
+            echo "===== $f ====="
+            cat "$f"
+          done
+
+      - name: Upload PSP build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-psp-logs
+          path: logs/*
+          if-no-files-found: warn
+
+      - name: Upload PSP EBOOT artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-psp-eboot
+          path: dist/pexcraft-psp-eboot.zip
+          if-no-files-found: error
+
+      - name: Send PSP zip to Telegram
+        if: success()
+        shell: bash
+        env:
+          ZIP_PATH: dist/pexcraft-psp-eboot.zip
+          CAPTION: PEXCraft PSP EBOOT build
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN}" ]; then
+            echo "TOKEN secret is missing; skipping Telegram upload."
+            exit 0
+          fi
+          test -f "$ZIP_PATH"
+          python3 - <<'PY'
+          import os, sys, uuid, mimetypes, urllib.request
+          token = os.environ['TOKEN']
+          chat_id = os.environ['CHAT_ID']
+          zip_path = os.environ['ZIP_PATH']
+          caption = os.environ['CAPTION'] + f"\nRepo: {os.environ.get('GITHUB_REPOSITORY','')}\nCommit: {os.environ.get('GITHUB_SHA','')[:12]}"
+          boundary = '----pexcraft-' + uuid.uuid4().hex
+          parts = []
+          def field(name, value):
+              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+          def filefield(name, path):
+              filename = os.path.basename(path)
+              ctype = mimetypes.guess_type(filename)[0] or 'application/zip'
+              parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {ctype}\r\n\r\n'.encode())
+              with open(path, 'rb') as f:
+                  parts.append(f.read())
+              parts.append(b'\r\n')
+          field('chat_id', chat_id)
+          field('caption', caption)
+          filefield('document', zip_path)
+          parts.append(f'--{boundary}--\r\n'.encode())
+          req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendDocument', data=b''.join(parts), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+          with urllib.request.urlopen(req, timeout=180) as r:
+              sys.stdout.write(r.read().decode('utf-8', 'replace'))
+          PY

@@ -1,0 +1,12 @@
+TARGET = PEXCRAFT
+OBJS = main_psp.o
+
+CFLAGS = -std=c99 -O2 -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -Isrc
+CXXFLAGS = $(CFLAGS)
+ASFLAGS = $(CFLAGS)
+LIBS = -lpspgum -lpspgu -lpsppower -lpsprtc -lz -lm
+
+EXTRA_TARGETS = EBOOT.PBP
+PSP_EBOOT_TITLE = PEXCRAFT
+
+include $(PSPSDK)/lib/build.mak

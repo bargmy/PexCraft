@@ -23,7 +23,12 @@ static void set_default_options(void) {
     g_opts.show_fps = 0;
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = g_opts.renderer_backend;
+#ifdef PEX_PLATFORM_PSP
+    g_opts.ignore_classic_resources_warning = 1;
+    snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
+#else
     g_opts.ignore_classic_resources_warning = 0;
+#endif
     snprintf(g_opts.skin, sizeof(g_opts.skin), "Default");
     g_opts.skin_path[0] = 0;
     g_opts.last_server[0] = 0;
@@ -53,7 +58,7 @@ static int parse_renderer_backend(const char *s) {
 }
 
 static int renderer_backend_supported(int backend) {
-#ifdef PEX_PLATFORM_SDL2
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP)
     return backend == RENDERER_OPENGL;
 #else
     return backend == RENDERER_OPENGL || backend == RENDERER_D3D9 || backend == RENDERER_D3D11;
@@ -61,8 +66,13 @@ static int renderer_backend_supported(int backend) {
 }
 
 static const char *renderer_backend_label(int backend) {
+#ifdef PEX_PLATFORM_PSP
+    (void)backend;
+    return "PSP GU (fixed)";
+#else
     if (backend < 0 || backend >= RENDERER_COUNT) backend = RENDERER_OPENGL;
     return renderer_backend_names[backend];
+#endif
 }
 
 static void load_options(void) {
@@ -114,6 +124,11 @@ static void load_options(void) {
     if (g_opts.fov < 30.0f) g_opts.fov = 30.0f;
     if (g_opts.fov > 110.0f) g_opts.fov = 110.0f;
     if (g_opts.renderer_backend < 0 || g_opts.renderer_backend >= RENDERER_COUNT) g_opts.renderer_backend = RENDERER_OPENGL;
+#ifdef PEX_PLATFORM_PSP
+    g_opts.renderer_backend = RENDERER_OPENGL;
+    g_opts.ignore_classic_resources_warning = 1;
+    snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
+#endif
     g_selected_renderer_backend = g_opts.renderer_backend;
     if (g_opts.max_fps <= 0) g_opts.anaglyph = 0;
     if (!g_opts.username[0]) snprintf(g_opts.username, sizeof(g_opts.username), "Player");
@@ -257,7 +272,7 @@ static void bump_option(OptionId opt, int delta) {
     else if (opt == OPT_FULLSCREEN) { set_fullscreen_enabled(!g_opts.fullscreen); return; }
     else if (opt == OPT_SHOW_FPS) g_opts.show_fps = !g_opts.show_fps;
     else if (opt == OPT_RENDERER) {
-#ifdef PEX_PLATFORM_SDL2
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP)
         (void)delta;
         g_selected_renderer_backend = RENDERER_OPENGL;
 #else

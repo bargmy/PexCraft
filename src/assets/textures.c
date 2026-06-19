@@ -60,7 +60,10 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
     return load_mcrw_path(t, path, repeat);
 }
 
-#ifdef PEX_PLATFORM_SDL2
+#if defined(PEX_PLATFORM_PSP)
+static int ensure_wic(void) { return 1; }
+static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
+#elif defined(PEX_PLATFORM_SDL2)
 static int ensure_wic(void) { return 1; }
 
 static int load_png_texture(Texture *t, const char *path, int repeat) {
@@ -176,7 +179,10 @@ static int load_custom_skin_path(const char *path, int persist) {
 }
 
 static int choose_and_import_skin(void) {
-#ifdef PEX_PLATFORM_SDL2
+#ifdef PEX_PLATFORM_PSP
+    open_notice("Skins", "Skin import is not available on PSP.", "Copy converted assets before building the EBOOT.");
+    return 0;
+#elif defined(PEX_PLATFORM_SDL2)
     char path[MAX_PATHBUF];
     snprintf(path, sizeof(path), "%s/custom.png", g_skin_dir);
     if (load_custom_skin_path(path, 1)) return 1;

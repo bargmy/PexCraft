@@ -172,6 +172,65 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
     }
 }
 
+
+#elif defined(PEX_PLATFORM_PSP)
+static unsigned int g_psp_buttons_prev_raw = 0;
+
+static float psp_axis_deadzone(int v) {
+    /* PSP analog range is 0..255, center around 128. */
+    float f = ((float)v - 128.0f) / 127.0f;
+    return pex_deadzone(f);
+}
+
+static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    SceCtrlData pad;
+    memset(&pad, 0, sizeof(pad));
+    sceCtrlPeekBufferPositive(&pad, 1);
+    g_gamepad_count = 0;
+    g_gamepad_primary = -1;
+    memset(g_gamepads, 0, sizeof(g_gamepads));
+
+    int slot = 0;
+    PexGamepadState *p = &g_gamepads[slot];
+    pex_gamepad_copy_edges(p, &oldpads[slot]);
+    p->connected = 1;
+    p->slot = 0;
+    snprintf(p->name, sizeof(p->name), "PSP built-in controls");
+    snprintf(p->kind, sizeof(p->kind), "PSP controls");
+
+    unsigned int b = pad.Buttons;
+    p->lx = psp_axis_deadzone((int)pad.Lx);
+    p->ly = psp_axis_deadzone((int)pad.Ly);
+
+    /* PSP has no right analog stick.  The four face buttons emulate it while held. */
+    p->rx = 0.0f;
+    p->ry = 0.0f;
+    if (b & PSP_CTRL_SQUARE)   p->rx -= 1.0f; /* look left */
+    if (b & PSP_CTRL_TRIANGLE) p->rx += 1.0f; /* look right */
+    if (b & PSP_CTRL_CIRCLE)   p->ry -= 1.0f; /* look up */
+    if (b & PSP_CTRL_CROSS)    p->ry += 1.0f; /* look down */
+
+    /* Menu/cursor abstraction: Cross=A/select, Circle=B/back, Square=X/right-click, Triangle=Y. */
+    p->a = (b & PSP_CTRL_CROSS) != 0;
+    p->b = (b & PSP_CTRL_CIRCLE) != 0;
+    p->x = (b & PSP_CTRL_SQUARE) != 0;
+    p->y = (b & PSP_CTRL_TRIANGLE) != 0;
+    p->lb = (b & PSP_CTRL_LTRIGGER) != 0;
+    p->rb = (b & PSP_CTRL_RTRIGGER) != 0;
+    p->back = (b & PSP_CTRL_SELECT) != 0;  /* gameplay jump */
+    p->start = (b & PSP_CTRL_START) != 0;  /* pause */
+    p->lt = p->lb ? 1.0f : 0.0f;
+    p->rt = p->rb ? 1.0f : 0.0f;
+    p->dpad_up = (b & PSP_CTRL_UP) != 0;
+    p->dpad_down = (b & PSP_CTRL_DOWN) != 0;
+    p->dpad_left = (b & PSP_CTRL_LEFT) != 0;
+    p->dpad_right = (b & PSP_CTRL_RIGHT) != 0;
+
+    g_gamepad_primary = 0;
+    g_gamepad_count = 1;
+    g_psp_buttons_prev_raw = b;
+}
+
 #else
 /* Minimal dynamic XInput declarations: avoids an xinput import dependency. */
 typedef struct PexXInputGamepad {
@@ -426,15 +485,27 @@ static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
 static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (!p || g_screen != SCREEN_INGAME || g_player_dead) return;
     if (fabsf(p->rx) > 0.02f || fabsf(p->ry) > 0.02f) {
+#ifdef PEX_PLATFORM_PSP
+        float look = 24.0f * (float)dt * 60.0f;
+#else
         float look = 34.0f * (float)dt * 60.0f;
+#endif
         player_turn_from_mouse((int)(p->rx * look), (int)(-p->ry * look));
     }
+#ifdef PEX_PLATFORM_PSP
+    if (p->lb && !p->prev_lb) mouse_right_down(g_gui_w / 2, g_gui_h / 2); /* L = place/use */
+    if (p->dpad_up && !p->prev_dpad_up) { set_screen(SCREEN_INVENTORY); return; }
+    if (p->start && !p->prev_start) set_screen(SCREEN_PAUSE);
+    if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
+    if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
+#else
     if (p->lt > 0.35f && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
     if (p->y && !p->prev_y) { set_screen(SCREEN_INVENTORY); return; }
     if (p->x && !p->prev_x) inventory_drop_selected_one();
     if (p->back && !p->prev_back) set_screen(SCREEN_PAUSE);
     if (p->lb && !p->prev_lb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->rb && !p->prev_rb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
+#endif
 }
 
 static void pex_gamepad_update(void) {
@@ -458,7 +529,7 @@ static void pex_gamepad_shutdown(void) {
 #ifdef PEX_PLATFORM_SDL2
     pex_gamepad_sdl2_close_all();
 #endif
-#ifndef PEX_PLATFORM_SDL2
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP)
     if (g_xinput_dll) { FreeLibrary(g_xinput_dll); g_xinput_dll = NULL; g_xinput_get_state = NULL; }
 #endif
 }
@@ -475,7 +546,9 @@ static void draw_gamepad_virtual_cursor(void) {
 }
 
 static int pex_network_available(void) {
-#ifdef PEX_PLATFORM_SDL2
+#if defined(PEX_PLATFORM_PSP)
+    return 0;
+#elif defined(PEX_PLATFORM_SDL2)
     SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
     if (s == INVALID_SOCKET) return 0;
     closesocket(s);
@@ -497,7 +570,15 @@ static void pex_query_system_info(void) {
     g_system_info_last_time = now;
     memset(&g_system_info, 0, sizeof(g_system_info));
     snprintf(g_system_info.client_version, sizeof(g_system_info.client_version), "%s", VERSION_TEXT);
-#ifdef PEX_PLATFORM_SDL2
+#ifdef PEX_PLATFORM_PSP
+    snprintf(g_system_info.platform, sizeof(g_system_info.platform), "Sony PSP / PSPSDK");
+    snprintf(g_system_info.display_name, sizeof(g_system_info.display_name), "PSP LCD");
+    g_system_info.display_refresh_hz = 60;
+    g_system_info.screen_w = 480;
+    g_system_info.screen_h = 272;
+    g_system_info.ram_total_mb = 32;
+    g_system_info.ram_available_mb = 0;
+#elif defined(PEX_PLATFORM_SDL2)
     snprintf(g_system_info.platform, sizeof(g_system_info.platform), "Linux / SDL2");
     int display = g_hwnd ? SDL_GetWindowDisplayIndex(g_hwnd) : 0;
     SDL_DisplayMode mode;
@@ -570,7 +651,12 @@ static void draw_system_info_screen(void) {
             if (y > g_gui_h - 54) break;
         }
     }
+    #ifdef PEX_PLATFORM_PSP
+    draw_text("PSP: D-pad menu, Cross selects, Circle backs. Sliders: Left/Right.", x, g_gui_h - 44, 10526880);
+    draw_text("PSP: analog move, face buttons look, L place, R break, Select jump.", x, g_gui_h - 34, 10526880);
+#else
     draw_text("Menu: D-pad/left stick moves, A selects, B goes back. Sliders: right stick.", x, g_gui_h - 44, 10526880);
     draw_text("Gameplay: left stick move, right stick look, RT break, LT place, LB/RB hotbar.", x, g_gui_h - 34, 10526880);
+#endif
     draw_all_buttons();
 }

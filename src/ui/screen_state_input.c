@@ -69,6 +69,9 @@ static void rebuild_screen(void) {
         get_option_label(OPT_RENDERER, renderer_label, sizeof(renderer_label));
         Button *renderer = add_button_full(21, g_gui_w / 2 - 100, g_gui_h / 4 + 40, 200, 20, renderer_label, BUTTON_NORMAL);
         renderer->opt = OPT_RENDERER;
+#ifdef PEX_PLATFORM_PSP
+        renderer->enabled = 0;
+#endif
         add_button(10, g_gui_w / 2 - 100, g_gui_h / 4 + 72, tr("Skins..."));
         add_button(22, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Info...");
         add_button_full(199, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Back"), BUTTON_NORMAL);
@@ -169,6 +172,11 @@ static void finish_options_to(ScreenId target) {
 }
 
 static void restart_application_now(void) {
+#ifdef PEX_PLATFORM_PSP
+    save_current_world_state();
+    g_running = 0;
+    return;
+#else
     char exe[MAX_PATHBUF];
     DWORD n = GetModuleFileNameA(NULL, exe, sizeof(exe));
     save_current_world_state();
@@ -177,6 +185,7 @@ static void restart_application_now(void) {
         ShellExecuteA(NULL, "open", exe, NULL, NULL, SW_SHOWNORMAL);
     }
     PostQuitMessage(0);
+#endif
 }
 
 static void on_button(Button *b) {
@@ -186,7 +195,13 @@ static void on_button(Button *b) {
         else if (b->id == 1) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_WORLD_SELECT); }
         else if (b->id == 2) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_MULTIPLAYER); }
         else if (b->id == 3) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_TEXPACK); }
-        else if (b->id == 4) { PostQuitMessage(0); }
+        else if (b->id == 4) {
+#ifdef PEX_PLATFORM_PSP
+            g_running = 0;
+#else
+            PostQuitMessage(0);
+#endif
+        }
     } else if (g_screen == SCREEN_OPTIONS) {
         if (b->id < 100) {
             if (b->kind == BUTTON_NORMAL) {
