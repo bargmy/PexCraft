@@ -245,7 +245,7 @@ int main(int argc, char **argv) {
     psp_boot_debug_stagef("exit callback registered");
     PEX_PSP_LOGF("init_dirs begin");
     init_dirs();
-    PEX_PSP_LOGF("init_dirs end: exe=%s data=%s saves=%s", g_exe_dir, g_data_dir, g_saves_dir);
+    PEX_PSP_LOGF("init_dirs end: mc=%s save=%s texpack=%s skin=%s", g_mc_dir, g_save_dir, g_texpack_dir, g_skin_dir);
     psp_boot_debug_stagef("memory-only dirs initialized");
     PEX_PSP_LOGF("load_options begin");
     load_options();
