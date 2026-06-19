@@ -1,5 +1,5 @@
 @echo off
 set CC=i686-w64-mingw32-gcc
-%CC% -std=c99 -O2 -Wall -Wextra -mwindows main.c -o pexcraft.exe -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs
+%CC% -std=c99 -O2 -Wall -Wextra -mwindows main.c -o pexcraft.exe -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32
 if errorlevel 1 exit /b 1
 echo Built pexcraft.exe
