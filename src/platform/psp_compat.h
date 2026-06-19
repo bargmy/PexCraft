@@ -355,7 +355,28 @@ static inline BOOL SetThreadPriority(HANDLE h, int prio) { (void)h; (void)prio; 
 static inline LONG InterlockedExchange(volatile LONG *target, LONG value) { return __sync_lock_test_and_set(target, value); }
 static inline LONG InterlockedCompareExchange(volatile LONG *target, LONG exchange, LONG comparand) { return __sync_val_compare_and_swap(target, comparand, exchange); }
 static inline void Sleep(DWORD ms) { sceKernelDelayThread((SceUInt)ms * 1000u); }
-static inline void ExitProcess(UINT code) { sceKernelExitGame(); (void)code; }
+static inline void ExitProcess(UINT code) {
+    pspDebugScreenInit();
+    pspDebugScreenSetBackColor(0x00000000);
+    pspDebugScreenSetTextColor(0xffffffff);
+    pspDebugScreenClear();
+    pspDebugScreenSetXY(0, 0);
+    pspDebugScreenPrintf("PEXCRAFT PSP ExitProcess(%u)\n", (unsigned)code);
+    pspDebugScreenPrintf("A shared PC code path requested process exit.\n");
+    pspDebugScreenPrintf("START+SELECT+L+R exits PPSSPP/game.\n");
+    for (;;) {
+        SceCtrlData pad;
+        memset(&pad, 0, sizeof(pad));
+        sceCtrlPeekBufferPositive(&pad, 1);
+        if ((pad.Buttons & PSP_CTRL_START) &&
+            (pad.Buttons & PSP_CTRL_SELECT) &&
+            (pad.Buttons & PSP_CTRL_LTRIGGER) &&
+            (pad.Buttons & PSP_CTRL_RTRIGGER)) {
+            sceKernelExitGame();
+        }
+        sceKernelDelayThread(250000);
+    }
+}
 static inline BOOL MoveFileA(const char *src, const char *dst) { char s[1024], d[1024]; pex_normalize_path(s,sizeof(s),src); pex_normalize_path(d,sizeof(d),dst); return rename(s,d)==0; }
 static inline DWORD GetTickCount(void) { return (DWORD)(sceKernelGetSystemTimeLow() / 1000u); }
 static inline HMODULE LoadLibraryA(const char *name) { (void)name; return NULL; }

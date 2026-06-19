@@ -43,7 +43,7 @@ static void psp_boot_debug_stagef(const char *fmt, ...) {
     g_psp_boot_debug_count++;
     g_psp_boot_debug_stage++;
     psp_boot_debug_redraw("working...");
-    sceKernelDelayThread(140000);
+    sceKernelDelayThread(350000);
 }
 
 static void psp_boot_debug_pause(const char *footer, int usec) {
@@ -51,14 +51,33 @@ static void psp_boot_debug_pause(const char *footer, int usec) {
     if (usec > 0) sceKernelDelayThread((SceUInt)usec);
 }
 
+static void psp_boot_debug_hold(const char *footer) {
+    char line[160];
+    snprintf(line, sizeof(line), "%s\n\nDebug hold: START+SELECT+L+R exits.", footer ? footer : "PSP debug hold");
+    for (;;) {
+        psp_boot_debug_redraw(line);
+        SceCtrlData pad;
+        memset(&pad, 0, sizeof(pad));
+        sceCtrlPeekBufferPositive(&pad, 1);
+        if ((pad.Buttons & PSP_CTRL_START) &&
+            (pad.Buttons & PSP_CTRL_SELECT) &&
+            (pad.Buttons & PSP_CTRL_LTRIGGER) &&
+            (pad.Buttons & PSP_CTRL_RTRIGGER)) {
+            sceKernelExitGame();
+        }
+        sceKernelDelayThread(250000);
+    }
+}
+
 static void psp_boot_debug_fail(const char *msg) {
     psp_boot_debug_stagef("FAIL: %s", msg ? msg : "unknown");
-    psp_boot_debug_pause("Boot stopped. Check this stage.", 8000000);
+    psp_boot_debug_hold("Boot stopped. Check this stage.");
 }
 #else
 static void psp_boot_debug_stagef(const char *fmt, ...) { (void)fmt; }
 static void psp_boot_debug_pause(const char *footer, int usec) { (void)footer; (void)usec; }
-static void psp_boot_debug_fail(const char *msg) { (void)msg; }
+static void psp_boot_debug_hold(const char *footer) { (void)footer; for (;;) sceKernelDelayThread(1000000); }
+static void psp_boot_debug_fail(const char *msg) { (void)msg; psp_boot_debug_hold("Boot stopped."); }
 #endif
 
 
@@ -187,13 +206,13 @@ static void main_loop(void) {
         if (psp_debug_first_frame) {
             psp_debug_first_frame = 0;
             psp_boot_debug_stagef("first frame rendered");
-            psp_boot_debug_pause("Entering game. If the screen goes black after this, rendering/menu code is the next suspect.", 900000);
+            psp_boot_debug_pause("First frame rendered. Entering game in 5 seconds. If it exits after this, the main loop ended cleanly.", 5000000);
         }
         sleep_for_max_fps(frame_start_time);
         pex_profile_frame_end();
     }
     psp_boot_debug_stagef("main loop exited: running=%d screen=%d ticks=%llu", g_running, g_screen, (unsigned long long)g_ticks);
-    psp_boot_debug_pause("Game loop ended without a PSP exception.", 5000000);
+    psp_boot_debug_hold("Game loop ended without a PSP exception.");
 }
 
 int main(int argc, char **argv) {
@@ -211,9 +230,7 @@ int main(int argc, char **argv) {
     setup_scale();
     InitializeCriticalSection(&g_save_cs);
     if (!pex_renderer_backend_init(g_hwnd)) {
-        pspDebugScreenPrintf("PEXCRAFT failed to initialize PSP GU or assets.\n");
-        sceKernelDelayThread(3000000);
-        sceKernelExitGame();
+        psp_boot_debug_hold("PEXCRAFT failed to initialize PSP GU or assets.");
         return 1;
     }
     set_screen(SCREEN_TITLE);
@@ -229,6 +246,6 @@ int main(int argc, char **argv) {
     pex_renderer_shutdown();
     pex_join_save_thread_for_exit();
     DeleteCriticalSection(&g_save_cs);
-    sceKernelExitGame();
+    psp_boot_debug_hold("Cleanup finished. The game would normally call sceKernelExitGame now.");
     return 0;
 }
