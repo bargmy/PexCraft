@@ -38,7 +38,7 @@ jobs:
             zip \
             file
 
-      - name: Build and package self-contained client
+      - name: Build and package client
         shell: bash
         run: |
           set -o pipefail
@@ -74,48 +74,24 @@ jobs:
               $SDL_CFLAGS $CURL_CFLAGS \
               "$SRC" \
               -o build/pexcraft_sdl2 \
-              -Wl,-rpath,'$ORIGIN/lib' \
               $SDL_LIBS \
               -lGL -lGLU \
               $CURL_LIBS \
               -lz -lm -pthread
 
             file build/pexcraft_sdl2 | tee logs/file-pexcraft_sdl2.log
-            ldd build/pexcraft_sdl2 | tee logs/ldd-pexcraft_sdl2-before-bundle.log || true
-
-            mkdir -p build/lib
-            ldd build/pexcraft_sdl2 | awk '($2 == "=>" && $3 ~ /^\//) { print $3 } ($1 ~ /^\//) { print $1 }' | sort -u > logs/dep-paths.txt || true
-
-            while IFS= read -r lib; do
-              [ -f "$lib" ] || continue
-              base="$(basename "$lib")"
-              # Do not bundle the glibc loader/libc family. Everything else gets copied beside the executable.
-              case "$base" in
-                linux-vdso*|ld-linux*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libresolv.so*|libnsl.so*|libutil.so*)
-                  continue
-                  ;;
-              esac
-              cp -Lv "$lib" build/lib/
-            done < logs/dep-paths.txt
-
-            cat > build/run_pexcraft_sdl2.sh <<'EOS'
-          #!/usr/bin/env bash
-          set -e
-          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH:-}"
-          exec "$DIR/pexcraft_sdl2" "$@"
-          EOS
-            chmod +x build/run_pexcraft_sdl2.sh
+            ldd build/pexcraft_sdl2 | tee logs/ldd-pexcraft_sdl2.log || true
 
             if [ -d assets ]; then
               cp -a assets build/assets
             fi
-
             cp -a LICENSE build/LICENSE 2>/dev/null || true
 
-            echo "Bundled Linux libraries:"
-            find build/lib -maxdepth 1 -type f -printf '%f\n' | sort | tee logs/bundled-libs.txt
-            LD_LIBRARY_PATH="$PWD/build/lib" ldd build/pexcraft_sdl2 | tee logs/ldd-pexcraft_sdl2-after-bundle.log || true
+            cat > build/linux-runtime-deps.txt <<'EOS'
+Runtime packages are expected from the Linux system, not bundled in this zip.
+Ubuntu/Debian example:
+  sudo apt install libsdl2-2.0-0 libsdl2-image-2.0-0 libcurl4 zlib1g libgl1 libglu1-mesa
+EOS
 
             (cd build && zip -r ../dist/pexcraft-client-linux-sdl2-x64.zip .)
             ls -lh dist/pexcraft-client-linux-sdl2-x64.zip
@@ -156,7 +132,7 @@ jobs:
         shell: bash
         env:
           ZIP_PATH: dist/pexcraft-client-linux-sdl2-x64.zip
-          CAPTION: PEXCraft client Linux SDL2 x64 build with bundled shared libraries
+          CAPTION: PEXCraft client Linux SDL2 x64 build
         run: |
           set -euo pipefail
           if [ -z "${TOKEN}" ]; then

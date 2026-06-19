@@ -325,7 +325,8 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->lx >  PEX_GAMEPAD_DEADZONE || p->dpad_right) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
     if (p->a) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* jump */
     if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
-    if (p->rt > 0.35f || p->rb) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
+    /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
+    if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
 }
 
 static void pex_gamepad_back_action(void) {
@@ -466,10 +467,11 @@ static void draw_gamepad_virtual_cursor(void) {
     if (!g_gamepad_virtual_cursor_active || !pex_gamepad_inventory_screen()) return;
     int x = (int)g_gamepad_virtual_cursor_x;
     int y = (int)g_gamepad_virtual_cursor_y;
-    draw_rect(x - 13, y - 3, x + 14, y + 4, (int)0xD0FFFFFFu);
-    draw_rect(x - 3, y - 13, x + 4, y + 14, (int)0xD0FFFFFFu);
-    draw_rect(x - 9, y - 1, x + 10, y + 2, (int)0xFF000000u);
-    draw_rect(x - 1, y - 9, x + 2, y + 10, (int)0xFF000000u);
+    /* Compact virtual cursor: still a thick +, but no longer covers slots/items. */
+    draw_rect(x - 8, y - 2, x + 9, y + 3, (int)0xD0FFFFFFu);
+    draw_rect(x - 2, y - 8, x + 3, y + 9, (int)0xD0FFFFFFu);
+    draw_rect(x - 6, y - 1, x + 7, y + 2, (int)0xFF000000u);
+    draw_rect(x - 1, y - 6, x + 2, y + 7, (int)0xFF000000u);
 }
 
 static int pex_network_available(void) {
@@ -561,7 +563,7 @@ static void draw_system_info_screen(void) {
         for (int i = 0; i < g_gamepad_count && i < PEX_GAMEPAD_MAX; i++) {
             PexGamepadState *p = &g_gamepads[i];
             snprintf(line, sizeof(line), "%d. %s", i + 1, p->name); draw_text(line, x, y, i == g_gamepad_primary ? 16777120 : 14737632); y += 10;
-            snprintf(line, sizeof(line), "   Type: %s  A:%d B:%d X:%d Y:%d  LT:%.2f RT:%.2f", p->kind, p->a, p->b, p->x, p->y, p->lt, p->rt);
+            snprintf(line, sizeof(line), "   Type: %s  A:%d B:%d X:%d Y:%d LB:%d RB:%d LT:%.2f RT:%.2f", p->kind, p->a, p->b, p->x, p->y, p->lb, p->rb, p->lt, p->rt);
             draw_text(line, x, y, 10526880); y += 10;
             snprintf(line, sizeof(line), "   LS %.2f %.2f  RS %.2f %.2f  DPad %d%d%d%d", p->lx, p->ly, p->rx, p->ry, p->dpad_up, p->dpad_down, p->dpad_left, p->dpad_right);
             draw_text(line, x, y, 10526880); y += 10;
@@ -569,6 +571,6 @@ static void draw_system_info_screen(void) {
         }
     }
     draw_text("Menu: D-pad/left stick moves, A selects, B goes back. Sliders: right stick.", x, g_gui_h - 44, 10526880);
-    draw_text("Gameplay: left stick move, right stick look, RT break, LT place, Y inventory.", x, g_gui_h - 34, 10526880);
+    draw_text("Gameplay: left stick move, right stick look, RT break, LT place, LB/RB hotbar.", x, g_gui_h - 34, 10526880);
     draw_all_buttons();
 }
