@@ -63,7 +63,7 @@ jobs:
                 command -v psp-gcc
                 test -f "$PSPSDK/lib/build.mak"
                 make -f Makefile.psp clean || true
-                make -f Makefile.psp -j2
+                make -f Makefile.psp all -j2
                 psp-size PEXCRAFT.elf || true
                 ls -lh PEXCRAFT.elf EBOOT.PBP || true
                 if [ -f PEXCRAFT.map ]; then tail -80 PEXCRAFT.map || true; fi

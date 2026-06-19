@@ -1,5 +1,9 @@
 TARGET = PEXCRAFT
 OBJS = main_psp.o build/psp_generated/psp_mcrw_assets.o
+.DEFAULT_GOAL := all
+
+# The generated asset-object rule below appears before PSPSDK build.mak.
+# Without this default goal, GNU make would build only that first rule.
 
 # GitHub Actions Docker shells do not always export PSPDEV/PSPSDK.
 # Keep this Makefile usable both locally and inside pspdev/pspdev.
