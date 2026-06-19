@@ -237,6 +237,16 @@ static inline BOOL CopyFileA(const char *src, const char *dst, BOOL fail_if_exis
     fclose(out); fclose(in); return ok ? TRUE : FALSE;
 }
 static inline char *lstrcpynA(char *dst, const char *src, int cap) { if (!dst || cap <= 0) return dst; snprintf(dst, (size_t)cap, "%s", src ? src : ""); return dst; }
+static inline int lstrcmpA(const char *a, const char *b) {
+    if (!a) a = "";
+    if (!b) b = "";
+    return strcmp(a, b);
+}
+static inline int lstrcmpiA(const char *a, const char *b) {
+    if (!a) a = "";
+    if (!b) b = "";
+    return strcasecmp(a, b);
+}
 
 typedef struct WIN32_FIND_DATAA { DWORD dwFileAttributes; char cFileName[260]; DWORD nFileSizeHigh; DWORD nFileSizeLow; } WIN32_FIND_DATAA;
 typedef enum PexHandleKind { PEX_HANDLE_NONE, PEX_HANDLE_DIR, PEX_HANDLE_THREAD, PEX_HANDLE_EVENT } PexHandleKind;
