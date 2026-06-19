@@ -5,33 +5,58 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-jobs:
-  build-linux-sdl2:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - name: Install dependencies
+env:
+  CHAT_ID: :contentReference[oaicite:0]{index=0}  build-linux-sdl2:
+    runs-on: ubuntu-latest
+
+    env:
+      TOKEN: ${{ secrets.TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux SDL2 dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libsdl2-dev libsdl2-image-dev libgl1-mesa-dev libglu1-mesa-dev zip curl
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            zip \
+            curl
 
       - name: Build SDL2 client
-        run: ./build_linux_sdl2.sh
+        run: |
+          chmod +x ./build_linux_sdl2.sh
+          ./build_linux_sdl2.sh
 
-      - name: Upload artifact
+      - name: Upload GitHub artifact
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-client-linux-sdl2-x64
           path: dist/pexcraft-client-linux-sdl2-x64.zip
 
-      - name: Send to Telegram
-        if: ${{ secrets.TOKEN != '' }}
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: '-1004462705182'
+      - name: Send build to Telegram
+        shell: bash
         run: |
+          if [ -z "${TOKEN}" ]; then
+            echo "TOKEN secret is missing; skipping Telegram upload."
+            exit 0
+          fi
+
+          if [ ! -f "dist/pexcraft-client-linux-sdl2-x64.zip" ]; then
+            echo "Build zip not found."
+            exit 1
+          fi
+
           curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
-            -F chat_id="${CHAT_ID}" \
-            -F caption="PEXCraft client Linux SDL2 x64 build" \
-            -F document=@dist/pexcraft-client-linux-sdl2-x64.zip
+            -F "chat_id=${CHAT_ID}" \
+            -F "caption=PEXCraft client Linux SDL2 x64 build" \
+            -F "document=@dist/pexcraft-client-linux-sdl2-x64.zip"
