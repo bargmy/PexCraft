@@ -1114,10 +1114,12 @@ static void draw_break_overlay_cube(float x, float y, float z, int stage) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glEnable(GL_BLEND);
 #if defined(PEX_PLATFORM_PSP)
-    /* PSP GU shim does not emulate the PC multiplicative crack blend well.
-       Use normal alpha so the mining crack texture is actually visible. */
+    /* PSP terrain destroy-stage tiles need alpha testing.  Without it, the
+       transparent gray parts of destroy_stage show as a flat gray cube. */
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.15f);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(1,1,1,0.85f);
+    glColor4f(1,1,1,1.0f);
 #else
     glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
     glColor4f(1,1,1,1);
@@ -4177,19 +4179,73 @@ static void psp_fast_emit_surface_block(int id, int x, int y, int z) {
     }
 }
 
-static PspBatch *g_psp_fast_surface_batch = NULL;
-static int g_psp_fast_surface_cx = 0x7fffffff;
-static int g_psp_fast_surface_cz = 0x7fffffff;
+#define PEX_PSP_FAST_TILE_SIZE 16
+#define PEX_PSP_FAST_MAX_TILES 128
+typedef struct PspFastSurfaceTile {
+    int valid;
+    int dirty;
+    int tx, tz;
+    GLuint tex;
+    PspBatch *batch;
+    int vertex_count;
+} PspFastSurfaceTile;
+
+static PspFastSurfaceTile g_psp_fast_surface_tiles[PEX_PSP_FAST_MAX_TILES];
 static GLuint g_psp_fast_surface_tex = 0;
-static double g_psp_fast_surface_last_rebuild = -1000.0;
-static int g_psp_fast_surface_vertex_count = 0;
+
+static int psp_floor_div_tile(int v) {
+    int s = PEX_PSP_FAST_TILE_SIZE;
+    return (v >= 0) ? (v / s) : ((v - s + 1) / s);
+}
 
 static void psp_fast_surface_free_cache(void) {
-    if (g_psp_fast_surface_batch) {
-        psp_batch_destroy(g_psp_fast_surface_batch);
-        g_psp_fast_surface_batch = NULL;
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        if (g_psp_fast_surface_tiles[i].batch) psp_batch_destroy(g_psp_fast_surface_tiles[i].batch);
+        memset(&g_psp_fast_surface_tiles[i], 0, sizeof(g_psp_fast_surface_tiles[i]));
     }
-    g_psp_fast_surface_vertex_count = 0;
+}
+
+static PspFastSurfaceTile *psp_fast_surface_find_tile(int tx, int tz) {
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        if (g_psp_fast_surface_tiles[i].valid && g_psp_fast_surface_tiles[i].tx == tx && g_psp_fast_surface_tiles[i].tz == tz) return &g_psp_fast_surface_tiles[i];
+    }
+    return NULL;
+}
+
+static PspFastSurfaceTile *psp_fast_surface_alloc_tile(int tx, int tz, int center_tx, int center_tz) {
+    PspFastSurfaceTile *slot = NULL;
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        if (!g_psp_fast_surface_tiles[i].valid) { slot = &g_psp_fast_surface_tiles[i]; break; }
+    }
+    if (!slot) {
+        int best = 0, best_d = -1;
+        for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+            int dx = g_psp_fast_surface_tiles[i].tx - center_tx;
+            int dz = g_psp_fast_surface_tiles[i].tz - center_tz;
+            int d = dx * dx + dz * dz;
+            if (d > best_d) { best_d = d; best = i; }
+        }
+        slot = &g_psp_fast_surface_tiles[best];
+        if (slot->batch) psp_batch_destroy(slot->batch);
+    }
+    memset(slot, 0, sizeof(*slot));
+    slot->valid = 1;
+    slot->dirty = 1;
+    slot->tx = tx;
+    slot->tz = tz;
+    slot->tex = tex_terrain.id;
+    return slot;
+}
+
+static int psp_fast_surface_tile_overlaps_dirty(int tx, int tz) {
+    if (!g_psp_fast_surface_dirty) return 0;
+    int x0 = tx * PEX_PSP_FAST_TILE_SIZE;
+    int z0 = tz * PEX_PSP_FAST_TILE_SIZE;
+    int x1 = x0 + PEX_PSP_FAST_TILE_SIZE - 1;
+    int z1 = z0 + PEX_PSP_FAST_TILE_SIZE - 1;
+    if (x1 < g_psp_fast_dirty_min_x || x0 > g_psp_fast_dirty_max_x) return 0;
+    if (z1 < g_psp_fast_dirty_min_z || z0 > g_psp_fast_dirty_max_z) return 0;
+    return 1;
 }
 
 static void psp_fast_surface_capture_begin(void) {
@@ -4198,34 +4254,14 @@ static void psp_fast_surface_capture_begin(void) {
     g_psp_imm_count = 0;
 }
 
-static void psp_fast_surface_capture_end(int pcx, int pcz) {
+static PspBatch *psp_fast_surface_capture_to_batch(void) {
     g_psp_begin_active = 0;
     PspBatch *nb = psp_batch_create(g_psp_imm, g_psp_imm_count, GL_QUADS);
-    if (nb) {
-        psp_fast_surface_free_cache();
-        g_psp_fast_surface_batch = nb;
-        g_psp_fast_surface_vertex_count = nb->count;
-        g_psp_fast_surface_cx = pcx;
-        g_psp_fast_surface_cz = pcz;
-        g_psp_fast_surface_tex = tex_terrain.id;
-        g_psp_fast_surface_last_rebuild = now_seconds();
-    }
     g_psp_imm_count = 0;
+    return nb;
 }
 
-static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
-    const int rebuild_step = 8; /* larger cache: rebuild after moving half a chunk */
-    double now = now_seconds();
-    int need = 0;
-    if (!g_psp_fast_surface_batch) need = 1;
-    if (g_psp_fast_surface_dirty) need = 1;
-    if (g_psp_fast_surface_tex != tex_terrain.id) need = 1;
-    if (abs(pcx - g_psp_fast_surface_cx) >= rebuild_step || abs(pcz - g_psp_fast_surface_cz) >= rebuild_step) need = 1;
-    /* Do not rebuild on a timer.  On PSP that timer caused a regular freeze even
-       when standing still.  Block edits invalidate by movement/texture for now. */
-    (void)now;
-    if (!need) return;
-
+static PspBatch *psp_fast_surface_build_tile_batch(int tx, int tz, int pcx, int pcz, int radius) {
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
@@ -4234,32 +4270,125 @@ static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glColor4f(1, 1, 1, 1);
 
-    /* PSP requested render distance 4: use the real render-distance value as a
-       block radius instead of the old tiny emergency radius.  Four chunks means
-       about 64 blocks; the expanded static vertex buffer keeps this cached and
-       avoids per-frame rebuilding. */
-    int radius = effective_generated_render_chunk_radius() * 16;
-    if (radius < 16) radius = 16;
-    if (radius > 64) radius = 64;
-    const int r2 = radius * radius;
-    int emitted_columns = 0;
+    int x0 = tx * PEX_PSP_FAST_TILE_SIZE;
+    int z0 = tz * PEX_PSP_FAST_TILE_SIZE;
+    int r2 = radius * radius;
     psp_fast_surface_capture_begin();
-    for (int dz = -radius; dz <= radius; ++dz) {
-        int z = pcz + dz;
-        for (int dx = -radius; dx <= radius; ++dx) {
+    for (int z = z0; z < z0 + PEX_PSP_FAST_TILE_SIZE; ++z) {
+        int dz = z - pcz;
+        for (int x = x0; x < x0 + PEX_PSP_FAST_TILE_SIZE; ++x) {
+            int dx = x - pcx;
             if (dx * dx + dz * dz > r2) continue;
-            int x = pcx + dx;
             int y = 0, id = 0;
             if (!psp_fast_surface_top(x, z, &y, &id)) continue;
             psp_fast_emit_surface_block(id, x, y, z);
-            emitted_columns++;
-            if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 64) break;
+            if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 128) break;
         }
-        if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 64) break;
+        if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 128) break;
     }
-    psp_fast_surface_capture_end(pcx, pcz);
+    return psp_fast_surface_capture_to_batch();
+}
+
+static int psp_fast_surface_radius_blocks(void) {
+    int radius = effective_generated_render_chunk_radius() * 16;
+    if (radius < 16) radius = 16;
+    if (radius > 64) radius = 64;
+    return radius;
+}
+
+static void psp_fast_surface_update_tiles(int pcx, int pcz) {
+    int radius = psp_fast_surface_radius_blocks();
+    int min_tx = psp_floor_div_tile(pcx - radius);
+    int max_tx = psp_floor_div_tile(pcx + radius);
+    int min_tz = psp_floor_div_tile(pcz - radius);
+    int max_tz = psp_floor_div_tile(pcz + radius);
+    int center_tx = psp_floor_div_tile(pcx);
+    int center_tz = psp_floor_div_tile(pcz);
+
+    if (g_psp_fast_surface_tex != tex_terrain.id) {
+        for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) g_psp_fast_surface_tiles[i].dirty = 1;
+        g_psp_fast_surface_tex = tex_terrain.id;
+        psp_fast_surface_mark_dirty_all();
+    }
+
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        PspFastSurfaceTile *t = &g_psp_fast_surface_tiles[i];
+        if (!t->valid) continue;
+        if (t->tx < min_tx - 1 || t->tx > max_tx + 1 || t->tz < min_tz - 1 || t->tz > max_tz + 1) {
+            if (t->batch) psp_batch_destroy(t->batch);
+            memset(t, 0, sizeof(*t));
+            continue;
+        }
+        if (psp_fast_surface_tile_overlaps_dirty(t->tx, t->tz)) t->dirty = 1;
+    }
+
+    int rebuild_budget = 4;
+    for (int pass = 0; pass < 2 && rebuild_budget > 0; ++pass) {
+        for (int tz = min_tz; tz <= max_tz && rebuild_budget > 0; ++tz) {
+            for (int tx = min_tx; tx <= max_tx && rebuild_budget > 0; ++tx) {
+                int tcx = tx * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+                int tcz = tz * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+                int dx = tcx - pcx;
+                int dz = tcz - pcz;
+                if (pass == 0 && (dx * dx + dz * dz > (radius + PEX_PSP_FAST_TILE_SIZE) * (radius + PEX_PSP_FAST_TILE_SIZE))) continue;
+                PspFastSurfaceTile *t = psp_fast_surface_find_tile(tx, tz);
+                if (!t) t = psp_fast_surface_alloc_tile(tx, tz, center_tx, center_tz);
+                if (!t) continue;
+                if (!t->dirty && t->batch && t->tex == tex_terrain.id) continue;
+                PspBatch *nb = psp_fast_surface_build_tile_batch(tx, tz, pcx, pcz, radius);
+                if (t->batch) psp_batch_destroy(t->batch);
+                t->batch = nb;
+                t->vertex_count = nb ? nb->count : 0;
+                t->tex = tex_terrain.id;
+                t->dirty = 0;
+                rebuild_budget--;
+            }
+        }
+    }
+
     g_psp_fast_surface_dirty = 0;
-    (void)emitted_columns;
+    g_psp_fast_dirty_min_x = 0x7fffffff;
+    g_psp_fast_dirty_max_x = -0x7fffffff;
+    g_psp_fast_dirty_min_z = 0x7fffffff;
+    g_psp_fast_dirty_max_z = -0x7fffffff;
+}
+
+static void psp_fast_surface_draw_tiles(int pcx, int pcz) {
+    int radius = psp_fast_surface_radius_blocks() + PEX_PSP_FAST_TILE_SIZE;
+    int r2 = radius * radius;
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        PspFastSurfaceTile *t = &g_psp_fast_surface_tiles[i];
+        if (!t->valid || !t->batch) continue;
+        int tcx = t->tx * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+        int tcz = t->tz * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+        int dx = tcx - pcx;
+        int dz = tcz - pcz;
+        if (dx * dx + dz * dz > r2) continue;
+        psp_draw_persistent_batch(t->batch);
+    }
+}
+
+static void psp_fast_surface_draw_recent_edits(int pcx, int pcz) {
+    int radius = psp_fast_surface_radius_blocks() + 4;
+    int r2 = radius * radius;
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glColor4f(1, 1, 1, 1);
+    for (int i = 0; i < 64; ++i) {
+        if (!g_psp_fast_edited_blocks[i].stamp) continue;
+        int x = g_psp_fast_edited_blocks[i].x;
+        int y = g_psp_fast_edited_blocks[i].y;
+        int z = g_psp_fast_edited_blocks[i].z;
+        int dx = x - pcx;
+        int dz = z - pcz;
+        if (dx * dx + dz * dz > r2) continue;
+        int id = flat_get_block(x, y, z);
+        if (!id) continue;
+        draw_generic_world_block_model(id, (float)x, (float)y, (float)z);
+    }
 }
 
 static void psp_fast_draw_flat_surface_world(void) {
@@ -4275,13 +4404,12 @@ static void psp_fast_draw_flat_surface_world(void) {
 
     int pcx = (int)floorf(g_player_x);
     int pcz = (int)floorf(g_player_z);
-    psp_fast_surface_rebuild_if_needed(pcx, pcz);
+    psp_fast_surface_update_tiles(pcx, pcz);
 
     apply_player_camera(g_frame_partial);
     /* Fog/clouds are skipped on PSP fast path to avoid extra fill/state churn. */
-    if (g_psp_fast_surface_batch) {
-        psp_draw_persistent_batch(g_psp_fast_surface_batch);
-    }
+    psp_fast_surface_draw_tiles(pcx, pcz);
+    psp_fast_surface_draw_recent_edits(pcx, pcz);
 
     glColor4f(1,1,1,1);
     glDisable(GL_FOG);

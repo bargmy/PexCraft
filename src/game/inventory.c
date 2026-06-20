@@ -285,11 +285,64 @@ static void mark_flat_chunks_modified_all(void) {
 
 static TerrainProvider *beta_stream_provider(void);
 
+#if defined(PEX_PLATFORM_PSP)
+/* PSP-safe "normal" terrain: the exact Beta generator allocates and populates a
+   3x3 chunk canvas for every streamed chunk.  That is too heavy for PSP and was
+   closing PPSSPP during normal-world generation.  This keeps the normal-world
+   look but is deterministic, chunk-local, and cheap enough for cooperative
+   streaming. */
+static unsigned int psp_safe_terrain_hash(int x, int z, int salt, long long seed) {
+    unsigned int h = (unsigned int)(x * 374761393u + z * 668265263u + salt * 1442695041u + (unsigned int)seed);
+    h ^= (unsigned int)((unsigned long long)seed >> 32);
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return h ^ (h >> 16);
+}
+static float psp_safe_noise(int x, int z, int scale, int salt, long long seed) {
+    int gx = (x >= 0) ? x / scale : (x - scale + 1) / scale;
+    int gz = (z >= 0) ? z / scale : (z - scale + 1) / scale;
+    unsigned int h = psp_safe_terrain_hash(gx, gz, salt, seed);
+    return ((float)(h & 65535u) / 65535.0f) * 2.0f - 1.0f;
+}
+static int psp_safe_height_at(int x, int z, long long seed) {
+    float n1 = psp_safe_noise(x, z, 18, 1, seed) * 10.0f;
+    float n2 = psp_safe_noise(x, z, 7, 2, seed) * 4.0f;
+    float n3 = psp_safe_noise(x, z, 37, 3, seed) * 14.0f;
+    int h = 32 + (int)(n1 + n2 + n3);
+    if (h < 8) h = 8;
+    if (h > 58) h = 58;
+    return h;
+}
+#endif
+
 static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp) {
     if (!out) return;
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
 
     if (world_type == 1) {
+#if defined(PEX_PLATFORM_PSP)
+        for (int lx = 0; lx < 16; lx++) {
+            int wx = cx * 16 + lx;
+            for (int lz = 0; lz < 16; lz++) {
+                int wz = cz * 16 + lz;
+                int h = psp_safe_height_at(wx, wz, seed);
+                for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+                    int id = 0;
+                    if (y == 0) id = BLOCK_BEDROCK;
+                    else if (y < h - 4) {
+                        unsigned int oh = psp_safe_terrain_hash(wx, wz, y * 31 + 7, seed);
+                        if (y < 18 && (oh % 900u) < 4u) id = BLOCK_DIAMOND_ORE;
+                        else if (y < 32 && (oh % 360u) < 4u) id = BLOCK_GOLD_ORE;
+                        else if (y < 45 && (oh % 180u) < 5u) id = BLOCK_IRON_ORE;
+                        else if (y < 58 && (oh % 115u) < 6u) id = BLOCK_COAL_ORE;
+                        else id = BLOCK_STONE;
+                    } else if (y < h) id = BLOCK_DIRT;
+                    else if (y == h) id = BLOCK_GRASS;
+                    else if (y <= 30 && h < 30) id = (y == 30) ? BLOCK_STILL_WATER : BLOCK_WATER;
+                    out[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
+                }
+            }
+        }
+#else
         unsigned char beta_blocks[32768];
         memset(beta_blocks, 0, sizeof(beta_blocks));
 
@@ -337,6 +390,7 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
                 }
             }
         }
+#endif
     } else {
         for (int lx = 0; lx < 16; lx++) {
             for (int lz = 0; lz < 16; lz++) {
@@ -374,6 +428,9 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    psp_fast_surface_mark_dirty_block(cx * 16 + 8, cz * 16 + 8);
+#endif
 }
 
 static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
@@ -761,7 +818,8 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
         flat_update_section_occupancy_after_block_change(x, y, z, id);
         mark_flat_render_sections_dirty_around_block(x, y, z);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-        g_psp_fast_surface_dirty = 1;
+        psp_fast_surface_mark_dirty_block(x, z);
+        psp_fast_surface_note_edit_block(x, y, z);
 #endif
         if (flat_persistent_edit_active()) {
             mark_flat_chunk_modified_at(x, z);
@@ -786,7 +844,8 @@ static void flat_set_fluid(int x, int y, int z, int id, int level) {
         flat_update_section_occupancy_after_block_change(x, y, z, id);
         mark_flat_render_sections_dirty_around_block(x, y, z);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-        g_psp_fast_surface_dirty = 1;
+        psp_fast_surface_mark_dirty_block(x, z);
+        psp_fast_surface_note_edit_block(x, y, z);
 #endif
         if (flat_persistent_edit_active()) {
             mark_flat_chunk_modified_at(x, z);
@@ -4568,6 +4627,15 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
 static void stream_async_init(void) {
     if (g_stream_async_initialized) return;
+#if defined(PEX_PLATFORM_PSP)
+    /* Real PSP/PPSSPP became unstable when the PC terrain worker generated
+       chunks on a second user thread.  Use cooperative async instead: one cheap
+       PSP-safe chunk is generated/installed over time from the main loop. */
+    g_stream_async_event = NULL;
+    g_stream_async_thread = NULL;
+    g_stream_async_initialized = 1;
+    return;
+#endif
     InitializeCriticalSection(&g_stream_async_cs);
     g_stream_async_event = CreateEventA(NULL, FALSE, FALSE, NULL);
     if (g_stream_async_event) {
@@ -4579,6 +4647,9 @@ static void stream_async_init(void) {
 
 static int stream_async_pending(void) {
     if (!g_stream_async_initialized) return 0;
+#if defined(PEX_PLATFORM_PSP)
+    if (!g_stream_async_event || !g_stream_async_thread) return 0;
+#endif
     int pending = 0;
     EnterCriticalSection(&g_stream_async_cs);
     pending = g_stream_async_has_job || g_stream_async_busy || g_stream_async_result_ready;
@@ -5019,6 +5090,9 @@ static void process_stream_generation_queue(void) {
             int wcz = g_stream_gen_queue_cz[idx];
             beta_preview_copy_chunk_to_flat(wcx, wcz);
             stream_mark_local_chunk_generated(stream_world_chunk_local_x(wcx), stream_world_chunk_local_z(wcz));
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+            psp_fast_surface_mark_dirty_block(wcx * 16 + 8, wcz * 16 + 8);
+#endif
             g_stream_gen_queue_installed_count++;
         }
         if (!stream_generation_active() && !g_stream_generation_keep_completed) stream_generation_queue_clear();

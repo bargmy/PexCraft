@@ -17,6 +17,41 @@ static void save_world_state_for_exit(void);
 
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
 static int g_psp_fast_surface_dirty = 1;
+static int g_psp_fast_dirty_min_x = 0x7fffffff;
+static int g_psp_fast_dirty_max_x = -0x7fffffff;
+static int g_psp_fast_dirty_min_z = 0x7fffffff;
+static int g_psp_fast_dirty_max_z = -0x7fffffff;
+static void psp_fast_surface_mark_dirty_block(int x, int z) {
+    g_psp_fast_surface_dirty = 1;
+    int r = 2;
+    if (x - r < g_psp_fast_dirty_min_x) g_psp_fast_dirty_min_x = x - r;
+    if (x + r > g_psp_fast_dirty_max_x) g_psp_fast_dirty_max_x = x + r;
+    if (z - r < g_psp_fast_dirty_min_z) g_psp_fast_dirty_min_z = z - r;
+    if (z + r > g_psp_fast_dirty_max_z) g_psp_fast_dirty_max_z = z + r;
+}
+typedef struct PspFastEditedBlock { int x, y, z; unsigned int stamp; } PspFastEditedBlock;
+static PspFastEditedBlock g_psp_fast_edited_blocks[64];
+static unsigned int g_psp_fast_edit_stamp = 1;
+static void psp_fast_surface_note_edit_block(int x, int y, int z) {
+    unsigned int stamp = ++g_psp_fast_edit_stamp;
+    int slot = 0;
+    unsigned int oldest = 0xffffffffu;
+    for (int i = 0; i < 64; ++i) {
+        if (g_psp_fast_edited_blocks[i].stamp == 0) { slot = i; break; }
+        if (g_psp_fast_edited_blocks[i].stamp < oldest) { oldest = g_psp_fast_edited_blocks[i].stamp; slot = i; }
+    }
+    g_psp_fast_edited_blocks[slot].x = x;
+    g_psp_fast_edited_blocks[slot].y = y;
+    g_psp_fast_edited_blocks[slot].z = z;
+    g_psp_fast_edited_blocks[slot].stamp = stamp;
+}
+static void psp_fast_surface_mark_dirty_all(void) {
+    g_psp_fast_surface_dirty = 1;
+    g_psp_fast_dirty_min_x = -0x3fffffff;
+    g_psp_fast_dirty_max_x =  0x3fffffff;
+    g_psp_fast_dirty_min_z = -0x3fffffff;
+    g_psp_fast_dirty_max_z =  0x3fffffff;
+}
 #endif
 
 #include "render/renderer_backend.h"
