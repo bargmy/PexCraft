@@ -1,4 +1,4 @@
-name: Build PSP EBOOT texture atlas view distance fix
+name: Build PSP EBOOT async terrain thread fix
 
 on:
   push:

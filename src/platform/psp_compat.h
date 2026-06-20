@@ -366,13 +366,33 @@ static inline void LeaveCriticalSection(CRITICAL_SECTION *cs) { if (cs && *cs >=
 
 typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 typedef struct PexThreadStart { LPTHREAD_START_ROUTINE fn; LPVOID arg; } PexThreadStart;
-static int pex_thread_trampoline(SceSize args, void *argp) { (void)args; PexThreadStart *ts=(PexThreadStart*)argp; DWORD r=ts->fn(ts->arg); free(ts); sceKernelExitThread((int)r); return (int)r; }
+static int pex_thread_trampoline(SceSize args, void *argp) {
+    PexThreadStart *ts = NULL;
+    /* sceKernelStartThread copies the argument bytes into the new thread.  The
+       old wrapper passed sizeof(pointer) but then treated argp as the full
+       PexThreadStart struct, so PSP worker threads jumped through a garbage
+       function pointer.  That is the EB000649 / PC=000000aa crash seen while
+       generating terrain. */
+    if (argp && args == (SceSize)sizeof(ts)) memcpy(&ts, argp, sizeof(ts));
+    if (!ts || !ts->fn) sceKernelExitThread(0);
+    LPTHREAD_START_ROUTINE fn = ts->fn;
+    LPVOID fn_arg = ts->arg;
+    free(ts);
+    DWORD r = fn(fn_arg);
+    sceKernelExitThread((int)r);
+    return (int)r;
+}
 static inline HANDLE CreateThread(void *sa, size_t stack, LPTHREAD_START_ROUTINE fn, LPVOID arg, DWORD flags, DWORD *tid) {
     (void)sa; (void)flags; if (tid) *tid = 0;
     HANDLE h=(HANDLE)calloc(1,sizeof(*h)); PexThreadStart *ts=(PexThreadStart*)malloc(sizeof(*ts)); if(!h||!ts){free(h);free(ts);return NULL;}
     ts->fn=fn; ts->arg=arg; h->kind=PEX_HANDLE_THREAD;
-    h->uid=sceKernelCreateThread("pxc_thread", pex_thread_trampoline, 0x18, stack?stack:0x10000, PSP_THREAD_ATTR_USER, NULL);
-    if(h->uid<0){free(ts);free(h);return NULL;} sceKernelStartThread(h->uid, sizeof(ts), ts); return h;
+    /* Terrain/save workers must be lower priority than user_main.  The old 0x18
+       priority could starve rendering/input and caused freeze -> burst -> freeze
+       whenever new chunks were being generated. */
+    h->uid=sceKernelCreateThread("pxc_worker", pex_thread_trampoline, 0x30, stack?stack:0x10000, PSP_THREAD_ATTR_USER, NULL);
+    if(h->uid<0){free(ts);free(h);return NULL;}
+    sceKernelStartThread(h->uid, sizeof(ts), &ts);
+    return h;
 }
 static inline HANDLE CreateEventA(void *sa, BOOL manual_reset, BOOL initial_state, const char *name) {
     (void)sa; HANDLE h=(HANDLE)calloc(1,sizeof(*h)); if(!h) return NULL; h->kind=PEX_HANDLE_EVENT; h->manual_reset=manual_reset; h->signaled=initial_state; h->uid=sceKernelCreateSema(name?name:"pxc_ev",0,initial_state?1:0,1,NULL); return h;
@@ -386,7 +406,13 @@ static inline DWORD WaitForSingleObject(HANDLE h, DWORD ms) {
 }
 static inline BOOL CloseHandle(HANDLE h) { if(!h||h==INVALID_HANDLE_VALUE)return FALSE; if(h->kind==PEX_HANDLE_DIR&&h->dir) closedir(h->dir); else if(h->kind==PEX_HANDLE_THREAD) sceKernelDeleteThread(h->uid); else if(h->kind==PEX_HANDLE_EVENT) sceKernelDeleteSema(h->uid); free(h); return TRUE; }
 static inline BOOL FindClose(HANDLE h) { return CloseHandle(h); }
-static inline BOOL SetThreadPriority(HANDLE h, int prio) { (void)h; (void)prio; return TRUE; }
+static inline BOOL SetThreadPriority(HANDLE h, int prio) {
+    if(!h || h==INVALID_HANDLE_VALUE || h->kind!=PEX_HANDLE_THREAD) return FALSE;
+    int psp_prio = 0x2a;
+    if (prio <= THREAD_PRIORITY_BELOW_NORMAL) psp_prio = 0x38;
+    else if (prio >= THREAD_PRIORITY_NORMAL) psp_prio = 0x2a;
+    return sceKernelChangeThreadPriority(h->uid, psp_prio) >= 0 ? TRUE : FALSE;
+}
 static inline LONG InterlockedExchange(volatile LONG *target, LONG value) { return __sync_lock_test_and_set(target, value); }
 static inline LONG InterlockedCompareExchange(volatile LONG *target, LONG exchange, LONG comparand) { return __sync_val_compare_and_swap(target, comparand, exchange); }
 static inline void Sleep(DWORD ms) { sceKernelDelayThread((SceUInt)ms * 1000u); }

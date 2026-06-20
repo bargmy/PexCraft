@@ -4295,6 +4295,17 @@ static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_draw_flat_surface_world();
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    draw_remote_break_overlays();
+    if (g_breaking_block && flat_get_block(g_break_x, g_break_y, g_break_z) != 0) {
+        float dmg = g_prev_break_damage + (g_break_damage - g_prev_break_damage) * g_frame_partial;
+        int stage = (int)(dmg * 10.0f);
+        draw_break_overlay_cube((float)g_break_x, (float)g_break_y, (float)g_break_z, stage);
+    }
+    glDepthMask(GL_TRUE);
     draw_block_selection_border();
     return;
 #endif

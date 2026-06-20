@@ -306,11 +306,12 @@ int main(int argc, char **argv) {
     load_options();
     /* PSP stability defaults: small render distance, no fancy translucent pass,
        fixed 60 FPS, no filesystem/options persistence. */
-    /* PSP performance defaults: Tiny render distance and a 30 FPS target keep
-       the GE/CPU from trying to catch up with too much world work at once. */
+    /* PSP gameplay default: 60 FPS gives PPSSPP/real PSP smoother pacing;
+       terrain workers are now low-priority async threads, so they should use
+       leftover time instead of blocking user_main. */
     g_opts.render_distance = 4;
     g_opts.fancy_graphics = 0;
-    g_opts.max_fps = 30;
+    g_opts.max_fps = 60;
     g_opts.anaglyph = 0;
     g_opts.show_fps = 1;
     g_opts.renderer_backend = RENDERER_OPENGL;
