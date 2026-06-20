@@ -4213,8 +4213,9 @@ static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
     if (!g_psp_fast_surface_batch) need = 1;
     if (g_psp_fast_surface_tex != tex_terrain.id) need = 1;
     if (abs(pcx - g_psp_fast_surface_cx) >= rebuild_step || abs(pcz - g_psp_fast_surface_cz) >= rebuild_step) need = 1;
-    /* Rare safety refresh for placed/broken blocks without per-frame rebuild stalls. */
-    if (!need && now - g_psp_fast_surface_last_rebuild > 1.25) need = 1;
+    /* Do not rebuild on a timer.  On PSP that timer caused a regular freeze even
+       when standing still.  Block edits invalidate by movement/texture for now. */
+    (void)now;
     if (!need) return;
 
     glEnable(GL_TEXTURE_2D);
@@ -4225,7 +4226,7 @@ static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glColor4f(1, 1, 1, 1);
 
-    const int radius = 7;
+    const int radius = 4;
     const int r2 = radius * radius;
     int emitted_columns = 0;
     psp_fast_surface_capture_begin();

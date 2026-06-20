@@ -126,12 +126,20 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_PERF) && PEX_PSP_PERF
+        /* PSP: background terrain streaming and liquid propagation share the same
+           single CPU with rendering.  They caused the stop/start stutter pattern,
+           so the PSP build uses the initially generated RAM island and event-only
+           block updates during gameplay. */
+        g_prof_stream_pending_last = 0;
+#else
         prof_part = pex_profile_begin();
         update_infinite_world_streaming();
         pex_profile_add(PROF_WORLD_STREAM, prof_part);
         prof_part = pex_profile_begin();
         update_liquids();
         pex_profile_add(PROF_LIQUIDS, prof_part);
+#endif
     }
     prof_part = pex_profile_begin();
     update_buttons_and_pressure_plates();

@@ -10,12 +10,15 @@
 #define PEX_PSP_MAX_IMM_VERTS 16384
 #define PEX_PSP_LIST_COUNT 4096
 #define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 4096
+#define PEX_PSP_TEX_VRAM_START 0x00180000u
+#define PEX_PSP_TEX_VRAM_END   0x00400000u
 
 static unsigned int __attribute__((aligned(16))) g_psp_gu_list[262144];
 static void *g_psp_drawbuf = NULL;
 static void *g_psp_dispbuf = NULL;
 static void *g_psp_depthbuf = NULL;
 static unsigned int g_psp_display_offset = 0x00088000u;
+static unsigned int g_psp_tex_vram_offset = PEX_PSP_TEX_VRAM_START;
 
 static int g_psp_texture_enabled = 1;
 static int g_psp_blend_enabled = 1;
@@ -54,7 +57,7 @@ typedef struct PspImmVertex { float u, v; unsigned int color; float x, y, z; } P
 static PspImmVertex g_psp_imm[PEX_PSP_MAX_IMM_VERTS];
 static int g_psp_imm_count = 0;
 
-typedef struct PspTexture { int used; int w, h, stride; unsigned int *pixels; } PspTexture;
+typedef struct PspTexture { int used; int w, h, stride; int in_vram; unsigned int vram_off; unsigned int *pixels; } PspTexture;
 static PspTexture g_psp_textures[PEX_PSP_MAX_TEXTURES];
 static GLuint g_psp_next_tex = 1;
 
@@ -77,6 +80,29 @@ static GLuint g_psp_next_list = 1;
 static int g_psp_compiling = 0;
 static GLuint g_psp_compile_list = 0;
 
+
+static unsigned int psp_align_up_u32(unsigned int v, unsigned int a) {
+    return (v + a - 1u) & ~(a - 1u);
+}
+
+static void *psp_vram_cpu_ptr(unsigned int off) {
+    return (void *)(uintptr_t)(0x44000000u + off);
+}
+
+static void *psp_vram_ge_ptr(unsigned int off) {
+    return (void *)(uintptr_t)off;
+}
+
+static void *psp_alloc_texture_vram(size_t bytes, unsigned int *out_off) {
+    if (bytes == 0 || !out_off) return NULL;
+    unsigned int off = psp_align_up_u32(g_psp_tex_vram_offset, 16u);
+    unsigned int end = psp_align_up_u32(off + (unsigned int)bytes, 16u);
+    if (end > PEX_PSP_TEX_VRAM_END || end <= off) return NULL;
+    g_psp_tex_vram_offset = end;
+    *out_off = off;
+    return psp_vram_cpu_ptr(off);
+}
+
 static unsigned int psp_rgba_to_abgr(float r, float g, float b, float a) {
     int ri=(int)(r*255.0f+0.5f), gi=(int)(g*255.0f+0.5f), bi=(int)(b*255.0f+0.5f), ai=(int)(a*255.0f+0.5f);
     if(ri<0)ri=0; if(ri>255)ri=255;
@@ -94,7 +120,7 @@ static void psp_apply_state_values(GLuint tex, int tex_enabled, int blend_enable
             PspTexture *t=&g_psp_textures[tex];
             sceGuEnable(GU_TEXTURE_2D);
             sceGuTexMode(GU_PSM_8888,0,0,0);
-            sceGuTexImage(0,t->w,t->h,t->stride,t->pixels);
+            sceGuTexImage(0,t->w,t->h,t->stride,t->in_vram ? psp_vram_ge_ptr(t->vram_off) : (void*)t->pixels);
             sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
             sceGuTexFilter(GU_NEAREST,GU_NEAREST);
             sceGuTexWrap(GU_REPEAT,GU_REPEAT);
@@ -302,7 +328,7 @@ static unsigned int psp_gu_current_display_offset(void) { return g_psp_display_o
 static void psp_gu_shutdown(void) {
     PEX_PSP_LOGF("GU_SHUTDOWN sceGuTerm");
     for (GLuint i=1;i<PEX_PSP_LIST_COUNT;i++) psp_list_free(i);
-    for (GLuint i=1;i<PEX_PSP_MAX_TEXTURES;i++) { free(g_psp_textures[i].pixels); g_psp_textures[i].pixels=NULL; }
+    for (GLuint i=1;i<PEX_PSP_MAX_TEXTURES;i++) { if (!g_psp_textures[i].in_vram) free(g_psp_textures[i].pixels); g_psp_textures[i].pixels=NULL; }
     sceGuTerm();
 }
 static void psp_gu_begin_frame(void) {
@@ -391,10 +417,33 @@ static GLuint glGenLists(GLsizei range){ GLuint base=g_psp_next_list; int r=rang
 static void glNewList(GLuint list, GLenum mode){ (void)mode; if(list>0&&list<PEX_PSP_LIST_COUNT) psp_list_free(list); g_psp_compiling=1; g_psp_compile_list=list; }
 static void glEndList(void){ g_psp_compiling=0; g_psp_compile_list=0; }
 static void glCallList(GLuint list){ if(list>0&&list<PEX_PSP_LIST_COUNT){ for(PspBatch *b=g_psp_lists[list].first;b;b=b->next) psp_draw_persistent_batch(b); } }
-static void glGenTextures(GLsizei n, GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=g_psp_next_tex++; if(id>=PEX_PSP_MAX_TEXTURES)id=1; tex[i]=id; free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } }
+static void glGenTextures(GLsizei n, GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=g_psp_next_tex++; if(id>=PEX_PSP_MAX_TEXTURES)id=1; tex[i]=id; if (!g_psp_textures[id].in_vram) free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } }
 static void glBindTexture(GLenum target, GLuint tex){ (void)target; g_psp_bound_tex=tex; }
 static void glTexParameteri(GLenum target, GLenum pname, GLint param){ (void)target; (void)pname; (void)param; }
-static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){ (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type; if(!g_psp_bound_tex||g_psp_bound_tex>=PEX_PSP_MAX_TEXTURES)return; PspTexture *t=&g_psp_textures[g_psp_bound_tex]; free(t->pixels); memset(t,0,sizeof(*t)); if(!pixels||w<=0||h<=0)return; t->w=w; t->h=h; t->stride=w; t->pixels=(unsigned int*)memalign(16,(size_t)w*h*4); if(t->pixels){ memcpy(t->pixels,pixels,(size_t)w*h*4); sceKernelDcacheWritebackInvalidateRange(t->pixels,(SceSize)((size_t)w*h*4)); t->used=1; } }
-static void glDeleteTextures(GLsizei n, const GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=tex[i]; if(id<PEX_PSP_MAX_TEXTURES){ free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } } }
+static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){
+    (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type;
+    if(!g_psp_bound_tex||g_psp_bound_tex>=PEX_PSP_MAX_TEXTURES)return;
+    PspTexture *t=&g_psp_textures[g_psp_bound_tex];
+    if (!t->in_vram) free(t->pixels);
+    memset(t,0,sizeof(*t));
+    if(!pixels||w<=0||h<=0)return;
+    t->w=w; t->h=h; t->stride=w;
+    size_t bytes=(size_t)w*(size_t)h*4u;
+    unsigned int off=0;
+    void *dst=psp_alloc_texture_vram(bytes, &off);
+    if (dst) {
+        memcpy(dst,pixels,bytes);
+        sceKernelDcacheWritebackInvalidateRange(dst,(SceSize)bytes);
+        t->pixels=(unsigned int*)dst;
+        t->vram_off=off;
+        t->in_vram=1;
+        t->used=1;
+    } else {
+        t->pixels=(unsigned int*)memalign(16,bytes);
+        if(t->pixels){ memcpy(t->pixels,pixels,bytes); sceKernelDcacheWritebackInvalidateRange(t->pixels,(SceSize)bytes); t->used=1; }
+    }
+    psp_state_cache_invalidate();
+}
+static void glDeleteTextures(GLsizei n, const GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=tex[i]; if(id<PEX_PSP_MAX_TEXTURES){ if (!g_psp_textures[id].in_vram) free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } } }
 static void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h){ (void)target;(void)level;(void)xoff;(void)yoff;(void)x;(void)y;(void)w;(void)h; /* PSP path avoids backbuffer copies; title snapshot is disabled. */ }
 static const GLubyte *glGetString(GLenum name){ if(name==GL_VENDOR)return (const GLubyte*)"Sony"; if(name==GL_RENDERER)return (const GLubyte*)"PSP Graphics Engine (GU)"; if(name==GL_VERSION)return (const GLubyte*)"PSP GU fixed-function"; return (const GLubyte*)""; }

@@ -308,11 +308,11 @@ int main(int argc, char **argv) {
        fixed 60 FPS, no filesystem/options persistence. */
     /* PSP performance defaults: Tiny render distance and a 30 FPS target keep
        the GE/CPU from trying to catch up with too much world work at once. */
-    g_opts.render_distance = 3;
+    g_opts.render_distance = 1;
     g_opts.fancy_graphics = 0;
     g_opts.max_fps = 30;
     g_opts.anaglyph = 0;
-    g_opts.show_fps = 0;
+    g_opts.show_fps = 1;
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     PEX_PSP_LOGF("load_options end/forced PSP: user=%s fps=%d renderer=%d rd=%d fancy=%d", g_opts.username, g_opts.max_fps, g_selected_renderer_backend, g_opts.render_distance, g_opts.fancy_graphics);
