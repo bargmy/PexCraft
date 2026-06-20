@@ -943,12 +943,32 @@ static void beta_preview_generate_flat_world(void) {
     int min_cz = floor_div16(g_flat_world_origin_z);
     int max_cz = floor_div16(g_flat_world_origin_z + FLAT_WORLD_SIZE - 1);
 
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+    /* PSP-1000 safety: never allocate the full active-window Beta canvas.
+       Generate one chunk at a time using the PSP-safe chunk-local generator. */
+    for (int cz = min_cz; cz <= max_cz; cz++) {
+        for (int cx = min_cx; cx <= max_cx; cx++) {
+            beta_preview_copy_chunk_to_flat(cx, cz);
+        }
+    }
+    return;
+#endif
+
     /* Fast startup path: build one shared Beta canvas for the whole active
        in-memory window plus a 1-chunk population border.  The earlier per-chunk
        path recreated the terrain provider and a 3x3 canvas for every visible
-       chunk, which is why opening a world paused for seconds. */
-    TerrainProvider tp;
-    terrain_provider_init(&tp, (int64_t)g_world_seed);
+       chunk, which is why opening a world paused for seconds.
+       Keep TerrainProvider on the heap; it is far too large for PSP stacks. */
+    TerrainProvider *tp = (TerrainProvider*)calloc(1, sizeof(*tp));
+    if (!tp) {
+        for (int cz = min_cz; cz <= max_cz; cz++) {
+            for (int cx = min_cx; cx <= max_cx; cx++) {
+                beta_preview_copy_chunk_to_flat(cx, cz);
+            }
+        }
+        return;
+    }
+    terrain_provider_init(tp, (int64_t)g_world_seed);
 
     GenCanvas cv;
     cv.minCx = min_cx - 1;
@@ -965,13 +985,13 @@ static void beta_preview_generate_flat_world(void) {
     if (cv.blocks) {
         for (int cz = cv.minCz; cz < cv.minCz + cv.chunks; cz++) {
             for (int cx = cv.minCx; cx < cv.minCx + cv.chunks; cx++) {
-                generate_canvas_chunk(&tp, &cv, cx, cz);
+                generate_canvas_chunk(tp, &cv, cx, cz);
             }
         }
 
         for (int cz = min_cz - 1; cz <= max_cz; cz++) {
             for (int cx = min_cx - 1; cx <= max_cx; cx++) {
-                qm_populate_canvas(&tp, &cv, cx, cz);
+                qm_populate_canvas(tp, &cv, cx, cz);
             }
         }
 
@@ -1011,7 +1031,8 @@ static void beta_preview_generate_flat_world(void) {
         }
     }
 
-    terrain_provider_free(&tp);
+    terrain_provider_free(tp);
+    free(tp);
 }
 
 
@@ -1122,7 +1143,11 @@ static int stream_initial_spawn_chunk_radius(void) {
        A 7x7 chunk spawn island is enough to stand/walk safely; the normal
        streaming worker fills the rest after gameplay starts. */
     int r = stream_effective_render_chunk_radius();
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+    if (r > 2) r = 2;
+#else
     if (r > 3) r = 3;
+#endif
     if (r < 2) r = 2;
     return r;
 }
@@ -4562,7 +4587,7 @@ static unsigned char *g_stream_async_result_meta = NULL;
 
 static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
     (void)unused;
-    TerrainProvider worker_tp;
+    TerrainProvider *worker_tp = NULL;
     int worker_tp_valid = 0;
     long long worker_tp_seed = 0;
     for (;;) {
@@ -4593,12 +4618,17 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
             TerrainProvider *reuse = NULL;
             if (type == 1) {
                 if (!worker_tp_valid || worker_tp_seed != seed) {
-                    if (worker_tp_valid) terrain_provider_free(&worker_tp);
-                    terrain_provider_init(&worker_tp, (int64_t)seed);
-                    worker_tp_seed = seed;
-                    worker_tp_valid = 1;
+                    if (worker_tp_valid && worker_tp) { terrain_provider_free(worker_tp); free(worker_tp); worker_tp = NULL; }
+                    worker_tp = (TerrainProvider*)calloc(1, sizeof(*worker_tp));
+                    if (worker_tp) {
+                        terrain_provider_init(worker_tp, (int64_t)seed);
+                        worker_tp_seed = seed;
+                        worker_tp_valid = 1;
+                    } else {
+                        worker_tp_valid = 0;
+                    }
                 }
-                reuse = &worker_tp;
+                reuse = worker_tp_valid ? worker_tp : NULL;
             }
             generate_flat_chunk_base_to_buffer_ex(cx, cz, buf, type, seed, reuse);
             load_modified_flat_chunk_delta_into_buffers_for_dir(world_dir, cx, cz, buf, meta);
@@ -4621,7 +4651,7 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
         g_stream_async_busy = 0;
         LeaveCriticalSection(&g_stream_async_cs);
     }
-    if (worker_tp_valid) terrain_provider_free(&worker_tp);
+    if (worker_tp_valid && worker_tp) { terrain_provider_free(worker_tp); free(worker_tp); }
     return 0;
 }
 

@@ -1,8 +1,12 @@
 /* Sony PSP app/bootstrap/main loop. */
 
+/* Leave a bigger system/stack reserve on real PSP-1000.  The previous all-but-1MB heap
+   could let the client push too close to the 32MB model and hard-power-off on OOM. */
+PSP_HEAP_SIZE_KB(-4096);
+/* Terrain/world generation has large helper structs; 512KB avoids silent PSP-1000 stack overflow. */
+PSP_MAIN_THREAD_STACK_SIZE_KB(512);
 PSP_MODULE_INFO("PEXCRAFT", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
-PSP_HEAP_SIZE_KB(-1024);
 
 #ifndef PEX_PSP_BOOT_DEBUG
 #define PEX_PSP_BOOT_DEBUG 1

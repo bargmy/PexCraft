@@ -1,4 +1,4 @@
-name: Build PSP EBOOT tiled terrain and safe normal world fix
+name: Build PSP EBOOT PSP-1000 RAM safe
 
 on:
   push:

@@ -100,6 +100,32 @@ static int psp_make_fallback_texture(Texture *t, const char *name, int w, int h,
     return ok;
 }
 
+
+#if defined(PEX_PLATFORM_PSP)
+static void psp_drop_texture_cpu_copy(Texture *t) {
+    if (!t || !t->rgba) return;
+    free(t->rgba);
+    t->rgba = NULL;
+}
+static void psp_drop_gui_texture_cpu_copies(void) {
+    /* Keep CPU copies only where the game actually samples pixels on CPU: font
+       for text width/alpha, terrain for item/color/cutout logic, and Steve. */
+    psp_drop_texture_cpu_copy(&tex_bg);
+    psp_drop_texture_cpu_copy(&tex_gui);
+    psp_drop_texture_cpu_copy(&tex_black);
+    psp_drop_texture_cpu_copy(&tex_pack);
+    psp_drop_texture_cpu_copy(&tex_default_pack_icon);
+    psp_drop_texture_cpu_copy(&tex_unknown_pack);
+    psp_drop_texture_cpu_copy(&tex_icons);
+    psp_drop_texture_cpu_copy(&tex_inventory);
+    psp_drop_texture_cpu_copy(&tex_workbench);
+    psp_drop_texture_cpu_copy(&tex_furnace_gui);
+    psp_drop_texture_cpu_copy(&tex_chest_gui);
+    psp_drop_texture_cpu_copy(&tex_logo);
+    psp_drop_texture_cpu_copy(&tex_items);
+}
+#endif
+
 static const unsigned char *psp_mcrw_pak_data(size_t *out_len) {
     const unsigned char *start = pexcraft_psp_mcrw_assets_pak_start;
     const unsigned char *end = pexcraft_psp_mcrw_assets_pak_end;
@@ -540,7 +566,8 @@ static int load_default_textures(void) {
     free_texture(&tex_large_chest_entity);
     PEX_PSP_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
-    PEX_PSP_LOGF("load_default_textures PSP done: missing_required=%d embedded_count=%u", missing, psp_embedded_mcrw_count());
+    psp_drop_gui_texture_cpu_copies();
+    PEX_PSP_LOGF("load_default_textures PSP done: missing_required=%d embedded_count=%u free=%u", missing, psp_embedded_mcrw_count(), (unsigned)sceKernelTotalFreeMemSize());
 #undef PEX_PSP_LOAD_REQ
 #undef PEX_PSP_LOAD_OPT
     return 1;

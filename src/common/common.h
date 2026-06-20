@@ -402,11 +402,22 @@ static double g_system_info_last_time = -10.0;
    flat-world arrays alone are about 201 MB at 512*256*512.  Keep a separate
    low-memory PSP window so PPSSPP/real PSP can actually load the EBOOT. */
 #if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+/* Real PSP-1000 only has 32MB main RAM.  Keep the 128x128 horizontal window
+   for streaming/render-distance behavior, but cap vertical storage to 96 blocks
+   so the three dense block/meta/liquid arrays save about 1.6MB. */
+#define FLAT_WORLD_SIZE 128
+#define FLAT_WORLD_Y_MIN 0
+#define FLAT_WORLD_Y_MAX 95
+#define MAX_DROP_ENTITIES 24
+#define MAX_FALLING_BLOCK_ENTITIES 16
+#else
 #define FLAT_WORLD_SIZE 128
 #define FLAT_WORLD_Y_MIN 0
 #define FLAT_WORLD_Y_MAX 127
 #define MAX_DROP_ENTITIES 64
 #define MAX_FALLING_BLOCK_ENTITIES 64
+#endif
 #else
 #define FLAT_WORLD_SIZE 512
 #define FLAT_WORLD_Y_MIN 0
@@ -777,7 +788,11 @@ static int g_flat_world_origin_z = FLAT_WORLD_MIN;
 static int g_stream_last_center_chunk_x = 999999;
 static int g_stream_last_center_chunk_z = 999999;
 #define STREAM_GEN_QUEUE_MAX (FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS)
+#if defined(PEX_PLATFORM_PSP)
+#define STREAM_CHUNKS_PER_TICK 1
+#else
 #define STREAM_CHUNKS_PER_TICK 2
+#endif
 static int g_stream_gen_queue_cx[STREAM_GEN_QUEUE_MAX];
 static int g_stream_gen_queue_cz[STREAM_GEN_QUEUE_MAX];
 static int g_stream_gen_queue_count = 0;

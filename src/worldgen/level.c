@@ -1172,19 +1172,23 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
     unsigned char *heightmap = (unsigned char*)calloc(256, 1);
     if (!blocks || !data || !sky || !blocklight || !heightmap) { free(blocks); free(data); free(sky); free(blocklight); free(heightmap); return 0; }
 
-    TerrainProvider tp;
-    terrain_provider_init(&tp, (int64_t)seed);
+    /* TerrainProvider is too large for the PSP-1000 default user stack.
+       Keep it on the heap so normal-world generation cannot silently overflow
+       the main thread stack and hard-kill the process. */
+    TerrainProvider *tp = (TerrainProvider*)calloc(1, sizeof(*tp));
+    if (!tp) { free(blocks); free(data); free(sky); free(blocklight); free(heightmap); return 0; }
+    terrain_provider_init(tp, (int64_t)seed);
 
     GenCanvas cv;
     cv.minCx = cx - 1;
     cv.minCz = cz - 1;
     cv.chunks = 3;
     cv.blocks = (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1);
-    if (!cv.blocks) { free(blocks); free(data); free(sky); free(blocklight); free(heightmap); return 0; }
+    if (!cv.blocks) { terrain_provider_free(tp); free(tp); free(blocks); free(data); free(sky); free(blocklight); free(heightmap); return 0; }
 
     for (int dz = 0; dz < cv.chunks; dz++) {
         for (int dx = 0; dx < cv.chunks; dx++) {
-            generate_canvas_chunk(&tp, &cv, cv.minCx + dx, cv.minCz + dz);
+            generate_canvas_chunk(tp, &cv, cv.minCx + dx, cv.minCz + dz);
         }
     }
 
@@ -1193,7 +1197,7 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
        write into the target chunk. */
     for (int pz = cz - 1; pz <= cz; pz++) {
         for (int px = cx - 1; px <= cx; px++) {
-            qm_populate_canvas(&tp, &cv, px, pz);
+            qm_populate_canvas(tp, &cv, px, pz);
         }
     }
 
@@ -1229,7 +1233,8 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
     snprintf(path, sizeof(path), "%s\\c.%s.%s.dat", dir2, fx, fz);
     int ok = write_gzip_store(path, b.data, b.len);
     bb_free(&b);
-    terrain_provider_free(&tp);
+    terrain_provider_free(tp);
+    free(tp);
     free(blocks); free(data); free(sky); free(blocklight); free(heightmap);
     return ok;
 }

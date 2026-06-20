@@ -6,17 +6,26 @@
 #define PEX_PSP_FB_WIDTH 512
 #define PEX_PSP_SCR_WIDTH 480
 #define PEX_PSP_SCR_HEIGHT 272
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+#define PEX_PSP_MAX_TEXTURES 128
+#define PEX_PSP_MAX_IMM_VERTS 32768
+#define PEX_PSP_LIST_COUNT 1024
+#define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 2048
+#define PEX_PSP_GU_LIST_WORDS 131072
+#else
 #define PEX_PSP_MAX_TEXTURES 1024
 #define PEX_PSP_MAX_IMM_VERTS 98304
 #define PEX_PSP_LIST_COUNT 4096
 #define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 4096
+#define PEX_PSP_GU_LIST_WORDS 262144
+#endif
 #define PEX_PSP_TEX_VRAM_START 0x00180000u
 #define PEX_PSP_TEX_VRAM_END   0x00400000u
 #ifndef GU_CLAMP
 #define GU_CLAMP 0
 #endif
 
-static unsigned int __attribute__((aligned(16))) g_psp_gu_list[262144];
+static unsigned int __attribute__((aligned(16))) g_psp_gu_list[PEX_PSP_GU_LIST_WORDS];
 static void *g_psp_drawbuf = NULL;
 static void *g_psp_dispbuf = NULL;
 static void *g_psp_depthbuf = NULL;

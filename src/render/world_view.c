@@ -4180,7 +4180,11 @@ static void psp_fast_emit_surface_block(int id, int x, int y, int z) {
 }
 
 #define PEX_PSP_FAST_TILE_SIZE 16
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+#define PEX_PSP_FAST_MAX_TILES 72
+#else
 #define PEX_PSP_FAST_MAX_TILES 128
+#endif
 typedef struct PspFastSurfaceTile {
     int valid;
     int dirty;
@@ -4292,7 +4296,11 @@ static PspBatch *psp_fast_surface_build_tile_batch(int tx, int tz, int pcx, int 
 static int psp_fast_surface_radius_blocks(void) {
     int radius = effective_generated_render_chunk_radius() * 16;
     if (radius < 16) radius = 16;
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+    if (radius > 48) radius = 48;
+#else
     if (radius > 64) radius = 64;
+#endif
     return radius;
 }
 
@@ -4322,7 +4330,11 @@ static void psp_fast_surface_update_tiles(int pcx, int pcz) {
         if (psp_fast_surface_tile_overlaps_dirty(t->tx, t->tz)) t->dirty = 1;
     }
 
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+    int rebuild_budget = 1;
+#else
     int rebuild_budget = 4;
+#endif
     for (int pass = 0; pass < 2 && rebuild_budget > 0; ++pass) {
         for (int tz = min_tz; tz <= max_tz && rebuild_budget > 0; ++tz) {
             for (int tx = min_tx; tx <= max_tx && rebuild_budget > 0; ++tx) {
