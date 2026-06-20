@@ -122,6 +122,8 @@ static void psp_drop_gui_texture_cpu_copies(void) {
     psp_drop_texture_cpu_copy(&tex_furnace_gui);
     psp_drop_texture_cpu_copy(&tex_chest_gui);
     psp_drop_texture_cpu_copy(&tex_items);
+    psp_drop_texture_cpu_copy(&tex_clouds);
+    psp_drop_texture_cpu_copy(&tex_water_overlay);
 }
 #endif
 
@@ -565,6 +567,8 @@ static int load_default_textures(void) {
     free_texture(&tex_large_chest_entity);
     PEX_PSP_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_REQ(&tex_clouds, "environment_clouds.mcrw", 1, 256, 256);
+    PEX_PSP_LOAD_REQ(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
     psp_drop_gui_texture_cpu_copies();
     PEX_PSP_LOGF("load_default_textures PSP done: missing_required=%d embedded_count=%u free=%u", missing, psp_embedded_mcrw_count(), (unsigned)sceKernelTotalFreeMemSize());
 #undef PEX_PSP_LOAD_REQ
@@ -589,6 +593,8 @@ static int load_default_textures(void) {
     free_texture(&tex_large_chest_entity);
     load_mcrw(&tex_items, "gui_items.mcrw", 0);
     ok = load_mcrw(&tex_steve, "mob_char.mcrw", 0) && ok;
+    load_mcrw(&tex_clouds, "environment_clouds.mcrw", 1);
+    load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
     return ok;
 #endif
 }

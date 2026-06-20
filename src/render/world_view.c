@@ -72,81 +72,191 @@ static void apply_source_like_fog(void) {
     glFogf(GL_FOG_END, end);
 }
 
-static unsigned int cloud_hash(int cx, int cz) {
-    unsigned int h = (unsigned int)cx * 0x8da6b343u;
-    h ^= (unsigned int)cz * 0xd8163841u;
-    h ^= 0x5a5a5a5au;
-    h ^= h >> 13;
-    h *= 0x85ebca6bu;
-    h ^= h >> 16;
-    return h;
+
+static void cloud_color(float *r, float *g, float *b) {
+    /* Source RenderGlobal uses world.getCloudColor(partial).  This port has no
+       full world sky-color object, so keep the same neutral Beta cloud tint and
+       let fog/sky handle time-of-day later. */
+    *r = 0.92f;
+    *g = 0.96f;
+    *b = 1.0f;
 }
 
-static void draw_cloud_quad(float x0, float x1, float y, float z0, float z1, float alpha) {
-    glColor4f(0.92f, 0.96f, 1.0f, alpha);
-    glVertex3f(x0, y, z0);
-    glVertex3f(x1, y, z0);
-    glVertex3f(x1, y, z1);
-    glVertex3f(x0, y, z1);
+static void cloud_tex_vertex(float x, float y, float z, float u, float v) {
+    glTexCoord2f(u, v);
+    glVertex3f(x, y, z);
 }
 
-static void draw_source_clouds(void) {
-    /* Cheap fixed cloud sheet.
-       The previous version built many overlapping translucent 3-D boxes every
-       frame.  Looking up through them blended layer-on-layer (the "clouds
-       generating on themselves" look) and made clouds the new FPS bottleneck.
+static void draw_source_fast_clouds(float partial) {
+    if (!tex_clouds.id) return;
+    float cr, cg, cb;
+    cloud_color(&cr, &cg, &cb);
 
-       Keep the pattern in cloud-space, move only the final world positions, and
-       draw a single flat batch.  Clouds stay independent from terrain render
-       distance without hundreds of glBegin/glEnd calls or alpha-stacked boxes. */
-    const float cloud_y = 96.0f;
-    const float tile = 32.0f;
-    const float cloud_radius = 192.0f;
-    const float scroll = ((float)g_ingame_ticks + g_frame_partial) * 0.02f;
+    float px = g_player_prev_x + (g_player_x - g_player_prev_x) * partial;
+    float py = g_player_prev_y + (g_player_y - g_player_prev_y) * partial;
+    float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * partial;
 
-    float px = g_player_prev_x + (g_player_x - g_player_prev_x) * g_frame_partial;
-    float py = g_player_prev_y + (g_player_y - g_player_prev_y) * g_frame_partial;
-    float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * g_frame_partial;
+    const int step = 32;
+    const int loops = 256 / step;
+    const float uv_scale = 0.5f / 1024.0f;
+    double scroll_x = (double)px + (double)(((float)g_ingame_ticks + partial) * 0.03f);
+    double scroll_z = (double)pz;
+    int wrap_x = (int)floor(scroll_x / 2048.0);
+    int wrap_z = (int)floor(scroll_z / 2048.0);
+    scroll_x -= (double)(wrap_x * 2048);
+    scroll_z -= (double)(wrap_z * 2048);
+    float u_scroll = (float)(scroll_x * (double)uv_scale);
+    float v_scroll = (float)(scroll_z * (double)uv_scale);
+    float y = 120.0f;
 
-    int min_cx = (int)floorf((px - scroll - cloud_radius) / tile) - 1;
-    int max_cx = (int)floorf((px - scroll + cloud_radius) / tile) + 1;
-    int min_cz = (int)floorf((pz - cloud_radius) / tile) - 1;
-    int max_cz = (int)floorf((pz + cloud_radius) / tile) + 1;
-
+    glDisable(GL_CULL_FACE);
     glDisable(GL_FOG);
-    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_clouds.id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
+    glColor4f(cr, cg, cb, 0.8f);
 
     glBegin(GL_QUADS);
-    for (int cz = min_cz; cz <= max_cz; cz++) {
-        for (int cx = min_cx; cx <= max_cx; cx++) {
-            unsigned int h = cloud_hash(cx, cz);
-            if ((h & 7u) < 3u) continue;
-
-            float x0 = (float)cx * tile + scroll;
-            float z0 = (float)cz * tile;
-            float x1 = x0 + tile;
-            float z1 = z0 + tile;
-
-            float mx = (x0 + x1) * 0.5f - px;
-            float mz = (z0 + z1) * 0.5f - pz;
-            if (mx * mx + mz * mz > cloud_radius * cloud_radius) continue;
-
-            /* A single sheet, not a pile: no overlapping sub-boxes, no sides
-               through the player's view, and no per-cloud glBegin/glEnd. */
-            float alpha = (py > cloud_y) ? 0.52f : 0.40f;
-            draw_cloud_quad(x0, x1, cloud_y, z0, z1, alpha);
+    for (int x = -step * loops; x < step * loops; x += step) {
+        for (int z = -step * loops; z < step * loops; z += step) {
+            float x0 = px + (float)x;
+            float x1 = px + (float)(x + step);
+            float z0 = pz + (float)z;
+            float z1 = pz + (float)(z + step);
+            cloud_tex_vertex(x0, y, z1, (float)x * uv_scale + u_scroll, (float)(z + step) * uv_scale + v_scroll);
+            cloud_tex_vertex(x1, y, z1, (float)(x + step) * uv_scale + u_scroll, (float)(z + step) * uv_scale + v_scroll);
+            cloud_tex_vertex(x1, y, z0, (float)(x + step) * uv_scale + u_scroll, (float)z * uv_scale + v_scroll);
+            cloud_tex_vertex(x0, y, z0, (float)x * uv_scale + u_scroll, (float)z * uv_scale + v_scroll);
         }
     }
     glEnd();
 
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
-    glEnable(GL_TEXTURE_2D);
     glEnable(GL_FOG);
     glColor4f(1,1,1,1);
+}
+
+static void draw_source_fancy_clouds(float partial) {
+    if (!tex_clouds.id) return;
+    float cr, cg, cb;
+    cloud_color(&cr, &cg, &cb);
+
+    float px = g_player_prev_x + (g_player_x - g_player_prev_x) * partial;
+    float py = g_player_prev_y + (g_player_y - g_player_prev_y) * partial;
+    float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * partial;
+
+    const float scale = 12.0f;
+    const float thickness = 4.0f;
+    const int cell = 8;
+    const int radius_cells = 3;
+    const float eps = 1.0f / 1024.0f;
+    const float uv_scale = 1.0f / 256.0f;
+    double sx = ((double)px + (double)(((float)g_ingame_ticks + partial) * 0.03f)) / (double)scale;
+    double sz = ((double)pz) / (double)scale + 0.33;
+    int wrap_x = (int)floor(sx / 2048.0);
+    int wrap_z = (int)floor(sz / 2048.0);
+    sx -= (double)(wrap_x * 2048);
+    sz -= (double)(wrap_z * 2048);
+    int fsx = (int)floor(sx);
+    int fsz = (int)floor(sz);
+    float u_base = (float)fsx * uv_scale;
+    float v_base = (float)fsz * uv_scale;
+    float frac_x = (float)(sx - (double)fsx);
+    float frac_z = (float)(sz - (double)fsz);
+    float base_y = 108.0f;
+    float y0 = base_y;
+    float y1 = base_y + thickness;
+
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_FOG);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_clouds.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    for (int pass = 0; pass < 2; ++pass) {
+        /* Java uses color-mask off/on to prime depth.  The PSP shim has no
+           color-mask state, so pass 0 uses almost transparent color and pass 1
+           draws visible color. */
+        float alpha = pass == 0 ? 0.02f : 0.8f;
+        for (int cz = -radius_cells + 1; cz <= radius_cells; ++cz) {
+            for (int cx = -radius_cells + 1; cx <= radius_cells; ++cx) {
+                float gx0 = (float)(cx * cell) - frac_x;
+                float gz0 = (float)(cz * cell) - frac_z;
+                float gx1 = gx0 + (float)cell;
+                float gz1 = gz0 + (float)cell;
+                float x0 = px + gx0 * scale;
+                float x1 = px + gx1 * scale;
+                float z0 = pz + gz0 * scale;
+                float z1 = pz + gz1 * scale;
+                float u0 = ((float)(cx * cell) + 0.0f) * uv_scale + u_base;
+                float u1 = ((float)(cx * cell + cell)) * uv_scale + u_base;
+                float v0 = ((float)(cz * cell) + 0.0f) * uv_scale + v_base;
+                float v1 = ((float)(cz * cell + cell)) * uv_scale + v_base;
+
+                glBegin(GL_QUADS);
+                if (py < y0 + thickness + 1.0f) {
+                    glColor4f(cr, cg, cb, alpha);
+                    cloud_tex_vertex(x0, y1 - eps, z1, u0, v1);
+                    cloud_tex_vertex(x1, y1 - eps, z1, u1, v1);
+                    cloud_tex_vertex(x1, y1 - eps, z0, u1, v0);
+                    cloud_tex_vertex(x0, y1 - eps, z0, u0, v0);
+                }
+                if (py > y0 - 1.0f) {
+                    glColor4f(cr * 0.7f, cg * 0.7f, cb * 0.7f, alpha);
+                    cloud_tex_vertex(x0, y0, z1, u0, v1);
+                    cloud_tex_vertex(x1, y0, z1, u1, v1);
+                    cloud_tex_vertex(x1, y0, z0, u1, v0);
+                    cloud_tex_vertex(x0, y0, z0, u0, v0);
+                }
+                glColor4f(cr * 0.9f, cg * 0.9f, cb * 0.9f, alpha);
+                if (cx > -1) {
+                    for (int i = 0; i < cell; ++i) {
+                        float xa = px + ((float)(cx * cell + i) - frac_x) * scale;
+                        float uu = ((float)(cx * cell + i) + 0.5f) * uv_scale + u_base;
+                        cloud_tex_vertex(xa, y0, z1, uu, v1); cloud_tex_vertex(xa, y1, z1, uu, v1); cloud_tex_vertex(xa, y1, z0, uu, v0); cloud_tex_vertex(xa, y0, z0, uu, v0);
+                    }
+                }
+                if (cx <= 1) {
+                    for (int i = 0; i < cell; ++i) {
+                        float xa = px + ((float)(cx * cell + i + 1) - frac_x - eps) * scale;
+                        float uu = ((float)(cx * cell + i) + 0.5f) * uv_scale + u_base;
+                        cloud_tex_vertex(xa, y0, z0, uu, v0); cloud_tex_vertex(xa, y1, z0, uu, v0); cloud_tex_vertex(xa, y1, z1, uu, v1); cloud_tex_vertex(xa, y0, z1, uu, v1);
+                    }
+                }
+                glColor4f(cr * 0.8f, cg * 0.8f, cb * 0.8f, alpha);
+                if (cz > -1) {
+                    for (int i = 0; i < cell; ++i) {
+                        float za = pz + ((float)(cz * cell + i) - frac_z) * scale;
+                        float vv = ((float)(cz * cell + i) + 0.5f) * uv_scale + v_base;
+                        cloud_tex_vertex(x0, y1, za, u0, vv); cloud_tex_vertex(x1, y1, za, u1, vv); cloud_tex_vertex(x1, y0, za, u1, vv); cloud_tex_vertex(x0, y0, za, u0, vv);
+                    }
+                }
+                if (cz <= 1) {
+                    for (int i = 0; i < cell; ++i) {
+                        float za = pz + ((float)(cz * cell + i + 1) - frac_z - eps) * scale;
+                        float vv = ((float)(cz * cell + i) + 0.5f) * uv_scale + v_base;
+                        cloud_tex_vertex(x0, y0, za, u0, vv); cloud_tex_vertex(x1, y0, za, u1, vv); cloud_tex_vertex(x1, y1, za, u1, vv); cloud_tex_vertex(x0, y1, za, u0, vv);
+                    }
+                }
+                glEnd();
+            }
+        }
+    }
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_FOG);
+    glColor4f(1,1,1,1);
+}
+
+static void draw_source_clouds(void) {
+    if (g_opts.fancy_graphics) draw_source_fancy_clouds(g_frame_partial);
+    else draw_source_fast_clouds(g_frame_partial);
 }
 
 
@@ -2475,6 +2585,38 @@ static float liquid_corner_height(int x, int y, int z, int is_water) {
     return 1.0f - sum / (float)count;
 }
 
+
+static float liquid_flow_angle_at(int x, int y, int z, int is_water) {
+    float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    (void)vy;
+    fluid_flow_vector_at(x, y, z, is_water, &vx, &vy, &vz);
+    if (vx == 0.0f && vz == 0.0f) return -1000.0f;
+    return atan2f(vz, vx) - (float)M_PI * 0.5f;
+}
+
+static void liquid_top_uvs_source(int tile, float angle,
+                                  float *u00, float *v00, float *u01, float *v01,
+                                  float *u11, float *v11, float *u10, float *v10) {
+    float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
+    float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+    int tx = (tile & 15) * 16;
+    int ty = (tile & 240);
+    float cu = ((float)tx + 8.0f) / tw;
+    float cv = ((float)ty + 8.0f) / th;
+    if (angle > -999.0f) {
+        cu = ((float)tx + 16.0f) / tw;
+        cv = ((float)ty + 16.0f) / th;
+    } else {
+        angle = 0.0f;
+    }
+    float sx = sinf(angle) * 8.0f / tw;
+    float cz = cosf(angle) * 8.0f / th;
+    *u00 = cu - cz - sx; *v00 = cv - cz + sx;
+    *u01 = cu - cz + sx; *v01 = cv + cz + sx;
+    *u11 = cu + cz + sx; *v11 = cv + cz - sx;
+    *u10 = cu + cz - sx; *v10 = cv - cz - sx;
+}
+
 static void emit_liquid_block_faces(int id, int x, int y, int z) {
     int is_water = (id == BLOCK_WATER || id == BLOCK_STILL_WATER);
     int top_tile = liquid_top_tile_for_block(id);
@@ -2490,12 +2632,14 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
 
     flat_direct_set_color4f(1.0f, 1.0f, 1.0f, is_water ? 0.72f : 0.88f);
 
-    terrain_tile_uv(top_tile, &u0, &v0, &u1, &v1);
     if (liquid_face_exposed(x, y, z, 1)) {
-        world_tex_vertex(x0, (float)y + h00, z0, u0, v0);
-        world_tex_vertex(x0, (float)y + h01, z1, u0, v1);
-        world_tex_vertex(x1, (float)y + h11, z1, u1, v1);
-        world_tex_vertex(x1, (float)y + h10, z0, u1, v0);
+        float u00, v00, u01, v01, u11, v11, u10, v10;
+        liquid_top_uvs_source(top_tile, liquid_flow_angle_at(x, y, z, is_water),
+                              &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
+        world_tex_vertex(x0, (float)y + h00, z0, u00, v00);
+        world_tex_vertex(x0, (float)y + h01, z1, u01, v01);
+        world_tex_vertex(x1, (float)y + h11, z1, u11, v11);
+        world_tex_vertex(x1, (float)y + h10, z0, u10, v10);
     }
 
     terrain_tile_uv(side_tile, &u0, &v0, &u1, &v1);
@@ -4102,17 +4246,25 @@ static void draw_in_block_overlay(void) {
     if (!id || !tex_terrain.id) return;
 
     float u0, v0, u1, v1;
-    terrain_tile_uv(overlay_tile_for_block(id), &u0, &v0, &u1, &v1);
+    int water_overlay = (id == BLOCK_WATER || id == BLOCK_STILL_WATER) && tex_water_overlay.id;
+    if (water_overlay) {
+        u0 = 4.0f - g_player_yaw / 64.0f;
+        v0 = 0.0f + g_player_pitch / 64.0f;
+        u1 = 0.0f - g_player_yaw / 64.0f;
+        v1 = 4.0f + g_player_pitch / 64.0f;
+    } else {
+        terrain_tile_uv(overlay_tile_for_block(id), &u0, &v0, &u1, &v1);
+    }
 
     glDisable(GL_FOG);
     setup_gui_projection();
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glBindTexture(GL_TEXTURE_2D, water_overlay ? tex_water_overlay.id : tex_terrain.id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     if (id == BLOCK_WATER || id == BLOCK_STILL_WATER) {
-        glColor4f(0.35f, 0.55f, 1.0f, 0.42f);
+        glColor4f(0.40f, 0.40f, 0.40f, 0.50f);
     } else if (id == BLOCK_LAVA || id == BLOCK_STILL_LAVA) {
         glColor4f(1.0f, 0.35f, 0.05f, 0.55f);
     } else {
@@ -4151,7 +4303,7 @@ static int psp_fast_surface_top(int wx, int wz, int *out_y, int *out_id) {
        block so initial generated terrain actually becomes visible. */
     for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
         int id = flat_get_block(wx, y, wz);
-        if (id != 0) {
+        if (id != 0 && !block_is_liquid(id)) {
             if (out_y) *out_y = y;
             if (out_id) *out_id = id;
             return 1;
@@ -4196,7 +4348,9 @@ typedef struct PspFastSurfaceTile {
     int tx, tz;
     GLuint tex;
     PspBatch *batch;
+    PspBatch *water_batch;
     int vertex_count;
+    int water_vertex_count;
 } PspFastSurfaceTile;
 
 static PspFastSurfaceTile g_psp_fast_surface_tiles[PEX_PSP_FAST_MAX_TILES];
@@ -4210,6 +4364,7 @@ static int psp_floor_div_tile(int v) {
 static void psp_fast_surface_free_cache(void) {
     for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
         if (g_psp_fast_surface_tiles[i].batch) psp_batch_destroy(g_psp_fast_surface_tiles[i].batch);
+        if (g_psp_fast_surface_tiles[i].water_batch) psp_batch_destroy(g_psp_fast_surface_tiles[i].water_batch);
         memset(&g_psp_fast_surface_tiles[i], 0, sizeof(g_psp_fast_surface_tiles[i]));
     }
 }
@@ -4236,6 +4391,7 @@ static PspFastSurfaceTile *psp_fast_surface_alloc_tile(int tx, int tz, int cente
         }
         slot = &g_psp_fast_surface_tiles[best];
         if (slot->batch) psp_batch_destroy(slot->batch);
+        if (slot->water_batch) psp_batch_destroy(slot->water_batch);
     }
     memset(slot, 0, sizeof(*slot));
     slot->valid = 1;
@@ -4298,6 +4454,39 @@ static PspBatch *psp_fast_surface_build_tile_batch(int tx, int tz, int pcx, int 
     return psp_fast_surface_capture_to_batch();
 }
 
+
+static PspBatch *psp_fast_surface_build_water_tile_batch(int tx, int tz, int pcx, int pcz, int radius) {
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glColor4f(1, 1, 1, 0.72f);
+
+    int x0 = tx * PEX_PSP_FAST_TILE_SIZE;
+    int z0 = tz * PEX_PSP_FAST_TILE_SIZE;
+    int r2 = radius * radius;
+    psp_fast_surface_capture_begin();
+    for (int z = z0; z < z0 + PEX_PSP_FAST_TILE_SIZE; ++z) {
+        int dz = z - pcz;
+        for (int x = x0; x < x0 + PEX_PSP_FAST_TILE_SIZE; ++x) {
+            int dx = x - pcx;
+            if (dx * dx + dz * dz > r2) continue;
+            for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
+                int id = flat_get_block(x, y, z);
+                if (!block_is_liquid(id)) continue;
+                emit_liquid_block_faces(id, x, y, z);
+                if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 256) break;
+            }
+            if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 256) break;
+        }
+        if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 256) break;
+    }
+    return psp_fast_surface_capture_to_batch();
+}
+
 static int psp_fast_surface_radius_blocks(void) {
     int radius = effective_generated_render_chunk_radius() * 16;
     if (radius < 16) radius = 16;
@@ -4329,6 +4518,7 @@ static void psp_fast_surface_update_tiles(int pcx, int pcz) {
         if (!t->valid) continue;
         if (t->tx < min_tx - 1 || t->tx > max_tx + 1 || t->tz < min_tz - 1 || t->tz > max_tz + 1) {
             if (t->batch) psp_batch_destroy(t->batch);
+            if (t->water_batch) psp_batch_destroy(t->water_batch);
             memset(t, 0, sizeof(*t));
             continue;
         }
@@ -4381,9 +4571,13 @@ static void psp_fast_surface_update_tiles(int pcx, int pcz) {
                     if (!t) continue;
                     if (!t->dirty && t->batch && t->tex == tex_terrain.id) continue;
                     PspBatch *nb = psp_fast_surface_build_tile_batch(tx, tz, pcx, pcz, radius);
+                    PspBatch *wb = psp_fast_surface_build_water_tile_batch(tx, tz, pcx, pcz, radius);
                     if (t->batch) psp_batch_destroy(t->batch);
+                    if (t->water_batch) psp_batch_destroy(t->water_batch);
                     t->batch = nb;
+                    t->water_batch = wb;
                     t->vertex_count = nb ? nb->count : 0;
+                    t->water_vertex_count = wb ? wb->count : 0;
                     t->tex = tex_terrain.id;
                     t->dirty = 0;
                     rebuild_budget--;
@@ -4412,6 +4606,33 @@ static void psp_fast_surface_draw_tiles(int pcx, int pcz) {
         if (dx * dx + dz * dz > r2) continue;
         psp_draw_persistent_batch(t->batch);
     }
+}
+
+
+static void psp_fast_surface_draw_water_tiles(int pcx, int pcz) {
+    int radius = psp_fast_surface_radius_blocks() + PEX_PSP_FAST_TILE_SIZE;
+    int r2 = radius * radius;
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glColor4f(1,1,1,1);
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        PspFastSurfaceTile *t = &g_psp_fast_surface_tiles[i];
+        if (!t->valid || !t->water_batch) continue;
+        int tcx = t->tx * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+        int tcz = t->tz * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+        int dx = tcx - pcx;
+        int dz = tcz - pcz;
+        if (dx * dx + dz * dz > r2) continue;
+        psp_draw_persistent_batch(t->water_batch);
+    }
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glColor4f(1,1,1,1);
 }
 
 static void psp_fast_surface_draw_recent_edits(int pcx, int pcz) {
@@ -4453,9 +4674,11 @@ static void psp_fast_draw_flat_surface_world(void) {
     psp_fast_surface_update_tiles(pcx, pcz);
 
     apply_player_camera(g_frame_partial);
-    /* Fog/clouds are skipped on PSP fast path to avoid extra fill/state churn. */
+    apply_source_like_fog();
     psp_fast_surface_draw_tiles(pcx, pcz);
     psp_fast_surface_draw_recent_edits(pcx, pcz);
+    psp_fast_surface_draw_water_tiles(pcx, pcz);
+    draw_source_clouds();
 
     glColor4f(1,1,1,1);
     glDisable(GL_FOG);

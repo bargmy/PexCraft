@@ -7,6 +7,7 @@ CLASSIC_PACK_URL = "https://piston-data.mojang.com/v1/objects/93faf3398ebf8008d5
 REQUIRED_MCRW = {
     "gui_background.mcrw", "gui_gui.mcrw", "font_default.mcrw", "terrain.mcrw",
     "title_black.mcrw", "gui_icons.mcrw", "gui_inventory.mcrw", "mob_char.mcrw",
+    "environment_clouds.mcrw", "misc_water.mcrw",
 }
 
 def require_pillow():
@@ -131,6 +132,8 @@ def main():
         'gui/furnace.png': 'gui_furnace.mcrw',
         'gui/container.png': 'gui_chest.mcrw',
         'title/black.png': 'title_black.mcrw',
+        'environment/clouds.png': 'environment_clouds.mcrw',
+        'misc/water.png': 'misc_water.mcrw',
     }
     # Start with existing fallback assets, then overwrite with Java's assets.
     src_assets = Path('assets')
@@ -158,7 +161,7 @@ def main():
                     continue
                 if name == 'pack.png':
                     continue
-                if name == 'terrain.png' or name.startswith(('gui/','font/','mob/','title/')):
+                if name == 'terrain.png' or name.startswith(('gui/','font/','mob/','title/','environment/','misc/')):
                     dest = classic / name
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(zf.read(name))
