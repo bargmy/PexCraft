@@ -4226,7 +4226,10 @@ static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glColor4f(1, 1, 1, 1);
 
-    const int radius = 4;
+    /* Larger PSP playable radius.  The previous radius=4 was only a tiny
+       emergency test window.  Radius 12 stays inside the static vertex capture
+       budget while giving a usable view distance. */
+    const int radius = 12;
     const int r2 = radius * radius;
     int emitted_columns = 0;
     psp_fast_surface_capture_begin();

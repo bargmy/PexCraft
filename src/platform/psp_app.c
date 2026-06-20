@@ -308,7 +308,7 @@ int main(int argc, char **argv) {
        fixed 60 FPS, no filesystem/options persistence. */
     /* PSP performance defaults: Tiny render distance and a 30 FPS target keep
        the GE/CPU from trying to catch up with too much world work at once. */
-    g_opts.render_distance = 1;
+    g_opts.render_distance = 4;
     g_opts.fancy_graphics = 0;
     g_opts.max_fps = 30;
     g_opts.anaglyph = 0;

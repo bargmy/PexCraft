@@ -1,4 +1,4 @@
-name: Build PSP EBOOT gameplay controls texture fix
+name: Build PSP EBOOT texture atlas view distance fix
 
 on:
   push:

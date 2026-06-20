@@ -107,12 +107,13 @@ static void *psp_alloc_texture_vram(size_t bytes, unsigned int *out_off) {
 }
 
 static int psp_texture_should_use_vram(int w, int h, int repeat_s, int repeat_t) {
-    /* Keep GUI/font/menu textures in normal RAM. The previous all-VRAM path
-       made PSP/PPSSPP lose the dirt background and bitmap font on some runs.
-       The only texture that really benefits here is the repeated terrain atlas. */
-    if (w < 128 || h < 128) return 0;
-    if (!(repeat_s || repeat_t)) return 0;
-    return 1;
+    (void)w; (void)h; (void)repeat_s; (void)repeat_t;
+    /* Keep *all* textures in normal cached RAM for now.
+       The VRAM upload experiment made terrain/title textures sample as black
+       on PPSSPP/real PSP in some states.  A proper VRAM path needs swizzled
+       power-of-two texture allocation plus stable lifetime tracking; until then
+       correctness beats a broken black terrain atlas. */
+    return 0;
 }
 
 static unsigned int psp_rgba_to_abgr(float r, float g, float b, float a) {
