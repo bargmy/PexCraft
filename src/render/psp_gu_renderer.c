@@ -282,7 +282,15 @@ static void psp_gu_end_frame(void) {
 }
 
 static void glClearColor(float r,float g,float b,float a){ g_psp_clear_color=psp_rgba_to_abgr(r,g,b,a); }
-static void glClear(GLbitfield mask){ (void)mask; sceGuClearColor(g_psp_clear_color); sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT); }
+static void glClear(GLbitfield mask){
+    int gu_mask = 0;
+    if (mask & GL_COLOR_BUFFER_BIT) gu_mask |= GU_COLOR_BUFFER_BIT;
+    if (mask & GL_DEPTH_BUFFER_BIT) gu_mask |= GU_DEPTH_BUFFER_BIT;
+    if (!gu_mask) return;
+    if (gu_mask & GU_COLOR_BUFFER_BIT) sceGuClearColor(g_psp_clear_color);
+    if (gu_mask & GU_DEPTH_BUFFER_BIT) sceGuClearDepth(0);
+    sceGuClear(gu_mask);
+}
 static void glEnable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=1; else if(cap==GL_BLEND)g_psp_blend_enabled=1; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=1; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=1; else if(cap==GL_CULL_FACE)g_psp_cull_enabled=1; }
 static void glDisable(GLenum cap){ if(cap==GL_TEXTURE_2D)g_psp_texture_enabled=0; else if(cap==GL_BLEND)g_psp_blend_enabled=0; else if(cap==GL_DEPTH_TEST)g_psp_depth_enabled=0; else if(cap==GL_ALPHA_TEST)g_psp_alpha_enabled=0; else if(cap==GL_CULL_FACE)g_psp_cull_enabled=0; }
 static void glBlendFunc(GLenum s, GLenum d){ (void)s; (void)d; }
