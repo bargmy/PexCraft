@@ -8,12 +8,13 @@ PSP_HEAP_SIZE_KB(-1024);
 #define PEX_PSP_BOOT_DEBUG 1
 #endif
 
+static int g_psp_gu_debug_screen_ready = 0;
+static unsigned int g_psp_runtime_overlay_frame = 0;
+
 #if PEX_PSP_BOOT_DEBUG
 static char g_psp_boot_debug_lines[18][96];
 static int g_psp_boot_debug_count = 0;
 static int g_psp_boot_debug_stage = 0;
-static int g_psp_gu_debug_screen_ready = 0;
-static unsigned int g_psp_runtime_overlay_frame = 0;
 
 static void psp_boot_debug_redraw(const char *footer) {
     pspDebugScreenSetBackColor(0x00000000);
@@ -102,30 +103,23 @@ static void psp_boot_debug_fail(const char *msg) {
     psp_boot_debug_hold("Boot stopped. Check this stage.");
 }
 #else
-
-static void psp_boot_debug_redraw_gu_front(const char *footer) {
-    unsigned int off = psp_gu_current_display_offset();
-    void *base = (void *)(0x44000000u + off);
-    pspDebugScreenInitEx(base, PSP_DISPLAY_PIXEL_FORMAT_8888, 0);
-    psp_boot_debug_redraw(footer);
-}
-
-static void psp_boot_debug_show_runtime_overlay(const char *phase) {
-    g_psp_runtime_overlay_frame++;
-    char footer[192];
-    snprintf(footer, sizeof(footer),
-             "LIVE PSP DEBUG OVERLAY\nphase=%s frame=%u screen=%d ticks=%llu display_off=0x%06x\nIf this stays visible, the app is alive but game drawing is not visible.",
-             phase ? phase : "?",
-             g_psp_runtime_overlay_frame,
-             g_screen,
-             (unsigned long long)g_ticks,
-             psp_gu_current_display_offset());
-    psp_boot_debug_redraw_gu_front(footer);
-}
-
+static void psp_boot_debug_redraw_gu_front(const char *footer) { (void)footer; }
+static void psp_boot_debug_show_runtime_overlay(const char *phase) { (void)phase; }
 static void psp_boot_debug_stagef(const char *fmt, ...) { (void)fmt; }
 static void psp_boot_debug_pause(const char *footer, int usec) { (void)footer; (void)usec; }
-static void psp_boot_debug_hold(const char *footer) { (void)footer; for (;;) sceKernelDelayThread(1000000); }
+static void psp_boot_debug_hold(const char *footer) {
+    (void)footer;
+    for (;;) {
+        SceCtrlData pad;
+        memset(&pad, 0, sizeof(pad));
+        sceCtrlPeekBufferPositive(&pad, 1);
+        if ((pad.Buttons & PSP_CTRL_START) && (pad.Buttons & PSP_CTRL_SELECT) &&
+            (pad.Buttons & PSP_CTRL_LTRIGGER) && (pad.Buttons & PSP_CTRL_RTRIGGER)) {
+            sceKernelExitGame();
+        }
+        sceKernelDelayThread(250000);
+    }
+}
 static void psp_boot_debug_fail(const char *msg) { (void)msg; psp_boot_debug_hold("Boot stopped."); }
 #endif
 
@@ -144,7 +138,9 @@ static int init_gl(HWND unused) {
     if (!psp_gu_init()) { psp_boot_debug_fail("psp_gu_init failed"); return 0; }
     g_psp_gu_debug_screen_ready = 1;
     psp_boot_debug_redraw_gu_front("GU returned OK. Front-buffer debug console is active.");
+#if PEX_PSP_BOOT_DEBUG
     sceKernelDelayThread(1200000);
+#endif
     psp_boot_debug_stagef("GU initialized");
     glClearColor(0,0,0,1);
     glDisable(GL_DITHER);
@@ -279,7 +275,9 @@ static void main_loop(void) {
         if (psp_debug_first_frame) {
             psp_debug_first_frame = 0;
             psp_boot_debug_stagef("first frame rendered");
+#if PEX_PSP_BOOT_DEBUG
             psp_boot_debug_pause("First frame rendered. Entering game in 5 seconds. If it exits after this, the main loop ended cleanly.", 5000000);
+#endif
         }
         sleep_for_max_fps(frame_start_time);
         pex_profile_frame_end();
@@ -308,9 +306,11 @@ int main(int argc, char **argv) {
     load_options();
     /* PSP stability defaults: small render distance, no fancy translucent pass,
        fixed 60 FPS, no filesystem/options persistence. */
-    g_opts.render_distance = 2;
+    /* PSP performance defaults: Tiny render distance and a 30 FPS target keep
+       the GE/CPU from trying to catch up with too much world work at once. */
+    g_opts.render_distance = 3;
     g_opts.fancy_graphics = 0;
-    g_opts.max_fps = 60;
+    g_opts.max_fps = 30;
     g_opts.anaglyph = 0;
     g_opts.show_fps = 0;
     g_opts.renderer_backend = RENDERER_OPENGL;
@@ -348,7 +348,9 @@ int main(int argc, char **argv) {
     PEX_PSP_LOGF("set_screen(SCREEN_TITLE) end: screen=%d", g_screen);
     psp_boot_debug_stagef("title screen selected");
     psp_boot_debug_redraw_gu_front("Reached title screen setup. Calling main_loop next.");
+#if PEX_PSP_BOOT_DEBUG
     sceKernelDelayThread(1500000);
+#endif
     PEX_PSP_LOGF("calling main_loop");
     main_loop();
     PEX_PSP_LOGF("main_loop returned; cleanup begin");

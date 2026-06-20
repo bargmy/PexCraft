@@ -31,6 +31,25 @@ static int g_psp_viewport[4] = {0,0,480,272};
 static unsigned int g_psp_verbose_frame_counter = 0;
 static int g_psp_cull_enabled = 0;
 
+/* Tiny state cache. The old PSP shim re-issued sceGuTexImage/blend/depth/etc.
+   for every compiled world batch and also wrote back vertex cache every frame.
+   On PSP/PPSSPP that creates the freeze/unfreeze stutter pattern. */
+static GLuint g_psp_cached_tex = (GLuint)0xffffffffu;
+static int g_psp_cached_tex_enabled = -1;
+static int g_psp_cached_blend = -1;
+static int g_psp_cached_depth = -1;
+static int g_psp_cached_alpha = -1;
+static int g_psp_cached_cull = -1;
+
+static void psp_state_cache_invalidate(void) {
+    g_psp_cached_tex = (GLuint)0xffffffffu;
+    g_psp_cached_tex_enabled = -1;
+    g_psp_cached_blend = -1;
+    g_psp_cached_depth = -1;
+    g_psp_cached_alpha = -1;
+    g_psp_cached_cull = -1;
+}
+
 typedef struct PspImmVertex { float u, v; unsigned int color; float x, y, z; } PspImmVertex;
 static PspImmVertex g_psp_imm[PEX_PSP_MAX_IMM_VERTS];
 static int g_psp_imm_count = 0;
@@ -69,25 +88,42 @@ static unsigned int psp_rgba_to_abgr(float r, float g, float b, float a) {
 }
 
 static void psp_apply_state_values(GLuint tex, int tex_enabled, int blend_enabled, int depth_enabled, int alpha_enabled, int cull_enabled) {
-    if (tex_enabled && tex && tex < PEX_PSP_MAX_TEXTURES && g_psp_textures[tex].used) {
-        PspTexture *t=&g_psp_textures[tex];
-        sceGuEnable(GU_TEXTURE_2D);
-        sceGuTexMode(GU_PSM_8888,0,0,0);
-        sceGuTexImage(0,t->w,t->h,t->stride,t->pixels);
-        sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
-        sceGuTexFilter(GU_NEAREST,GU_NEAREST);
-        sceGuTexWrap(GU_REPEAT,GU_REPEAT);
-        sceGuTexScale(1.0f, 1.0f);
-        sceGuTexOffset(0.0f, 0.0f);
-    } else {
-        sceGuDisable(GU_TEXTURE_2D);
+    int valid_tex = (tex_enabled && tex && tex < PEX_PSP_MAX_TEXTURES && g_psp_textures[tex].used);
+    if (g_psp_cached_tex_enabled != valid_tex || g_psp_cached_tex != tex) {
+        if (valid_tex) {
+            PspTexture *t=&g_psp_textures[tex];
+            sceGuEnable(GU_TEXTURE_2D);
+            sceGuTexMode(GU_PSM_8888,0,0,0);
+            sceGuTexImage(0,t->w,t->h,t->stride,t->pixels);
+            sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
+            sceGuTexFilter(GU_NEAREST,GU_NEAREST);
+            sceGuTexWrap(GU_REPEAT,GU_REPEAT);
+            sceGuTexScale(1.0f, 1.0f);
+            sceGuTexOffset(0.0f, 0.0f);
+        } else {
+            sceGuDisable(GU_TEXTURE_2D);
+        }
+        g_psp_cached_tex_enabled = valid_tex;
+        g_psp_cached_tex = tex;
     }
-    if (blend_enabled) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0); }
-    else sceGuDisable(GU_BLEND);
-    if (depth_enabled) sceGuEnable(GU_DEPTH_TEST); else sceGuDisable(GU_DEPTH_TEST);
-    if (alpha_enabled) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0x08, 0xff); }
-    else sceGuDisable(GU_ALPHA_TEST);
-    if (cull_enabled) sceGuEnable(GU_CULL_FACE); else sceGuDisable(GU_CULL_FACE);
+    if (g_psp_cached_blend != blend_enabled) {
+        if (blend_enabled) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0); }
+        else sceGuDisable(GU_BLEND);
+        g_psp_cached_blend = blend_enabled;
+    }
+    if (g_psp_cached_depth != depth_enabled) {
+        if (depth_enabled) sceGuEnable(GU_DEPTH_TEST); else sceGuDisable(GU_DEPTH_TEST);
+        g_psp_cached_depth = depth_enabled;
+    }
+    if (g_psp_cached_alpha != alpha_enabled) {
+        if (alpha_enabled) { sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0x08, 0xff); }
+        else sceGuDisable(GU_ALPHA_TEST);
+        g_psp_cached_alpha = alpha_enabled;
+    }
+    if (g_psp_cached_cull != cull_enabled) {
+        if (cull_enabled) sceGuEnable(GU_CULL_FACE); else sceGuDisable(GU_CULL_FACE);
+        g_psp_cached_cull = cull_enabled;
+    }
 }
 
 static void psp_apply_state(void) {
@@ -165,7 +201,9 @@ static void psp_list_append_batch(GLuint list, PspBatch *b) {
 static void psp_draw_persistent_batch(const PspBatch *b) {
     if (!b || !b->v || b->count <= 0) return;
     psp_apply_state_values(b->tex, b->texture_enabled, b->blend_enabled, b->depth_enabled, b->alpha_enabled, b->cull_enabled);
-    sceKernelDcacheWritebackInvalidateRange((void*)b->v, (SceSize)((size_t)b->count * sizeof(PspImmVertex)));
+    /* Vertices in persistent display lists are immutable after creation; they
+       were cache-flushed in psp_batch_create(). Flushing them every frame is
+       extremely expensive and caused huge frame pacing stalls. */
     sceGumDrawArray(psp_prim_from_gl(b->mode), GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D, b->count, 0, b->v);
 }
 
@@ -268,6 +306,7 @@ static void psp_gu_begin_frame(void) {
     g_psp_verbose_frame_counter++;
     if (g_psp_verbose_frame_counter <= 30 || (g_psp_verbose_frame_counter % 120u) == 0u) PEX_PSP_LOGF("GU_FRAME %u begin", g_psp_verbose_frame_counter);
     sceGuStart(GU_DIRECT, g_psp_gu_list);
+    psp_state_cache_invalidate();
     sceGuClearColor(g_psp_clear_color);
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
