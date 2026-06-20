@@ -121,7 +121,6 @@ static void psp_drop_gui_texture_cpu_copies(void) {
     psp_drop_texture_cpu_copy(&tex_workbench);
     psp_drop_texture_cpu_copy(&tex_furnace_gui);
     psp_drop_texture_cpu_copy(&tex_chest_gui);
-    psp_drop_texture_cpu_copy(&tex_logo);
     psp_drop_texture_cpu_copy(&tex_items);
 }
 #endif
