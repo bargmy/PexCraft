@@ -12,6 +12,9 @@
 #define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 4096
 #define PEX_PSP_TEX_VRAM_START 0x00180000u
 #define PEX_PSP_TEX_VRAM_END   0x00400000u
+#ifndef GU_CLAMP
+#define GU_CLAMP 0
+#endif
 
 static unsigned int __attribute__((aligned(16))) g_psp_gu_list[262144];
 static void *g_psp_drawbuf = NULL;
@@ -57,7 +60,7 @@ typedef struct PspImmVertex { float u, v; unsigned int color; float x, y, z; } P
 static PspImmVertex g_psp_imm[PEX_PSP_MAX_IMM_VERTS];
 static int g_psp_imm_count = 0;
 
-typedef struct PspTexture { int used; int w, h, stride; int in_vram; unsigned int vram_off; unsigned int *pixels; } PspTexture;
+typedef struct PspTexture { int used; int w, h, stride; int in_vram; int repeat_s, repeat_t; unsigned int vram_off; unsigned int *pixels; } PspTexture;
 static PspTexture g_psp_textures[PEX_PSP_MAX_TEXTURES];
 static GLuint g_psp_next_tex = 1;
 
@@ -103,6 +106,15 @@ static void *psp_alloc_texture_vram(size_t bytes, unsigned int *out_off) {
     return psp_vram_cpu_ptr(off);
 }
 
+static int psp_texture_should_use_vram(int w, int h, int repeat_s, int repeat_t) {
+    /* Keep GUI/font/menu textures in normal RAM. The previous all-VRAM path
+       made PSP/PPSSPP lose the dirt background and bitmap font on some runs.
+       The only texture that really benefits here is the repeated terrain atlas. */
+    if (w < 128 || h < 128) return 0;
+    if (!(repeat_s || repeat_t)) return 0;
+    return 1;
+}
+
 static unsigned int psp_rgba_to_abgr(float r, float g, float b, float a) {
     int ri=(int)(r*255.0f+0.5f), gi=(int)(g*255.0f+0.5f), bi=(int)(b*255.0f+0.5f), ai=(int)(a*255.0f+0.5f);
     if(ri<0)ri=0; if(ri>255)ri=255;
@@ -123,7 +135,8 @@ static void psp_apply_state_values(GLuint tex, int tex_enabled, int blend_enable
             sceGuTexImage(0,t->w,t->h,t->stride,t->in_vram ? psp_vram_ge_ptr(t->vram_off) : (void*)t->pixels);
             sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
             sceGuTexFilter(GU_NEAREST,GU_NEAREST);
-            sceGuTexWrap(GU_REPEAT,GU_REPEAT);
+            sceGuTexWrap(t->repeat_s ? GU_REPEAT : GU_CLAMP, t->repeat_t ? GU_REPEAT : GU_CLAMP);
+            sceGuTexFlush();
             sceGuTexScale(1.0f, 1.0f);
             sceGuTexOffset(0.0f, 0.0f);
         } else {
@@ -417,20 +430,34 @@ static GLuint glGenLists(GLsizei range){ GLuint base=g_psp_next_list; int r=rang
 static void glNewList(GLuint list, GLenum mode){ (void)mode; if(list>0&&list<PEX_PSP_LIST_COUNT) psp_list_free(list); g_psp_compiling=1; g_psp_compile_list=list; }
 static void glEndList(void){ g_psp_compiling=0; g_psp_compile_list=0; }
 static void glCallList(GLuint list){ if(list>0&&list<PEX_PSP_LIST_COUNT){ for(PspBatch *b=g_psp_lists[list].first;b;b=b->next) psp_draw_persistent_batch(b); } }
-static void glGenTextures(GLsizei n, GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=g_psp_next_tex++; if(id>=PEX_PSP_MAX_TEXTURES)id=1; tex[i]=id; if (!g_psp_textures[id].in_vram) free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } }
+static void glGenTextures(GLsizei n, GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=g_psp_next_tex++; if(id>=PEX_PSP_MAX_TEXTURES)id=1; tex[i]=id; if (!g_psp_textures[id].in_vram) free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); g_psp_textures[id].repeat_s=1; g_psp_textures[id].repeat_t=1; } }
 static void glBindTexture(GLenum target, GLuint tex){ (void)target; g_psp_bound_tex=tex; }
-static void glTexParameteri(GLenum target, GLenum pname, GLint param){ (void)target; (void)pname; (void)param; }
+static void glTexParameteri(GLenum target, GLenum pname, GLint param){
+    (void)target;
+    if(!g_psp_bound_tex||g_psp_bound_tex>=PEX_PSP_MAX_TEXTURES)return;
+    PspTexture *t=&g_psp_textures[g_psp_bound_tex];
+    if(pname==GL_TEXTURE_WRAP_S) t->repeat_s = (param==GL_REPEAT);
+    else if(pname==GL_TEXTURE_WRAP_T) t->repeat_t = (param==GL_REPEAT);
+    psp_state_cache_invalidate();
+}
 static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){
     (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type;
     if(!g_psp_bound_tex||g_psp_bound_tex>=PEX_PSP_MAX_TEXTURES)return;
     PspTexture *t=&g_psp_textures[g_psp_bound_tex];
+    int repeat_s = t->repeat_s;
+    int repeat_t = t->repeat_t;
     if (!t->in_vram) free(t->pixels);
     memset(t,0,sizeof(*t));
+    t->repeat_s = repeat_s;
+    t->repeat_t = repeat_t;
     if(!pixels||w<=0||h<=0)return;
     t->w=w; t->h=h; t->stride=w;
     size_t bytes=(size_t)w*(size_t)h*4u;
     unsigned int off=0;
-    void *dst=psp_alloc_texture_vram(bytes, &off);
+    void *dst = NULL;
+    if (psp_texture_should_use_vram(w, h, t->repeat_s, t->repeat_t)) {
+        dst=psp_alloc_texture_vram(bytes, &off);
+    }
     if (dst) {
         memcpy(dst,pixels,bytes);
         sceKernelDcacheWritebackInvalidateRange(dst,(SceSize)bytes);

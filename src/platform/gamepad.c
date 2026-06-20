@@ -210,7 +210,8 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
     if (b & PSP_CTRL_CIRCLE)   p->ry -= 1.0f; /* look up */
     if (b & PSP_CTRL_CROSS)    p->ry += 1.0f; /* look down */
 
-    /* Menu/cursor abstraction: Cross=A/select, Circle=B/back, Square=X/right-click, Triangle=Y. */
+    /* Menu/cursor abstraction only.  Gameplay ignores A/B/X/Y so face buttons
+       remain camera-only in-game, while menus/inventory still work normally. */
     p->a = (b & PSP_CTRL_CROSS) != 0;
     p->b = (b & PSP_CTRL_CIRCLE) != 0;
     p->x = (b & PSP_CTRL_SQUARE) != 0;
@@ -378,6 +379,19 @@ static PexGamepadState *pex_gamepad_primary_pad(void) {
 static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     memset(g_gamepad_vk_state, 0, sizeof(g_gamepad_vk_state));
     if (!p || g_screen != SCREEN_INGAME || g_player_dead) return;
+#ifdef PEX_PLATFORM_PSP
+    /* PSP gameplay mapping is intentionally different from menu/inventory mapping.
+       Menus still use Cross=select, Circle=back, D-pad/analog navigation.
+       In-game, the four face buttons are camera ONLY, so never use A/B/X/Y
+       here for jump, sneak, inventory, attack, or UI. */
+    if (p->ly < -PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1; /* analog forward */
+    if (p->ly >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1; /* analog back */
+    if (p->lx < -PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1; /* analog left */
+    if (p->lx >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1; /* analog right */
+    if (p->back) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* Select = jump */
+    if (p->dpad_down) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;        /* D-pad Down = sneak */
+    if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;                /* R = break/attack */
+#else
     if (p->ly < -PEX_GAMEPAD_DEADZONE || p->dpad_up) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1;
     if (p->ly >  PEX_GAMEPAD_DEADZONE || p->dpad_down) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
     if (p->lx < -PEX_GAMEPAD_DEADZONE || p->dpad_left) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
@@ -386,6 +400,7 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
+#endif
 }
 
 static void pex_gamepad_back_action(void) {

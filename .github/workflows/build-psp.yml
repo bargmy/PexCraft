@@ -1,4 +1,4 @@
-name: Build PSP EBOOT
+name: Build PSP EBOOT gameplay controls texture fix
 
 on:
   push:
@@ -118,7 +118,7 @@ jobs:
         shell: bash
         env:
           ZIP_PATH: dist/pexcraft-psp-eboot.zip
-          CAPTION: PEXCraft PSP EBOOT build
+          CAPTION: PEXCraft PSP gameplay controls texture fix
         run: |
           set -euo pipefail
           if [ -z "${TOKEN}" ]; then
