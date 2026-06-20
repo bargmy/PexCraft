@@ -3680,6 +3680,13 @@ static void worldgen_mesh_prep_build_list(void) {
 }
 
 static int worldgen_mesh_prep_step(int max_rebuilds) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    (void)max_rebuilds;
+    g_worldgen_mesh_prep_active = 1;
+    g_worldgen_mesh_prep_count = 1;
+    g_worldgen_mesh_prep_index = 1;
+    return 1;
+#endif
     if (!g_worldgen_mesh_prep_active) worldgen_mesh_prep_build_list();
     if (max_rebuilds < 1) max_rebuilds = 1;
 
@@ -3719,11 +3726,17 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
 }
 
 static int worldgen_mesh_prep_total(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    return 1;
+#endif
     if (!g_worldgen_mesh_prep_active) worldgen_mesh_prep_build_list();
     return g_worldgen_mesh_prep_count;
 }
 
 static int worldgen_mesh_prep_done(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    return 1;
+#endif
     if (!g_worldgen_mesh_prep_active) worldgen_mesh_prep_build_list();
     return g_worldgen_mesh_prep_index;
 }
@@ -4109,8 +4122,104 @@ static void draw_in_block_overlay(void) {
 }
 
 
+
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+/* PSP emergency world renderer.
+   The PC renderer builds many 16x16x16 display-list sections while the player
+   moves.  On PSP/PPSSPP this causes the visible freeze/unfreeze pattern even
+   when the average FPS counter is low-but-not-zero.  For the first playable PSP
+   build we use a stable surface renderer: no section rebuild queue, no display
+   lists, no world mesh worker, no cache churn.  It draws the live RAM world
+   directly around the player each frame with a hard vertex budget. */
+static int psp_fast_surface_top(int wx, int wz, int *out_y, int *out_id) {
+    int start = (int)floorf(g_player_y) + 32;
+    if (start > FLAT_WORLD_Y_MAX) start = FLAT_WORLD_Y_MAX;
+    if (start < FLAT_WORLD_Y_MIN) start = FLAT_WORLD_Y_MAX;
+    for (int y = start; y >= FLAT_WORLD_Y_MIN; --y) {
+        int id = flat_get_block(wx, y, wz);
+        if (id != 0) {
+            if (out_y) *out_y = y;
+            if (out_id) *out_id = id;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void psp_fast_emit_surface_block(int id, int x, int y, int z) {
+    if (!id) return;
+    if (id == BLOCK_SNOW_LAYER) {
+        emit_snow_layer_block(x, y, z);
+        return;
+    }
+    if (block_uses_special_model(id) || block_uses_cross_plant_model(id)) {
+        /* The full special/cross models are expensive and often alpha-heavy.
+           Draw a cheap supporting top face instead so forests/flowers do not
+           stall the PSP build. */
+        int below = flat_get_block(x, y - 1, z);
+        if (below) { id = below; y = y - 1; }
+        else return;
+    }
+
+    if (flat_face_exposed_for_block(id, x, y, z, 1)) emit_world_block_face_at(id, x, y, z, 1);
+
+    /* Nearby cliff/wall hints.  This keeps the world from looking like a flat
+       map without drawing whole vertical columns. */
+    for (int face = 2; face <= 5; ++face) {
+        if (flat_face_exposed_for_block(id, x, y, z, face)) emit_world_block_face_at(id, x, y, z, face);
+    }
+}
+
+static void psp_fast_draw_flat_surface_world(void) {
+    setup_world_projection();
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+
+    apply_player_camera(g_frame_partial);
+    /* Fog/clouds are skipped on PSP fast path to avoid extra fill/state churn. */
+
+    int pcx = (int)floorf(g_player_x);
+    int pcz = (int)floorf(g_player_z);
+    const int radius = 12;
+    const int r2 = radius * radius;
+    int emitted_columns = 0;
+
+    glBegin(GL_QUADS);
+    for (int dz = -radius; dz <= radius; ++dz) {
+        int z = pcz + dz;
+        for (int dx = -radius; dx <= radius; ++dx) {
+            if (dx * dx + dz * dz > r2) continue;
+            int x = pcx + dx;
+            int y = 0, id = 0;
+            if (!psp_fast_surface_top(x, z, &y, &id)) continue;
+            psp_fast_emit_surface_block(id, x, y, z);
+            emitted_columns++;
+        }
+    }
+    glEnd();
+
+    glColor4f(1,1,1,1);
+    glDisable(GL_FOG);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    (void)emitted_columns;
+}
+#endif
+
 static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    psp_fast_draw_flat_surface_world();
+    draw_block_selection_border();
+    return;
+#endif
 
     setup_world_projection();
     glClear(GL_DEPTH_BUFFER_BIT);
