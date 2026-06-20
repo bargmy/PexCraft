@@ -4170,6 +4170,82 @@ static void psp_fast_emit_surface_block(int id, int x, int y, int z) {
     }
 }
 
+static PspBatch *g_psp_fast_surface_batch = NULL;
+static int g_psp_fast_surface_cx = 0x7fffffff;
+static int g_psp_fast_surface_cz = 0x7fffffff;
+static GLuint g_psp_fast_surface_tex = 0;
+static double g_psp_fast_surface_last_rebuild = -1000.0;
+static int g_psp_fast_surface_vertex_count = 0;
+
+static void psp_fast_surface_free_cache(void) {
+    if (g_psp_fast_surface_batch) {
+        psp_batch_destroy(g_psp_fast_surface_batch);
+        g_psp_fast_surface_batch = NULL;
+    }
+    g_psp_fast_surface_vertex_count = 0;
+}
+
+static void psp_fast_surface_capture_begin(void) {
+    g_psp_begin_active = 1;
+    g_psp_begin_mode = GL_QUADS;
+    g_psp_imm_count = 0;
+}
+
+static void psp_fast_surface_capture_end(int pcx, int pcz) {
+    g_psp_begin_active = 0;
+    PspBatch *nb = psp_batch_create(g_psp_imm, g_psp_imm_count, GL_QUADS);
+    if (nb) {
+        psp_fast_surface_free_cache();
+        g_psp_fast_surface_batch = nb;
+        g_psp_fast_surface_vertex_count = nb->count;
+        g_psp_fast_surface_cx = pcx;
+        g_psp_fast_surface_cz = pcz;
+        g_psp_fast_surface_tex = tex_terrain.id;
+        g_psp_fast_surface_last_rebuild = now_seconds();
+    }
+    g_psp_imm_count = 0;
+}
+
+static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
+    const int rebuild_step = 4; /* rebuild only after the player moves several blocks */
+    double now = now_seconds();
+    int need = 0;
+    if (!g_psp_fast_surface_batch) need = 1;
+    if (g_psp_fast_surface_tex != tex_terrain.id) need = 1;
+    if (abs(pcx - g_psp_fast_surface_cx) >= rebuild_step || abs(pcz - g_psp_fast_surface_cz) >= rebuild_step) need = 1;
+    /* Rare safety refresh for placed/broken blocks without per-frame rebuild stalls. */
+    if (!need && now - g_psp_fast_surface_last_rebuild > 1.25) need = 1;
+    if (!need) return;
+
+    glEnable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glColor4f(1, 1, 1, 1);
+
+    const int radius = 7;
+    const int r2 = radius * radius;
+    int emitted_columns = 0;
+    psp_fast_surface_capture_begin();
+    for (int dz = -radius; dz <= radius; ++dz) {
+        int z = pcz + dz;
+        for (int dx = -radius; dx <= radius; ++dx) {
+            if (dx * dx + dz * dz > r2) continue;
+            int x = pcx + dx;
+            int y = 0, id = 0;
+            if (!psp_fast_surface_top(x, z, &y, &id)) continue;
+            psp_fast_emit_surface_block(id, x, y, z);
+            emitted_columns++;
+            if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 64) break;
+        }
+        if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 64) break;
+    }
+    psp_fast_surface_capture_end(pcx, pcz);
+    (void)emitted_columns;
+}
+
 static void psp_fast_draw_flat_surface_world(void) {
     setup_world_projection();
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -4181,35 +4257,21 @@ static void psp_fast_draw_flat_surface_world(void) {
     glDisable(GL_ALPHA_TEST);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
 
-    apply_player_camera(g_frame_partial);
-    /* Fog/clouds are skipped on PSP fast path to avoid extra fill/state churn. */
-
     int pcx = (int)floorf(g_player_x);
     int pcz = (int)floorf(g_player_z);
-    const int radius = 12;
-    const int r2 = radius * radius;
-    int emitted_columns = 0;
+    psp_fast_surface_rebuild_if_needed(pcx, pcz);
 
-    glBegin(GL_QUADS);
-    for (int dz = -radius; dz <= radius; ++dz) {
-        int z = pcz + dz;
-        for (int dx = -radius; dx <= radius; ++dx) {
-            if (dx * dx + dz * dz > r2) continue;
-            int x = pcx + dx;
-            int y = 0, id = 0;
-            if (!psp_fast_surface_top(x, z, &y, &id)) continue;
-            psp_fast_emit_surface_block(id, x, y, z);
-            emitted_columns++;
-        }
+    apply_player_camera(g_frame_partial);
+    /* Fog/clouds are skipped on PSP fast path to avoid extra fill/state churn. */
+    if (g_psp_fast_surface_batch) {
+        psp_draw_persistent_batch(g_psp_fast_surface_batch);
     }
-    glEnd();
 
     glColor4f(1,1,1,1);
     glDisable(GL_FOG);
     glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
-    (void)emitted_columns;
 }
 #endif
 

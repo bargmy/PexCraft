@@ -140,15 +140,18 @@ static int psp_prim_from_gl(GLenum mode) {
     return GU_TRIANGLES;
 }
 
-static void psp_list_free(GLuint list) {
-    if (list == 0 || list >= PEX_PSP_LIST_COUNT) return;
-    PspBatch *b = g_psp_lists[list].first;
+static void psp_batch_destroy(PspBatch *b) {
     while (b) {
         PspBatch *n = b->next;
         free(b->v);
         free(b);
         b = n;
     }
+}
+
+static void psp_list_free(GLuint list) {
+    if (list == 0 || list >= PEX_PSP_LIST_COUNT) return;
+    psp_batch_destroy(g_psp_lists[list].first);
     memset(&g_psp_lists[list], 0, sizeof(g_psp_lists[list]));
 }
 
