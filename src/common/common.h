@@ -1032,7 +1032,7 @@ static double g_last_time = 0.0;
 
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
 static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
-static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds, tex_water_overlay;
+static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static int font_widths[256];
 
 static const char *TITLE_BLOCKS[5] = {

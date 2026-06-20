@@ -1,4 +1,4 @@
-name: Build PSP EBOOT PSP-1000 RAM safe
+name: Build PSP cloud water source fix EBOOT PSP-1000 RAM safe
 
 on:
   push:
