@@ -1203,6 +1203,12 @@ static void flat_world_finish_initial_generation(void) {
     stream_generation_queue_clear();
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    /* The PSP renderer owns a separate cached surface/tile mesh.  After initial
+       terrain generation finishes, force that cache to bootstrap from the newly
+       generated RAM terrain instead of waiting for player edits. */
+    psp_fast_surface_mark_dirty_all();
+#endif
 }
 
 static void flat_world_generate_blocks_for_current_origin(void) {

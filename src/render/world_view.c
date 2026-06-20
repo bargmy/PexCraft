@@ -4141,10 +4141,15 @@ static void draw_in_block_overlay(void) {
    lists, no world mesh worker, no cache churn.  It draws the live RAM world
    directly around the player each frame with a hard vertex budget. */
 static int psp_fast_surface_top(int wx, int wz, int *out_y, int *out_id) {
-    int start = (int)floorf(g_player_y) + 32;
-    if (start > FLAT_WORLD_Y_MAX) start = FLAT_WORLD_Y_MAX;
-    if (start < FLAT_WORLD_Y_MIN) start = FLAT_WORLD_Y_MAX;
-    for (int y = start; y >= FLAT_WORLD_Y_MIN; --y) {
+    /* Do not start the scan near the player's current Y.
+       On generated normal worlds the player can spawn below/inside a hillside
+       while the visible surface is much higher.  The old PSP fast path started
+       at player_y + 32, then found an internal buried stone block; because its
+       top face was covered, the batch emitted nothing.  Placed blocks rendered
+       because they were recent exposed edits, which made it look like only edits
+       existed.  Scan from the real world ceiling and return the first non-air
+       block so initial generated terrain actually becomes visible. */
+    for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
         int id = flat_get_block(wx, y, wz);
         if (id != 0) {
             if (out_y) *out_y = y;
@@ -4335,25 +4340,54 @@ static void psp_fast_surface_update_tiles(int pcx, int pcz) {
 #else
     int rebuild_budget = 4;
 #endif
+
+    /* Bootstrap/prioritize around the player.  The old loop walked from the
+       far min corner to the max corner, so on a 1-tile-per-frame PSP-1000 build
+       the first visible terrain tile near the player could be delayed behind a
+       lot of empty/far tiles.  Build rings centered on the player instead. */
+    int have_near_batch = 0;
+    for (int i = 0; i < PEX_PSP_FAST_MAX_TILES; ++i) {
+        PspFastSurfaceTile *t = &g_psp_fast_surface_tiles[i];
+        if (!t->valid || !t->batch) continue;
+        int tcx = t->tx * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+        int tcz = t->tz * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+        int dx = tcx - pcx;
+        int dz = tcz - pcz;
+        if (dx * dx + dz * dz <= (PEX_PSP_FAST_TILE_SIZE * 2) * (PEX_PSP_FAST_TILE_SIZE * 2)) {
+            have_near_batch = 1;
+            break;
+        }
+    }
+    if (!have_near_batch && rebuild_budget < 4) rebuild_budget = 4;
+
+    int max_ring = max_tx - min_tx;
+    if (max_tz - min_tz > max_ring) max_ring = max_tz - min_tz;
+    if (max_ring < 0) max_ring = 0;
     for (int pass = 0; pass < 2 && rebuild_budget > 0; ++pass) {
-        for (int tz = min_tz; tz <= max_tz && rebuild_budget > 0; ++tz) {
-            for (int tx = min_tx; tx <= max_tx && rebuild_budget > 0; ++tx) {
-                int tcx = tx * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
-                int tcz = tz * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
-                int dx = tcx - pcx;
-                int dz = tcz - pcz;
-                if (pass == 0 && (dx * dx + dz * dz > (radius + PEX_PSP_FAST_TILE_SIZE) * (radius + PEX_PSP_FAST_TILE_SIZE))) continue;
-                PspFastSurfaceTile *t = psp_fast_surface_find_tile(tx, tz);
-                if (!t) t = psp_fast_surface_alloc_tile(tx, tz, center_tx, center_tz);
-                if (!t) continue;
-                if (!t->dirty && t->batch && t->tex == tex_terrain.id) continue;
-                PspBatch *nb = psp_fast_surface_build_tile_batch(tx, tz, pcx, pcz, radius);
-                if (t->batch) psp_batch_destroy(t->batch);
-                t->batch = nb;
-                t->vertex_count = nb ? nb->count : 0;
-                t->tex = tex_terrain.id;
-                t->dirty = 0;
-                rebuild_budget--;
+        for (int ring = 0; ring <= max_ring && rebuild_budget > 0; ++ring) {
+            for (int dz = -ring; dz <= ring && rebuild_budget > 0; ++dz) {
+                for (int dx_tile = -ring; dx_tile <= ring && rebuild_budget > 0; ++dx_tile) {
+                    if (ring != 0 && abs(dx_tile) != ring && abs(dz) != ring) continue;
+                    int tx = center_tx + dx_tile;
+                    int tz = center_tz + dz;
+                    if (tx < min_tx || tx > max_tx || tz < min_tz || tz > max_tz) continue;
+                    int tcx = tx * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+                    int tcz = tz * PEX_PSP_FAST_TILE_SIZE + PEX_PSP_FAST_TILE_SIZE / 2;
+                    int dx = tcx - pcx;
+                    int dzb = tcz - pcz;
+                    if (pass == 0 && (dx * dx + dzb * dzb > (radius + PEX_PSP_FAST_TILE_SIZE) * (radius + PEX_PSP_FAST_TILE_SIZE))) continue;
+                    PspFastSurfaceTile *t = psp_fast_surface_find_tile(tx, tz);
+                    if (!t) t = psp_fast_surface_alloc_tile(tx, tz, center_tx, center_tz);
+                    if (!t) continue;
+                    if (!t->dirty && t->batch && t->tex == tex_terrain.id) continue;
+                    PspBatch *nb = psp_fast_surface_build_tile_batch(tx, tz, pcx, pcz, radius);
+                    if (t->batch) psp_batch_destroy(t->batch);
+                    t->batch = nb;
+                    t->vertex_count = nb ? nb->count : 0;
+                    t->tex = tex_terrain.id;
+                    t->dirty = 0;
+                    rebuild_budget--;
+                }
             }
         }
     }
