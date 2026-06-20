@@ -1113,9 +1113,16 @@ static void draw_break_overlay_cube(float x, float y, float z, int stage) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glEnable(GL_BLEND);
+#if defined(PEX_PLATFORM_PSP)
+    /* PSP GU shim does not emulate the PC multiplicative crack blend well.
+       Use normal alpha so the mining crack texture is actually visible. */
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(1,1,1,0.85f);
+#else
     glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
-    glDepthMask(GL_FALSE);
     glColor4f(1,1,1,1);
+#endif
+    glDepthMask(GL_FALSE);
     emit_overlay_bounds_textured(b, stage);
     glDepthMask(GL_TRUE);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -4207,10 +4214,11 @@ static void psp_fast_surface_capture_end(int pcx, int pcz) {
 }
 
 static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
-    const int rebuild_step = 4; /* rebuild only after the player moves several blocks */
+    const int rebuild_step = 8; /* larger cache: rebuild after moving half a chunk */
     double now = now_seconds();
     int need = 0;
     if (!g_psp_fast_surface_batch) need = 1;
+    if (g_psp_fast_surface_dirty) need = 1;
     if (g_psp_fast_surface_tex != tex_terrain.id) need = 1;
     if (abs(pcx - g_psp_fast_surface_cx) >= rebuild_step || abs(pcz - g_psp_fast_surface_cz) >= rebuild_step) need = 1;
     /* Do not rebuild on a timer.  On PSP that timer caused a regular freeze even
@@ -4226,10 +4234,13 @@ static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glColor4f(1, 1, 1, 1);
 
-    /* Larger PSP playable radius.  The previous radius=4 was only a tiny
-       emergency test window.  Radius 12 stays inside the static vertex capture
-       budget while giving a usable view distance. */
-    const int radius = 12;
+    /* PSP requested render distance 4: use the real render-distance value as a
+       block radius instead of the old tiny emergency radius.  Four chunks means
+       about 64 blocks; the expanded static vertex buffer keeps this cached and
+       avoids per-frame rebuilding. */
+    int radius = effective_generated_render_chunk_radius() * 16;
+    if (radius < 16) radius = 16;
+    if (radius > 64) radius = 64;
     const int r2 = radius * radius;
     int emitted_columns = 0;
     psp_fast_surface_capture_begin();
@@ -4247,6 +4258,7 @@ static void psp_fast_surface_rebuild_if_needed(int pcx, int pcz) {
         if (g_psp_imm_count > PEX_PSP_MAX_IMM_VERTS - 64) break;
     }
     psp_fast_surface_capture_end(pcx, pcz);
+    g_psp_fast_surface_dirty = 0;
     (void)emitted_columns;
 }
 

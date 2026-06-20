@@ -760,6 +760,9 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
         g_flat_meta[yi][zi][xi] = 0;
         flat_update_section_occupancy_after_block_change(x, y, z, id);
         mark_flat_render_sections_dirty_around_block(x, y, z);
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+        g_psp_fast_surface_dirty = 1;
+#endif
         if (flat_persistent_edit_active()) {
             mark_flat_chunk_modified_at(x, z);
             g_save_dirty = 1;
@@ -782,6 +785,9 @@ static void flat_set_fluid(int x, int y, int z, int id, int level) {
         g_flat_meta[yi][zi][xi] = want_level;
         flat_update_section_occupancy_after_block_change(x, y, z, id);
         mark_flat_render_sections_dirty_around_block(x, y, z);
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+        g_psp_fast_surface_dirty = 1;
+#endif
         if (flat_persistent_edit_active()) {
             mark_flat_chunk_modified_at(x, z);
             g_save_dirty = 1;

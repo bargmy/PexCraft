@@ -15,6 +15,10 @@ static void pex_renderer_shutdown(void);
 static void pex_gl_suppress_immediate(int on);
 static void save_world_state_for_exit(void);
 
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+static int g_psp_fast_surface_dirty = 1;
+#endif
+
 #include "render/renderer_backend.h"
 
 typedef struct PexMat4 { float m[16]; } PexMat4;

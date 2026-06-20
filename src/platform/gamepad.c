@@ -206,8 +206,8 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
     p->rx = 0.0f;
     p->ry = 0.0f;
     if (b & PSP_CTRL_SQUARE)   p->rx -= 1.0f; /* look left */
-    if (b & PSP_CTRL_TRIANGLE) p->rx += 1.0f; /* look right */
-    if (b & PSP_CTRL_CIRCLE)   p->ry -= 1.0f; /* look up */
+    if (b & PSP_CTRL_CIRCLE)   p->rx += 1.0f; /* look right */
+    if (b & PSP_CTRL_TRIANGLE) p->ry -= 1.0f; /* look up */
     if (b & PSP_CTRL_CROSS)    p->ry += 1.0f; /* look down */
 
     /* Menu/cursor abstraction only.  Gameplay ignores A/B/X/Y so face buttons
@@ -668,7 +668,7 @@ static void draw_system_info_screen(void) {
     }
     #ifdef PEX_PLATFORM_PSP
     draw_text("PSP: D-pad menu, Cross selects, Circle backs. Sliders: Left/Right.", x, g_gui_h - 44, 10526880);
-    draw_text("PSP: analog move, face buttons look, L place, R break, Select jump.", x, g_gui_h - 34, 10526880);
+    draw_text("PSP game: analog move, Square/Circle turn, Triangle/X look, Select jump.", x, g_gui_h - 34, 10526880);
 #else
     draw_text("Menu: D-pad/left stick moves, A selects, B goes back. Sliders: right stick.", x, g_gui_h - 44, 10526880);
     draw_text("Gameplay: left stick move, right stick look, RT break, LT place, LB/RB hotbar.", x, g_gui_h - 34, 10526880);
