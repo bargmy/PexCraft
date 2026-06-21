@@ -51,7 +51,7 @@ static void draw_hud(void) {
     int hotbar_y = h - 22;
     draw_textured_rect_tex(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
     draw_textured_rect_tex(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
-    for (int i = 0; i < 9; i++) draw_item_stack_gui(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
+    for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
     draw_textured_rect_tex(&tex_icons, w / 2 - 7, h / 2 - 7, 0, 0, 16, 16, 0xFFFFFF);
 
     int hp = g_player_health;

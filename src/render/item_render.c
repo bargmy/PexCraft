@@ -162,6 +162,8 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     glDepthMask(GL_TRUE);
     glClear(GL_DEPTH_BUFFER_BIT);
     glDisable(GL_CULL_FACE);
+    glColorMask(1,1,1,1);
+    glColor4f(1,1,1,1);
     int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);
     if (cutout_item) {
         glEnable(GL_ALPHA_TEST);
@@ -173,14 +175,16 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
         glDisable(GL_BLEND);
     }
 
-    /* Beta inventory block items are rendered as small 3D isometric blocks, not
-       flat terrain icons. This keeps the GUI orthographic projection but uses
-       the same grass/dirt cube renderer as the world. */
-    glTranslatef((float)x + 8.0f, (float)y + 8.5f, 80.0f);
-    glScalef(10.0f, 10.0f, -10.0f);
+    /* Match Java RenderItem.renderItemIntoGUI: translate to slot-2/+3, scale,
+       translate to the block center, then rotate. */
+    glTranslatef((float)(x - 2), (float)(y + 3), 0.0f);
+    glScalef(10.0f, 10.0f, 10.0f);
+    glTranslatef(1.0f, 0.5f, 8.0f);
     glRotatef(210.0f, 1.0f, 0.0f, 0.0f);
     glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+    g_force_fullbright_item_model++;
     draw_inventory_block_model(st->id);
+    g_force_fullbright_item_model--;
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_ALPHA_TEST);
@@ -496,30 +500,46 @@ static const char *item_display_name(int id) {
     return "";
 }
 
-static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
+static void draw_item_stack_gui_ex(const ItemStack *st, int x, int y, int animate_pop) {
     if (stack_empty(st)) return;
     int pushed = 0;
-    if (st->pop_time > 0) {
-        float f = ((float)st->pop_time - g_frame_partial) / 5.0f;
-        if (f < 0.0f) f = 0.0f;
-        float sx = 1.0f / (1.0f + f);
-        float sy = (1.0f + f) * 0.5f + 0.5f;
+    float var6 = animate_pop ? ((float)st->pop_time - g_frame_partial) : 0.0f;
+    if (var6 > 0.0f) {
+        float var7 = 1.0f + var6 / 5.0f;
         glPushMatrix();
         glTranslatef((float)(x + 8), (float)(y + 12), 0.0f);
-        glScalef(sx, sy, 1.0f);
+        glScalef(1.0f / var7, (var7 + 1.0f) / 2.0f, 1.0f);
         glTranslatef((float)-(x + 8), (float)-(y + 12), 0.0f);
         pushed = 1;
     }
+
+    glColorMask(1,1,1,1);
+    glColor4f(1,1,1,1);
     if (item_is_block_id(st->id)) {
         if (block_item_should_render_3d(st->id)) draw_block_item_3d_gui(st, x, y);
         else draw_block_item_icon_gui(st->id, x, y);
     } else draw_item_icon_2d_gui(st, x, y);
+
+    if (pushed) glPopMatrix();
+
+    /* Java renders the stack-size/damage overlay after popping the hotbar pickup
+       scale matrix.  Scaling the count together with the item is what made the
+       pickup UI look wrong. */
     if (st->count > 1) {
         char num[16];
         snprintf(num, sizeof(num), "%d", st->count);
+        glDisable(GL_DEPTH_TEST);
+        glColor4f(1,1,1,1);
         draw_text(num, x + 19 - 2 - text_width(num), y + 6 + 3, 16777215);
     }
-    if (pushed) glPopMatrix();
+}
+
+static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
+    draw_item_stack_gui_ex(st, x, y, 0);
+}
+
+static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y) {
+    draw_item_stack_gui_ex(st, x, y, 1);
 }
 
 static void draw_carried_stack(void) {

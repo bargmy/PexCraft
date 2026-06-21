@@ -1172,6 +1172,7 @@ static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block
 static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz);
 static void update_dig_particles(void);
 static void draw_item_stack_gui(const ItemStack *st, int x, int y);
+static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y);
 static void draw_carried_stack(void);
 static void update_breaking(void);
 static void update_dropped_items(void);

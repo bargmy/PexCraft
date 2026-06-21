@@ -184,7 +184,13 @@ static void draw_source_fancy_clouds(float partial) {
     glBindTexture(GL_TEXTURE_2D, tex_clouds.id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDepthMask(GL_FALSE);
+    /* Java does a true depth prepass by disabling color writes only.  Depth
+       writes must stay enabled, otherwise all internal 3D cloud slab faces blend
+       through each other and look like separated translucent cubes.  Alpha test
+       is also needed so transparent pixels in clouds.png do not write depth. */
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
+    glDepthMask(GL_TRUE);
 
     for (int pass = 0; pass < 2; ++pass) {
         glColorMask(pass != 0, pass != 0, pass != 0, pass != 0);
@@ -248,6 +254,7 @@ static void draw_source_fancy_clouds(float partial) {
 
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
+    glDisable(GL_ALPHA_TEST);
     glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
 }
@@ -486,6 +493,10 @@ static PEX_THREAD_LOCAL int g_world_style_z = 0;
 static PEX_THREAD_LOCAL int g_world_light_x = 0;
 static PEX_THREAD_LOCAL int g_world_light_y = 65;
 static PEX_THREAD_LOCAL int g_world_light_z = 0;
+/* GUI/in-hand block item models must be lit like Java RenderItem.func_1227_a:
+   fixed face shading only, not the last sampled world light cell.  Without this
+   a stale zero-light world coordinate can make inventory/held 3D blocks render black. */
+static PEX_THREAD_LOCAL int g_force_fullbright_item_model = 0;
 
 static void world_style_set_pos(int x, int y, int z) {
     g_world_style_x = x;
@@ -700,13 +711,18 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
 }
 
 static void world_set_shade(float shade) {
-    float light = flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
+    float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
+    /* During streaming, some edge columns can temporarily have no populated light
+       value.  Do not let that become pure black on exposed faces; Java's brightness
+       table bottoms out above black and the next light rebuild will refine it. */
+    if (!g_force_fullbright_item_model && light < 0.05f) light = 0.05f;
     shade *= light;
     flat_direct_set_color4f(shade, shade, shade, 1.0f);
 }
 
 static void world_set_color_shade(int rgb, float shade) {
-    float light = flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
+    float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
+    if (!g_force_fullbright_item_model && light < 0.05f) light = 0.05f;
     shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
