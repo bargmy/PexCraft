@@ -332,27 +332,20 @@ jobs:
           artifact_prefix="pexcraft-psp-mips"
           package_dir="dist/$artifact_prefix"
 
+          rm -rf "$package_dir"
           mkdir -p "$package_dir"
 
-          find . -maxdepth 5 -type f \( \
-            -name 'EBOOT.PBP' -o \
-            -name 'PARAM.SFO' -o \
-            -name '*.elf' -o \
-            -name '*.prx' -o \
-            -name '*.pbp' \
-          \) -exec cp -f {} "$package_dir/" \; || true
+          eboot="$(find . -maxdepth 6 -type f -name 'EBOOT.PBP' -print -quit)"
+          if [ -z "$eboot" ]; then
+            eboot="$(find . -maxdepth 6 -type f -iname '*.pbp' -print -quit)"
+          fi
+          test -n "$eboot"
 
-          cp -R assets "$package_dir/assets" || true
-          cp -R logs "$package_dir/logs" || true
-
-          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
-          Commit name: ${{ steps.commit.outputs.name }}
-          Commit SHA:  $GITHUB_SHA
-          Builder:     PSP
-          EOF
+          cp -f "$eboot" "$package_dir/EBOOT.PBP"
 
           zip_path="dist/$artifact_prefix.zip"
-          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          rm -f "$zip_path"
+          (cd "$package_dir" && zip -9 -j "../$(basename "$zip_path")" EBOOT.PBP)
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
       - name: Upload PSP artifact
@@ -515,11 +508,34 @@ jobs:
           Commit SHA:  $GITHUB_SHA
           Builder:     LG webOS ${{ matrix.arch }}
           EOF
-          ares-package "$package_dir"
-          ipk="$(find . -maxdepth 3 -type f \( -name 'ir.hienob.pexcraft_*.ipk' -o -name '*.ipk' \) | head -n 1)"
-          test -n "$ipk"
+
+          rm -f ir.hienob.pexcraft_*.ipk ./*.ipk
+
+          # Newer npm/Node combinations can make @webos-tools/cli finish the
+          # package and then fail during cleanup with "rimraf is not a function".
+          # Keep the produced IPK if it exists; fail only when packaging produced none.
+          set +e
+          ares-package --no-minify "$package_dir"
+          ares_status=$?
+          set -e
+
+          ipk="$(find "$PWD" -maxdepth 1 -type f -name 'ir.hienob.pexcraft_*.ipk' -print -quit)"
+          if [ -z "$ipk" ]; then
+            ipk="$(find "$PWD" -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          fi
+
+          if [ -z "$ipk" ]; then
+            echo "ares-package failed with status $ares_status and produced no IPK" >&2
+            exit "${ares_status:-1}"
+          fi
+
+          if [ "$ares_status" -ne 0 ]; then
+            echo "ares-package exited with status $ares_status after producing $ipk; continuing" >&2
+          fi
+
+          mkdir -p dist
           final="dist/pexcraft-lgwebos-${{ matrix.arch }}.ipk"
-          mv "$ipk" "$final"
+          mv -f "$ipk" "$final"
           echo "IPK_PATH=$final" >> "$GITHUB_ENV"
 
       - name: Upload LG webOS artifact
