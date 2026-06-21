@@ -606,7 +606,8 @@ jobs:
       - name: Prepare SDL2 Android dependency
         shell: bash
         run: |
-          android_tv/prepare_sdl2.sh
+          chmod +x android_tv/*.sh || true
+          bash android_tv/prepare_sdl2.sh
 
       - name: Decode release signing key
         env:

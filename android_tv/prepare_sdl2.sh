@@ -3,87 +3,86 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE="$ROOT/third_party/cache"
-SDL_DST="$ROOT/third_party/SDL2"
-JNI_DST="$ROOT/app/src/main/jniLibs"
-AAR_DST="$ROOT/app/libs/SDL2.aar"
-mkdir -p "$CACHE" "$SDL_DST" "$JNI_DST" "$ROOT/app/libs"
+SDL_SRC_DST="$ROOT/third_party/SDL2-src"
+SDL_INCLUDE_DST="$ROOT/third_party/SDL2/include/SDL2"
+APP_JAVA_DST="$ROOT/app/src/main/java"
+mkdir -p "$CACHE" "$ROOT/third_party" "$SDL_INCLUDE_DST" "$APP_JAVA_DST"
 
-find_latest_sdl2_android_url() {
+find_latest_sdl2_source_url() {
   python3 - <<'PY'
-import json, sys, urllib.request
-url = "https://api.github.com/repos/libsdl-org/SDL/releases?per_page=100"
-with urllib.request.urlopen(url, timeout=60) as r:
-    releases = json.load(r)
-for rel in releases:
-    for asset in rel.get("assets", []):
-        name = asset.get("name", "")
-        if name.startswith("SDL2-devel-") and name.endswith("-android.zip"):
-            print(asset["browser_download_url"])
-            raise SystemExit(0)
-raise SystemExit(1)
+import html.parser, re, sys, urllib.request
+url = "https://www.libsdl.org/release/?C=M;O=D"
+try:
+    with urllib.request.urlopen(url, timeout=60) as r:
+        html = r.read().decode("utf-8", "replace")
+except Exception as exc:
+    raise SystemExit(1)
+versions = []
+for name in re.findall(r'SDL2-(\d+\.\d+\.\d+)\.zip', html):
+    try:
+        parts = tuple(int(p) for p in name.split('.'))
+    except ValueError:
+        continue
+    versions.append((parts, name))
+if not versions:
+    raise SystemExit(1)
+versions.sort(reverse=True)
+print("https://www.libsdl.org/release/SDL2-%s.zip" % versions[0][1])
 PY
 }
 
-if [ -z "${SDL2_ANDROID_ZIP_URL:-}" ]; then
-  SDL2_ANDROID_ZIP_URL="$(find_latest_sdl2_android_url || true)"
+if [ -z "${SDL2_SOURCE_ZIP_URL:-}" ]; then
+  SDL2_SOURCE_ZIP_URL="$(find_latest_sdl2_source_url || true)"
 fi
 
-if [ -z "${SDL2_ANDROID_ZIP_URL:-}" ]; then
-  echo "Could not discover an SDL2 Android development zip. Set SDL2_ANDROID_ZIP_URL manually." >&2
-  exit 1
+# SDL2 no longer ships the Android AAR/devel package shape that SDL3 does.
+# Keep a known-good SDL2 source release fallback so GitHub Actions reaches the
+# native compiler instead of failing while searching for a prebuilt Android zip.
+if [ -z "${SDL2_SOURCE_ZIP_URL:-}" ]; then
+  SDL2_SOURCE_ZIP_URL="https://www.libsdl.org/release/SDL2-2.32.10.zip"
 fi
 
-ZIP="$CACHE/$(basename "$SDL2_ANDROID_ZIP_URL")"
+ZIP="$CACHE/$(basename "$SDL2_SOURCE_ZIP_URL")"
 if [ ! -s "$ZIP" ]; then
-  echo "Downloading $SDL2_ANDROID_ZIP_URL"
-  curl -L --retry 3 --fail "$SDL2_ANDROID_ZIP_URL" -o "$ZIP"
+  echo "Downloading $SDL2_SOURCE_ZIP_URL"
+  curl -L --retry 3 --fail "$SDL2_SOURCE_ZIP_URL" -o "$ZIP"
 fi
 
-rm -rf "$SDL_DST" "$CACHE/unpack"
-mkdir -p "$SDL_DST" "$CACHE/unpack"
+rm -rf "$SDL_SRC_DST" "$CACHE/unpack"
+mkdir -p "$CACHE/unpack"
 unzip -q "$ZIP" -d "$CACHE/unpack"
 
-AAR="$(find "$CACHE/unpack" -type f -name '*SDL2*.aar' -print -quit)"
-if [ -z "$AAR" ]; then
-  echo "No SDL2 AAR found in $ZIP" >&2
-  find "$CACHE/unpack" -maxdepth 4 -type f | sort >&2
-  exit 1
-fi
-cp -f "$AAR" "$AAR_DST"
-
-INCLUDE_DIR="$(find "$CACHE/unpack" -type f -name SDL.h -printf '%h\n' | head -n 1)"
-if [ -z "$INCLUDE_DIR" ]; then
-  echo "No SDL.h found in $ZIP" >&2
-  exit 1
-fi
-mkdir -p "$SDL_DST/include/SDL2"
-if [ "$(basename "$INCLUDE_DIR")" = "SDL2" ]; then
-  cp -R "$INCLUDE_DIR"/* "$SDL_DST/include/SDL2/"
-else
-  cp -R "$INCLUDE_DIR"/* "$SDL_DST/include/SDL2/"
-fi
-
-rm -rf "$JNI_DST"
-mkdir -p "$JNI_DST"
-AAR_UNPACK="$CACHE/aar"
-rm -rf "$AAR_UNPACK" && mkdir -p "$AAR_UNPACK"
-unzip -q "$AAR_DST" -d "$AAR_UNPACK"
-for so in $(find "$AAR_UNPACK" "$CACHE/unpack" -type f -name libSDL2.so | sort -u); do
-  abi="$(basename "$(dirname "$so")")"
-  case "$abi" in
-    arm64-v8a|armeabi-v7a|x86|x86_64)
-      mkdir -p "$JNI_DST/$abi"
-      cp -f "$so" "$JNI_DST/$abi/libSDL2.so"
-      ;;
-  esac
-done
-
-if [ -z "$(find "$JNI_DST" -type f -name libSDL2.so -print -quit)" ]; then
-  echo "No libSDL2.so files found in SDL2 AAR/devel archive." >&2
+SRC_ROOT="$(find "$CACHE/unpack" -maxdepth 4 -type f -name SDL.h -printf '%h\n' | sed 's#/include$##' | head -n 1)"
+if [ -z "$SRC_ROOT" ] || [ ! -f "$SRC_ROOT/CMakeLists.txt" ]; then
+  echo "Could not find SDL2 source root in $ZIP" >&2
+  find "$CACHE/unpack" -maxdepth 3 -type f | sort >&2
   exit 1
 fi
 
-echo "Prepared SDL2 Android dependency:"
-echo "  AAR:     $AAR_DST"
-echo "  Headers: $SDL_DST/include/SDL2"
-find "$JNI_DST" -type f -name libSDL2.so | sort | sed 's#^#  #'
+mv "$SRC_ROOT" "$SDL_SRC_DST"
+
+rm -rf "$SDL_INCLUDE_DST"
+mkdir -p "$SDL_INCLUDE_DST"
+cp -R "$SDL_SRC_DST/include/"* "$SDL_INCLUDE_DST/"
+
+SDL_JAVA_SRC="$SDL_SRC_DST/android-project/app/src/main/java/org"
+if [ ! -d "$SDL_JAVA_SRC" ]; then
+  echo "Could not find SDL2 Android Java sources under $SDL_SRC_DST" >&2
+  exit 1
+fi
+rm -rf "$APP_JAVA_DST/org/libsdl"
+mkdir -p "$APP_JAVA_DST/org"
+cp -R "$SDL_JAVA_SRC/libsdl" "$APP_JAVA_DST/org/"
+
+# Remove the older prebuilt-AAR/JNI layout if it exists from a previous run.
+rm -rf "$ROOT/app/libs/SDL2.aar" "$ROOT/app/src/main/jniLibs"
+
+cat > "$ROOT/third_party/SDL2-source.properties" <<EOF2
+SDL2_SOURCE_ZIP_URL=$SDL2_SOURCE_ZIP_URL
+SDL2_SOURCE_ROOT=$SDL_SRC_DST
+EOF2
+
+echo "Prepared SDL2 Android source dependency:"
+echo "  Source:  $SDL_SRC_DST"
+echo "  Headers: $SDL_INCLUDE_DST"
+echo "  Java:    $APP_JAVA_DST/org/libsdl/app/SDLActivity.java"

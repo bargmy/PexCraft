@@ -56,7 +56,7 @@ android {
 
     sourceSets {
         main {
-            jniLibs.srcDirs = ['src/main/jniLibs']
+            java.srcDirs += ['src/main/java']
         }
     }
 
@@ -69,6 +69,5 @@ android {
 }
 
 dependencies {
-    implementation files('libs/SDL2.aar')
     implementation 'androidx.tvprovider:tvprovider:1.1.0'
 }

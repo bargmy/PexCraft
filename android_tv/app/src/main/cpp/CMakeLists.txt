@@ -7,18 +7,31 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 get_filename_component(ANDROID_TV_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
 get_filename_component(REPO_ROOT "${ANDROID_TV_ROOT}/.." ABSOLUTE)
 
+set(SDL2_SOURCE_ROOT "${ANDROID_TV_ROOT}/third_party/SDL2-src")
 set(SDL2_INCLUDE_ROOT "${ANDROID_TV_ROOT}/third_party/SDL2/include")
+
+if(NOT EXISTS "${SDL2_SOURCE_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR "SDL2 source missing. Run android_tv/prepare_sdl2.sh before building.")
+endif()
 if(NOT EXISTS "${SDL2_INCLUDE_ROOT}/SDL2/SDL.h")
     message(FATAL_ERROR "SDL2 headers missing. Run android_tv/prepare_sdl2.sh before building.")
 endif()
 
-set(SDL2_LIB "${CMAKE_CURRENT_LIST_DIR}/../jniLibs/${ANDROID_ABI}/libSDL2.so")
-if(NOT EXISTS "${SDL2_LIB}")
-    message(FATAL_ERROR "libSDL2.so for ${ANDROID_ABI} missing. Run android_tv/prepare_sdl2.sh before building.")
-endif()
+set(SDL_SHARED ON CACHE BOOL "" FORCE)
+set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+add_subdirectory("${SDL2_SOURCE_ROOT}" "${CMAKE_BINARY_DIR}/SDL2")
 
-add_library(SDL2 SHARED IMPORTED)
-set_target_properties(SDL2 PROPERTIES IMPORTED_LOCATION "${SDL2_LIB}")
+if(TARGET SDL2::SDL2)
+    set(PEX_SDL2_TARGET SDL2::SDL2)
+elseif(TARGET SDL2)
+    set(PEX_SDL2_TARGET SDL2)
+else()
+    message(FATAL_ERROR "SDL2 CMake target was not created.")
+endif()
 
 add_library(main SHARED "${REPO_ROOT}/src/main_android_tv.c")
 
@@ -41,7 +54,7 @@ target_compile_options(main PRIVATE
 )
 
 target_link_libraries(main
-    SDL2
+    ${PEX_SDL2_TARGET}
     GLESv2
     EGL
     android
