@@ -974,7 +974,7 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     }
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
-    if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+    if (!g_copy_chunk_skip_main_light && flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
     if (!g_copy_chunk_skip_main_light) flat_recalculate_lighting_chunk_fast_surface(cx, cz);
 }
 
@@ -1169,18 +1169,20 @@ static void stream_mark_neighbor_boundary_dirty(int cx, int cz, int sy) {
 
 static void stream_mark_local_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
-    g_flat_world_chunk_generated[lcz][lcx] = 1;
 
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
        This replaces the old 3x3x16 section scan performed for every installed
-       streamed chunk.  Only the new chunk gets invalidated; existing neighbor
-       meshes stay drawable and are dirtied only on shared borders. */
+       streamed chunk.  The generated flag is published last so the renderer never
+       sees a half-installed chunk from the streaming worker. */
     unsigned short mask = flat_refresh_chunk_section_occupancy_local(lcx, lcz);
     g_flat_world_chunk_dirty[lcz][lcx] = 1;
     g_flat_world_chunk_valid[lcz][lcx] = 0;
     g_flat_renderer_sort_dirty = 1;
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
         flat_mark_section_after_generation(lcx, lcz, sy);
+    }
+    g_flat_world_chunk_generated[lcz][lcx] = 1;
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
         if (mask & (unsigned short)(1u << sy)) {
             stream_mark_neighbor_boundary_dirty(lcx - 1, lcz, sy);
             stream_mark_neighbor_boundary_dirty(lcx + 1, lcz, sy);
@@ -5169,9 +5171,10 @@ static void stream_generation_queue_clear(void) {
     if (g_stream_generation_epoch <= 0) g_stream_generation_epoch = 1;
 }
 
-/* Exact seed terrain generation runs on a worker thread.  The main/game/render
-   thread never performs the expensive Beta 3x3 canvas generation while walking;
-   it only installs completed chunk buffers. */
+/* Exact seed terrain generation and chunk installation run on a worker thread.
+   The main/game/render thread only posts jobs and clears tiny completion flags;
+   it never performs the expensive Beta 3x3 canvas generation or the 65k-cell
+   active-world chunk copy while walking. */
 static CRITICAL_SECTION g_stream_async_cs;
 static int g_stream_async_initialized = 0;
 static HANDLE g_stream_async_event = NULL;
@@ -5183,11 +5186,7 @@ static int g_stream_async_job_cx = 0, g_stream_async_job_cz = 0, g_stream_async_
 static long long g_stream_async_job_seed = 0;
 static char g_stream_async_job_world_dir[MAX_PATHBUF];
 static int g_stream_async_result_ready = 0;
-static int g_stream_async_result_cx = 0, g_stream_async_result_cz = 0, g_stream_async_result_epoch = 0;
-static unsigned char *g_stream_async_result_buf = NULL;
-static unsigned char *g_stream_async_result_meta = NULL;
-static unsigned char *g_stream_async_result_sky = NULL;
-static unsigned char *g_stream_async_result_blocklight = NULL;
+static int g_stream_async_result_installed = 0;
 
 static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
     (void)unused;
@@ -5216,6 +5215,7 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
         if (stop) break;
         if (!g_stream_async_busy) continue;
 
+        int installed = 0;
         unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
         unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
         unsigned char *sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
@@ -5239,24 +5239,28 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
             generate_flat_chunk_base_to_buffer_ex(cx, cz, buf, type, seed, reuse);
             load_modified_flat_chunk_delta_into_buffers_for_dir(world_dir, cx, cz, buf, meta);
             flat_compute_chunk_light_fast_from_buffers(buf, sky, blocklight);
-        } else {
-            free(buf); free(meta); free(sky); free(blocklight);
-            buf = NULL; meta = NULL; sky = NULL; blocklight = NULL;
+
+            if (epoch == g_stream_generation_epoch &&
+                stream_world_chunk_in_window(cx, cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+                g_copy_chunk_skip_main_light = 1;
+                copy_flat_chunk_buffers_to_world(cx, cz, buf, meta);
+                g_copy_chunk_skip_main_light = 0;
+                copy_flat_chunk_light_buffers_to_world(cx, cz, sky, blocklight);
+                stream_mark_local_chunk_generated(stream_world_chunk_local_x(cx), stream_world_chunk_local_z(cz));
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+                psp_fast_surface_mark_dirty_block(cx * 16 + 8, cz * 16 + 8);
+#endif
+                installed = 1;
+            }
         }
+        free(buf);
+        free(meta);
+        free(sky);
+        free(blocklight);
 
         EnterCriticalSection(&g_stream_async_cs);
-        if (g_stream_async_result_buf) { free(g_stream_async_result_buf); g_stream_async_result_buf = NULL; }
-        if (g_stream_async_result_meta) { free(g_stream_async_result_meta); g_stream_async_result_meta = NULL; }
-        if (g_stream_async_result_sky) { free(g_stream_async_result_sky); g_stream_async_result_sky = NULL; }
-        if (g_stream_async_result_blocklight) { free(g_stream_async_result_blocklight); g_stream_async_result_blocklight = NULL; }
-        g_stream_async_result_buf = buf;
-        g_stream_async_result_meta = meta;
-        g_stream_async_result_sky = sky;
-        g_stream_async_result_blocklight = blocklight;
-        g_stream_async_result_cx = cx;
-        g_stream_async_result_cz = cz;
-        g_stream_async_result_epoch = epoch;
-        g_stream_async_result_ready = (buf != NULL);
+        g_stream_async_result_installed = installed;
+        g_stream_async_result_ready = 1;
         g_stream_async_busy = 0;
         LeaveCriticalSection(&g_stream_async_cs);
     }
@@ -5266,15 +5270,6 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
 static void stream_async_init(void) {
     if (g_stream_async_initialized) return;
-#if defined(PEX_PLATFORM_PSP)
-    /* Real PSP/PPSSPP became unstable when the PC terrain worker generated
-       chunks on a second user thread.  Use cooperative async instead: one cheap
-       PSP-safe chunk is generated/installed over time from the main loop. */
-    g_stream_async_event = NULL;
-    g_stream_async_thread = NULL;
-    g_stream_async_initialized = 1;
-    return;
-#endif
     InitializeCriticalSection(&g_stream_async_cs);
     g_stream_async_event = CreateEventA(NULL, FALSE, FALSE, NULL);
     if (g_stream_async_event) {
@@ -5286,9 +5281,7 @@ static void stream_async_init(void) {
 
 static int stream_async_pending(void) {
     if (!g_stream_async_initialized) return 0;
-#if defined(PEX_PLATFORM_PSP)
     if (!g_stream_async_event || !g_stream_async_thread) return 0;
-#endif
     int pending = 0;
     EnterCriticalSection(&g_stream_async_cs);
     pending = g_stream_async_has_job || g_stream_async_busy || g_stream_async_result_ready;
@@ -5316,46 +5309,26 @@ static void stream_async_submit_next(void) {
     if (can_submit) SetEvent(g_stream_async_event);
 }
 
-static int stream_async_install_ready(int max_install) {
+static int stream_async_collect_ready(int max_collect) {
     int installed = 0;
-    while (installed < max_install) {
-        int cx = 0, cz = 0, epoch = 0;
-        unsigned char *buf = NULL;
-        unsigned char *meta = NULL;
-        unsigned char *sky = NULL;
-        unsigned char *blocklight = NULL;
+    int collected = 0;
+    while (collected < max_collect) {
+        int result_installed = 0;
+        int had_result = 0;
         EnterCriticalSection(&g_stream_async_cs);
         if (g_stream_async_result_ready) {
-            cx = g_stream_async_result_cx;
-            cz = g_stream_async_result_cz;
-            epoch = g_stream_async_result_epoch;
-            buf = g_stream_async_result_buf;
-            meta = g_stream_async_result_meta;
-            sky = g_stream_async_result_sky;
-            blocklight = g_stream_async_result_blocklight;
-            g_stream_async_result_buf = NULL;
-            g_stream_async_result_meta = NULL;
-            g_stream_async_result_sky = NULL;
-            g_stream_async_result_blocklight = NULL;
+            result_installed = g_stream_async_result_installed;
+            g_stream_async_result_installed = 0;
             g_stream_async_result_ready = 0;
+            had_result = 1;
         }
         LeaveCriticalSection(&g_stream_async_cs);
-        if (!buf) break;
-
-        if (epoch == g_stream_generation_epoch &&
-            stream_world_chunk_in_window(cx, cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
-            g_copy_chunk_skip_main_light = (sky && blocklight) ? 1 : 0;
-            copy_flat_chunk_buffers_to_world(cx, cz, buf, meta);
-            g_copy_chunk_skip_main_light = 0;
-            if (sky && blocklight) copy_flat_chunk_light_buffers_to_world(cx, cz, sky, blocklight);
-            stream_mark_local_chunk_generated(stream_world_chunk_local_x(cx), stream_world_chunk_local_z(cz));
+        if (!had_result) break;
+        collected++;
+        if (result_installed) {
             g_stream_gen_queue_installed_count++;
             installed++;
         }
-        free(buf);
-        free(meta);
-        free(sky);
-        free(blocklight);
     }
     return installed;
 }
@@ -5731,31 +5704,16 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
 static void process_stream_generation_queue(void) {
     stream_async_init();
 
-    /* If thread creation fails, keep the world functional with the old small
-       synchronous budget rather than leaving missing terrain forever. */
+    /* No terrain generation or chunk-copy fallback on the game thread.  If a
+       worker cannot be created, leave the queue pending instead of causing frame
+       hitches by doing streaming work inline. */
     if (!g_stream_async_event || !g_stream_async_thread) {
-        if (g_stream_gen_queue_index < g_stream_gen_queue_count) {
-            int idx = g_stream_gen_queue_index++;
-            int wcx = g_stream_gen_queue_cx[idx];
-            int wcz = g_stream_gen_queue_cz[idx];
-            beta_preview_copy_chunk_to_flat(wcx, wcz);
-            stream_mark_local_chunk_generated(stream_world_chunk_local_x(wcx), stream_world_chunk_local_z(wcz));
-#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-            psp_fast_surface_mark_dirty_block(wcx * 16 + 8, wcz * 16 + 8);
-#endif
-            g_stream_gen_queue_installed_count++;
-        }
-        if (!stream_generation_active() && !g_stream_generation_keep_completed) stream_generation_queue_clear();
+        g_prof_stream_pending_last = g_stream_gen_queue_count - g_stream_gen_queue_index;
+        if (g_prof_stream_pending_last < 0) g_prof_stream_pending_last = 0;
         return;
     }
 
-    static int s_stream_install_tick = 0;
-    /* Chunk generation, delta loading, and light-column calculation now happen on
-       the worker.  The remaining main-thread commit still touches active world
-       arrays and marks render sections dirty, so throttle it hard enough that
-       walking cannot create a 4-8 ms hitch every tick. */
-    int allow_install = ((s_stream_install_tick++ & 3) == 0);
-    if (allow_install) stream_async_install_ready(1);
+    stream_async_collect_ready(1);
     stream_async_submit_next();
 
     if (!stream_generation_active() && !g_stream_generation_keep_completed) {
