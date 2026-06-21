@@ -461,6 +461,11 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
     free(sky); free(block); free(q);
 }
 
+#ifndef FLAT_CHUNK_BLOCK_COUNT
+#define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
+#endif
+static int flat_chunk_buf_index(int lx, int y, int lz);
+
 static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
     int x0 = cx * 16, z0 = cz * 16;
     int x1 = x0 + 15, z1 = z0 + 15;
@@ -623,9 +628,6 @@ static int door_lower_y_at(int x, int y, int z) {
 }
 
 
-#ifndef FLAT_CHUNK_BLOCK_COUNT
-#define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
-#endif
 static int flat_chunk_buf_index(int lx, int y, int lz) {
     return flat_y_index(y) * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK) + lz * FLAT_RENDER_CHUNK + lx;
 }
