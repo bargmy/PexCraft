@@ -1,78 +1,39 @@
-name: Build PexCraft
+name: Build client Windows x86/x64 and upload to Telegram
 
 run-name: Build "${{ github.event.head_commit.message || github.ref_name }}"
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
-    branches: ["**"]
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CHAT_ID: '-1004462705182'
 
 jobs:
-  linux-sdl2:
-    name: Linux SDL2/OpenGL
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Read commit name
-        id: commit
-        shell: bash
-        run: |
-          name="$(git log -1 --pretty=%s)"
-          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
-          [ -n "$safe" ] || safe="commit"
-
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-          mkdir -p build logs
-          {
-            echo "Commit name: $name"
-            echo "Commit SHA:  $GITHUB_SHA"
-          } > build/COMMIT_NAME.txt
-
-          echo "### Linux SDL2/OpenGL" >> "$GITHUB_STEP_SUMMARY"
-          echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libcurl4-openssl-dev \
-            zlib1g-dev \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev
-
-      - name: Build Linux SDL2/OpenGL
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p build logs
-          make -f Makefile.linux_sdl2 2>&1 | tee logs/build-linux-sdl2.log
-
-      - name: Upload Linux SDL2/OpenGL artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-linux-sdl2-${{ steps.commit.outputs.safe }}-${{ github.sha }}
-          if-no-files-found: warn
-          path: |
-            build/**
-            logs/**
-            *.log
-
-  windows-msvc:
-    name: Windows MSVC x64 / Direct3D
+  build:
+    name: client ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
     runs-on: windows-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            msystem: MINGW32
+            gcc_package: mingw-w64-i686-gcc
+            zlib_package: mingw-w64-i686-zlib
+            out_exe: pexcraft-win-x86.exe
+          - arch: x64
+            msystem: MINGW64
+            gcc_package: mingw-w64-x86_64-gcc
+            zlib_package: mingw-w64-x86_64-zlib
+            out_exe: pexcraft-win-x64.exe
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,148 +45,207 @@ jobs:
           name="$(git log -1 --pretty=%s)"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
-
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-          mkdir -p build logs
-          {
-            echo "Commit name: $name"
-            echo "Commit SHA:  $GITHUB_SHA"
-          } > build/COMMIT_NAME.txt
-
-          echo "### Windows MSVC x64 / Direct3D" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Windows ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit SHA: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Setup MSVC developer command prompt
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Set up MSYS2 MinGW
+        uses: msys2/setup-msys2@v2
         with:
-          arch: x64
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            base-devel
+            ${{ matrix.gcc_package }}
+            ${{ matrix.zlib_package }}
+            zip
 
-      - name: Build Windows x64
-        shell: cmd
+      - name: Build client
+        shell: msys2 {0}
         run: |
-          if not exist logs mkdir logs
-          call build_x64.bat > logs\build-windows-msvc-x64.log 2>&1
+          set -euxo pipefail
+          mkdir -p logs
 
-      - name: Upload Windows MSVC artifact
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "MSYSTEM:     ${{ matrix.msystem }}"
+            echo "ARCH:        ${{ matrix.arch }}"
+            echo
+            gcc --version
+
+            gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o pexcraft.exe \
+              -static -static-libgcc \
+              -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
+              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
+
+            objdump -p pexcraft.exe | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > imported-dlls.txt || true
+            echo "Imported DLLs:"
+            cat imported-dlls.txt || true
+          } 2>&1 | tee logs/build-windows-${{ matrix.arch }}.log
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $arch = '${{ matrix.arch }}'
+          $commitName = '${{ steps.commit.outputs.name }}'
+          $safeCommitName = '${{ steps.commit.outputs.safe }}'
+          $distRoot = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          $packageName = "client-windows-$arch"
+          $packageDir = Join-Path $distRoot $packageName
+
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item 'pexcraft.exe' (Join-Path $packageDir '${{ matrix.out_exe }}') -Force
+
+          if (Test-Path 'assets') {
+            Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force
+          }
+
+          if (Test-Path 'imported-dlls.txt') {
+            Copy-Item 'imported-dlls.txt' $packageDir -Force
+          }
+
+          if (Test-Path 'logs') {
+            Copy-Item 'logs' (Join-Path $packageDir 'logs') -Recurse -Force
+          }
+
+          @"
+          Commit name: $commitName
+          Commit SHA:  $env:GITHUB_SHA
+          Builder:     Windows $arch MinGW / ${{ matrix.msystem }}
+          "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
+
+          $zipPath = Join-Path $distRoot "$packageName-$safeCommitName.zip"
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
+          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload GitHub artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pexcraft-windows-msvc-x64-${{ steps.commit.outputs.safe }}-${{ github.sha }}
-          if-no-files-found: warn
-          path: |
-            build/**
-            logs/**
-            *.exe
-            *.dll
-            *.pdb
+          name: client-windows-${{ matrix.arch }}-${{ steps.commit.outputs.safe }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
 
-  windows-mingw:
-    name: Windows MinGW cross-build
+  telegram:
+    name: Send Telegram message with Windows x86/x64 builds
     runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Read commit name
         id: commit
         shell: bash
         run: |
-          name="$(git log -1 --pretty=%s)"
+          name="${{ github.event.head_commit.message || github.ref_name }}"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
-
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-          mkdir -p build logs
-          {
-            echo "Commit name: $name"
-            echo "Commit SHA:  $GITHUB_SHA"
-          } > build/COMMIT_NAME.txt
-
-          echo "### Windows MinGW cross-build" >> "$GITHUB_STEP_SUMMARY"
-          echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Install MinGW dependencies
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            mingw-w64 \
-            zip \
-            zlib1g-dev
-
-      - name: Build Windows MinGW
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p build logs
-          make -f Makefile.mingw 2>&1 | tee logs/build-windows-mingw.log
-
-      - name: Upload Windows MinGW artifact
-        uses: actions/upload-artifact@v4
+      - name: Download x86/x64 artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: pexcraft-windows-mingw-${{ steps.commit.outputs.safe }}-${{ github.sha }}
-          if-no-files-found: warn
-          path: |
-            build/**
-            logs/**
-            *.exe
-            *.dll
-            *.zip
+          path: telegram_upload
 
-  psp:
-    name: PSP build
-    runs-on: ubuntu-latest
-    container:
-      image: pspdev/pspdev:latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Read commit name
-        id: commit
+      - name: Show downloaded artifacts
         shell: bash
         run: |
-          name="$(git log -1 --pretty=%s)"
-          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
-          [ -n "$safe" ] || safe="commit"
+          find telegram_upload -type f -maxdepth 4 -print
 
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-          mkdir -p build logs
-          {
-            echo "Commit name: $name"
-            echo "Commit SHA:  $GITHUB_SHA"
-          } > build/COMMIT_NAME.txt
-
-          echo "### PSP build" >> "$GITHUB_STEP_SUMMARY"
-          echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build PSP
-        shell: bash
+      - name: Send one Telegram message with two zip attachments
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
         run: |
-          set -o pipefail
-          mkdir -p build logs
-          make -f Makefile.psp 2>&1 | tee logs/build-psp.log
+          set -euo pipefail
 
-      - name: Upload PSP artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-psp-${{ steps.commit.outputs.safe }}-${{ github.sha }}
-          if-no-files-found: warn
-          path: |
-            build/**
-            logs/**
-            EBOOT.PBP
-            PARAM.SFO
-            *.elf
-            *.prx
-            *.pbp
-            *.zip
+          if [ -z "${TOKEN:-}" ]; then
+            echo 'Missing Telegram bot token. Add it as repository secret TOKEN.' >&2
+            exit 1
+          fi
+
+          X86_ZIP="$(find telegram_upload -type f -name 'client-windows-x86-*.zip' | head -n 1)"
+          X64_ZIP="$(find telegram_upload -type f -name 'client-windows-x64-*.zip' | head -n 1)"
+
+          test -f "$X86_ZIP"
+          test -f "$X64_ZIP"
+
+          python3 - <<'PY'
+          import os, sys, json, uuid, mimetypes, urllib.request
+
+          token = os.environ['TOKEN']
+          chat_id = os.environ['CHAT_ID']
+          x86_zip = os.environ['X86_ZIP'] if 'X86_ZIP' in os.environ else None
+          x64_zip = os.environ['X64_ZIP'] if 'X64_ZIP' in os.environ else None
+
+          # The shell variables are local, so rediscover from files if env is absent.
+          if not x86_zip or not x64_zip:
+              import glob
+              x86 = glob.glob('telegram_upload/**/client-windows-x86-*.zip', recursive=True)
+              x64 = glob.glob('telegram_upload/**/client-windows-x64-*.zip', recursive=True)
+              if not x86 or not x64:
+                  raise SystemExit('Could not find x86/x64 zip artifacts for Telegram upload')
+              x86_zip = x86[0]
+              x64_zip = x64[0]
+
+          commit_name = os.environ.get('COMMIT_NAME', '')
+          repo = os.environ.get('GITHUB_REPOSITORY', '')
+          sha = os.environ.get('GITHUB_SHA', '')
+
+          caption = (
+              'PEXCraft Windows client builds\n'
+              f'Commit name: {commit_name}\n'
+              f'Repo: {repo}\n'
+              f'Commit: {sha[:12]}'
+          )
+
+          media = [
+              {'type': 'document', 'media': 'attach://client_x86', 'caption': caption},
+              {'type': 'document', 'media': 'attach://client_x64'},
+          ]
+
+          boundary = '----pexcraft-' + uuid.uuid4().hex
+          parts = []
+
+          def field(name, value):
+              parts.append(
+                  f'--{boundary}\r\n'
+                  f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                  f'{value}\r\n'
+                  .encode()
+              )
+
+          def filefield(name, path):
+              filename = os.path.basename(path)
+              ctype = mimetypes.guess_type(filename)[0] or 'application/zip'
+              parts.append(
+                  f'--{boundary}\r\n'
+                  f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+                  f'Content-Type: {ctype}\r\n\r\n'
+                  .encode()
+              )
+              with open(path, 'rb') as f:
+                  parts.append(f.read())
+              parts.append(b'\r\n')
+
+          field('chat_id', chat_id)
+          field('media', json.dumps(media))
+          filefield('client_x86', x86_zip)
+          filefield('client_x64', x64_zip)
+          parts.append(f'--{boundary}--\r\n'.encode())
+
+          req = urllib.request.Request(
+              f'https://api.telegram.org/bot{token}/sendMediaGroup',
+              data=b''.join(parts),
+              headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
+          )
+
+          with urllib.request.urlopen(req, timeout=180) as r:
+              sys.stdout.write(r.read().decode('utf-8', 'replace'))
+          PY
