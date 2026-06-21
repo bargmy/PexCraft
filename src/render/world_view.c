@@ -483,11 +483,31 @@ static void flat_direct_set_color4f(float r, float g, float b, float a) {
 static PEX_THREAD_LOCAL int g_world_style_x = 0;
 static PEX_THREAD_LOCAL int g_world_style_y = 64;
 static PEX_THREAD_LOCAL int g_world_style_z = 0;
+static PEX_THREAD_LOCAL int g_world_light_x = 0;
+static PEX_THREAD_LOCAL int g_world_light_y = 65;
+static PEX_THREAD_LOCAL int g_world_light_z = 0;
 
 static void world_style_set_pos(int x, int y, int z) {
     g_world_style_x = x;
     g_world_style_y = y;
     g_world_style_z = z;
+}
+
+static void world_light_set_pos(int x, int y, int z) {
+    g_world_light_x = x;
+    g_world_light_y = y;
+    g_world_light_z = z;
+}
+
+static void world_light_set_pos_for_face(int x, int y, int z, int face) {
+    int lx = x, ly = y, lz = z;
+    if (face == 0) ly--;
+    else if (face == 1) ly++;
+    else if (face == 2) lz--;
+    else if (face == 3) lz++;
+    else if (face == 4) lx--;
+    else if (face == 5) lx++;
+    world_light_set_pos(lx, ly, lz);
 }
 
 static int java_light_blocks_sky(int id) {
@@ -680,13 +700,13 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
 }
 
 static void world_set_shade(float shade) {
-    float light = flat_light_brightness(g_world_style_x, g_world_style_y, g_world_style_z);
+    float light = flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
     shade *= light;
     flat_direct_set_color4f(shade, shade, shade, 1.0f);
 }
 
 static void world_set_color_shade(int rgb, float shade) {
-    float light = flat_light_brightness(g_world_style_x, g_world_style_y, g_world_style_z);
+    float light = flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
     shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
@@ -2085,6 +2105,7 @@ static void world_face_style(int id, int face, int *tile) {
 
 static void world_face_style_at(int id, int x, int y, int z, int face, int *tile) {
     world_style_set_pos(x, y, z);
+    world_light_set_pos_for_face(x, y, z, face);
     /* BlockGrass.getBlockTexture(): when snow/snow block is above grass, side
        faces use tile 68 instead of the normal grass-side tile 3.  This is only
        a visual overlay choice; the block underneath remains grass. */
@@ -2180,7 +2201,9 @@ static void emit_world_block_face_float(int id, float x, float y, float z, int f
     float z0 = z, z1 = z + 1.0f;
     float u0,v0,u1,v1;
     int tile = 2;
-    world_style_set_pos((int)floorf(x), (int)floorf(y), (int)floorf(z));
+    int bx = (int)floorf(x), by = (int)floorf(y), bz = (int)floorf(z);
+    world_style_set_pos(bx, by, bz);
+    world_light_set_pos_for_face(bx, by, bz, face);
     world_face_style(id, face, &tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     if (face == 1) { /* top */
@@ -2907,6 +2930,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
     world_style_set_pos(x, y, z);
 
     if (liquid_face_exposed(x, y, z, 1)) {
+        world_light_set_pos_for_face(x, y, z, 1);
         world_set_shade(1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
         liquid_top_uvs_source(top_tile, liquid_flow_angle_at(x, y, z, is_water),
@@ -2918,6 +2942,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
     }
 
     if (liquid_face_exposed(x, y, z, 0)) {
+        world_light_set_pos_for_face(x, y, z, 0);
         world_set_shade(0.5f);
         terrain_tile_uv(top_tile, &u0, &v0, &u1, &v1);
         world_tex_vertex(x0, y0, z1, u0, v0);
@@ -2927,20 +2952,24 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
     }
 
     terrain_tile_uv(side_tile, &u0, &v0, &u1, &v1);
-    world_set_shade(0.8f);
     if (liquid_face_exposed(x, y, z, 2)) {
+        world_light_set_pos_for_face(x, y, z, 2);
+        world_set_shade(0.8f);
         world_tex_vertex(x1, (float)y + h10, z0, u0, v0);
         world_tex_vertex(x0, (float)y + h00, z0, u1, v0);
         world_tex_vertex(x0, y0, z0, u1, v1);
         world_tex_vertex(x1, y0, z0, u0, v1);
     }
     if (liquid_face_exposed(x, y, z, 3)) {
+        world_light_set_pos_for_face(x, y, z, 3);
+        world_set_shade(0.8f);
         world_tex_vertex(x0, (float)y + h01, z1, u0, v0);
         world_tex_vertex(x1, (float)y + h11, z1, u1, v0);
         world_tex_vertex(x1, y0, z1, u1, v1);
         world_tex_vertex(x0, y0, z1, u0, v1);
     }
     if (liquid_face_exposed(x, y, z, 4)) {
+        world_light_set_pos_for_face(x, y, z, 4);
         world_set_shade(0.6f);
         world_tex_vertex(x0, (float)y + h00, z0, u0, v0);
         world_tex_vertex(x0, (float)y + h01, z1, u1, v0);
@@ -2948,6 +2977,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         world_tex_vertex(x0, y0, z0, u0, v1);
     }
     if (liquid_face_exposed(x, y, z, 5)) {
+        world_light_set_pos_for_face(x, y, z, 5);
         world_set_shade(0.6f);
         world_tex_vertex(x1, (float)y + h11, z1, u0, v0);
         world_tex_vertex(x1, (float)y + h10, z0, u1, v0);
@@ -4935,6 +4965,7 @@ static void psp_fast_surface_draw_recent_edits(int pcx, int pcz) {
 
 static void psp_fast_draw_flat_surface_world(void) {
     setup_world_projection();
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -4984,6 +5015,7 @@ static void draw_flat_test_world(void) {
 #endif
 
     setup_world_projection();
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);

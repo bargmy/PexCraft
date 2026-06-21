@@ -328,7 +328,11 @@ static void flat_propagate_light_region(unsigned char *arr, int x0, int y0, int 
 static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
     if (rx1 < rx0) { int t = rx0; rx0 = rx1; rx1 = t; }
     if (rz1 < rz0) { int t = rz0; rz0 = rz1; rz1 = t; }
-    const int margin = 16;
+    /* Rebuilding light was being done for every streamed chunk.  A 16-block
+       margin plus full sky BFS made new chunks stutter and sometimes mesh before
+       stable light arrived.  Surface skylight is column based here; use a small
+       neighbour margin and keep 15-block spreading only for actual light sources. */
+    const int margin = 2;
     int x0 = rx0 - margin, x1 = rx1 + margin;
     int z0 = rz0 - margin, z1 = rz1 + margin;
     if (x0 < g_flat_world_origin_x) x0 = g_flat_world_origin_x;
@@ -353,7 +357,6 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             for (int y = y1; y >= y0; --y) {
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
                 sky[idx] = (unsigned char)light;
-                if (light > 1) flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
                 int opacity = flat_light_opacity_for_id(flat_get_block(x, y, z));
                 if (opacity > 0 && light > 0) {
                     int dec = opacity < 1 ? 1 : opacity;
@@ -363,7 +366,9 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             }
         }
     }
-    flat_propagate_light_region(sky, x0, y0, z0, x1, y1, z1, q, 0, tail);
+    /* Java skylight travels mostly down columns.  Do not flood-fill the whole
+       region for every chunk load; exposed face rendering samples the neighbour
+       air block, so cliffs stay lit without an expensive sky BFS. */
 
     tail = 0;
     for (int z = z0; z <= z1; ++z) {
@@ -377,7 +382,7 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             }
         }
     }
-    flat_propagate_light_region(block, x0, y0, z0, x1, y1, z1, q, 0, tail);
+    if (tail > 0) flat_propagate_light_region(block, x0, y0, z0, x1, y1, z1, q, 0, tail);
 
     for (int z = z0; z <= z1; ++z) {
         int fz = flat_z_index(z);
