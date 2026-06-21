@@ -290,6 +290,16 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    /* Android exposes the accelerometer as a fake joystick unless this hint is
+       disabled before SDL_Init().  If it is left on, the shared gamepad camera
+       code treats tilt as a controller stick and the view drifts forever. */
+#ifdef SDL_HINT_ACCELEROMETER_AS_JOYSTICK
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+#else
+    SDL_SetHint("SDL_ANDROID_ACCELEROMETER_AS_JOYSTICK", "0");
+#endif
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;

@@ -90,12 +90,17 @@ static int pex_android_touch_button_inventory(int x, int y) {
     return pex_android_touch_in_rect(x, y, g_gui_w - 58, 34, 54, 26);
 }
 
+static void pex_android_touch_dpad_rect(int *left, int *top, int *size);
+
 static int pex_android_touch_button_jump(int x, int y) {
     return pex_android_touch_in_rect(x, y, g_gui_w - 62, g_gui_h - 92, 54, 54);
 }
 
 static int pex_android_touch_button_sneak(int x, int y) {
-    return pex_android_touch_in_rect(x, y, 10, g_gui_h - 116, 46, 28);
+    int l, t, s;
+    pex_android_touch_dpad_rect(&l, &t, &s);
+    int third = s / 3;
+    return pex_android_touch_in_rect(x, y, l + third, t + third, third, third);
 }
 
 static void pex_android_touch_dpad_rect(int *left, int *top, int *size) {
@@ -385,18 +390,17 @@ static void draw_android_touch_controls(void) {
 
     draw_rect(l + third, t, l + third * 2, t + third, (int)(g_android_move_up ? hi : alpha));
     draw_rect(l, t + third, l + third, t + third * 2, (int)(g_android_move_left ? hi : alpha));
-    draw_rect(l + third, t + third, l + third * 2, t + third * 2, (int)0x55000000u);
+    draw_rect(l + third, t + third, l + third * 2, t + third * 2, (int)(g_android_sneak_down ? hi : 0x55FFFFFFu));
     draw_rect(l + third * 2, t + third, l + s, t + third * 2, (int)(g_android_move_right ? hi : alpha));
     draw_rect(l + third, t + third * 2, l + third * 2, t + s, (int)(g_android_move_down ? hi : alpha));
     draw_text("^", l + third + third / 2 - 3, t + 5, 0xFFFFFF);
     draw_text("<", l + 6, t + third + third / 2 - 4, 0xFFFFFF);
+    draw_text("S", l + third + third / 2 - 3, t + third + third / 2 - 4, g_android_sneak_down ? 0x000000 : 0xFFFFFF);
     draw_text(">", l + third * 2 + third / 2 - 3, t + third + third / 2 - 4, 0xFFFFFF);
     draw_text("v", l + third + third / 2 - 3, t + third * 2 + third / 2 - 4, 0xFFFFFF);
 
     draw_rect(g_gui_w - 62, g_gui_h - 92, g_gui_w - 8, g_gui_h - 38, (int)(g_android_jump_down ? 0xAAFFFFFFu : 0x55FFFFFFu));
     draw_text("JUMP", g_gui_w - 52, g_gui_h - 65, 0x000000);
-    draw_rect(10, g_gui_h - 116, 56, g_gui_h - 88, (int)(g_android_sneak_down ? 0xAAFFFFFFu : 0x55FFFFFFu));
-    draw_text("SNEAK", 14, g_gui_h - 106, 0x000000);
     draw_rect(g_gui_w - 58, 34, g_gui_w - 4, 60, (int)0x66000000u);
     draw_text("INV", g_gui_w - 45, 43, 0xFFFFFF);
     draw_rect(g_gui_w - 50, 4, g_gui_w - 4, 28, (int)0x66000000u);

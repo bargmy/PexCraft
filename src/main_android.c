@@ -21,7 +21,7 @@ static void save_world_state_for_exit(void);
 
 #include "render/renderer_backend.h"
 
-/* D3D-only helpers are referenced by shared world code, but the Android TV
+/* D3D-only helpers are referenced by shared world code, but the Android
    target always uses the OpenGL ES compatibility shim. */
 typedef struct PexMat4 { float m[16]; } PexMat4;
 typedef struct PexD3DBackendStub {
@@ -35,9 +35,9 @@ typedef struct PexD3DBackendStub {
 } PexD3DBackendStub;
 static PexD3DBackendStub g_d3d9 = {0, {1,1,1,1}, 0, 0.0f, 1.0f, 0, {{0}}, {{0}}};
 typedef struct PexD3D11Mesh { void *vb; void *ib; uint32_t vertex_count, index_count, vertex_capacity, index_capacity; int dynamic; } PexD3D11Mesh;
-static PexRendererBackend g_android_tv_null_backend;
-static PexRendererBackend *renderer_d3d9_get_backend(void) { return &g_android_tv_null_backend; }
-static PexRendererBackend *renderer_d3d11_get_backend(void) { return &g_android_tv_null_backend; }
+static PexRendererBackend g_android_null_backend;
+static PexRendererBackend *renderer_d3d9_get_backend(void) { return &g_android_null_backend; }
+static PexRendererBackend *renderer_d3d11_get_backend(void) { return &g_android_null_backend; }
 static int renderer_d3d9_attach_device(void *dev, int width, int height) { (void)dev; (void)width; (void)height; return 0; }
 static int renderer_d3d11_attach_device(void *dev, void *ctx, int width, int height) { (void)dev; (void)ctx; (void)width; (void)height; return 0; }
 static int pex_using_d3d9(void) { return 0; }

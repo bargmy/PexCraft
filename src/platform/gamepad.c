@@ -66,6 +66,18 @@ static float sdl_axis_norm(Sint16 v) {
     return pex_deadzone(f);
 }
 
+
+static int pex_gamepad_sdl2_should_ignore_device(int device_index) {
+    const char *name = SDL_JoystickNameForIndex(device_index);
+#ifdef PEX_PLATFORM_ANDROID
+    /* Android phones expose the accelerometer as a joystick on some SDL builds.
+       It is not a real controller and its changing axes make the camera drift. */
+    if (pex_str_contains_i(name, "accelerometer")) return 1;
+    if (pex_str_contains_i(name, "android accelerometer")) return 1;
+#endif
+    return 0;
+}
+
 static void pex_gamepad_sdl2_close_all(void) {
     for (int i = 0; i < PEX_GAMEPAD_MAX; i++) {
         if (g_sdl2_pads[i]) { SDL_GameControllerClose(g_sdl2_pads[i]); g_sdl2_pads[i] = NULL; }
@@ -83,6 +95,7 @@ static void pex_gamepad_scan_devices(void) {
     pex_gamepad_sdl2_close_all();
     int total = SDL_NumJoysticks();
     for (int i = 0; i < total && g_sdl2_pad_open_count < PEX_GAMEPAD_MAX; i++) {
+        if (pex_gamepad_sdl2_should_ignore_device(i)) continue;
         int slot = g_sdl2_pad_open_count;
         if (SDL_IsGameController(i)) {
             SDL_GameController *gc = SDL_GameControllerOpen(i);

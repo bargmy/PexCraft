@@ -10,9 +10,30 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public class PexCraftActivity extends SDLActivity {
     private static final String TAG = "PexCraftAndroid";
+
+    private static final int CLASSIC_IDLE = 0;
+    private static final int CLASSIC_DOWNLOADING = 1;
+    private static final int CLASSIC_EXTRACTING = 2;
+    private static final int CLASSIC_DONE = 3;
+    private static final int CLASSIC_ERROR = 4;
+
+    private static final int CLASSIC_SIZE_UNKNOWN = 0;
+    private static final int CLASSIC_SIZE_FETCHING = 1;
+    private static final int CLASSIC_SIZE_READY = 2;
+    private static final int CLASSIC_SIZE_ERROR = 3;
+
+    private static final Object classicLock = new Object();
+    private static volatile int classicDownloadState = CLASSIC_IDLE;
+    private static volatile int classicDownloadProgress = 0;
+    private static volatile String classicDownloadStatus = "";
+    private static volatile String classicDownloadError = "";
+    private static volatile int classicSizeState = CLASSIC_SIZE_UNKNOWN;
+    private static volatile int classicSizeBytes = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -23,6 +44,145 @@ public class PexCraftActivity extends SDLActivity {
     @Override
     protected String[] getLibraries() {
         return new String[] { "SDL2", "main" };
+    }
+
+    public boolean startClassicPackDownload(final String url, final String outPath) {
+        synchronized (classicLock) {
+            if (classicDownloadState == CLASSIC_DOWNLOADING || classicDownloadState == CLASSIC_EXTRACTING) return true;
+            classicDownloadState = CLASSIC_DOWNLOADING;
+            classicDownloadProgress = 0;
+            classicDownloadStatus = "Downloading client.jar...";
+            classicDownloadError = "";
+        }
+
+        Thread th = new Thread(new Runnable() {
+            @Override public void run() {
+                downloadClassicPack(url, outPath);
+            }
+        }, "PexCraftClassicDownload");
+        th.setDaemon(true);
+        th.start();
+        return true;
+    }
+
+    public int getClassicPackDownloadState() { return classicDownloadState; }
+    public int getClassicPackDownloadProgress() { return classicDownloadProgress; }
+    public String getClassicPackDownloadStatus() { return classicDownloadStatus == null ? "" : classicDownloadStatus; }
+    public String getClassicPackDownloadError() { return classicDownloadError == null ? "" : classicDownloadError; }
+
+    public void startClassicPackSizeFetch(final String url) {
+        synchronized (classicLock) {
+            if (classicSizeState == CLASSIC_SIZE_FETCHING || classicSizeState == CLASSIC_SIZE_READY) return;
+            classicSizeState = CLASSIC_SIZE_FETCHING;
+            classicSizeBytes = 0;
+        }
+        Thread th = new Thread(new Runnable() {
+            @Override public void run() {
+                HttpURLConnection conn = null;
+                try {
+                    conn = openClassicConnection(url);
+                    conn.setRequestMethod("HEAD");
+                    conn.connect();
+                    int len = conn.getContentLength();
+                    if (len > 0) {
+                        classicSizeBytes = len;
+                        classicSizeState = CLASSIC_SIZE_READY;
+                    } else {
+                        classicSizeState = CLASSIC_SIZE_ERROR;
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "Classic pack size fetch failed", t);
+                    classicSizeState = CLASSIC_SIZE_ERROR;
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+            }
+        }, "PexCraftClassicSize");
+        th.setDaemon(true);
+        th.start();
+    }
+
+    public int getClassicPackSizeState() { return classicSizeState; }
+    public int getClassicPackSizeBytes() { return classicSizeBytes; }
+
+    private static HttpURLConnection openClassicConnection(String urlString) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection)new URL(urlString).openConnection();
+        conn.setInstanceFollowRedirects(true);
+        conn.setConnectTimeout(20000);
+        conn.setReadTimeout(60000);
+        conn.setRequestProperty("User-Agent", "PEXCRAFT/1.0 Android");
+        return conn;
+    }
+
+    private void downloadClassicPack(String urlString, String outPath) {
+        HttpURLConnection conn = null;
+        File outFile = new File(outPath);
+        File parent = outFile.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            failClassicDownload("Could not create download directory");
+            return;
+        }
+
+        try {
+            if (outFile.exists() && !outFile.delete()) {
+                Log.w(TAG, "Could not delete old classic jar: " + outFile);
+            }
+
+            classicDownloadStatus = "Connecting to Mojang...";
+            classicDownloadProgress = 1;
+            conn = openClassicConnection(urlString);
+            conn.setRequestMethod("GET");
+            conn.connect();
+            int response = conn.getResponseCode();
+            if (response < 200 || response >= 300) {
+                failClassicDownload("HTTP " + response + " while downloading client.jar");
+                return;
+            }
+            int total = conn.getContentLength();
+            byte[] buf = new byte[32 * 1024];
+            long downloaded = 0;
+
+            try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(outFile)) {
+                int n;
+                while ((n = in.read(buf)) >= 0) {
+                    if (n == 0) continue;
+                    out.write(buf, 0, n);
+                    downloaded += n;
+                    if (total > 0) {
+                        int pct = 1 + (int)((downloaded * 84L) / total);
+                        if (pct > 85) pct = 85;
+                        classicDownloadProgress = pct;
+                        classicDownloadStatus = "Downloading client.jar (" + pct + "%)";
+                    } else {
+                        classicDownloadProgress = 40;
+                        classicDownloadStatus = "Downloading client.jar (" + downloaded + " bytes)";
+                    }
+                }
+            }
+
+            if (outFile.length() < 1024) {
+                if (!outFile.delete()) Log.w(TAG, "Could not delete empty classic jar: " + outFile);
+                failClassicDownload("Downloaded client.jar was empty");
+                return;
+            }
+
+            classicDownloadProgress = 85;
+            classicDownloadStatus = "Downloaded client.jar";
+            classicDownloadState = CLASSIC_DONE;
+        } catch (Throwable t) {
+            Log.e(TAG, "Classic pack download failed", t);
+            if (outFile.exists() && !outFile.delete()) Log.w(TAG, "Could not delete failed classic jar: " + outFile);
+            failClassicDownload(t.getMessage() != null ? t.getMessage() : t.toString());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static void failClassicDownload(String message) {
+        classicDownloadError = message == null || message.length() == 0 ? "Download failed" : message;
+        classicDownloadStatus = "Failed";
+        classicDownloadProgress = 0;
+        classicDownloadState = CLASSIC_ERROR;
     }
 
     private void copyBundledGameAssets() {
