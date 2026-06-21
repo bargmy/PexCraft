@@ -408,12 +408,14 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             cmake \
-            ninja-build \
+            make \
             pkg-config \
             python3 \
             curl \
             tar \
             xz-utils \
+            bzip2 \
+            file \
             nodejs \
             npm
           sudo npm install -g @webos-tools/cli
@@ -422,16 +424,45 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p build/lgwebos_toolchain
-          curl -L "${{ matrix.toolchain_url }}" -o build/lgwebos_toolchain/toolchain.tar.gz
-          tar -xzf build/lgwebos_toolchain/toolchain.tar.gz -C build/lgwebos_toolchain
-          sdk_dir="$(find build/lgwebos_toolchain -type d -name 'arm-webos-linux-gnueabi_sdk-buildroot' | head -n 1)"
+
+          toolchain_root="$PWD/build/lgwebos_toolchain"
+          archive="$toolchain_root/toolchain.tar.gz"
+
+          rm -rf "$toolchain_root"
+          mkdir -p "$toolchain_root"
+
+          curl -L "${{ matrix.toolchain_url }}" -o "$archive"
+          file "$archive" || true
+          tar -xaf "$archive" -C "$toolchain_root"
+
+          echo "Extracted SDK layout:"
+          find "$toolchain_root" -maxdepth 3 -type d | sort | sed 's#^#  #' | head -80
+
+          sdk_dir="$(find "$toolchain_root" -type d -name 'arm-webos-linux-gnueabi_sdk-buildroot' | head -n 1)"
+          if [ -z "$sdk_dir" ]; then
+            sdk_dir="$(find "$toolchain_root" -type f -name 'relocate-sdk.sh' -printf '%h\n' | head -n 1)"
+          fi
           test -n "$sdk_dir"
+
           if [ -x "$sdk_dir/relocate-sdk.sh" ]; then
             (cd "$sdk_dir" && ./relocate-sdk.sh)
           fi
-          toolchain_file="$sdk_dir/share/buildroot/toolchainfile.cmake"
-          test -f "$toolchain_file"
+
+          toolchain_file="$(find "$sdk_dir" -type f \( \
+              -name 'toolchainfile.cmake' -o \
+              -name '*toolchain*.cmake' -o \
+              -name 'OEToolchainConfig.cmake' \
+            \) | head -n 1)"
+
+          if [ -z "$toolchain_file" ] || [ ! -f "$toolchain_file" ]; then
+            echo "No CMake toolchain file found under: $sdk_dir" >&2
+            find "$sdk_dir" -maxdepth 6 -type f | sort | sed 's#^#  #' | head -200 >&2
+            exit 1
+          fi
+
+          toolchain_file="$(realpath "$toolchain_file")"
+          echo "Using LG webOS SDK dir: $sdk_dir"
+          echo "Using LG webOS CMake toolchain: $toolchain_file"
           echo "LGWEBOS_TOOLCHAIN_FILE=$toolchain_file" >> "$GITHUB_ENV"
 
       - name: Extract LG webOS icon from client.jar
@@ -454,10 +485,9 @@ jobs:
             echo "Builder:     LG webOS ${{ matrix.arch }}"
             echo
             cmake -S webos -B build/lgwebos-${{ matrix.arch }} \
-              -G Ninja \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_TOOLCHAIN_FILE="$LGWEBOS_TOOLCHAIN_FILE"
-            cmake --build build/lgwebos-${{ matrix.arch }}
+              -DCMAKE_TOOLCHAIN_FILE:FILEPATH="$LGWEBOS_TOOLCHAIN_FILE"
+            cmake --build build/lgwebos-${{ matrix.arch }} -- -j"$(nproc)"
 
             status=$?
             echo "$status" > build/lgwebos-build-status.txt

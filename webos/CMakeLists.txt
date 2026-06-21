@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.10...3.31)
 project(pexcraft_lgwebos VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
