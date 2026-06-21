@@ -107,10 +107,10 @@ static int item_is_block_id(int id) {
 
 static int block_item_should_render_3d(int id) {
     if (!item_is_block_id(id)) return 0;
-    /* Java RenderItem only sends blocks through RenderBlocks.func_1227_a when
-       RenderBlocks.func_1219_a(renderType) is true: normal cube, cactus,
-       stairs, and fence.  Everything else remains the 2-D terrain icon. */
-    if (id == BLOCK_CHEST || id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+    /* Keep the Java 3-D inventory path for normal cube-like blocks, but also
+       force chests down the model renderer so the inventory icon matches the
+       in-world chest silhouette instead of falling back to a flat sprite. */
+    if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
         id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_CROPS ||
         id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN || id == BLOCK_WOOD_DOOR ||
@@ -311,6 +311,7 @@ static void draw_inventory_iso_block_model(int id, int slot_x, int slot_y) {
     if (id == BLOCK_SLAB) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.5f,1); return; }
     if (id == BLOCK_SNOW_LAYER) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.125f,1); return; }
     if (id == BLOCK_CACTUS) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_CHEST) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,14.0f/16.0f,0.9375f); return; }
     if (id == BLOCK_FENCE) {
         draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
         draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);

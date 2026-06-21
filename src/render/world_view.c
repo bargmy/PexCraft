@@ -1554,6 +1554,15 @@ static BlockBounds block_bounds_for_selection(int id, int x, int y, int z) {
         b.x0 = (float)x + 0.0625f; b.x1 = (float)x + 0.9375f;
         b.z0 = (float)z + 0.0625f; b.z1 = (float)z + 0.9375f;
         b.y1 = (float)y + 14.0f / 16.0f;
+    } else if (block_is_door_id(id)) {
+        int ly = door_meta_is_upper(meta) ? (y - 1) : y;
+        int lower_meta = flat_get_meta(x, ly, z);
+        int state = ((lower_meta & 4) == 0) ? ((lower_meta - 1) & 3) : (lower_meta & 3);
+        float t = 3.0f / 16.0f;
+        if (state == 0) b.z1 = (float)z + t;
+        else if (state == 1) b.x0 = (float)x + 1.0f - t;
+        else if (state == 2) b.z0 = (float)z + 1.0f - t;
+        else b.x1 = (float)x + t;
     } else if (id == BLOCK_STONE_BUTTON) {
         int side = meta & 7;
         float t = (meta & 8) ? (1.0f / 16.0f) : (2.0f / 16.0f);

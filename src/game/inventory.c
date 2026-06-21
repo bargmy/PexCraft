@@ -3579,7 +3579,7 @@ static void door_toggle_at(int x, int y, int z) {
     meta ^= 4;
     if (!g_mp_connected) flat_begin_persistent_edit();
     flat_set_meta_raw(x, ly, z, meta);
-    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, (meta ^ 4) + 8);
+    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, meta + 8);
     if (!g_mp_connected) flat_end_persistent_edit();
     if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, ly == y ? x : x, ly, z, 0, id);
     restart_hand_swing();
@@ -3771,7 +3771,7 @@ static void redstone_set_door_open_if_needed(int x, int y, int z) {
     if (should_open == is_open) return;
     lower_meta = should_open ? (lower_meta | 4) : (lower_meta & ~4);
     flat_set_meta_raw(x, ly, z, lower_meta);
-    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, (lower_meta ^ 4) + 8);
+    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, lower_meta + 8);
 }
 
 static void redstone_update_near(int cx, int cy, int cz) {
