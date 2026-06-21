@@ -114,9 +114,9 @@ static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot
 #include "settings/options.c"
 #include "platform/sdl2_input.c"
 
-/* Regular Android touch can ray-pick from the finger location, like Minecraft PE.
-   inventory.c is included below in this unity build, so its flat_raycast() can
-   consult these values without adding public headers or changing other targets. */
+/* Optional Android touch ray state.  Center-crosshair controls keep this
+   disabled; the fields remain so inventory.c can compile the shared helper
+   without adding public headers or changing other targets. */
 static int g_android_touch_pick_active = 0;
 static float g_android_touch_ray_dx = 0.0f;
 static float g_android_touch_ray_dy = 0.0f;

@@ -816,11 +816,15 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
     memset(b, 0, sizeof(*b));
 }
 
-static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
+static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
     return m->valid && m->v && m->i && m->vcount > 0 && m->icount > 0 &&
-           m->version == g_flat_section_mesh_version[sy][cz][cx] &&
            m->origin_x == g_flat_world_origin_x && m->origin_z == g_flat_world_origin_z;
+}
+
+static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
+    return flat_gl_cpu_mesh_drawable(sy, cz, cx, pass) &&
+           g_flat_section_gl_cpu_mesh[sy][cz][cx][pass].version == g_flat_section_mesh_version[sy][cz][cx];
 }
 
 static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
@@ -4673,7 +4677,7 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
-            flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) {
+            flat_gl_cpu_mesh_drawable(sy, cz, cx, 0)) {
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
         }
     }
@@ -4686,7 +4690,7 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
         for (int i = count - 1; i >= 0; i--) {
             int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
             if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
-                flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) {
+                flat_gl_cpu_mesh_drawable(sy, cz, cx, 1)) {
                 flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
             }
         }

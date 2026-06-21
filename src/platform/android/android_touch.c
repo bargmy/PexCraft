@@ -3,13 +3,13 @@
    This is a mobile Minecraft-style control layer:
      - visible movement D-pad only on the lower-left
      - swipe/drag anywhere in the world view to look
-     - tap the world to place/use/open the block under that finger
-     - hold the world to break the block under that finger
+     - tap the world to place/use/open from the center crosshair
+     - hold the world to mine from the center crosshair
      - tap/drag inventory slots directly, with the carried stack following the finger
 
-   The world tap/hold path uses a screen-space touch ray.  inventory.c consults
-   g_android_touch_pick_active while handling flat_raycast(), so placement and
-   mining can target the touched block instead of only the center crosshair. */
+   World use/mining intentionally ignores the finger position.  Touches choose
+   the action; the block target is always the same block selected by the + in
+   the middle of the screen. */
 
 #define PEX_ANDROID_TOUCH_NONE ((SDL_FingerID)-1)
 
@@ -38,7 +38,7 @@ static int g_android_world_breaking = 0;
 
 static int g_android_touch_seen = 0;
 static int g_android_jump_down = 0;
-static int g_android_sneak_down = 0;
+static int g_android_sneak_down = 0; /* latched toggle, not press-and-hold */
 static int g_android_inv_dragging = 0;
 static int g_android_inv_drag_start_slot = -1;
 static int g_android_inv_drag_last_x = 0;
@@ -153,6 +153,11 @@ static void pex_android_touch_clear_pick_ray(void) {
     g_android_touch_pick_active = 0;
 }
 
+static void pex_android_touch_center(int *x, int *y) {
+    if (x) *x = g_gui_w / 2;
+    if (y) *y = g_gui_h / 2;
+}
+
 static void pex_android_touch_set_pick_ray(int x, int y) {
     float fov = g_opts.fov;
     if (fov < 30.0f) fov = 30.0f;
@@ -199,18 +204,28 @@ static void pex_android_touch_set_pick_ray(int x, int y) {
 
 static void pex_android_touch_stop_break(void) {
     if (g_android_world_breaking) {
+        int cx, cy;
+        pex_android_touch_center(&cx, &cy);
         g_android_world_breaking = 0;
-        mouse_up(g_gui_w / 2, g_gui_h / 2);
+        g_sdl2_mouse_buttons[SDL_BUTTON_LEFT] = 0;
+        mouse_up(cx, cy);
     }
     pex_android_touch_clear_pick_ray();
 }
 
 static void pex_android_touch_begin_break(void) {
     if (g_android_world_breaking) return;
+    int cx, cy;
+    pex_android_touch_center(&cx, &cy);
     g_android_world_breaking = 1;
-    pex_android_touch_set_pick_ray(g_android_world_down_x, g_android_world_down_y);
-    g_mouse_x = g_android_world_down_x;
-    g_mouse_y = g_android_world_down_y;
+    pex_android_touch_clear_pick_ray();
+    g_mouse_x = cx;
+    g_mouse_y = cy;
+    /* mouse_down() starts the hit animation, but update_breaking() checks the
+       SDL button state via key_down_vk(VK_LBUTTON).  Touch has to latch that
+       state too, otherwise Android only shows the cracking overlay/swing and
+       never advances mining damage. */
+    g_sdl2_mouse_buttons[SDL_BUTTON_LEFT] = 1;
     mouse_down(g_mouse_x, g_mouse_y);
 }
 
@@ -268,7 +283,11 @@ static void pex_android_touch_ingame_down(SDL_FingerID id, int x, int y) {
     if (pex_android_touch_button_pause(x, y)) { set_screen(SCREEN_PAUSE); return; }
     if (pex_android_touch_button_inventory(x, y)) { set_screen(SCREEN_INVENTORY); return; }
     if (pex_android_touch_button_jump(x, y)) { g_android_jump_finger = id; g_android_jump_down = 1; return; }
-    if (pex_android_touch_button_sneak(x, y)) { g_android_sneak_finger = id; g_android_sneak_down = 1; return; }
+    if (pex_android_touch_button_sneak(x, y)) {
+        g_android_sneak_finger = id;
+        g_android_sneak_down = !g_android_sneak_down;
+        return;
+    }
     if (pex_android_touch_in_dpad(x, y) && g_android_move_finger == PEX_ANDROID_TOUCH_NONE) {
         g_android_move_finger = id;
         pex_android_touch_update_dpad(x, y);
@@ -313,15 +332,18 @@ static void pex_android_touch_ingame_motion(SDL_FingerID id, int x, int y) {
 static void pex_android_touch_ingame_up(SDL_FingerID id, int x, int y) {
     if (id == g_android_move_finger) { pex_android_touch_clear_move(); return; }
     if (id == g_android_jump_finger) { g_android_jump_finger = PEX_ANDROID_TOUCH_NONE; g_android_jump_down = 0; return; }
-    if (id == g_android_sneak_finger) { g_android_sneak_finger = PEX_ANDROID_TOUCH_NONE; g_android_sneak_down = 0; return; }
+    if (id == g_android_sneak_finger) { g_android_sneak_finger = PEX_ANDROID_TOUCH_NONE; return; }
     if (id == g_android_world_finger) {
         int was_breaking = g_android_world_breaking;
         double held = now_seconds() - g_android_world_down_time;
         pex_android_touch_stop_break();
         if (!was_breaking && !g_android_world_moved && held < 0.55) {
-            pex_android_touch_set_pick_ray(x, y);
-            mouse_right_down(x, y);
+            int cx, cy;
+            pex_android_touch_center(&cx, &cy);
             pex_android_touch_clear_pick_ray();
+            g_mouse_x = cx;
+            g_mouse_y = cy;
+            mouse_right_down(cx, cy);
         }
         g_android_world_finger = PEX_ANDROID_TOUCH_NONE;
         g_android_world_moved = 0;
@@ -334,7 +356,7 @@ static void pex_android_touch_tick(void) {
         if (!g_android_world_breaking && now_seconds() - g_android_world_down_time > 0.35) {
             pex_android_touch_begin_break();
         }
-        if (g_android_world_breaking) pex_android_touch_set_pick_ray(g_android_world_down_x, g_android_world_down_y);
+        if (g_android_world_breaking) pex_android_touch_clear_pick_ray();
     } else if (!g_android_world_breaking) {
         pex_android_touch_clear_pick_ray();
     }
@@ -412,6 +434,8 @@ static void draw_android_touch_controls(void) {
     draw_text("PAUSE", g_gui_w - 46, 12, 0xFFFFFF);
 
     if (g_android_world_breaking) {
-        draw_text("Breaking", g_android_world_down_x - 22, g_android_world_down_y - 14, 0xFFFF80);
+        int cx, cy;
+        pex_android_touch_center(&cx, &cy);
+        draw_text("Breaking", cx - 22, cy + 12, 0xFFFF80);
     }
 }
