@@ -60,12 +60,20 @@ static void draw_hud(void) {
     int prev_hp = g_player_prev_health;
     if (prev_hp < 0) prev_hp = 0;
     if (prev_hp > 20) prev_hp = 20;
-    int flash_old = (g_hearts_life > g_ingame_ticks) && (((g_hearts_life - g_ingame_ticks) / 3) & 1);
+    int heart_flash_ticks = g_hearts_life - g_ingame_ticks;
+    int flash_old = (heart_flash_ticks >= 10) && (((heart_flash_ticks / 3) & 1) != 0);
     for (int i = 0; i < 10; i++) {
         int x = w / 2 - 91 + i * 8;
         int y = h - 32;
-        if (hp <= 4 && hp > 0) y += rand() & 1;
-        draw_textured_rect_tex(&tex_icons, x, y, 16, 0, 9, 9, 0xFFFFFF);
+        if (hp <= 4 && hp > 0) {
+            /* Java seeds the HUD random from the 20 Hz update counter; using
+               rand() every rendered frame made low-health hearts jitter at
+               uncapped frame rate. */
+            unsigned int r = (unsigned int)(g_ingame_ticks * 312871 + i * 1013);
+            r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+            y += (int)(r & 1u);
+        }
+        draw_textured_rect_tex(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
         if (flash_old) {
             if (i * 2 + 1 < prev_hp) draw_textured_rect_tex(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
             else if (i * 2 + 1 == prev_hp) draw_textured_rect_tex(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);

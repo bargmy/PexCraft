@@ -580,6 +580,21 @@ static void flat_note_lighting_dirty_around_block(int x, int y, int z) {
     flat_note_lighting_dirty_region(x, z, x, z);
 }
 
+static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id, int new_id) {
+    (void)y;
+    int old_light = flat_block_light_value_for_id(old_id);
+    int new_light = flat_block_light_value_for_id(new_id);
+    if (old_light > 0 || new_light > 0) {
+        /* Block light spreads up to 15 cells.  The old 1-column dirty range made
+           torches light only their own column or a tiny slice until a larger
+           chunk rebuild happened.  This still runs through the background
+           streaming/light service, not the main tick. */
+        flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
+    } else {
+        flat_note_lighting_dirty_around_block(x, y, z);
+    }
+}
+
 static void flat_flush_pending_lighting(void) {
     if (!g_flat_light_dirty) return;
     int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
@@ -1226,7 +1241,7 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
         mark_flat_render_sections_dirty_around_block(x, y, z);
         if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
             flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
-            flat_note_lighting_dirty_around_block(x, y, z);
+            flat_note_lighting_dirty_for_change(x, y, z, old_id, id);
         }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
         psp_fast_surface_mark_dirty_block(x, z);
@@ -1257,7 +1272,7 @@ static void flat_set_fluid(int x, int y, int z, int id, int level) {
         mark_flat_render_sections_dirty_around_block(x, y, z);
         if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
             flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
-            flat_note_lighting_dirty_around_block(x, y, z);
+            flat_note_lighting_dirty_for_change(x, y, z, old_id, id);
         }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
         psp_fast_surface_mark_dirty_block(x, z);
@@ -3632,6 +3647,45 @@ static int place_door_from_item(int item_id, int x, int y, int z) {
     return 1;
 }
 
+static int flat_block_occludes_for_support(int id);
+
+static int block_is_torch_id(int id) {
+    return id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON;
+}
+
+static int torch_can_stay_with_meta(int x, int y, int z, int meta) {
+    meta &= 7;
+    if (meta == 1) return flat_block_occludes_for_support(flat_get_block(x - 1, y, z));
+    if (meta == 2) return flat_block_occludes_for_support(flat_get_block(x + 1, y, z));
+    if (meta == 3) return flat_block_occludes_for_support(flat_get_block(x, y, z - 1));
+    if (meta == 4) return flat_block_occludes_for_support(flat_get_block(x, y, z + 1));
+    return flat_block_occludes_for_support(flat_get_block(x, y - 1, z));
+}
+
+static int torch_can_place_at(int x, int y, int z) {
+    return flat_block_occludes_for_support(flat_get_block(x - 1, y, z)) ||
+           flat_block_occludes_for_support(flat_get_block(x + 1, y, z)) ||
+           flat_block_occludes_for_support(flat_get_block(x, y, z - 1)) ||
+           flat_block_occludes_for_support(flat_get_block(x, y, z + 1)) ||
+           flat_block_occludes_for_support(flat_get_block(x, y - 1, z));
+}
+
+static int torch_meta_from_placement_face(int x, int y, int z, int face) {
+    int meta = 0;
+    if (face == 1 && flat_block_occludes_for_support(flat_get_block(x, y - 1, z))) meta = 5;
+    if (face == 2 && flat_block_occludes_for_support(flat_get_block(x, y, z + 1))) meta = 4;
+    if (face == 3 && flat_block_occludes_for_support(flat_get_block(x, y, z - 1))) meta = 3;
+    if (face == 4 && flat_block_occludes_for_support(flat_get_block(x + 1, y, z))) meta = 2;
+    if (face == 5 && flat_block_occludes_for_support(flat_get_block(x - 1, y, z))) meta = 1;
+    if (meta != 0) return meta;
+    if (flat_block_occludes_for_support(flat_get_block(x - 1, y, z))) return 1;
+    if (flat_block_occludes_for_support(flat_get_block(x + 1, y, z))) return 2;
+    if (flat_block_occludes_for_support(flat_get_block(x, y, z - 1))) return 3;
+    if (flat_block_occludes_for_support(flat_get_block(x, y, z + 1))) return 4;
+    if (flat_block_occludes_for_support(flat_get_block(x, y - 1, z))) return 5;
+    return 0;
+}
+
 static int ladder_can_attach_to_face(int face) {
     return face >= 2 && face <= 5;
 }
@@ -4004,9 +4058,10 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
             if (!ok) drop_and_clear_block_no_particles(nx, ny, nz, 1);
             continue;
         }
-        if (id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) {
-            int below = flat_get_block(nx, ny - 1, nz);
-            if (below == 0 || block_is_liquid(below)) drop_and_clear_block_no_particles(nx, ny, nz, 1);
+        if (block_is_torch_id(id)) {
+            int m = flat_get_meta(nx, ny, nz) & 7;
+            if (m == 0) m = 5;
+            if (!torch_can_stay_with_meta(nx, ny, nz, m)) drop_and_clear_block_no_particles(nx, ny, nz, 1);
             continue;
         }
         if (id == BLOCK_LADDER || id == BLOCK_WALL_SIGN || block_is_button_or_lever(id)) {
@@ -4357,10 +4412,12 @@ static void ingame_right_click(void) {
 
     int place_existing = flat_get_block(px, py, pz);
     if (place_existing != 0 && !block_is_liquid(place_existing) && place_existing != BLOCK_SNOW_LAYER) return;
-    if (place_id != BLOCK_LADDER && place_id != BLOCK_SIGN_POST && place_id != BLOCK_WALL_SIGN && flat_block_intersects_player(px, py, pz)) return;
+    if (place_id != BLOCK_LADDER && place_id != BLOCK_SIGN_POST && place_id != BLOCK_WALL_SIGN &&
+        !block_is_torch_id(place_id) && flat_block_intersects_player(px, py, pz)) return;
     if (place_id == BLOCK_CHEST && !chest_can_place_at(px, py, pz)) return;
     if (place_id == BLOCK_LADDER && !ladder_can_attach_to_face(hit.face)) return;
     if (place_id == BLOCK_WALL_SIGN && !ladder_can_attach_to_face(hit.face)) return;
+    if (block_is_torch_id(place_id) && !torch_can_place_at(px, py, pz)) return;
     if (place_id == BLOCK_STONE_BUTTON) {
         int bm = side_meta_from_placement_face(hit.face);
         if (bm == 0 || !block_supports_attached_side(px, py, pz, bm)) return;
@@ -4382,12 +4439,14 @@ static void ingame_right_click(void) {
         flat_set_meta_raw(px, py, pz, furnace_facing_from_yaw());
     }
     if (place_id == BLOCK_LADDER || place_id == BLOCK_WALL_SIGN) flat_set_meta_raw(px, py, pz, hit.face);
+    if (block_is_torch_id(place_id)) flat_set_meta_raw(px, py, pz, torch_meta_from_placement_face(px, py, pz, hit.face));
     if (place_id == BLOCK_STONE_BUTTON) flat_set_meta_raw(px, py, pz, side_meta_from_placement_face(hit.face));
     if (place_id == BLOCK_LEVER) flat_set_meta_raw(px, py, pz, lever_meta_from_placement_face(hit.face));
     if (place_id == BLOCK_SIGN_POST) flat_set_meta_raw(px, py, pz, door_direction_from_yaw() & 3);
     if (place_id == BLOCK_WOOD_STAIRS || place_id == BLOCK_COBBLE_STAIRS) flat_set_meta_raw(px, py, pz, stair_direction_from_yaw());
     if (!g_mp_connected) flat_end_persistent_edit();
     if (place_id == BLOCK_REDSTONE_WIRE || place_id == BLOCK_STONE_BUTTON || place_id == BLOCK_LEVER ||
+        place_id == BLOCK_REDSTONE_TORCH_OFF || place_id == BLOCK_REDSTONE_TORCH_ON ||
         block_is_pressure_plate(place_id) || block_is_door_id(place_id)) {
         redstone_update_near(px, py, pz);
     }

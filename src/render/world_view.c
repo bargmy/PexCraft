@@ -1573,6 +1573,14 @@ static BlockBounds block_bounds_for_selection(int id, int x, int y, int z) {
         else if (state == 1) b.x0 = (float)x + 1.0f - t;
         else if (state == 2) b.z0 = (float)z + 1.0f - t;
         else b.x1 = (float)x + t;
+    } else if (id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) {
+        int side = meta & 7;
+        float r = 0.15f;
+        if (side == 1) { b.x0 = (float)x; b.x1 = (float)x + r * 2.0f; b.y0 = (float)y + 0.2f; b.y1 = (float)y + 0.8f; b.z0 = (float)z + 0.5f - r; b.z1 = (float)z + 0.5f + r; }
+        else if (side == 2) { b.x0 = (float)x + 1.0f - r * 2.0f; b.x1 = (float)x + 1.0f; b.y0 = (float)y + 0.2f; b.y1 = (float)y + 0.8f; b.z0 = (float)z + 0.5f - r; b.z1 = (float)z + 0.5f + r; }
+        else if (side == 3) { b.x0 = (float)x + 0.5f - r; b.x1 = (float)x + 0.5f + r; b.y0 = (float)y + 0.2f; b.y1 = (float)y + 0.8f; b.z0 = (float)z; b.z1 = (float)z + r * 2.0f; }
+        else if (side == 4) { b.x0 = (float)x + 0.5f - r; b.x1 = (float)x + 0.5f + r; b.y0 = (float)y + 0.2f; b.y1 = (float)y + 0.8f; b.z0 = (float)z + 1.0f - r * 2.0f; b.z1 = (float)z + 1.0f; }
+        else { r = 0.1f; b.x0 = (float)x + 0.5f - r; b.x1 = (float)x + 0.5f + r; b.y1 = (float)y + 0.6f; b.z0 = (float)z + 0.5f - r; b.z1 = (float)z + 0.5f + r; }
     } else if (id == BLOCK_STONE_BUTTON) {
         int side = meta & 7;
         float t = (meta & 8) ? (1.0f / 16.0f) : (2.0f / 16.0f);
@@ -1682,7 +1690,14 @@ static void draw_falling_blocks(float partial) {
 
         glPushMatrix();
         glTranslatef(x, y, z);
+        /* Falling block entities are not baked into the terrain light mesh yet.
+           Render them like Java entity blocks: stable entity brightness, not the
+           last sampled world face light, which made falling sand/gravel black. */
+        g_force_fullbright_item_model++;
+        world_style_set_pos((int)floorf(x), (int)floorf(y), (int)floorf(z));
+        world_light_set_pos((int)floorf(x), (int)floorf(y), (int)floorf(z));
         draw_world_block_id(fb->block_id, -0.5f, -0.5f, -0.5f);
+        g_force_fullbright_item_model--;
         glPopMatrix();
     }
 }
@@ -2932,6 +2947,78 @@ static void draw_lever_block_model(int x, int y, int z) {
     glEnd();
 }
 
+static int torch_tile_for_id(int id) {
+    if (id == BLOCK_REDSTONE_TORCH_OFF) return 115;
+    if (id == BLOCK_REDSTONE_TORCH_ON) return 99;
+    return 80;
+}
+
+static void emit_torch_at_angle(int id, double x, double y, double z, double ax, double az) {
+    int tile = torch_tile_for_id(id);
+    float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
+    float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+    float u0 = (float)((tile & 15) << 4) / tw;
+    float v0 = (float)(tile & 240) / th;
+    float u1 = (float)(((tile & 15) << 4) + 15.99f) / tw;
+    float v1 = (float)((tile & 240) + 15.99f) / th;
+    float cu0 = u0 + 7.0f / tw;
+    float cv0 = v0 + 6.0f / th;
+    float cu1 = u0 + 9.0f / tw;
+    float cv1 = v0 + 8.0f / th;
+
+    x += 0.5;
+    z += 0.5;
+    double x0 = x - 0.5;
+    double x1 = x + 0.5;
+    double z0 = z - 0.5;
+    double z1 = z + 0.5;
+    double r = 1.0 / 16.0;
+    double cap_y = 0.625;
+
+    world_set_shade(1.0f);
+    world_tex_vertex((float)(x + ax * (1.0 - cap_y) - r), (float)(y + cap_y), (float)(z + az * (1.0 - cap_y) - r), cu0, cv0);
+    world_tex_vertex((float)(x + ax * (1.0 - cap_y) - r), (float)(y + cap_y), (float)(z + az * (1.0 - cap_y) + r), cu0, cv1);
+    world_tex_vertex((float)(x + ax * (1.0 - cap_y) + r), (float)(y + cap_y), (float)(z + az * (1.0 - cap_y) + r), cu1, cv1);
+    world_tex_vertex((float)(x + ax * (1.0 - cap_y) + r), (float)(y + cap_y), (float)(z + az * (1.0 - cap_y) - r), cu1, cv0);
+
+    world_tex_vertex((float)(x - r),       (float)(y + 1.0), (float)z0,        u0, v0);
+    world_tex_vertex((float)(x - r + ax),  (float)y,         (float)(z0 + az), u0, v1);
+    world_tex_vertex((float)(x - r + ax),  (float)y,         (float)(z1 + az), u1, v1);
+    world_tex_vertex((float)(x - r),       (float)(y + 1.0), (float)z1,        u1, v0);
+
+    world_tex_vertex((float)(x + r),       (float)(y + 1.0), (float)z1,        u0, v0);
+    world_tex_vertex((float)(x + r + ax),  (float)y,         (float)(z1 + az), u0, v1);
+    world_tex_vertex((float)(x + r + ax),  (float)y,         (float)(z0 + az), u1, v1);
+    world_tex_vertex((float)(x + r),       (float)(y + 1.0), (float)z0,        u1, v0);
+
+    world_tex_vertex((float)x0,       (float)(y + 1.0), (float)(z + r),      u0, v0);
+    world_tex_vertex((float)(x0 + ax),(float)y,         (float)(z + r + az),u0, v1);
+    world_tex_vertex((float)(x1 + ax),(float)y,         (float)(z + r + az),u1, v1);
+    world_tex_vertex((float)x1,       (float)(y + 1.0), (float)(z + r),      u1, v0);
+
+    world_tex_vertex((float)x1,       (float)(y + 1.0), (float)(z - r),      u0, v0);
+    world_tex_vertex((float)(x1 + ax),(float)y,         (float)(z - r + az),u0, v1);
+    world_tex_vertex((float)(x0 + ax),(float)y,         (float)(z - r + az),u1, v1);
+    world_tex_vertex((float)x0,       (float)(y + 1.0), (float)(z - r),      u1, v0);
+}
+
+static void draw_torch_block_model(int id, int x, int y, int z) {
+    int meta = flat_get_meta(x, y, z) & 7;
+    int pushed_fullbright = 0;
+    if (flat_block_light_value_for_id(id) > 0) { g_force_fullbright_item_model++; pushed_fullbright = 1; }
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    glBegin(GL_QUADS);
+    if (meta == 1) emit_torch_at_angle(id, (double)x - 0.1, (double)y + 0.2, (double)z, -0.4, 0.0);
+    else if (meta == 2) emit_torch_at_angle(id, (double)x + 0.1, (double)y + 0.2, (double)z, 0.4, 0.0);
+    else if (meta == 3) emit_torch_at_angle(id, (double)x, (double)y + 0.2, (double)z - 0.1, 0.0, -0.4);
+    else if (meta == 4) emit_torch_at_angle(id, (double)x, (double)y + 0.2, (double)z + 0.1, 0.0, 0.4);
+    else emit_torch_at_angle(id, (double)x, (double)y, (double)z, 0.0, 0.0);
+    glEnd();
+    glDisable(GL_ALPHA_TEST);
+    if (pushed_fullbright) g_force_fullbright_item_model--;
+}
+
 static void draw_ladder_block_model(int x, int y, int z) {
     int meta = flat_get_meta(x, y, z);
     if (meta < 2 || meta > 5) meta = 3;
@@ -3081,7 +3168,7 @@ static void draw_special_block_model(int id, int x, int y, int z) {
         return;
     }
     if (id == BLOCK_LEVER) { draw_lever_block_model(x, y, z); return; }
-    if (id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0.4375f,0.5625f,0.65f,0.5625f); return; }
+    if (id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) { draw_torch_block_model(id, x, y, z); return; }
 }
 
 
