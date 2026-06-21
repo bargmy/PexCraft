@@ -57,7 +57,6 @@ static void apply_texture_pack_index(int index);
 
 #include "platform/filesystem.c"
 #include "assets/textures.c"
-#include "platform/win32_remote_http.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"
 #include "assets/classic_pack_installer.c"

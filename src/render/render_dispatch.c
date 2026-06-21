@@ -131,9 +131,6 @@ static void render(float partial) {
     draw_current_screen(partial);
     draw_gamepad_virtual_cursor();
     draw_fps_counter();
-#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP)
-    pex_remote_http_capture_opengl_frame();
-#endif
     pex_renderer_present();
     g_render_ms_last = (now_seconds() - render_start_time) * 1000.0;
     record_frame_time_sample(render_entry_time);

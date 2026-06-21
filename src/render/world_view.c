@@ -1688,6 +1688,14 @@ static void draw_falling_blocks(float partial) {
         }
         draw_java_entity_shadow(x, y, z, 0.50f, 1.0f);
 
+        /* draw_java_entity_shadow binds tex_shadow.  Falling blocks need the
+           terrain atlas rebound per entity, otherwise they sample the shadow
+           texture and appear black until they land back in the terrain mesh. */
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+        glDisable(GL_BLEND);
+        glColor4f(1, 1, 1, 1);
+
         glPushMatrix();
         glTranslatef(x, y, z);
         /* Falling block entities are not baked into the terrain light mesh yet.

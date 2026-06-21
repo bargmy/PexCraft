@@ -373,15 +373,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     begin_high_res_timer();
     init_dirs();
     load_options();
-#if defined(PEX_REMOTE_HTTP)
-    /* The remote stream captures the OpenGL back buffer.  Force OpenGL for this target. */
-    g_runtime_renderer_backend = RENDERER_OPENGL;
-    g_selected_renderer_backend = RENDERER_OPENGL;
-    if (g_opts.max_fps <= 0 || g_opts.max_fps > PEX_REMOTE_FPS) g_opts.max_fps = PEX_REMOTE_FPS;
-#else
     g_runtime_renderer_backend = g_opts.renderer_backend;
     g_selected_renderer_backend = g_opts.renderer_backend;
-#endif
     if (!renderer_backend_supported(g_runtime_renderer_backend)) {
         g_renderer_backend_unavailable_notice = 1;
         g_runtime_renderer_backend = RENDERER_OPENGL;
@@ -418,14 +411,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                            NULL, NULL, hInstance, NULL);
     if (!g_hwnd) { end_high_res_timer(); return 2; }
-#if defined(PEX_REMOTE_HTTP)
-    /* Keep a real visible GL drawable for drivers, but park it off-screen so
-       the local desktop does not need to show the client. */
-    SetWindowPos(g_hwnd, HWND_BOTTOM, -32000, -32000, rc.right - rc.left, rc.bottom - rc.top,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
-#else
     ShowWindow(g_hwnd, nCmdShow);
-#endif
     UpdateWindow(g_hwnd);
     GetClientRect(g_hwnd, &rc);
     g_win_w = rc.right - rc.left;
@@ -439,13 +425,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
         return 3;
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
-#if defined(PEX_REMOTE_HTTP)
-    if (!pex_remote_http_start()) {
-        MessageBoxA(g_hwnd, "PEXCRAFT remote HTTP server failed to start on 0.0.0.0:8425.", APP_TITLE, MB_ICONERROR);
-        end_high_res_timer();
-        return 4;
-    }
-#endif
     if (should_show_classic_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_pack_missing_required_textures()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else if (g_renderer_backend_unavailable_notice) {
@@ -474,9 +453,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     free_texture(&tex_large_chest_entity);
     free_texture_pack_icons();
     pex_gamepad_shutdown();
-#if defined(PEX_REMOTE_HTTP)
-    pex_remote_http_stop();
-#endif
     pex_renderer_shutdown();
     if (g_wic_factory) { IWICImagingFactory_Release(g_wic_factory); g_wic_factory = NULL; }
     CoUninitialize();
