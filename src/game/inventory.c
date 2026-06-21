@@ -4925,8 +4925,14 @@ static void reset_flat_player_spawn(void) {
 /* ---- Beta-accurate fluid simulation (mirrors BlockFluids/BlockFlowing) ---- */
 static const int FLUID_DX[4] = {-1, 1, 0, 0};
 static const int FLUID_DZ[4] = {0, 0, -1, 1};
+#if defined(PEX_PLATFORM_PSP)
+enum { FLUID_SIM_RADIUS = 8 };
+enum { FLUID_VERTICAL_RADIUS = 18 };
+#else
 enum { FLUID_SIM_RADIUS = 16 };
-enum { FLUID_TICK_MAX = (FLUID_SIM_RADIUS * 2 + 1) * (FLUID_SIM_RADIUS * 2 + 1) * FLAT_WORLD_HEIGHT };
+enum { FLUID_VERTICAL_RADIUS = FLAT_WORLD_HEIGHT };
+#endif
+enum { FLUID_TICK_MAX = (FLUID_SIM_RADIUS * 2 + 1) * (FLUID_SIM_RADIUS * 2 + 1) * ((FLUID_VERTICAL_RADIUS * 2) + 3) };
 
 typedef struct FluidTickCell {
     int x, y, z;
@@ -5106,8 +5112,17 @@ static void apply_player_fluid_velocity(int is_water) {
 static void update_liquids(void) {
     if (stream_generation_active()) return;
 
+#if defined(PEX_PLATFORM_PSP)
+    /* Real Beta terrain can contain many water/lava blocks.  A full 33x33x128
+       liquid scan is deadly on PSP, so tick less often and only near the player
+       vertically.  Fluid behavior is preserved locally; distant underground
+       liquids sleep until the player gets near them. */
+    int tick_water = (g_ingame_ticks % 10) == 0;
+    int tick_lava = (g_ingame_ticks % 60) == 0;
+#else
     int tick_water = (g_ingame_ticks % 5) == 0;
     int tick_lava = (g_ingame_ticks % 30) == 0;
+#endif
     if (!tick_water && !tick_lava) return;
 
     int range = active_world_sim_radius();
@@ -5123,12 +5138,23 @@ static void update_liquids(void) {
     if (max_z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 1) max_z = g_flat_world_origin_z + FLAT_WORLD_SIZE - 2;
 
     int moved = 0;
+#if defined(PEX_PLATFORM_PSP)
+    int changes_left = 8;
+    int center_y = (int)floorf(g_player_y) - 1;
+    int scan_y_max = center_y + FLUID_VERTICAL_RADIUS / 2;
+    int scan_y_min = center_y - FLUID_VERTICAL_RADIUS;
+    if (scan_y_max > FLAT_WORLD_Y_MAX - 1) scan_y_max = FLAT_WORLD_Y_MAX - 1;
+    if (scan_y_min < FLAT_WORLD_Y_MIN + 1) scan_y_min = FLAT_WORLD_Y_MIN + 1;
+#else
     int changes_left = MAX_WORLD_SIM_CHANGES_PER_TICK;
+    int scan_y_max = FLAT_WORLD_Y_MAX - 1;
+    int scan_y_min = FLAT_WORLD_Y_MIN + 1;
+#endif
 
     static FluidTickCell fluid_ticks[FLUID_TICK_MAX];
     int fluid_tick_count = 0;
 
-    for (int y = FLAT_WORLD_Y_MAX - 1; y >= FLAT_WORLD_Y_MIN + 1; y--) {
+    for (int y = scan_y_max; y >= scan_y_min; y--) {
         for (int z = min_z; z <= max_z; z++) {
             for (int x = min_x; x <= max_x; x++) {
                 int id = flat_get_block(x, y, z);

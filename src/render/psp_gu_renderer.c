@@ -372,6 +372,171 @@ static void psp_gu_end_frame(void) {
     g_psp_display_offset = (g_psp_display_offset == 0u) ? 0x00088000u : 0u;
 }
 
+
+/* Direct GU mesh backend ---------------------------------------------------------
+   The old PSP real-world path used OpenGL-style display lists, which meant every
+   dirty 16x16x16 section was scanned and compiled on the main thread.  This
+   backend gives the shared async section-mesh system a PSP target: the worker
+   builds CPU vertices, then the render thread adopts them as persistent GU
+   arrays. */
+#ifndef PEX_PSP_MAX_BACKEND_MESHES
+#define PEX_PSP_MAX_BACKEND_MESHES 4096
+#endif
+
+static PspBatch *g_psp_backend_meshes[PEX_PSP_MAX_BACKEND_MESHES];
+static PexRendererStats g_psp_backend_stats;
+
+static PspBatch *psp_batch_create_from_mesh(const PexMesh *mesh) {
+    if (!mesh || !mesh->vertices || mesh->vertex_count == 0) return NULL;
+    uint32_t count = mesh->indices ? mesh->index_count : mesh->vertex_count;
+    if (count < 3) return NULL;
+    PspBatch *b = (PspBatch*)calloc(1, sizeof(PspBatch));
+    if (!b) return NULL;
+    b->v = (PspImmVertex*)memalign(16, (size_t)count * sizeof(PspImmVertex));
+    if (!b->v) { free(b); return NULL; }
+    b->count = (int)count;
+    b->mode = GL_TRIANGLES;
+    b->tex = 0;
+    b->texture_enabled = 1;
+    b->blend_enabled = 0;
+    b->depth_enabled = 1;
+    b->alpha_enabled = 0;
+    b->cull_enabled = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t src_i = mesh->indices ? mesh->indices[i] : i;
+        if (src_i >= mesh->vertex_count) src_i = 0;
+        const PexVertex *src = &mesh->vertices[src_i];
+        b->v[i].u = src->u;
+        b->v[i].v = src->v;
+        b->v[i].color = src->color;
+        b->v[i].x = src->x;
+        b->v[i].y = src->y;
+        b->v[i].z = src->z;
+    }
+    sceKernelDcacheWritebackInvalidateRange(b->v, (SceSize)((size_t)b->count * sizeof(PspImmVertex)));
+    return b;
+}
+
+static int psp_backend_find_free_mesh_slot(void) {
+    for (int i = 1; i < PEX_PSP_MAX_BACKEND_MESHES; ++i) if (!g_psp_backend_meshes[i]) return i;
+    return 0;
+}
+
+static PexTextureHandle psp_backend_create_texture(const PexTextureDesc *desc) {
+    if (!desc || !desc->rgba_pixels || desc->width <= 0 || desc->height <= 0) return 0;
+    GLuint id = 0;
+    for (GLuint i = 1; i < PEX_PSP_MAX_TEXTURES; ++i) {
+        if (!g_psp_textures[i].used) { id = i; break; }
+    }
+    if (!id) return 0;
+    PspTexture *t = &g_psp_textures[id];
+    if (!t->in_vram) free(t->pixels);
+    memset(t, 0, sizeof(*t));
+    t->w = desc->width;
+    t->h = desc->height;
+    t->stride = desc->width;
+    t->repeat_s = desc->repeat ? 1 : 0;
+    t->repeat_t = desc->repeat ? 1 : 0;
+    size_t bytes = (size_t)t->w * (size_t)t->h * 4u;
+    t->pixels = (unsigned int*)memalign(16, bytes);
+    if (!t->pixels) { memset(t, 0, sizeof(*t)); return 0; }
+    memcpy(t->pixels, desc->rgba_pixels, bytes);
+    sceKernelDcacheWritebackInvalidateRange(t->pixels, (SceSize)bytes);
+    t->used = 1;
+    g_psp_backend_stats.texture_uploads++;
+    psp_state_cache_invalidate();
+    return id;
+}
+
+static void psp_backend_destroy_texture(PexTextureHandle handle) {
+    GLuint id = (GLuint)handle;
+    if (id == 0 || id >= PEX_PSP_MAX_TEXTURES) return;
+    if (!g_psp_textures[id].in_vram) free(g_psp_textures[id].pixels);
+    memset(&g_psp_textures[id], 0, sizeof(g_psp_textures[id]));
+    psp_state_cache_invalidate();
+}
+
+static PexMeshHandle psp_backend_upload_mesh(const PexMesh *mesh) {
+    int slot = psp_backend_find_free_mesh_slot();
+    if (!slot) return 0;
+    PspBatch *b = psp_batch_create_from_mesh(mesh);
+    if (!b) return 0;
+    g_psp_backend_meshes[slot] = b;
+    g_psp_backend_stats.buffer_uploads++;
+    return (PexMeshHandle)slot;
+}
+
+static int psp_backend_update_mesh(PexMeshHandle handle, const PexMesh *mesh) {
+    if (handle == 0 || handle >= PEX_PSP_MAX_BACKEND_MESHES) return 0;
+    PspBatch *b = psp_batch_create_from_mesh(mesh);
+    if (!b) return 0;
+    psp_batch_destroy(g_psp_backend_meshes[handle]);
+    g_psp_backend_meshes[handle] = b;
+    g_psp_backend_stats.buffer_uploads++;
+    return 1;
+}
+
+static void psp_backend_destroy_mesh(PexMeshHandle handle) {
+    if (handle == 0 || handle >= PEX_PSP_MAX_BACKEND_MESHES) return;
+    psp_batch_destroy(g_psp_backend_meshes[handle]);
+    g_psp_backend_meshes[handle] = NULL;
+}
+
+static void psp_backend_draw_batch_with_state(const PspBatch *b, const PexRenderState *state) {
+    if (!b || !b->v || b->count <= 0 || !state) return;
+    psp_apply_state_values((GLuint)state->texture, state->texture_enabled, state->blend_enabled,
+                           state->depth_enabled, state->alpha_test_enabled, 0);
+    sceGuDepthMask(state->depth_write ? GU_FALSE : GU_TRUE);
+    int pos = 0;
+    while (pos < b->count) {
+        int n = b->count - pos;
+        if (n > 65535) n = 65535;
+        sceGumDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D,
+                        n, 0, b->v + pos);
+        pos += n;
+        g_psp_backend_stats.draw_calls++;
+        g_psp_backend_stats.triangles += (uint32_t)(n / 3);
+    }
+}
+
+static void psp_backend_draw_mesh(PexMeshHandle handle, const PexRenderState *state) {
+    if (handle == 0 || handle >= PEX_PSP_MAX_BACKEND_MESHES) return;
+    psp_backend_draw_batch_with_state(g_psp_backend_meshes[handle], state);
+}
+
+static void psp_backend_draw_dynamic(const PexMesh *mesh, const PexRenderState *state) {
+    PspBatch *b = psp_batch_create_from_mesh(mesh);
+    if (!b) return;
+    psp_backend_draw_batch_with_state(b, state);
+    psp_batch_destroy(b);
+}
+
+static int psp_backend_init(void *window_handle, int width, int height) { (void)window_handle; (void)width; (void)height; return 1; }
+static void psp_backend_shutdown(void) { for (int i = 1; i < PEX_PSP_MAX_BACKEND_MESHES; ++i) psp_backend_destroy_mesh((PexMeshHandle)i); }
+static void psp_backend_resize(int width, int height) { (void)width; (void)height; }
+static int psp_backend_begin_frame(float r, float g, float b, float a) { (void)r; (void)g; (void)b; (void)a; memset(&g_psp_backend_stats, 0, sizeof(g_psp_backend_stats)); return 1; }
+static void psp_backend_end_frame(void) {}
+static PexRendererStats psp_backend_get_stats(void) { return g_psp_backend_stats; }
+
+static PexRendererBackend g_psp_gu_backend = {
+    "PSP GU Mesh",
+    psp_backend_init,
+    psp_backend_shutdown,
+    psp_backend_resize,
+    psp_backend_begin_frame,
+    psp_backend_end_frame,
+    psp_backend_create_texture,
+    psp_backend_destroy_texture,
+    psp_backend_upload_mesh,
+    psp_backend_update_mesh,
+    psp_backend_destroy_mesh,
+    psp_backend_draw_mesh,
+    psp_backend_draw_dynamic,
+    psp_backend_get_stats
+};
+
+static PexRendererBackend *psp_gu_get_backend(void) { return &g_psp_gu_backend; }
+
 static void glClearColor(float r,float g,float b,float a){ g_psp_clear_color=psp_rgba_to_abgr(r,g,b,a); }
 static void glClear(GLbitfield mask){
     int gu_mask = 0;

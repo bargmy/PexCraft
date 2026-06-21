@@ -477,9 +477,17 @@ static unsigned char *g_flat_direct_terrain_rgba = NULL;
 static int g_flat_direct_terrain_w = 0, g_flat_direct_terrain_h = 0;
 
 static PexRendererBackend *flat_direct_backend(void) {
+#if defined(PEX_PLATFORM_PSP)
+    /* PSP has its own GU mesh backend.  This is important for real-world mode:
+       it lets section meshing run on the worker and only uploads/adopts the
+       completed mesh on the render thread instead of rebuilding GL display
+       lists inside the frame. */
+    return psp_gu_get_backend();
+#else
     if (pex_using_d3d9()) return renderer_d3d9_get_backend();
     if (pex_using_d3d11()) return renderer_d3d11_get_backend();
     return NULL;
+#endif
 }
 
 static uint32_t flat_pack_current_rgba(void) {
@@ -3977,9 +3985,18 @@ static int g_async_section_mesh_stop = 0;
 static int g_async_section_mesh_busy = 0;
 static int g_async_section_mesh_upload_busy = 0;
 
+#if defined(PEX_PLATFORM_PSP)
+/* PSP has far less RAM than desktop.  Keep the async mesh queue intentionally
+   small; a single job snapshot is about 29 KB and each finished section can own
+   a sizeable vertex/index buffer until the render thread adopts it. */
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 12
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 6
+#else
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 96
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 24
 #define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 24
+#endif
 
 static AsyncSectionMeshJob g_async_section_mesh_jobs[ASYNC_SECTION_MESH_JOB_QUEUE_MAX];
 static int g_async_section_mesh_job_head = 0, g_async_section_mesh_job_tail = 0, g_async_section_mesh_job_count = 0;
@@ -4206,11 +4223,15 @@ static void async_section_mesh_init(void) {
     g_async_section_mesh_initialized = 1;
     InitializeCriticalSection(&g_async_section_mesh_cs);
     g_async_section_mesh_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    g_async_section_mesh_upload_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (!g_async_section_mesh_event || !g_async_section_mesh_upload_event) return;
+    if (pex_using_d3d11()) g_async_section_mesh_upload_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_async_section_mesh_event || (pex_using_d3d11() && !g_async_section_mesh_upload_event)) return;
     g_async_section_mesh_stop = 0;
+#if defined(PEX_PLATFORM_PSP)
+    g_async_section_mesh_thread = CreateThread(NULL, 0x20000, async_section_mesh_worker_proc, NULL, 0, NULL);
+#else
     g_async_section_mesh_thread = CreateThread(NULL, 0, async_section_mesh_worker_proc, NULL, 0, NULL);
-    g_async_section_mesh_upload_thread = CreateThread(NULL, 0, async_section_mesh_upload_worker_proc, NULL, 0, NULL);
+#endif
+    if (pex_using_d3d11()) g_async_section_mesh_upload_thread = CreateThread(NULL, 0, async_section_mesh_upload_worker_proc, NULL, 0, NULL);
     if (g_async_section_mesh_thread) SetThreadPriority(g_async_section_mesh_thread, THREAD_PRIORITY_BELOW_NORMAL);
     if (g_async_section_mesh_upload_thread) SetThreadPriority(g_async_section_mesh_upload_thread, THREAD_PRIORITY_BELOW_NORMAL);
 }
@@ -4455,7 +4476,11 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     if (streaming) rebuilds_left = direct ? 1 : 2;
     double deadline = now_seconds() + (streaming ? 0.0015 : 0.0030);
 
+#if defined(PEX_PLATFORM_PSP)
+    if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
+#else
     if (async_mesh) async_section_mesh_install_ready(2);
+#endif
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
         if (now_seconds() > deadline) break;
