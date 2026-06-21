@@ -13,8 +13,6 @@
 
 #define PEX_ANDROID_TOUCH_NONE ((SDL_FingerID)-1)
 
-static void pex_gamepad_copy_edges(PexGamepadState *dst, const PexGamepadState *old);
-
 static SDL_FingerID g_android_move_finger = PEX_ANDROID_TOUCH_NONE;
 static SDL_FingerID g_android_world_finger = PEX_ANDROID_TOUCH_NONE;
 static SDL_FingerID g_android_jump_finger = PEX_ANDROID_TOUCH_NONE;
@@ -46,6 +44,12 @@ static int g_android_inv_drag_start_slot = -1;
 static int g_android_inv_drag_last_x = 0;
 static int g_android_inv_drag_last_y = 0;
 
+static void pex_android_touch_set_focus(void) {
+    g_input_focus_mode = PEX_INPUT_FOCUS_TOUCH;
+    g_gamepad_virtual_cursor_active = 0;
+    g_gamepad_menu_index = -1;
+}
+
 static int pex_android_touch_gui_x(float nx) {
     if (nx < 0.0f) nx = 0.0f;
     if (nx > 1.0f) nx = 1.0f;
@@ -60,6 +64,10 @@ static int pex_android_touch_gui_y(float ny) {
 
 static int pex_android_touch_in_rect(int x, int y, int rx, int ry, int rw, int rh) {
     return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+}
+
+static int pex_android_touch_button_close(int x, int y) {
+    return pex_android_touch_in_rect(x, y, g_gui_w - 38, 6, 32, 24);
 }
 
 static float pex_android_touch_clampf(float v, float lo, float hi) {
@@ -207,9 +215,15 @@ static void pex_android_touch_begin_break(void) {
 }
 
 static void pex_android_touch_ui_down(SDL_FingerID id, int x, int y) {
+    pex_android_touch_set_focus();
     g_android_ui_finger = id;
     g_mouse_x = x;
     g_mouse_y = y;
+    if (pex_android_touch_inventory_screen() && pex_android_touch_button_close(x, y)) {
+        set_screen(SCREEN_INGAME);
+        g_android_ui_finger = PEX_ANDROID_TOUCH_NONE;
+        return;
+    }
     if (pex_android_touch_inventory_screen()) {
         g_android_inv_dragging = 1;
         g_android_inv_drag_start_slot = inventory_slot_at(x, y);
@@ -248,6 +262,7 @@ static void pex_android_touch_ui_up(SDL_FingerID id, int x, int y) {
 }
 
 static void pex_android_touch_ingame_down(SDL_FingerID id, int x, int y) {
+    pex_android_touch_set_focus();
     int slot = pex_android_touch_hotbar_slot(x, y);
     if (slot >= 0) { g_selected_hotbar_slot = slot; return; }
     if (pex_android_touch_button_pause(x, y)) { set_screen(SCREEN_PAUSE); return; }
@@ -332,6 +347,7 @@ static int pex_android_handle_touch_event(SDL_Event *e) {
     int y = pex_android_touch_gui_y(e->tfinger.y);
     SDL_FingerID id = e->tfinger.fingerId;
     g_android_touch_seen = 1;
+    pex_android_touch_set_focus();
 
     if (e->type == SDL_FINGERDOWN) {
         if (g_screen == SCREEN_INGAME) pex_android_touch_ingame_down(id, x, y);
@@ -346,29 +362,16 @@ static int pex_android_handle_touch_event(SDL_Event *e) {
     return 1;
 }
 
-static void pex_android_append_touch_pad(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
-    if (!g_android_touch_seen && g_android_move_finger == PEX_ANDROID_TOUCH_NONE &&
-        !g_android_jump_down && !g_android_sneak_down && !g_android_world_breaking) return;
-    if (g_gamepad_count >= PEX_GAMEPAD_MAX) return;
-    int slot = g_gamepad_count;
-    PexGamepadState *p = &g_gamepads[slot];
-    memset(p, 0, sizeof(*p));
-    pex_gamepad_copy_edges(p, &oldpads[slot]);
-    p->connected = 1;
-    p->slot = slot;
-    snprintf(p->name, sizeof(p->name), "Android PE touchscreen");
-    snprintf(p->kind, sizeof(p->kind), "PE touch");
-    p->lx = g_android_move_x;
-    p->ly = g_android_move_y;
-    p->dpad_up = g_android_move_up;
-    p->dpad_down = g_android_move_down;
-    p->dpad_left = g_android_move_left;
-    p->dpad_right = g_android_move_right;
-    p->a = g_android_jump_down;
-    p->b = g_android_sneak_down;
-    p->rt = g_android_world_breaking ? 1.0f : 0.0f;
-    g_gamepad_count++;
-    if (g_gamepad_primary < 0) g_gamepad_primary = slot;
+static void pex_android_touch_apply_virtual_keys(void) {
+    /* Touch is not a gamepad.  Feed only the movement/action key state here so
+       gameplay works without enabling controller menus/cursors. */
+    if (g_input_focus_mode != PEX_INPUT_FOCUS_TOUCH) return;
+    if (g_android_move_up) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1;
+    if (g_android_move_left) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
+    if (g_android_move_down) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
+    if (g_android_move_right) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
+    if (g_android_jump_down) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;
+    if (g_android_sneak_down) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;
 }
 
 static void pex_android_touch_ingame_update(void) {
@@ -378,7 +381,9 @@ static void pex_android_touch_ingame_update(void) {
 static void draw_android_touch_controls(void) {
     if (g_screen != SCREEN_INGAME && !pex_android_touch_inventory_screen()) return;
     if (pex_android_touch_inventory_screen()) {
-        draw_text("Tap/drag slots directly. Dragging carries the stack under your finger.", 8, g_gui_h - 12, 0xE0E0E0);
+        draw_rect(g_gui_w - 38, 6, g_gui_w - 6, 30, (int)0xAA000000u);
+        draw_text("X", g_gui_w - 25, 14, 0xFFFFFF);
+        draw_text("Tap/drag slots directly. Tap X or Android Back to close.", 8, g_gui_h - 12, 0xE0E0E0);
         return;
     }
 

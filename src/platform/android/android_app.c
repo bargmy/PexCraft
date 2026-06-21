@@ -136,6 +136,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             break;
         case SDL_MOUSEMOTION:
             if (e->motion.which == SDL_TOUCH_MOUSEID) break;
+            if (!g_mouse_grabbed) pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (g_mouse_grabbed && g_screen == SCREEN_INGAME) {
                 handle_grabbed_mouse_move(e->motion.xrel, e->motion.yrel);
                 g_mouse_x = g_gui_w / 2; g_mouse_y = g_gui_h / 2;
@@ -148,6 +149,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             break;
         case SDL_MOUSEBUTTONDOWN:
             if (e->button.which == SDL_TOUCH_MOUSEID) break;
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (e->button.button < ARRAY_COUNT(g_sdl2_mouse_buttons)) g_sdl2_mouse_buttons[e->button.button] = 1;
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);
@@ -156,6 +158,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             break;
         case SDL_MOUSEBUTTONUP:
             if (e->button.which == SDL_TOUCH_MOUSEID) break;
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (e->button.button < ARRAY_COUNT(g_sdl2_mouse_buttons)) g_sdl2_mouse_buttons[e->button.button] = 0;
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);

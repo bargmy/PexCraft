@@ -27,6 +27,25 @@ static float pex_deadzone(float v) {
     return v;
 }
 
+static void pex_input_focus_set(PexInputFocusMode mode) {
+    if (g_input_focus_mode == mode) return;
+    g_input_focus_mode = mode;
+    if (mode != PEX_INPUT_FOCUS_GAMEPAD) {
+        g_gamepad_virtual_cursor_active = 0;
+        g_gamepad_menu_index = -1;
+    }
+}
+
+static int pex_gamepad_has_intentional_input(const PexGamepadState *p) {
+    if (!p || !p->connected) return 0;
+    if (fabsf(p->lx) > 0.35f || fabsf(p->ly) > 0.35f ||
+        fabsf(p->rx) > 0.35f || fabsf(p->ry) > 0.35f ||
+        p->lt > 0.35f || p->rt > 0.35f) return 1;
+    return p->a || p->b || p->x || p->y || p->lb || p->rb ||
+           p->back || p->start || p->guide || p->ls || p->rs ||
+           p->dpad_up || p->dpad_down || p->dpad_left || p->dpad_right;
+}
+
 static void pex_gamepad_classify(PexGamepadState *pad, const char *name) {
     snprintf(pad->name, sizeof(pad->name), "%s", (name && *name) ? name : "Unknown controller");
     pad->is_xbox = pex_str_contains_i(pad->name, "xbox") ||
@@ -187,7 +206,7 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
     pex_android_tv_append_remote_pad(oldpads);
 #endif
 #ifdef PEX_PLATFORM_ANDROID
-    pex_android_append_touch_pad(oldpads);
+    (void)oldpads; /* Android touch is handled as touch/mouse focus, not as a controller. */
 #endif
 }
 
@@ -544,7 +563,7 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     pex_android_tv_ingame_update();
 #endif
 #ifdef PEX_PLATFORM_ANDROID
-    pex_android_touch_ingame_update();
+    /* Android touch tick runs from pex_gamepad_update even when gamepad focus is off. */
 #endif
 }
 
@@ -553,16 +572,30 @@ static void pex_gamepad_update(void) {
     memcpy(oldpads, g_gamepads, sizeof(oldpads));
     pex_gamepad_platform_poll(oldpads);
     PexGamepadState *p = pex_gamepad_primary_pad();
-    pex_gamepad_rebuild_virtual_keys(p);
+    if (pex_gamepad_has_intentional_input(p)) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
+
+    PexGamepadState *active_pad = (g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD) ? p : NULL;
+    pex_gamepad_rebuild_virtual_keys(active_pad);
+#ifdef PEX_PLATFORM_ANDROID
+    pex_android_touch_apply_virtual_keys();
+#endif
+
     static double last = 0.0;
     double now = now_seconds();
     double dt = last > 0.0 ? now - last : 1.0 / 60.0;
     if (dt < 0.0) dt = 0.0;
     if (dt > 0.10) dt = 0.10;
     last = now;
-    if (pex_gamepad_inventory_screen()) pex_gamepad_inventory_update(p, dt);
-    else if (g_screen == SCREEN_INGAME) pex_gamepad_ingame_update(p, dt);
-    else pex_gamepad_menu_update(p);
+#ifdef PEX_PLATFORM_ANDROID
+    pex_android_touch_ingame_update();
+#endif
+    if (g_input_focus_mode != PEX_INPUT_FOCUS_GAMEPAD) {
+        g_gamepad_virtual_cursor_active = 0;
+        return;
+    }
+    if (pex_gamepad_inventory_screen()) pex_gamepad_inventory_update(active_pad, dt);
+    else if (g_screen == SCREEN_INGAME) pex_gamepad_ingame_update(active_pad, dt);
+    else pex_gamepad_menu_update(active_pad);
 }
 
 static void pex_gamepad_shutdown(void) {
@@ -575,6 +608,7 @@ static void pex_gamepad_shutdown(void) {
 }
 
 static void draw_gamepad_virtual_cursor(void) {
+    if (g_input_focus_mode != PEX_INPUT_FOCUS_GAMEPAD) return;
     if (!g_gamepad_virtual_cursor_active || !pex_gamepad_inventory_screen()) return;
     int x = (int)g_gamepad_virtual_cursor_x;
     int y = (int)g_gamepad_virtual_cursor_y;

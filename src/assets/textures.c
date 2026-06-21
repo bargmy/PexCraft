@@ -244,19 +244,65 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
 #if defined(PEX_PLATFORM_PSP)
 static int ensure_wic(void) { return 1; }
 static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
-#elif defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_ANDROID)
+#elif defined(PEX_PLATFORM_ANDROID)
 static int ensure_wic(void) { return 1; }
-static int load_png_texture(Texture *t, const char *path, int repeat) {
-    (void)t;
-    (void)path;
-    (void)repeat;
-    /* Android/Android TV ship with the bundled MCRW assets. External PNG
-       texture packs can be added later by routing this through Android Bitmap,
-       asset APIs, or an Android SDL_image build. Keeping this branch separate
-       prevents the regular Android target from compiling the desktop SDL_image
-       path without SDL_image headers/libs. */
-    return 0;
+
+static unsigned char *android_decode_png_rgba(const char *path, int *out_w, int *out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!path || !file_exists(path)) return NULL;
+
+    char norm[MAX_PATHBUF];
+    pex_normalize_path(norm, sizeof(norm), path);
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject activity = SDL_AndroidGetActivity();
+    if (!env || !activity) return NULL;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID mid = cls ? (*env)->GetMethodID(env, cls, "decodePngToRgba", "(Ljava/lang/String;)[B") : NULL;
+    if (!mid) {
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); }
+        if (cls) (*env)->DeleteLocalRef(env, cls);
+        (*env)->DeleteLocalRef(env, activity);
+        return NULL;
+    }
+    jstring jpath = (*env)->NewStringUTF(env, norm);
+    jbyteArray arr = (jbyteArray)(*env)->CallObjectMethod(env, activity, mid, jpath);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); }
+    if (jpath) (*env)->DeleteLocalRef(env, jpath);
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+    if (!arr) return NULL;
+
+    jsize len = (*env)->GetArrayLength(env, arr);
+    if (len < 8) { (*env)->DeleteLocalRef(env, arr); return NULL; }
+    jbyte *bytes = (*env)->GetByteArrayElements(env, arr, NULL);
+    if (!bytes) { (*env)->DeleteLocalRef(env, arr); return NULL; }
+    unsigned char *b = (unsigned char *)bytes;
+    int w = (int)((unsigned)b[0] | ((unsigned)b[1] << 8) | ((unsigned)b[2] << 16) | ((unsigned)b[3] << 24));
+    int h = (int)((unsigned)b[4] | ((unsigned)b[5] << 8) | ((unsigned)b[6] << 16) | ((unsigned)b[7] << 24));
+    size_t need = (size_t)w * (size_t)h * 4u;
+    unsigned char *rgba = NULL;
+    if (w > 0 && h > 0 && w <= 4096 && h <= 4096 && (size_t)len >= 8u + need) {
+        rgba = (unsigned char *)malloc(need);
+        if (rgba) memcpy(rgba, b + 8, need);
+        if (out_w) *out_w = w;
+        if (out_h) *out_h = h;
+    }
+    (*env)->ReleaseByteArrayElements(env, arr, bytes, JNI_ABORT);
+    (*env)->DeleteLocalRef(env, arr);
+    return rgba;
 }
+
+static int load_png_texture(Texture *t, const char *path, int repeat) {
+    int w = 0, h = 0;
+    unsigned char *rgba = android_decode_png_rgba(path, &w, &h);
+    if (!rgba) return 0;
+    log_msg("Loaded PNG texture: %s (%dx%d)", path, w, h);
+    return upload_rgba_texture(t, w, h, rgba, repeat);
+}
+#elif defined(PEX_PLATFORM_ANDROID_TV)
+static int ensure_wic(void) { return 1; }
+static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
 #elif defined(PEX_PLATFORM_SDL2)
 static int ensure_wic(void) { return 1; }
 

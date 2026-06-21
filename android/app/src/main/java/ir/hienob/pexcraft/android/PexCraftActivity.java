@@ -1,5 +1,7 @@
 package ir.hienob.pexcraft.android;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -104,6 +106,43 @@ public class PexCraftActivity extends SDLActivity {
 
     public int getClassicPackSizeState() { return classicSizeState; }
     public int getClassicPackSizeBytes() { return classicSizeBytes; }
+
+    /** Decode external texture-pack PNGs for native code.
+     *  Output layout: little-endian width, little-endian height, then RGBA8888 pixels. */
+    public byte[] decodePngToRgba(String path) {
+        Bitmap bmp = null;
+        try {
+            bmp = BitmapFactory.decodeFile(path);
+            if (bmp == null) return null;
+            int w = bmp.getWidth();
+            int h = bmp.getHeight();
+            if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return null;
+            int[] pixels = new int[w * h];
+            bmp.getPixels(pixels, 0, w, 0, 0, w, h);
+            byte[] out = new byte[8 + w * h * 4];
+            out[0] = (byte)(w & 255);
+            out[1] = (byte)((w >> 8) & 255);
+            out[2] = (byte)((w >> 16) & 255);
+            out[3] = (byte)((w >> 24) & 255);
+            out[4] = (byte)(h & 255);
+            out[5] = (byte)((h >> 8) & 255);
+            out[6] = (byte)((h >> 16) & 255);
+            out[7] = (byte)((h >> 24) & 255);
+            int o = 8;
+            for (int p : pixels) {
+                out[o++] = (byte)((p >> 16) & 255); // R
+                out[o++] = (byte)((p >> 8) & 255);  // G
+                out[o++] = (byte)(p & 255);         // B
+                out[o++] = (byte)((p >> 24) & 255); // A
+            }
+            return out;
+        } catch (Throwable t) {
+            Log.e(TAG, "PNG decode failed: " + path, t);
+            return null;
+        } finally {
+            if (bmp != null) bmp.recycle();
+        }
+    }
 
     private static HttpURLConnection openClassicConnection(String urlString) throws IOException {
         HttpURLConnection conn = (HttpURLConnection)new URL(urlString).openConnection();

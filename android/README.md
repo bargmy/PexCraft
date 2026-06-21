@@ -10,7 +10,8 @@ This is the regular Android phone/tablet APK target. It is separate from `androi
 - Hold a block in the world view: mine/break the block under that finger.
 - Jump, Inv, Pause: PE-style on-screen game buttons.
 - Hotbar: tap a slot to select it.
-- Inventory/chest/furnace/crafting: touch slots directly; tap to pick/place and drag a carried stack from one slot to another.
+- Inventory/chest/furnace/crafting: touch slots directly; tap to pick/place and drag a carried stack from one slot to another. Tap the on-screen X or Android Back to close.
+- Touch is not registered as a controller. Touch/mouse/gamepad each switch input focus, and the controller cursor only appears after real controller input.
 
 ## Classic resource pack download
 

@@ -143,6 +143,15 @@ typedef enum ButtonKind {
     BUTTON_SLIDER
 } ButtonKind;
 
+
+/* Last intentional input source.  Touch is not a controller: it uses mouse-style
+   direct UI focus plus a separate mobile movement/action path. */
+typedef enum PexInputFocusMode {
+    PEX_INPUT_FOCUS_MOUSE = 0,
+    PEX_INPUT_FOCUS_GAMEPAD = 1,
+    PEX_INPUT_FOCUS_TOUCH = 2
+} PexInputFocusMode;
+
 typedef enum RendererBackend {
     RENDERER_OPENGL = 0,
     RENDERER_D3D9,
@@ -395,6 +404,7 @@ static double g_gamepad_nav_last_time = 0.0;
 static double g_gamepad_slider_last_time = 0.0;
 static double g_gamepad_click_last_time = 0.0;
 static double g_gamepad_probe_last_time = -10.0;
+static PexInputFocusMode g_input_focus_mode = PEX_INPUT_FOCUS_MOUSE;
 static PexSystemInfo g_system_info;
 static double g_system_info_last_time = -10.0;
 
