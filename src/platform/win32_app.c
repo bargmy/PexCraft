@@ -5,6 +5,22 @@ static PFNWGLSWAPINTERVALEXTPROC_LOCAL g_wgl_swap_interval_ext = NULL;
 static int g_wgl_swap_interval_loaded = 0;
 static void save_world_state_for_exit(void);
 
+static void enable_windows_dpi_awareness(void) {
+    HMODULE user32 = GetModuleHandleA("user32.dll");
+    if (!user32) return;
+    typedef BOOL (WINAPI *PFN_SET_PROCESS_DPI_AWARE)(void);
+    typedef BOOL (WINAPI *PFN_SET_PROCESS_DPI_AWARENESS_CONTEXT)(HANDLE);
+    PFN_SET_PROCESS_DPI_AWARENESS_CONTEXT set_ctx =
+        (PFN_SET_PROCESS_DPI_AWARENESS_CONTEXT)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+    if (set_ctx) {
+        /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, without requiring newer SDK headers. */
+        if (set_ctx((HANDLE)-4)) return;
+    }
+    PFN_SET_PROCESS_DPI_AWARE set_dpi_aware =
+        (PFN_SET_PROCESS_DPI_AWARE)GetProcAddress(user32, "SetProcessDPIAware");
+    if (set_dpi_aware) set_dpi_aware();
+}
+
 static void apply_vsync_setting(void) {
     if (g_runtime_renderer_backend == RENDERER_D3D9) {
         if (g_d3d9.active) pex_renderer_d3d9_resize(g_d3d9.width, g_d3d9.height);
@@ -352,6 +368,7 @@ static void main_loop(void) {
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrev; (void)lpCmdLine;
+    enable_windows_dpi_awareness();
     g_inst = hInstance;
     begin_high_res_timer();
     init_dirs();
@@ -372,7 +389,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = "PEXCRAFTBeta10Client";
     if (!RegisterClassA(&wc)) { end_high_res_timer(); return 1; }
-    RECT rc = {0, 0, 854, 480};
+    int initial_w = 1280, initial_h = 720;
+    RECT work_area;
+    memset(&work_area, 0, sizeof(work_area));
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &work_area, 0)) {
+        int work_w = work_area.right - work_area.left;
+        int work_h = work_area.bottom - work_area.top;
+        if (work_w > 0 && work_h > 0) {
+            /* Use the largest 16:9 client area that fits the real DPI-aware desktop.
+               The old default stayed around 720p on 1080p displays, making the
+               Windows build look smeared even when the monitor was native 1080p. */
+            int target_w = work_w;
+            int target_h = (target_w * 9) / 16;
+            if (target_h > work_h) { target_h = work_h; target_w = (target_h * 16) / 9; }
+            if (target_w > initial_w) { initial_w = target_w; initial_h = target_h; }
+        }
+    }
+    RECT rc = {0, 0, initial_w, initial_h};
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
     g_hwnd = CreateWindowA(wc.lpszClassName, APP_TITLE, WS_OVERLAPPEDWINDOW,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,

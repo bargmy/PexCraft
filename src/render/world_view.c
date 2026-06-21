@@ -92,6 +92,16 @@ static void cloud_tex_vertex(float x, float y, float z, float u, float v) {
     glVertex3f(x, y, z);
 }
 
+static int cloud_texture_has_cutout_alpha(void) {
+    if (!tex_clouds.rgba || tex_clouds.w <= 0 || tex_clouds.h <= 0) return 0;
+    int n = tex_clouds.w * tex_clouds.h;
+    for (int i = 0; i < n; ++i) {
+        unsigned char a = tex_clouds.rgba[i * 4 + 3];
+        if (a < 250) return 1;
+    }
+    return 0;
+}
+
 static void draw_source_fast_clouds(float partial) {
     if (!tex_clouds.id) return;
     float cr, cg, cb;
@@ -147,6 +157,7 @@ static void draw_source_fast_clouds(float partial) {
 
 static void draw_source_fancy_clouds(float partial) {
     if (!tex_clouds.id) return;
+    if (!cloud_texture_has_cutout_alpha()) { draw_source_fast_clouds(partial); return; }
     float cr, cg, cb;
     cloud_color(&cr, &cg, &cb);
 
@@ -211,19 +222,23 @@ static void draw_source_fancy_clouds(float partial) {
                 float v1 = ((float)(cz * cell + cell)) * uv_scale + v_base;
 
                 glBegin(GL_QUADS);
+                /* Java draws the bottom face when the camera is below/inside the
+                   slab, and the top face when the camera is above/inside it.  The
+                   earlier port had these swapped, which made fancy clouds look like
+                   inside-out sheets from the ground. */
                 if (py < y1 + 1.0f) {
-                    glColor4f(cr, cg, cb, alpha);
-                    cloud_tex_vertex(x0, y1 - eps, z1, u0, v1);
-                    cloud_tex_vertex(x1, y1 - eps, z1, u1, v1);
-                    cloud_tex_vertex(x1, y1 - eps, z0, u1, v0);
-                    cloud_tex_vertex(x0, y1 - eps, z0, u0, v0);
-                }
-                if (py > y0 - 1.0f) {
                     glColor4f(cr * 0.7f, cg * 0.7f, cb * 0.7f, alpha);
                     cloud_tex_vertex(x0, y0, z1, u0, v1);
                     cloud_tex_vertex(x1, y0, z1, u1, v1);
                     cloud_tex_vertex(x1, y0, z0, u1, v0);
                     cloud_tex_vertex(x0, y0, z0, u0, v0);
+                }
+                if (py > y0 - thickness - 1.0f) {
+                    glColor4f(cr, cg, cb, alpha);
+                    cloud_tex_vertex(x0, y1 - eps, z1, u0, v1);
+                    cloud_tex_vertex(x1, y1 - eps, z1, u1, v1);
+                    cloud_tex_vertex(x1, y1 - eps, z0, u1, v0);
+                    cloud_tex_vertex(x0, y1 - eps, z0, u0, v0);
                 }
                 glColor4f(cr * 0.9f, cg * 0.9f, cb * 0.9f, alpha);
                 if (cx > -1) for (int i = 0; i < cell; ++i) {
@@ -1570,9 +1585,9 @@ static void draw_java_entity_shadow(float x, float y, float z, float shadow_size
             float dz = (cz - z) / radius;
             float dist = sqrtf(dx * dx + dz * dz);
             if (dist > 1.35f) continue;
-            float alpha = (shadow_alpha - dy / 2.0f) * 0.5f * (1.0f - dist / 1.35f) * br;
+            float alpha = (shadow_alpha - dy / 2.0f) * 0.35f * (1.0f - dist / 1.35f) * br;
             if (alpha <= 0.0f) continue;
-            if (alpha > 0.45f) alpha = 0.45f;
+            if (alpha > 0.22f) alpha = 0.22f;
             glColor4f(1.0f, 1.0f, 1.0f, alpha);
             glTexCoord2f(0, 1); glVertex3f((float)bx,     sy, (float)bz + 1);
             glTexCoord2f(1, 1); glVertex3f((float)bx + 1, sy, (float)bz + 1);
@@ -1898,6 +1913,14 @@ static int cross_plant_tile_for_block(int id) {
 }
 
 static void emit_cross_plant_block_float(int id, float x, float y, float z) {
+    int bx = (int)floorf(x);
+    int by = (int)floorf(y);
+    int bz = (int)floorf(z);
+    world_style_set_pos(bx, by, bz);
+    g_world_light_x = bx;
+    g_world_light_y = by;
+    g_world_light_z = bz;
+
     float u0, v0, u1, v1;
     terrain_tile_uv(cross_plant_tile_for_block(id), &u0, &v0, &u1, &v1);
     if (id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE || id == BLOCK_CROPS) {
@@ -1930,7 +1953,7 @@ static void emit_cross_plant_block(int id, int x, int y, int z) {
 
 static void draw_cross_plant_block(int id, float x, float y, float z) {
     glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.1f);
+    glAlphaFunc(GL_GREATER, 0.5f);
     glBegin(GL_QUADS);
     emit_cross_plant_block_float(id, x, y, z);
     glEnd();
@@ -2381,7 +2404,8 @@ static void draw_held_or_dropped_block_item_model(int id, float x, float y, floa
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glColor4f(1,1,1,1);
     glEnable(GL_TEXTURE_2D);
-    glEnable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
     /* RenderItem/ItemRenderer must not turn non-full block items into solid cubes.
        This path is used for dropped block entities and first-person held blocks. */
     if (id == BLOCK_SLAB) {
@@ -2737,7 +2761,7 @@ static void draw_ladder_block_model(int x, int y, int z) {
     if (meta < 2 || meta > 5) meta = 3;
     float u0, v0, u1, v1; terrain_tile_uv(83, &u0, &v0, &u1, &v1);
     float e = 1.0f / 16.0f;
-    glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER, 0.1f);
+    glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER, 0.5f);
     glBegin(GL_QUADS); world_set_shade(1.0f);
     if (meta == 2) { float zz = (float)z + 1.0f - e; world_tex_vertex(x+1,y+1,zz,u0,v0); world_tex_vertex(x,y+1,zz,u1,v0); world_tex_vertex(x,y,zz,u1,v1); world_tex_vertex(x+1,y,zz,u0,v1); }
     else if (meta == 3) { float zz = (float)z + e; world_tex_vertex(x,y+1,zz,u0,v0); world_tex_vertex(x+1,y+1,zz,u1,v0); world_tex_vertex(x+1,y,zz,u1,v1); world_tex_vertex(x,y,zz,u0,v1); }
@@ -2780,7 +2804,7 @@ static void draw_door_block_model(int id, int x, int y, int z) {
     else x1 = x0 + t;
 
     glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.1f);
+    glAlphaFunc(GL_GREATER, 0.5f);
     glBegin(GL_QUADS);
     world_style_set_pos(x, y, z);
     for (int face = 0; face < 6; face++) {
@@ -3178,7 +3202,7 @@ static void rebuild_flat_world_chunk_list(int cx, int cz) {
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
-        glAlphaFunc(GL_GREATER, 0.1f);
+        glAlphaFunc(GL_GREATER, 0.5f);
         glBegin(GL_QUADS);
         for (int y = FLAT_WORLD_Y_MIN; y <= chunk_ymax; y++) {
             for (int z = z0; z <= z1; z++) {
@@ -3400,7 +3424,7 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
-        glAlphaFunc(GL_GREATER, 0.1f);
+        glAlphaFunc(GL_GREATER, 0.5f);
         for (int y = y0; y <= y1; y++) {
             for (int z = z0; z <= z1; z++) {
                 for (int x = x0; x <= x1; x++) {
@@ -3516,7 +3540,7 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
-        glAlphaFunc(GL_GREATER, 0.1f);
+        glAlphaFunc(GL_GREATER, 0.5f);
         glBegin(GL_QUADS);
         for (int y = y0; y <= y1; y++) {
             for (int z = z0; z <= z1; z++) {
@@ -4297,6 +4321,7 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
 
 static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count) {
     if (flat_direct_backend()) { draw_flat_section_passes_direct(refs, count); return; }
+    glEnable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
     glDepthMask(GL_TRUE);

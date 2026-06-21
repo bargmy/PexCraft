@@ -288,12 +288,32 @@ static int flat_has_leaf_canopy_above(int x, int y, int z) {
     return saw_leaf;
 }
 
+static int flat_air_cell_has_lateral_sky(int x, int y, int z) {
+    if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) return 0;
+    int id = flat_get_block(x, y, z);
+    if (id != 0 && flat_light_opacity_for_id(id) >= 255) return 0;
+    const int radius = 4;
+    for (int dz = -radius; dz <= radius; ++dz) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            if (dx == 0 && dz == 0) continue;
+            if (abs(dx) + abs(dz) > radius) continue;
+            int sx = x + dx, sz = z + dz;
+            if (flat_get_sky_light(sx, y, sz) >= 15 || flat_get_sky_light(sx, y + 1, sz) >= 15) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static float flat_light_brightness(int x, int y, int z) {
     int l = flat_combined_light_value(x, y, z);
-    /* Beta leaves darken through skylight, but the previous propagated-light port
-       stacked every leaf layer down to light 0, creating pitch-black rectangles.
-       Clamp only the leaf-canopy case: real caves/solid overhangs can remain dark,
-       while flowers/items under trees get the same canopy shade as the ground. */
+    /* The fast column skylight pass intentionally avoids a full flood fill while
+       streaming.  Open cliff/valley side cells can therefore read sky=0 even
+       though Java's skylight would have spilled in from the side.  Raise only
+       exposed air/translucent sample cells that have nearby skylight, avoiding
+       the pure-black mountain rectangles without brightening sealed caves. */
+    if (l < 8 && flat_air_cell_has_lateral_sky(x, y, z)) l = 8;
     if (l < 8 && flat_has_leaf_canopy_above(x, y, z)) l = 8;
     if (l < 0) l = 0;
     if (l > 15) l = 15;
@@ -469,6 +489,58 @@ static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
                         if (light < 0) light = 0;
                     }
                 }
+            }
+        }
+    }
+    int lcx = stream_world_chunk_local_x(cx);
+    int lcz = stream_world_chunk_local_z(cz);
+    if (flat_local_chunk_valid(lcx, lcz)) {
+        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+    }
+}
+
+
+static void flat_compute_chunk_light_fast_from_buffers(const unsigned char *buf, unsigned char *sky, unsigned char *block) {
+    if (!buf || !sky || !block) return;
+    for (int lx = 0; lx < 16; lx++) {
+        for (int lz = 0; lz < 16; lz++) {
+            int light = 15;
+            for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
+                int bi = flat_chunk_buf_index(lx, y, lz);
+                int id = buf[bi];
+                sky[bi] = (unsigned char)(light & 15);
+                block[bi] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
+                int opacity = flat_light_opacity_for_id(id);
+                if (opacity > 0 && light > 0) {
+                    if (id == BLOCK_LEAVES) {
+                        if (light > 8) light -= 1;
+                    } else if (opacity >= 255) {
+                        light = 0;
+                    } else {
+                        light -= opacity;
+                        if (light < 0) light = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigned char *sky, const unsigned char *block) {
+    if (!sky || !block) return;
+    for (int lx = 0; lx < 16; lx++) {
+        int wx = cx * 16 + lx;
+        if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
+        int fx = flat_index(wx);
+        for (int lz = 0; lz < 16; lz++) {
+            int wz = cz * 16 + lz;
+            if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
+            int fz = flat_z_index(wz);
+            for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+                int bi = flat_chunk_buf_index(lx, y, lz);
+                int yi = flat_y_index(y);
+                g_flat_sky_light[yi][fz][fx] = sky[bi] & 15;
+                g_flat_block_light[yi][fz][fx] = block[bi] & 15;
             }
         }
     }
@@ -877,6 +949,7 @@ static void load_modified_flat_chunk_delta_into_buffers_for_dir(const char *worl
     fclose(f);
 }
 
+static int g_copy_chunk_skip_main_light = 0;
 static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char *buf, const unsigned char *meta) {
     if (!buf) return;
     for (int lx = 0; lx < 16; lx++) {
@@ -900,7 +973,7 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-    flat_recalculate_lighting_chunk_fast_surface(cx, cz);
+    if (!g_copy_chunk_skip_main_light) flat_recalculate_lighting_chunk_fast_surface(cx, cz);
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
@@ -5090,6 +5163,8 @@ static int g_stream_async_result_ready = 0;
 static int g_stream_async_result_cx = 0, g_stream_async_result_cz = 0, g_stream_async_result_epoch = 0;
 static unsigned char *g_stream_async_result_buf = NULL;
 static unsigned char *g_stream_async_result_meta = NULL;
+static unsigned char *g_stream_async_result_sky = NULL;
+static unsigned char *g_stream_async_result_blocklight = NULL;
 
 static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
     (void)unused;
@@ -5120,7 +5195,9 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
         unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
         unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
-        if (buf && meta) {
+        unsigned char *sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+        unsigned char *blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+        if (buf && meta && sky && blocklight) {
             TerrainProvider *reuse = NULL;
             if (type == 1) {
                 if (!worker_tp_valid || worker_tp_seed != seed) {
@@ -5138,18 +5215,21 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
             }
             generate_flat_chunk_base_to_buffer_ex(cx, cz, buf, type, seed, reuse);
             load_modified_flat_chunk_delta_into_buffers_for_dir(world_dir, cx, cz, buf, meta);
+            flat_compute_chunk_light_fast_from_buffers(buf, sky, blocklight);
         } else {
-            free(buf);
-            free(meta);
-            buf = NULL;
-            meta = NULL;
+            free(buf); free(meta); free(sky); free(blocklight);
+            buf = NULL; meta = NULL; sky = NULL; blocklight = NULL;
         }
 
         EnterCriticalSection(&g_stream_async_cs);
         if (g_stream_async_result_buf) { free(g_stream_async_result_buf); g_stream_async_result_buf = NULL; }
         if (g_stream_async_result_meta) { free(g_stream_async_result_meta); g_stream_async_result_meta = NULL; }
+        if (g_stream_async_result_sky) { free(g_stream_async_result_sky); g_stream_async_result_sky = NULL; }
+        if (g_stream_async_result_blocklight) { free(g_stream_async_result_blocklight); g_stream_async_result_blocklight = NULL; }
         g_stream_async_result_buf = buf;
         g_stream_async_result_meta = meta;
+        g_stream_async_result_sky = sky;
+        g_stream_async_result_blocklight = blocklight;
         g_stream_async_result_cx = cx;
         g_stream_async_result_cz = cz;
         g_stream_async_result_epoch = epoch;
@@ -5219,6 +5299,8 @@ static int stream_async_install_ready(int max_install) {
         int cx = 0, cz = 0, epoch = 0;
         unsigned char *buf = NULL;
         unsigned char *meta = NULL;
+        unsigned char *sky = NULL;
+        unsigned char *blocklight = NULL;
         EnterCriticalSection(&g_stream_async_cs);
         if (g_stream_async_result_ready) {
             cx = g_stream_async_result_cx;
@@ -5226,8 +5308,12 @@ static int stream_async_install_ready(int max_install) {
             epoch = g_stream_async_result_epoch;
             buf = g_stream_async_result_buf;
             meta = g_stream_async_result_meta;
+            sky = g_stream_async_result_sky;
+            blocklight = g_stream_async_result_blocklight;
             g_stream_async_result_buf = NULL;
             g_stream_async_result_meta = NULL;
+            g_stream_async_result_sky = NULL;
+            g_stream_async_result_blocklight = NULL;
             g_stream_async_result_ready = 0;
         }
         LeaveCriticalSection(&g_stream_async_cs);
@@ -5235,13 +5321,18 @@ static int stream_async_install_ready(int max_install) {
 
         if (epoch == g_stream_generation_epoch &&
             stream_world_chunk_in_window(cx, cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+            g_copy_chunk_skip_main_light = (sky && blocklight) ? 1 : 0;
             copy_flat_chunk_buffers_to_world(cx, cz, buf, meta);
+            g_copy_chunk_skip_main_light = 0;
+            if (sky && blocklight) copy_flat_chunk_light_buffers_to_world(cx, cz, sky, blocklight);
             stream_mark_local_chunk_generated(stream_world_chunk_local_x(cx), stream_world_chunk_local_z(cz));
             g_stream_gen_queue_installed_count++;
             installed++;
         }
         free(buf);
         free(meta);
+        free(sky);
+        free(blocklight);
     }
     return installed;
 }
@@ -5636,7 +5727,11 @@ static void process_stream_generation_queue(void) {
     }
 
     static int s_stream_install_tick = 0;
-    int allow_install = ((s_stream_install_tick++ & 1) == 0);
+    /* Chunk generation, delta loading, and light-column calculation now happen on
+       the worker.  The remaining main-thread commit still touches active world
+       arrays and marks render sections dirty, so throttle it hard enough that
+       walking cannot create a 4-8 ms hitch every tick. */
+    int allow_install = ((s_stream_install_tick++ & 3) == 0);
     if (allow_install) stream_async_install_ready(1);
     stream_async_submit_next();
 
