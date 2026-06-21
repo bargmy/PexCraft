@@ -55,6 +55,7 @@ static void stream_queue_add_chunk(int wcx, int wcz);
 static int stream_queue_missing_visible_chunks_near_player(void);
 static void process_stream_generation_queue(void);
 static int stream_generation_active(void);
+static int psp_player_terrain_ready_or_hold(void);
 static void wake_neighbor_liquids(int x, int y, int z);
 static void fluid_check_for_harden(int x, int y, int z);
 static void flat_place_fluid_source(int x, int y, int z, int id);
@@ -73,6 +74,27 @@ static int flat_section_y_for_world(int y) { return (y - FLAT_WORLD_Y_MIN) / FLA
 
 static int flat_local_chunk_valid(int lcx, int lcz) {
     return lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS;
+}
+
+static int flat_world_chunk_generated_at_block(int x, int z) {
+    if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE ||
+        z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return 0;
+    int lcx = flat_local_chunk_x_for_world(x);
+    int lcz = flat_local_chunk_z_for_world(z);
+    return flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx];
+}
+
+static int flat_player_columns_generated_at(float px, float pz) {
+    float xs[3] = { px, px - 0.30f, px + 0.30f };
+    float zs[3] = { pz, pz - 0.30f, pz + 0.30f };
+    for (int iz = 0; iz < 3; iz++) {
+        for (int ix = 0; ix < 3; ix++) {
+            int x = (int)floorf(xs[ix]);
+            int z = (int)floorf(zs[iz]);
+            if (!flat_world_chunk_generated_at_block(x, z)) return 0;
+        }
+    }
+    return 1;
 }
 
 static int flat_section_index_valid(int sy) {
@@ -2223,6 +2245,15 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
     for (int y = y0 - 1; y <= y1; y++) {
         for (int z = z0; z <= z1; z++) {
             for (int x = x0; x <= x1; x++) {
+#if defined(PEX_PLATFORM_PSP)
+                /* Do not let the player step/fall into an async chunk that has
+                   not been installed yet.  Treat the unloaded column under the
+                   feet as a temporary collision plane; the real chunk replaces
+                   it a few frames later. */
+                if (!flat_world_chunk_generated_at_block(x, z) && y <= (int)floorf(feet)) {
+                    return 1;
+                }
+#endif
                 int bid = flat_get_block(x, y, z);
                 if (block_is_door_id(bid)) {
                     if (door_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
@@ -4645,6 +4676,9 @@ static int flat_spawn_has_open_sky(int x, int z, int foot_y) {
 
 static int flat_column_spawn_y_ex(int x, int z, int require_sky) {
     if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE || z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return -9999;
+#if defined(PEX_PLATFORM_PSP)
+    if (!flat_world_chunk_generated_at_block(x, z)) return -9999;
+#endif
     for (int y = FLAT_WORLD_Y_MAX - 3; y >= FLAT_WORLD_Y_MIN; y--) {
         int id = flat_get_block(x, y, z);
         if (!flat_solid_for_spawn(id)) continue;
@@ -4663,14 +4697,16 @@ static int flat_column_spawn_y(int x, int z) {
     return flat_column_spawn_y_ex(x, z, 1);
 }
 
-static int flat_find_safe_spawn_pass(float *out_x, float *out_y, float *out_z, int require_sky) {
+static int flat_find_safe_spawn_pass_limited(float *out_x, float *out_y, float *out_z, int require_sky, int max_radius) {
     const int center_x = 0;
     const int center_z = 0;
 
     int best_x = 0, best_y = -9999, best_z = 0;
     int best_score = 0x7fffffff;
+    int hard_limit = FLAT_WORLD_SIZE / 2 - 2;
+    if (max_radius < 0 || max_radius > hard_limit) max_radius = hard_limit;
 
-    for (int r = 0; r <= FLAT_WORLD_SIZE / 2 - 2; r++) {
+    for (int r = 0; r <= max_radius; r++) {
         for (int dz = -r; dz <= r; dz++) {
             for (int dx = -r; dx <= r; dx++) {
                 if (abs(dx) != r && abs(dz) != r) continue;
@@ -4715,7 +4751,26 @@ static int flat_find_safe_spawn_pass(float *out_x, float *out_y, float *out_z, i
     return 0;
 }
 
+static int flat_find_safe_spawn_pass(float *out_x, float *out_y, float *out_z, int require_sky) {
+    return flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, require_sky, -1);
+}
+
 static int flat_find_safe_spawn(float *out_x, float *out_y, float *out_z) {
+#if defined(PEX_PLATFORM_PSP)
+    /* A full 128x128x128 spawn scan can freeze a PSP, especially right after a
+       death while the real Beta generator is still installing chunks.  Search
+       only the already-generated spawn neighborhood; if it is not ready yet,
+       place the player above spawn and let psp_player_terrain_ready_or_hold()
+       snap them down when the worker finishes. */
+    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 1, 24)) return 1;
+    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 0, 40)) return 1;
+
+    *out_x = 0.5f;
+    *out_y = (float)FLAT_WORLD_Y_MAX + 3.0f;
+    *out_z = 0.5f;
+    g_psp_respawn_snap_pending = 1;
+    return 0;
+#else
     if (flat_find_safe_spawn_pass(out_x, out_y, out_z, 1)) return 1;
 
     /* Last-resort fallback keeps old saves/world types playable if the center
@@ -4726,6 +4781,72 @@ static int flat_find_safe_spawn(float *out_x, float *out_y, float *out_z) {
     *out_y = (float)FLAT_WORLD_Y_MAX + 3.0f;
     *out_z = 0.5f;
     return 0;
+#endif
+}
+
+static void psp_snap_respawn_to_ready_ground(void) {
+#if defined(PEX_PLATFORM_PSP)
+    if (!g_psp_respawn_snap_pending) return;
+    if (!flat_player_columns_generated_at(g_player_x, g_player_z)) return;
+
+    float sx, sy, sz;
+    if (flat_find_safe_spawn_pass_limited(&sx, &sy, &sz, 1, 24) ||
+        flat_find_safe_spawn_pass_limited(&sx, &sy, &sz, 0, 40)) {
+        g_player_x = g_player_prev_x = sx;
+        g_player_y = g_player_prev_y = sy;
+        g_player_z = g_player_prev_z = sz;
+        g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+        g_player_fall_distance = 0.0f;
+        g_player_on_ground = 0;
+        g_psp_respawn_snap_pending = 0;
+        return;
+    }
+
+    /* If the center generated as ocean or a cliff with no clean sky column, at
+       least avoid keeping the player in the void. */
+    int x = (int)floorf(g_player_x);
+    int z = (int)floorf(g_player_z);
+    int syi = flat_column_spawn_y_ex(x, z, 0);
+    if (syi != -9999) {
+        g_player_y = g_player_prev_y = (float)syi + 1.62f;
+        g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+        g_player_fall_distance = 0.0f;
+        g_psp_respawn_snap_pending = 0;
+    }
+#endif
+}
+
+static int psp_player_terrain_ready_or_hold(void) {
+#if defined(PEX_PLATFORM_PSP)
+    if (g_mp_connected) return 1;
+    if (flat_player_columns_generated_at(g_player_x, g_player_z)) {
+        psp_snap_respawn_to_ready_ground();
+        return 1;
+    }
+
+    int pcx = floor_div16((int)floorf(g_player_x));
+    int pcz = floor_div16((int)floorf(g_player_z));
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            stream_queue_add_chunk(pcx + dx, pcz + dz);
+        }
+    }
+    process_stream_generation_queue();
+
+    g_player_prev_x = g_player_x;
+    g_player_prev_y = g_player_y;
+    g_player_prev_z = g_player_z;
+    g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+    g_player_fall_distance = 0.0f;
+    g_player_on_ground = 1;
+    if (g_ingame_ticks - g_psp_terrain_wait_chat_tick > 60) {
+        hud_add_chat("Waiting for terrain...");
+        g_psp_terrain_wait_chat_tick = g_ingame_ticks;
+    }
+    return 0;
+#else
+    return 1;
+#endif
 }
 
 static int flat_player_suffocation_block(void) {

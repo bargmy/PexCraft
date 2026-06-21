@@ -182,6 +182,14 @@ static void ingame_tick(void) {
         return;
     }
 
+#if defined(PEX_PLATFORM_PSP)
+    if (!psp_player_terrain_ready_or_hold()) {
+        pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
+        pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
+        return;
+    }
+#endif
+
     g_break_swing_holding = 0;
     g_prev_hand_swing = g_hand_swing;
     if (input_active) {

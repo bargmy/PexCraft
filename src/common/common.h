@@ -833,6 +833,11 @@ static int g_stream_gen_queue_index = 0;
 static int g_stream_gen_queue_installed_count = 0;
 static int g_stream_generation_keep_completed = 0;
 static int g_stream_generation_epoch = 1;
+/* PSP real-world streaming can leave the player briefly over a not-yet-installed
+   terrain chunk.  These flags let respawn/physics wait for the worker instead
+   of falling into air or doing a full blocking spawn scan on the main thread. */
+static int g_psp_respawn_snap_pending = 0;
+static int g_psp_terrain_wait_chat_tick = -1000;
 #define AUTOSAVE_INTERVAL_TICKS 600
 #define SAVE_MESSAGE_TICKS 40
 static int g_save_dirty = 0;
