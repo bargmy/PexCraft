@@ -2098,6 +2098,13 @@ static int flat_face_exposed_for_block(int id, int x, int y, int z, int face) {
     if (face == 0 && y <= FLAT_WORLD_Y_MIN) return 0; /* bottom of bedrock never needs drawing */
     int n = neighbor_for_face(x, y, z, face);
 
+    /* Practical OpenGL fix: do not emit leaf faces between leaf blocks.  The
+       Java fancy path may allow more internal faces, but with this renderer's
+       cutout atlas and old face emitters those hidden internal quads produce
+       the heavy z/alpha overlap seen inside trees.  External leaf faces still
+       use the fancy leaf texture and alpha test. */
+    if (id == BLOCK_LEAVES && n == BLOCK_LEAVES) return 0;
+
     /* A snow layer sits directly on the top face of the supporting block.
        Rendering the covered grass/dirt/stone top doubles the visible-surface
        cost across snowy biomes and creates unnecessary overdraw/z pressure.
@@ -2539,8 +2546,10 @@ static void draw_held_or_dropped_block_item_model(int id, float x, float y, floa
     glColor4f(1,1,1,1);
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    /* Disable culling here too: the same legacy cuboid emitter is used for
+       held/dropped block items, and OpenGL culling makes their faces disappear
+       or appear inverted while D3D looks fine. */
+    glDisable(GL_CULL_FACE);
     /* RenderItem/ItemRenderer must not turn non-full block items into solid cubes.
        This path is used for dropped block entities and first-person held blocks. */
     if (id == BLOCK_SLAB) {
@@ -4467,8 +4476,12 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
 static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    /* The captured terrain mesh reuses the old immediate-mode face emitters.
+       Their quad winding is not consistent enough for OpenGL back-face culling,
+       even though the D3D backends draw the same mesh fine without culling.
+       Culling here removed random mountain/terrain faces and made OpenGL look
+       like x-ray.  Keep depth test/write on, but render both sides. */
+    glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.5f);
@@ -4503,7 +4516,7 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
 static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count) {
     if (flat_direct_backend()) { draw_flat_section_passes_direct(refs, count); return; }
     if (flat_async_section_mesh_enabled()) { draw_flat_section_passes_gl_cpu(refs, count); return; }
-    glEnable(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
     glDepthMask(GL_TRUE);

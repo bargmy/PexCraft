@@ -133,26 +133,32 @@ static void draw_item_icon_2d_gui(const ItemStack *st, int x, int y) {
 
 
 static void draw_inventory_block_model(int id) {
-    if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_SNOW_LAYER) { draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0,0,0,1,0.125f,1); return; }
-    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
-    if (id == BLOCK_STONE_BUTTON) { draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
-    if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    /* Java RenderItem.renderItemIntoGUI transforms a block rendered at the
+       normal RenderBlocks origin (0..1).  The previous Pex path drew the cube at
+       -0.5..0.5, so the Java translate/rotate sequence showed the wrong faces
+       and made GUI/HUD block items look skewed or backwards, especially on
+       OpenGL. */
+    const float bx = 0.0f, by = 0.0f, bz = 0.0f;
+    if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
+    if (id == BLOCK_STONE_BUTTON) { draw_cuboid_model_for_block(id, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
+    if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_FENCE) {
         glBegin(GL_QUADS);
-        emit_cuboid_model_faces_for_block(id, -0.5f,-0.5f,-0.5f, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
-        emit_cuboid_model_faces_for_block(id, -0.5f,-0.5f,-0.5f, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
-        emit_cuboid_model_faces_for_block(id, -0.5f,-0.5f,-0.5f, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        emit_cuboid_model_faces_for_block(id, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        emit_cuboid_model_faces_for_block(id, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        emit_cuboid_model_faces_for_block(id, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
         glEnd();
         return;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
-        draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0,0,0,1,0.5f,1);
-        draw_cuboid_model_for_block(id, -0.5f,-0.5f,-0.5f, 0.5f,0.5f,0,1,1,1);
+        draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1);
+        draw_cuboid_model_for_block(id, bx,by,bz, 0.5f,0.5f,0,1,1,1);
         return;
     }
-    if (id == BLOCK_CHEST) { draw_chest_block(-0.5f,-0.5f,-0.5f); return; }
-    draw_world_block_id(id, -0.5f, -0.5f, -0.5f);
+    if (id == BLOCK_CHEST) { draw_chest_block(bx,by,bz); return; }
+    draw_world_block_id(id, bx, by, bz);
 }
 
 static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
@@ -166,8 +172,10 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     /* Java RenderItem does not clear the whole depth buffer for every slot.
        Clearing it made 3D blocks interact badly with the GUI and caused odd
        facing/depth artifacts. */
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    /* Keep culling off for Pex block item models.  D3D was fine because it did
+       not cull these faces; OpenGL culling exposed inconsistent legacy winding
+       and made GUI blocks look badly faced. */
+    glDisable(GL_CULL_FACE);
     glColorMask(1,1,1,1);
     glColor4f(1,1,1,1);
     int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);
