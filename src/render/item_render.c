@@ -132,31 +132,107 @@ static void draw_item_icon_2d_gui(const ItemStack *st, int x, int y) {
 }
 
 
+static void emit_inventory_cuboid_face_for_block(int id,
+                                                 float bx, float by, float bz,
+                                                 float x0, float y0, float z0,
+                                                 float x1, float y1, float z1,
+                                                 int face) {
+    int tile = 2;
+    float u0, v0, u1, v1;
+    float ax0 = bx + x0, ay0 = by + y0, az0 = bz + z0;
+    float ax1 = bx + x1, ay1 = by + y1, az1 = bz + z1;
+
+    world_style_set_pos(0, 0, 0);
+    world_face_style(id, face, &tile);
+
+    if (face == 0 || face == 1) {
+        terrain_tile_uv_subrect(tile, x0, z0, x1, z1, &u0, &v0, &u1, &v1);
+    } else if (face == 2 || face == 3) {
+        terrain_tile_uv_subrect(tile, x0, 1.0f - y1, x1, 1.0f - y0, &u0, &v0, &u1, &v1);
+    } else {
+        terrain_tile_uv_subrect(tile, z0, 1.0f - y1, z1, 1.0f - y0, &u0, &v0, &u1, &v1);
+    }
+
+    if (face == 0) {
+        world_tex_vertex(ax0, ay0, az1, u0, v1);
+        world_tex_vertex(ax0, ay0, az0, u0, v0);
+        world_tex_vertex(ax1, ay0, az0, u1, v0);
+        world_tex_vertex(ax1, ay0, az1, u1, v1);
+    } else if (face == 1) {
+        world_tex_vertex(ax1, ay1, az1, u1, v1);
+        world_tex_vertex(ax1, ay1, az0, u1, v0);
+        world_tex_vertex(ax0, ay1, az0, u0, v0);
+        world_tex_vertex(ax0, ay1, az1, u0, v1);
+    } else if (face == 2) {
+        world_tex_vertex(ax0, ay1, az0, u1, v0);
+        world_tex_vertex(ax1, ay1, az0, u0, v0);
+        world_tex_vertex(ax1, ay0, az0, u0, v1);
+        world_tex_vertex(ax0, ay0, az0, u1, v1);
+    } else if (face == 3) {
+        world_tex_vertex(ax0, ay1, az1, u0, v0);
+        world_tex_vertex(ax0, ay0, az1, u0, v1);
+        world_tex_vertex(ax1, ay0, az1, u1, v1);
+        world_tex_vertex(ax1, ay1, az1, u1, v0);
+    } else if (face == 4) {
+        world_tex_vertex(ax0, ay1, az1, u1, v0);
+        world_tex_vertex(ax0, ay1, az0, u0, v0);
+        world_tex_vertex(ax0, ay0, az0, u0, v1);
+        world_tex_vertex(ax0, ay0, az1, u1, v1);
+    } else if (face == 5) {
+        world_tex_vertex(ax1, ay0, az1, u0, v1);
+        world_tex_vertex(ax1, ay0, az0, u1, v1);
+        world_tex_vertex(ax1, ay1, az0, u1, v0);
+        world_tex_vertex(ax1, ay1, az1, u0, v0);
+    }
+}
+
+static void emit_inventory_cuboid_faces_for_block(int id,
+                                                  float bx, float by, float bz,
+                                                  float x0, float y0, float z0,
+                                                  float x1, float y1, float z1) {
+    for (int face = 0; face < 6; face++) {
+        emit_inventory_cuboid_face_for_block(id, bx, by, bz, x0, y0, z0, x1, y1, z1, face);
+    }
+}
+
+static void draw_inventory_cuboid_model_for_block(int id,
+                                                   float bx, float by, float bz,
+                                                   float x0, float y0, float z0,
+                                                   float x1, float y1, float z1) {
+    glBegin(GL_QUADS);
+    emit_inventory_cuboid_faces_for_block(id, bx, by, bz, x0, y0, z0, x1, y1, z1);
+    glEnd();
+}
+
 static void draw_inventory_block_model(int id) {
     /* Match Java RenderBlocks.func_1227_a exactly: after RenderItem applies
        its slot transform, RenderBlocks shifts the 0..1 block model by -0.5 on
-       every axis before emitting faces. */
+       every axis before emitting faces.  Inventory cuboids use the same face
+       winding/order as the deobfuscated Java source so only the correct faces
+       are visible. */
     const float bx = -0.5f, by = -0.5f, bz = -0.5f;
-    if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_SNOW_LAYER) { draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
-    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
-    if (id == BLOCK_STONE_BUTTON) { draw_cuboid_model_for_block(id, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
-    if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_SLAB) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
+    if (id == BLOCK_STONE_BUTTON) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
+    if (id == BLOCK_CACTUS) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_FENCE) {
         glBegin(GL_QUADS);
-        emit_cuboid_model_faces_for_block(id, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
-        emit_cuboid_model_faces_for_block(id, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
-        emit_cuboid_model_faces_for_block(id, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
         glEnd();
         return;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
-        draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1);
-        draw_cuboid_model_for_block(id, bx,by,bz, 0.5f,0.5f,0,1,1,1);
+        glBegin(GL_QUADS);
+        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1);
+        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.5f,0.5f,0,1,1,1);
+        glEnd();
         return;
     }
     if (id == BLOCK_CHEST) { draw_chest_block(bx,by,bz); return; }
-    draw_world_block_id(id, bx, by, bz);
+    draw_inventory_cuboid_model_for_block(id, bx, by, bz, 0,0,0,1,1,1);
 }
 
 static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
@@ -170,10 +246,10 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     /* Java RenderItem does not clear the whole depth buffer for every slot.
        Clearing it made 3D blocks interact badly with the GUI and caused odd
        facing/depth artifacts. */
-    /* Keep culling off for Pex block item models.  D3D was fine because it did
-       not cull these faces; OpenGL culling exposed inconsistent legacy winding
-       and made GUI blocks look badly faced. */
-    glDisable(GL_CULL_FACE);
+    /* Match Java inventory rendering: with Java-accurate face winding on the
+       inventory cuboid path, normal back-face culling shows only the intended
+       visible sides. */
+    glEnable(GL_CULL_FACE);
     glColorMask(1,1,1,1);
     glColor4f(1,1,1,1);
     int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);
