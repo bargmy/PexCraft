@@ -416,12 +416,37 @@ static void ingame_tick(void) {
     float old_y = g_player_y;
     int was_on_ground = g_player_on_ground;
     g_player_on_ground = 0;
+#if defined(PEX_PLATFORM_PSP)
+    (void)old_y;
+    /* PSP real-world mode can briefly run with low FPS while chunks/meshes are
+       being installed.  A large accumulated downward velocity could tunnel
+       through a one-block surface if we only tested the final Y position.
+       Sweep vertical movement in small steps on PSP only. */
+    {
+        float total_dy = g_player_motion_y;
+        int steps = (int)ceilf(fabsf(total_dy) / 0.25f);
+        if (steps < 1) steps = 1;
+        if (steps > 24) steps = 24;
+        float step_dy = total_dy / (float)steps;
+        for (int i = 0; i < steps; i++) {
+            float before_step_y = g_player_y;
+            g_player_y += step_dy;
+            if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
+                g_player_y = before_step_y;
+                if (total_dy < 0.0f) g_player_on_ground = 1;
+                g_player_motion_y = 0.0f;
+                break;
+            }
+        }
+    }
+#else
     g_player_y += g_player_motion_y;
     if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
         g_player_y = old_y;
         if (g_player_motion_y < 0.0f) g_player_on_ground = 1;
         g_player_motion_y = 0.0f;
     }
+#endif
 
     if (!g_player_on_ground && flat_player_aabb_collides(g_player_x, g_player_y - 0.05f, g_player_z)) {
         g_player_on_ground = 1;

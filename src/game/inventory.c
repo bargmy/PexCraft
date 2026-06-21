@@ -1924,6 +1924,110 @@ static int flat_solid_for_spawn(int id) {
     return flat_block_is_solid_for_collision(id);
 }
 
+#if defined(PEX_PLATFORM_PSP)
+static int psp_spawn_surface_marked_at(int x, int y, int z) {
+    if (!g_psp_spawn_surface_guard_active) return 0;
+    if (y != g_psp_spawn_surface_ground_y) return 0;
+    if (x < g_psp_spawn_surface_x0 || x > g_psp_spawn_surface_x1 ||
+        z < g_psp_spawn_surface_z0 || z > g_psp_spawn_surface_z1) return 0;
+    return flat_get_block(x, y, z) == BLOCK_GRASS &&
+           (flat_get_meta(x, y, z) & 15) == PSP_SPAWN_SURFACE_META;
+}
+
+static int psp_spawn_surface_intersects(float minx, float maxx, float miny, float maxy,
+                                        float minz, float maxz, int x, int y, int z) {
+    if (!psp_spawn_surface_marked_at(x, y, z)) return 0;
+    return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz,
+                               (float)x, (float)y, (float)z,
+                               (float)(x + 1), (float)(y + 1), (float)(z + 1));
+}
+
+static void psp_set_spawn_surface_guard(int cx, int ground_y, int cz, int radius) {
+    if (ground_y < FLAT_WORLD_Y_MIN + 1) ground_y = FLAT_WORLD_Y_MIN + 1;
+    if (ground_y > FLAT_WORLD_Y_MAX - 4) ground_y = FLAT_WORLD_Y_MAX - 4;
+    if (radius < 1) radius = 1;
+    g_psp_spawn_surface_guard_active = 1;
+    g_psp_spawn_surface_x0 = cx - radius;
+    g_psp_spawn_surface_x1 = cx + radius;
+    g_psp_spawn_surface_z0 = cz - radius;
+    g_psp_spawn_surface_z1 = cz + radius;
+    g_psp_spawn_surface_ground_y = ground_y;
+}
+
+static void psp_make_spawn_surface(int cx, int ground_y, int cz, int radius) {
+    if (ground_y < FLAT_WORLD_Y_MIN + 1) ground_y = FLAT_WORLD_Y_MIN + 1;
+    if (ground_y > FLAT_WORLD_Y_MAX - 4) ground_y = FLAT_WORLD_Y_MAX - 4;
+    if (radius < 1) radius = 1;
+    if (radius > 4) radius = 4;
+
+    psp_set_spawn_surface_guard(cx, ground_y, cz, radius);
+
+    for (int dz = -radius; dz <= radius; dz++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            int x = cx + dx;
+            int z = cz + dz;
+            if (!flat_in_bounds(x, ground_y, z)) continue;
+
+            /* Build a real, flat, solid top block and tag it with metadata so
+               the PSP spawn/collision path knows this is the safety floor. */
+            flat_set_block_raw(x, ground_y, z, BLOCK_GRASS);
+            flat_set_meta_raw(x, ground_y, z, PSP_SPAWN_SURFACE_META);
+
+            for (int y = ground_y - 1; y >= ground_y - 3 && y >= FLAT_WORLD_Y_MIN; y--) {
+                int id = flat_get_block(x, y, z);
+                if (id == 0 || block_is_liquid(id) || id == BLOCK_LEAVES) flat_set_block_raw(x, y, z, BLOCK_DIRT);
+            }
+            for (int y = ground_y + 1; y <= ground_y + 3 && y <= FLAT_WORLD_Y_MAX; y++) {
+                int id = flat_get_block(x, y, z);
+                if (id == BLOCK_LEAVES || block_is_liquid(id) || flat_block_is_solid_for_collision(id)) {
+                    flat_set_block_raw(x, y, z, 0);
+                }
+            }
+        }
+    }
+
+    mark_flat_render_chunks_dirty_around(cx, cz);
+    flat_note_lighting_dirty_region(cx - radius - 1, cz - radius - 1, cx + radius + 1, cz + radius + 1);
+}
+
+static int psp_highest_surface_foot_y(int x, int z, int *out_foot_y) {
+    if (!flat_world_chunk_generated_at_block(x, z)) return 0;
+    for (int y = FLAT_WORLD_Y_MAX - 3; y >= FLAT_WORLD_Y_MIN; y--) {
+        int id = flat_get_block(x, y, z);
+        if (!flat_solid_for_spawn(id) || id == BLOCK_LEAVES || block_is_liquid(id)) continue;
+        int ok = 1;
+        for (int ay = y + 1; ay <= y + 3 && ay <= FLAT_WORLD_Y_MAX; ay++) {
+            int above = flat_get_block(x, ay, z);
+            if (above != 0 && above != BLOCK_SNOW_LAYER && !block_is_liquid(above)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+        *out_foot_y = y + 1;
+        return 1;
+    }
+    return 0;
+}
+
+static void psp_ensure_spawn_surface_for_position(float *px, float *py, float *pz, int force_emergency) {
+    int cx = (int)floorf(*px);
+    int cz = (int)floorf(*pz);
+    int foot_y = (int)floorf(*py - 1.62f + 0.001f);
+
+    if (force_emergency || foot_y < FLAT_WORLD_Y_MIN + 2 || foot_y > FLAT_WORLD_Y_MAX - 3) {
+        foot_y = 64;
+        if (foot_y > FLAT_WORLD_Y_MAX - 3) foot_y = FLAT_WORLD_Y_MAX - 3;
+        if (foot_y < FLAT_WORLD_Y_MIN + 2) foot_y = FLAT_WORLD_Y_MIN + 2;
+    } else {
+        int better_foot_y = 0;
+        if (psp_highest_surface_foot_y(cx, cz, &better_foot_y)) foot_y = better_foot_y;
+    }
+
+    psp_make_spawn_surface(cx, foot_y - 1, cz, 3);
+    *px = (float)cx + 0.5f;
+    *py = (float)foot_y + 1.62f;
+    *pz = (float)cz + 0.5f;
+}
+#endif
+
 static int block_drop_id(int block_id) {
     /* ph.java grass drops dirt via of.v.a(0, random). */
     if (block_id == BLOCK_GRASS) return BLOCK_DIRT;
@@ -2253,6 +2357,7 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
                 if (!flat_world_chunk_generated_at_block(x, z) && y <= (int)floorf(feet)) {
                     return 1;
                 }
+                if (psp_spawn_surface_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
 #endif
                 int bid = flat_get_block(x, y, z);
                 if (block_is_door_id(bid)) {
@@ -4757,19 +4862,25 @@ static int flat_find_safe_spawn_pass(float *out_x, float *out_y, float *out_z, i
 
 static int flat_find_safe_spawn(float *out_x, float *out_y, float *out_z) {
 #if defined(PEX_PLATFORM_PSP)
-    /* A full 128x128x128 spawn scan can freeze a PSP, especially right after a
-       death while the real Beta generator is still installing chunks.  Search
-       only the already-generated spawn neighborhood; if it is not ready yet,
-       place the player above spawn and let psp_player_terrain_ready_or_hold()
-       snap them down when the worker finishes. */
-    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 1, 24)) return 1;
-    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 0, 40)) return 1;
+    /* PSP-only: never spawn above empty async terrain and hope collision catches
+       up.  First try real generated terrain; then stamp a tiny metadata-tagged
+       flat safety surface so first spawn/respawn has a guaranteed solid block
+       under the player's feet while the real Beta chunks finish streaming. */
+    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 1, 24)) {
+        psp_ensure_spawn_surface_for_position(out_x, out_y, out_z, 0);
+        return 1;
+    }
+    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 0, 40)) {
+        psp_ensure_spawn_surface_for_position(out_x, out_y, out_z, 0);
+        return 1;
+    }
 
     *out_x = 0.5f;
-    *out_y = (float)FLAT_WORLD_Y_MAX + 3.0f;
+    *out_y = 65.62f;
     *out_z = 0.5f;
+    psp_ensure_spawn_surface_for_position(out_x, out_y, out_z, 1);
     g_psp_respawn_snap_pending = 1;
-    return 0;
+    return 1;
 #else
     if (flat_find_safe_spawn_pass(out_x, out_y, out_z, 1)) return 1;
 
@@ -4792,12 +4903,13 @@ static void psp_snap_respawn_to_ready_ground(void) {
     float sx, sy, sz;
     if (flat_find_safe_spawn_pass_limited(&sx, &sy, &sz, 1, 24) ||
         flat_find_safe_spawn_pass_limited(&sx, &sy, &sz, 0, 40)) {
+        psp_ensure_spawn_surface_for_position(&sx, &sy, &sz, 0);
         g_player_x = g_player_prev_x = sx;
         g_player_y = g_player_prev_y = sy;
         g_player_z = g_player_prev_z = sz;
         g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
         g_player_fall_distance = 0.0f;
-        g_player_on_ground = 0;
+        g_player_on_ground = 1;
         g_psp_respawn_snap_pending = 0;
         return;
     }
@@ -4808,9 +4920,16 @@ static void psp_snap_respawn_to_ready_ground(void) {
     int z = (int)floorf(g_player_z);
     int syi = flat_column_spawn_y_ex(x, z, 0);
     if (syi != -9999) {
-        g_player_y = g_player_prev_y = (float)syi + 1.62f;
+        float sx = (float)x + 0.5f;
+        float sy = (float)syi + 1.62f;
+        float sz = (float)z + 0.5f;
+        psp_ensure_spawn_surface_for_position(&sx, &sy, &sz, 0);
+        g_player_x = g_player_prev_x = sx;
+        g_player_y = g_player_prev_y = sy;
+        g_player_z = g_player_prev_z = sz;
         g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
         g_player_fall_distance = 0.0f;
+        g_player_on_ground = 1;
         g_psp_respawn_snap_pending = 0;
     }
 #endif
@@ -5023,7 +5142,15 @@ static void reset_flat_player_spawn(void) {
     g_suffocation_damage_timer = 0;
     g_player_yaw = g_player_prev_yaw = 0.0f;
     g_player_pitch = g_player_prev_pitch = 0.0f;
+#if defined(PEX_PLATFORM_PSP)
+    psp_ensure_spawn_surface_for_position(&g_player_x, &g_player_y, &g_player_z, 0);
+    g_player_prev_x = g_player_x;
+    g_player_prev_y = g_player_y;
+    g_player_prev_z = g_player_z;
+    g_player_on_ground = 1;
+#else
     g_player_on_ground = 0;
+#endif
     g_distance_walked = g_prev_distance_walked = 0.0f;
     g_limb_swing = g_prev_limb_swing = 0.0f;
     g_limb_swing_amount = g_prev_limb_swing_amount = 0.0f;
