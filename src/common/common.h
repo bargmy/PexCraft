@@ -1195,6 +1195,8 @@ static void apply_player_fluid_velocity(int is_water);
 static void update_falling_blocks(void);
 static void update_liquids(void);
 static void update_infinite_world_streaming(void);
+static void world_stream_service_ensure(void);
+static int world_stream_service_active(void);
 static void stream_generation_queue_clear(void);
 static int item_icon_tile(int id);
 static int write_level_dat(const char *world_dir, const char *world_name, long long seed, int spawn_x, int spawn_y, int spawn_z, long long size_on_disk);

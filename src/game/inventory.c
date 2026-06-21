@@ -5383,8 +5383,11 @@ static PexRendererBackend *stream_direct_mesh_backend(void) {
 }
 
 static void stream_destroy_direct_mesh_handle(unsigned int h) {
-    PexRendererBackend *rb = stream_direct_mesh_backend();
-    if (rb && h) rb->destroy_mesh((PexMeshHandle)h);
+    (void)h;
+    /* World streaming now runs off the game/render thread.  Do not destroy GPU
+       mesh handles from the streaming service thread; the remap path reuses or
+       invalidates the section slots and lets the normal render-owned rebuild path
+       replace live handles safely. */
 }
 
 static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_origin_z,
@@ -5763,6 +5766,59 @@ static void process_stream_generation_queue(void) {
     }
 }
 
+
+
+static CRITICAL_SECTION g_world_stream_service_cs;
+static int g_world_stream_service_initialized = 0;
+static int g_world_stream_service_stop = 0;
+static int g_world_stream_service_busy = 0;
+static HANDLE g_world_stream_service_thread = NULL;
+
+static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
+    (void)unused;
+    for (;;) {
+        int stop = 0;
+        EnterCriticalSection(&g_world_stream_service_cs);
+        stop = g_world_stream_service_stop;
+        g_world_stream_service_busy = 1;
+        LeaveCriticalSection(&g_world_stream_service_cs);
+        if (stop) break;
+
+        if (g_screen == SCREEN_INGAME && !g_mp_connected) {
+            update_infinite_world_streaming();
+            flat_flush_pending_lighting();
+        }
+
+        EnterCriticalSection(&g_world_stream_service_cs);
+        g_world_stream_service_busy = 0;
+        LeaveCriticalSection(&g_world_stream_service_cs);
+
+        Sleep(stream_generation_active() ? 1 : 8);
+    }
+    EnterCriticalSection(&g_world_stream_service_cs);
+    g_world_stream_service_busy = 0;
+    LeaveCriticalSection(&g_world_stream_service_cs);
+    return 0;
+}
+
+static void world_stream_service_ensure(void) {
+    if (g_world_stream_service_initialized) return;
+    InitializeCriticalSection(&g_world_stream_service_cs);
+    g_world_stream_service_stop = 0;
+    g_world_stream_service_busy = 0;
+    g_world_stream_service_thread = CreateThread(NULL, 0, world_stream_service_proc, NULL, 0, NULL);
+    if (g_world_stream_service_thread) SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
+    g_world_stream_service_initialized = 1;
+}
+
+static int world_stream_service_active(void) {
+    if (!g_world_stream_service_initialized) return 0;
+    int active = 0;
+    EnterCriticalSection(&g_world_stream_service_cs);
+    active = g_world_stream_service_busy;
+    LeaveCriticalSection(&g_world_stream_service_cs);
+    return active;
+}
 
 static void update_infinite_world_streaming(void) {
     /* Do a tiny amount of terrain generation per tick.  This is the important
