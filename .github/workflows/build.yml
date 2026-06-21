@@ -436,11 +436,12 @@ jobs:
           tar -xaf "$archive" -C "$toolchain_root"
 
           echo "Extracted SDK layout:"
-          find "$toolchain_root" -maxdepth 3 -type d | sort | sed 's#^#  #' | head -80
+          find "$toolchain_root" -maxdepth 3 -type d | sort > "$toolchain_root/sdk-dirs.txt"
+          sed -n '1,80{s#^#  #;p}' "$toolchain_root/sdk-dirs.txt"
 
-          sdk_dir="$(find "$toolchain_root" -type d -name 'arm-webos-linux-gnueabi_sdk-buildroot' | head -n 1)"
+          sdk_dir="$(find "$toolchain_root" -type d -name 'arm-webos-linux-gnueabi_sdk-buildroot' -print -quit)"
           if [ -z "$sdk_dir" ]; then
-            sdk_dir="$(find "$toolchain_root" -type f -name 'relocate-sdk.sh' -printf '%h\n' | head -n 1)"
+            sdk_dir="$(find "$toolchain_root" -type f -name 'relocate-sdk.sh' -printf '%h\n' -quit)"
           fi
           test -n "$sdk_dir"
 
@@ -452,11 +453,12 @@ jobs:
               -name 'toolchainfile.cmake' -o \
               -name '*toolchain*.cmake' -o \
               -name 'OEToolchainConfig.cmake' \
-            \) | head -n 1)"
+            \) -print -quit)"
 
           if [ -z "$toolchain_file" ] || [ ! -f "$toolchain_file" ]; then
             echo "No CMake toolchain file found under: $sdk_dir" >&2
-            find "$sdk_dir" -maxdepth 6 -type f | sort | sed 's#^#  #' | head -200 >&2
+            find "$sdk_dir" -maxdepth 6 -type f | sort > "$toolchain_root/sdk-files.txt"
+            sed -n '1,200{s#^#  #;p}' "$toolchain_root/sdk-files.txt" >&2
             exit 1
           fi
 
