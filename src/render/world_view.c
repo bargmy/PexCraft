@@ -987,16 +987,26 @@ static int dig_particle_tile_for_block(int id) {
     return dig_particle_tile_for_block_face(id, 1);
 }
 
-static void dig_particle_color_for_block(int id, float *r, float *g, float *b) {
-    /* EntityDiggingFX sets all block particles to 0.6; grass skips colorMultiplier. */
+static void dig_particle_color_for_block(int id, int wx, int wz, float *r, float *g, float *b) {
+    /* EntityDiggingFX darkens dig particles, then some blocks (notably foliage)
+       multiply that by the block color.  Leaves should use the same biome
+       foliage tint as the rendered block instead of the gray placeholder. */
     *r = 0.6f; *g = 0.6f; *b = 0.6f;
+    if (id == BLOCK_LEAVES) {
+        int col = java_foliage_color_at(wx, wz);
+        *r *= (float)((col >> 16) & 255) / 255.0f;
+        *g *= (float)((col >> 8) & 255) / 255.0f;
+        *b *= (float)(col & 255) / 255.0f;
+    }
 }
 
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
 }
 
-static void add_dig_particle(float x, float y, float z, float mx, float my, float mz, int tile, int block_id, float motion_scale, float size_scale) {
+static void add_dig_particle(float x, float y, float z, float mx, float my, float mz,
+                             int tile, int block_id, int tint_x, int tint_z,
+                             float motion_scale, float size_scale) {
     DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
     memset(p, 0, sizeof(*p));
     p->active = 1;
@@ -1028,7 +1038,7 @@ static void add_dig_particle(float x, float y, float z, float mx, float my, floa
     p->max_age = (int)(4.0f / (frand01() * 0.9f + 0.1f));
     if (p->max_age < 1) p->max_age = 1;
     p->age = 0;
-    dig_particle_color_for_block(block_id, &p->r, &p->g, &p->b);
+    dig_particle_color_for_block(block_id, tint_x, tint_z, &p->r, &p->g, &p->b);
 }
 
 static void spawn_block_destroy_particles(int bx, int by, int bz, int block_id) {
@@ -1046,7 +1056,7 @@ static void spawn_block_destroy_particles(int bx, int by, int bz, int block_id) 
                                  x - (float)bx - 0.5f,
                                  y - (float)by - 0.5f,
                                  z - (float)bz - 0.5f,
-                                 tile, block_id, 1.0f, 1.0f);
+                                 tile, block_id, bx, bz, 1.0f, 1.0f);
             }
         }
     }
@@ -1066,7 +1076,7 @@ static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block
     if (face == 4) x = (float)bx - eps;
     if (face == 5) x = (float)bx + 1.0f + eps;
     add_dig_particle(x, y, z, 0.0f, 0.0f, 0.0f,
-                     dig_particle_tile_for_block_face(block_id, face), block_id,
+                     dig_particle_tile_for_block_face(block_id, face), block_id, bx, bz,
                      0.2f, 0.6f);
 }
 
@@ -2380,6 +2390,13 @@ static void emit_world_block_face_at(int id, int x, int y, int z, int face) {
     float z0 = (float)z, z1 = (float)z + 1.0f;
     float u0,v0,u1,v1;
     int tile = 2;
+    if (id == BLOCK_LEAVES && g_opts.fancy_graphics && neighbor_for_face(x, y, z, face) == BLOCK_LEAVES) {
+        /* For the single canonical fancy-leaf interior quad, keep the local
+           block light sample instead of sampling from the neighboring leaf.
+           That keeps connected leaf faces the same color/brightness family as
+           the exterior foliage instead of turning them into darker seams. */
+        world_light_set_pos(x, y, z);
+    }
     world_face_style_at(id, x, y, z, face, &tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     if (face == 1) {

@@ -348,7 +348,20 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     }
 
     g_force_fullbright_item_model++;
-    draw_inventory_iso_block_model(st->id, x, y);
+    if (st->id == BLOCK_CHEST) {
+        /* Match the classic GUI 3-D path more closely for chests so the
+           inventory model lines up with the in-world / held chest silhouette. */
+        glPushMatrix();
+        glTranslatef((float)(x - 2), (float)(y + 3), 0.0f);
+        glScalef(10.0f, 10.0f, 10.0f);
+        glTranslatef(1.0f, 0.5f, 8.0f);
+        glRotatef(210.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+        draw_inventory_block_model(st->id);
+        glPopMatrix();
+    } else {
+        draw_inventory_iso_block_model(st->id, x, y);
+    }
     g_force_fullbright_item_model--;
 
     glDisable(GL_ALPHA_TEST);
