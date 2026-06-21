@@ -129,6 +129,9 @@ static void render(float partial) {
     setup_gui_projection();
     double render_start_time = now_seconds();
     draw_current_screen(partial);
+#ifdef PEX_PLATFORM_ANDROID
+    draw_android_touch_controls();
+#endif
     draw_gamepad_virtual_cursor();
     draw_fps_counter();
     pex_renderer_present();

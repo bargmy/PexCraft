@@ -1,0 +1,408 @@
+/* Android PE-style touchscreen controls.
+
+   This is a mobile Minecraft-style control layer:
+     - visible movement D-pad only on the lower-left
+     - swipe/drag anywhere in the world view to look
+     - tap the world to place/use/open the block under that finger
+     - hold the world to break the block under that finger
+     - tap/drag inventory slots directly, with the carried stack following the finger
+
+   The world tap/hold path uses a screen-space touch ray.  inventory.c consults
+   g_android_touch_pick_active while handling flat_raycast(), so placement and
+   mining can target the touched block instead of only the center crosshair. */
+
+#define PEX_ANDROID_TOUCH_NONE ((SDL_FingerID)-1)
+
+static void pex_gamepad_copy_edges(PexGamepadState *dst, const PexGamepadState *old);
+
+static SDL_FingerID g_android_move_finger = PEX_ANDROID_TOUCH_NONE;
+static SDL_FingerID g_android_world_finger = PEX_ANDROID_TOUCH_NONE;
+static SDL_FingerID g_android_jump_finger = PEX_ANDROID_TOUCH_NONE;
+static SDL_FingerID g_android_sneak_finger = PEX_ANDROID_TOUCH_NONE;
+static SDL_FingerID g_android_ui_finger = PEX_ANDROID_TOUCH_NONE;
+
+static int g_android_move_up = 0;
+static int g_android_move_down = 0;
+static int g_android_move_left = 0;
+static int g_android_move_right = 0;
+static float g_android_move_x = 0.0f;
+static float g_android_move_y = 0.0f;
+
+static int g_android_world_down_x = 0;
+static int g_android_world_down_y = 0;
+static int g_android_world_last_x = 0;
+static int g_android_world_last_y = 0;
+static int g_android_world_cur_x = 0;
+static int g_android_world_cur_y = 0;
+static double g_android_world_down_time = 0.0;
+static int g_android_world_moved = 0;
+static int g_android_world_breaking = 0;
+
+static int g_android_touch_seen = 0;
+static int g_android_jump_down = 0;
+static int g_android_sneak_down = 0;
+static int g_android_inv_dragging = 0;
+static int g_android_inv_drag_start_slot = -1;
+static int g_android_inv_drag_last_x = 0;
+static int g_android_inv_drag_last_y = 0;
+
+static int pex_android_touch_gui_x(float nx) {
+    if (nx < 0.0f) nx = 0.0f;
+    if (nx > 1.0f) nx = 1.0f;
+    return (int)(nx * (float)g_gui_w + 0.5f);
+}
+
+static int pex_android_touch_gui_y(float ny) {
+    if (ny < 0.0f) ny = 0.0f;
+    if (ny > 1.0f) ny = 1.0f;
+    return (int)(ny * (float)g_gui_h + 0.5f);
+}
+
+static int pex_android_touch_in_rect(int x, int y, int rx, int ry, int rw, int rh) {
+    return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+}
+
+static float pex_android_touch_clampf(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static int pex_android_touch_inventory_screen(void) {
+    return g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+           g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST;
+}
+
+static int pex_android_touch_hotbar_slot(int x, int y) {
+    int hotbar_x = g_gui_w / 2 - 91;
+    int hotbar_y = g_gui_h - 26;
+    if (y < hotbar_y - 5 || y > g_gui_h) return -1;
+    for (int i = 0; i < 9; ++i) {
+        int sx = hotbar_x + i * 20;
+        if (x >= sx && x < sx + 20) return i;
+    }
+    return -1;
+}
+
+static int pex_android_touch_button_pause(int x, int y) {
+    return pex_android_touch_in_rect(x, y, g_gui_w - 50, 4, 46, 24);
+}
+
+static int pex_android_touch_button_inventory(int x, int y) {
+    return pex_android_touch_in_rect(x, y, g_gui_w - 58, 34, 54, 26);
+}
+
+static int pex_android_touch_button_jump(int x, int y) {
+    return pex_android_touch_in_rect(x, y, g_gui_w - 62, g_gui_h - 92, 54, 54);
+}
+
+static int pex_android_touch_button_sneak(int x, int y) {
+    return pex_android_touch_in_rect(x, y, 10, g_gui_h - 116, 46, 28);
+}
+
+static void pex_android_touch_dpad_rect(int *left, int *top, int *size) {
+    int s = g_gui_h / 3;
+    if (s < 78) s = 78;
+    if (s > 132) s = 132;
+    *size = s;
+    *left = 12;
+    *top = g_gui_h - s - 20;
+}
+
+static int pex_android_touch_in_dpad(int x, int y) {
+    int l, t, s;
+    pex_android_touch_dpad_rect(&l, &t, &s);
+    return pex_android_touch_in_rect(x, y, l, t, s, s);
+}
+
+static void pex_android_touch_update_dpad(int x, int y) {
+    int l, t, s;
+    pex_android_touch_dpad_rect(&l, &t, &s);
+    float cx = (float)l + (float)s * 0.5f;
+    float cy = (float)t + (float)s * 0.5f;
+    float dx = ((float)x - cx) / ((float)s * 0.38f);
+    float dy = ((float)y - cy) / ((float)s * 0.38f);
+    dx = pex_android_touch_clampf(dx, -1.0f, 1.0f);
+    dy = pex_android_touch_clampf(dy, -1.0f, 1.0f);
+    g_android_move_x = dx;
+    g_android_move_y = dy;
+    g_android_move_left = dx < -0.30f;
+    g_android_move_right = dx > 0.30f;
+    g_android_move_up = dy < -0.30f;
+    g_android_move_down = dy > 0.30f;
+}
+
+static void pex_android_touch_clear_move(void) {
+    g_android_move_finger = PEX_ANDROID_TOUCH_NONE;
+    g_android_move_up = g_android_move_down = g_android_move_left = g_android_move_right = 0;
+    g_android_move_x = g_android_move_y = 0.0f;
+}
+
+static void pex_android_touch_clear_pick_ray(void) {
+    g_android_touch_pick_active = 0;
+}
+
+static void pex_android_touch_set_pick_ray(int x, int y) {
+    float fov = g_opts.fov;
+    if (fov < 30.0f) fov = 30.0f;
+    if (fov > 110.0f) fov = 110.0f;
+    if (flat_player_head_in_water() && fov > 60.0f) fov = 60.0f;
+
+    float aspect = (g_gui_h > 0) ? (float)g_gui_w / (float)g_gui_h : 16.0f / 9.0f;
+    float tan_half = tanf(fov * (float)M_PI / 360.0f);
+    float ndc_x = (((float)x + 0.5f) / (float)(g_gui_w > 0 ? g_gui_w : 1)) * 2.0f - 1.0f;
+    float ndc_y = 1.0f - (((float)y + 0.5f) / (float)(g_gui_h > 0 ? g_gui_h : 1)) * 2.0f;
+
+    float yaw = g_player_yaw * (float)M_PI / 180.0f;
+    float pitch = g_player_pitch * (float)M_PI / 180.0f;
+    float cp = cosf(pitch);
+
+    float fx = -sinf(yaw) * cp;
+    float fy = -sinf(pitch);
+    float fz =  cosf(yaw) * cp;
+
+    float rx = fz;
+    float ry = 0.0f;
+    float rz = -fx;
+    float rlen = sqrtf(rx * rx + ry * ry + rz * rz);
+    if (rlen < 0.0001f) { rx = 1.0f; ry = 0.0f; rz = 0.0f; rlen = 1.0f; }
+    rx /= rlen; ry /= rlen; rz /= rlen;
+
+    float ux = fy * rz - fz * ry;
+    float uy = fz * rx - fx * rz;
+    float uz = fx * ry - fy * rx;
+
+    float sx = ndc_x * aspect * tan_half;
+    float sy = ndc_y * tan_half;
+    float dx = fx + rx * sx + ux * sy;
+    float dy = fy + ry * sx + uy * sy;
+    float dz = fz + rz * sx + uz * sy;
+    float len = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (len < 0.0001f) { dx = fx; dy = fy; dz = fz; len = 1.0f; }
+
+    g_android_touch_ray_dx = dx / len;
+    g_android_touch_ray_dy = dy / len;
+    g_android_touch_ray_dz = dz / len;
+    g_android_touch_pick_active = 1;
+}
+
+static void pex_android_touch_stop_break(void) {
+    if (g_android_world_breaking) {
+        g_android_world_breaking = 0;
+        mouse_up(g_gui_w / 2, g_gui_h / 2);
+    }
+    pex_android_touch_clear_pick_ray();
+}
+
+static void pex_android_touch_begin_break(void) {
+    if (g_android_world_breaking) return;
+    g_android_world_breaking = 1;
+    pex_android_touch_set_pick_ray(g_android_world_down_x, g_android_world_down_y);
+    g_mouse_x = g_android_world_down_x;
+    g_mouse_y = g_android_world_down_y;
+    mouse_down(g_mouse_x, g_mouse_y);
+}
+
+static void pex_android_touch_ui_down(SDL_FingerID id, int x, int y) {
+    g_android_ui_finger = id;
+    g_mouse_x = x;
+    g_mouse_y = y;
+    if (pex_android_touch_inventory_screen()) {
+        g_android_inv_dragging = 1;
+        g_android_inv_drag_start_slot = inventory_slot_at(x, y);
+        g_android_inv_drag_last_x = x;
+        g_android_inv_drag_last_y = y;
+    }
+    mouse_down(x, y);
+}
+
+static void pex_android_touch_ui_motion(SDL_FingerID id, int x, int y) {
+    if (g_android_ui_finger != id) return;
+    g_mouse_x = x;
+    g_mouse_y = y;
+    if (g_drag_slider) update_slider(g_drag_slider, x);
+    if (g_screen == SCREEN_TEXPACK) texpack_mouse_drag(y);
+    if (g_android_inv_dragging) {
+        g_android_inv_drag_last_x = x;
+        g_android_inv_drag_last_y = y;
+    }
+}
+
+static void pex_android_touch_ui_up(SDL_FingerID id, int x, int y) {
+    if (g_android_ui_finger != id) return;
+    g_mouse_x = x;
+    g_mouse_y = y;
+    if (g_android_inv_dragging) {
+        int end_slot = inventory_slot_at(x, y);
+        if (end_slot >= 0 && end_slot != g_android_inv_drag_start_slot) {
+            inventory_mouse_click(x, y, 0);
+        }
+    }
+    mouse_up(x, y);
+    g_android_inv_dragging = 0;
+    g_android_inv_drag_start_slot = -1;
+    g_android_ui_finger = PEX_ANDROID_TOUCH_NONE;
+}
+
+static void pex_android_touch_ingame_down(SDL_FingerID id, int x, int y) {
+    int slot = pex_android_touch_hotbar_slot(x, y);
+    if (slot >= 0) { g_selected_hotbar_slot = slot; return; }
+    if (pex_android_touch_button_pause(x, y)) { set_screen(SCREEN_PAUSE); return; }
+    if (pex_android_touch_button_inventory(x, y)) { set_screen(SCREEN_INVENTORY); return; }
+    if (pex_android_touch_button_jump(x, y)) { g_android_jump_finger = id; g_android_jump_down = 1; return; }
+    if (pex_android_touch_button_sneak(x, y)) { g_android_sneak_finger = id; g_android_sneak_down = 1; return; }
+    if (pex_android_touch_in_dpad(x, y) && g_android_move_finger == PEX_ANDROID_TOUCH_NONE) {
+        g_android_move_finger = id;
+        pex_android_touch_update_dpad(x, y);
+        return;
+    }
+
+    if (g_android_world_finger == PEX_ANDROID_TOUCH_NONE) {
+        g_android_world_finger = id;
+        g_android_world_down_x = g_android_world_last_x = g_android_world_cur_x = x;
+        g_android_world_down_y = g_android_world_last_y = g_android_world_cur_y = y;
+        g_android_world_down_time = now_seconds();
+        g_android_world_moved = 0;
+        g_android_world_breaking = 0;
+        pex_android_touch_clear_pick_ray();
+    }
+}
+
+static void pex_android_touch_ingame_motion(SDL_FingerID id, int x, int y) {
+    if (id == g_android_move_finger) {
+        pex_android_touch_update_dpad(x, y);
+        return;
+    }
+    if (id == g_android_world_finger) {
+        int dx0 = x - g_android_world_down_x;
+        int dy0 = y - g_android_world_down_y;
+        int threshold = g_gui_h / 80;
+        if (threshold < 5) threshold = 5;
+        if (dx0 * dx0 + dy0 * dy0 > threshold * threshold) {
+            g_android_world_moved = 1;
+            if (g_android_world_breaking) pex_android_touch_stop_break();
+        }
+        if (g_android_world_moved) {
+            int dx = x - g_android_world_last_x;
+            int dy = y - g_android_world_last_y;
+            if (dx || dy) player_turn_from_mouse((int)((float)dx * 1.35f), (int)((float)-dy * 1.35f));
+        }
+        g_android_world_last_x = g_android_world_cur_x = x;
+        g_android_world_last_y = g_android_world_cur_y = y;
+    }
+}
+
+static void pex_android_touch_ingame_up(SDL_FingerID id, int x, int y) {
+    if (id == g_android_move_finger) { pex_android_touch_clear_move(); return; }
+    if (id == g_android_jump_finger) { g_android_jump_finger = PEX_ANDROID_TOUCH_NONE; g_android_jump_down = 0; return; }
+    if (id == g_android_sneak_finger) { g_android_sneak_finger = PEX_ANDROID_TOUCH_NONE; g_android_sneak_down = 0; return; }
+    if (id == g_android_world_finger) {
+        int was_breaking = g_android_world_breaking;
+        double held = now_seconds() - g_android_world_down_time;
+        pex_android_touch_stop_break();
+        if (!was_breaking && !g_android_world_moved && held < 0.55) {
+            pex_android_touch_set_pick_ray(x, y);
+            mouse_right_down(x, y);
+            pex_android_touch_clear_pick_ray();
+        }
+        g_android_world_finger = PEX_ANDROID_TOUCH_NONE;
+        g_android_world_moved = 0;
+    }
+}
+
+static void pex_android_touch_tick(void) {
+    if (g_screen != SCREEN_INGAME) { pex_android_touch_stop_break(); return; }
+    if (g_android_world_finger != PEX_ANDROID_TOUCH_NONE && !g_android_world_moved) {
+        if (!g_android_world_breaking && now_seconds() - g_android_world_down_time > 0.35) {
+            pex_android_touch_begin_break();
+        }
+        if (g_android_world_breaking) pex_android_touch_set_pick_ray(g_android_world_down_x, g_android_world_down_y);
+    } else if (!g_android_world_breaking) {
+        pex_android_touch_clear_pick_ray();
+    }
+}
+
+static int pex_android_handle_touch_event(SDL_Event *e) {
+    if (!e) return 0;
+    if (e->type != SDL_FINGERDOWN && e->type != SDL_FINGERUP && e->type != SDL_FINGERMOTION) return 0;
+    int x = pex_android_touch_gui_x(e->tfinger.x);
+    int y = pex_android_touch_gui_y(e->tfinger.y);
+    SDL_FingerID id = e->tfinger.fingerId;
+    g_android_touch_seen = 1;
+
+    if (e->type == SDL_FINGERDOWN) {
+        if (g_screen == SCREEN_INGAME) pex_android_touch_ingame_down(id, x, y);
+        else pex_android_touch_ui_down(id, x, y);
+    } else if (e->type == SDL_FINGERMOTION) {
+        if (g_screen == SCREEN_INGAME) pex_android_touch_ingame_motion(id, x, y);
+        else pex_android_touch_ui_motion(id, x, y);
+    } else if (e->type == SDL_FINGERUP) {
+        if (g_screen == SCREEN_INGAME) pex_android_touch_ingame_up(id, x, y);
+        else pex_android_touch_ui_up(id, x, y);
+    }
+    return 1;
+}
+
+static void pex_android_append_touch_pad(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    if (!g_android_touch_seen && g_android_move_finger == PEX_ANDROID_TOUCH_NONE &&
+        !g_android_jump_down && !g_android_sneak_down && !g_android_world_breaking) return;
+    if (g_gamepad_count >= PEX_GAMEPAD_MAX) return;
+    int slot = g_gamepad_count;
+    PexGamepadState *p = &g_gamepads[slot];
+    memset(p, 0, sizeof(*p));
+    pex_gamepad_copy_edges(p, &oldpads[slot]);
+    p->connected = 1;
+    p->slot = slot;
+    snprintf(p->name, sizeof(p->name), "Android PE touchscreen");
+    snprintf(p->kind, sizeof(p->kind), "PE touch");
+    p->lx = g_android_move_x;
+    p->ly = g_android_move_y;
+    p->dpad_up = g_android_move_up;
+    p->dpad_down = g_android_move_down;
+    p->dpad_left = g_android_move_left;
+    p->dpad_right = g_android_move_right;
+    p->a = g_android_jump_down;
+    p->b = g_android_sneak_down;
+    p->rt = g_android_world_breaking ? 1.0f : 0.0f;
+    g_gamepad_count++;
+    if (g_gamepad_primary < 0) g_gamepad_primary = slot;
+}
+
+static void pex_android_touch_ingame_update(void) {
+    pex_android_touch_tick();
+}
+
+static void draw_android_touch_controls(void) {
+    if (g_screen != SCREEN_INGAME && !pex_android_touch_inventory_screen()) return;
+    if (pex_android_touch_inventory_screen()) {
+        draw_text("Tap/drag slots directly. Dragging carries the stack under your finger.", 8, g_gui_h - 12, 0xE0E0E0);
+        return;
+    }
+
+    int l, t, s;
+    pex_android_touch_dpad_rect(&l, &t, &s);
+    int third = s / 3;
+    int alpha = 0x66000000u;
+    int hi = 0xAAFFFFFFu;
+
+    draw_rect(l + third, t, l + third * 2, t + third, (int)(g_android_move_up ? hi : alpha));
+    draw_rect(l, t + third, l + third, t + third * 2, (int)(g_android_move_left ? hi : alpha));
+    draw_rect(l + third, t + third, l + third * 2, t + third * 2, (int)0x55000000u);
+    draw_rect(l + third * 2, t + third, l + s, t + third * 2, (int)(g_android_move_right ? hi : alpha));
+    draw_rect(l + third, t + third * 2, l + third * 2, t + s, (int)(g_android_move_down ? hi : alpha));
+    draw_text("^", l + third + third / 2 - 3, t + 5, 0xFFFFFF);
+    draw_text("<", l + 6, t + third + third / 2 - 4, 0xFFFFFF);
+    draw_text(">", l + third * 2 + third / 2 - 3, t + third + third / 2 - 4, 0xFFFFFF);
+    draw_text("v", l + third + third / 2 - 3, t + third * 2 + third / 2 - 4, 0xFFFFFF);
+
+    draw_rect(g_gui_w - 62, g_gui_h - 92, g_gui_w - 8, g_gui_h - 38, (int)(g_android_jump_down ? 0xAAFFFFFFu : 0x55FFFFFFu));
+    draw_text("JUMP", g_gui_w - 52, g_gui_h - 65, 0x000000);
+    draw_rect(10, g_gui_h - 116, 56, g_gui_h - 88, (int)(g_android_sneak_down ? 0xAAFFFFFFu : 0x55FFFFFFu));
+    draw_text("SNEAK", 14, g_gui_h - 106, 0x000000);
+    draw_rect(g_gui_w - 58, 34, g_gui_w - 4, 60, (int)0x66000000u);
+    draw_text("INV", g_gui_w - 45, 43, 0xFFFFFF);
+    draw_rect(g_gui_w - 50, 4, g_gui_w - 4, 28, (int)0x66000000u);
+    draw_text("PAUSE", g_gui_w - 46, 12, 0xFFFFFF);
+
+    if (g_android_world_breaking) {
+        draw_text("Breaking", g_android_world_down_x - 22, g_android_world_down_y - 14, 0xFFFF80);
+    }
+}

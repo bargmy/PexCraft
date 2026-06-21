@@ -2517,6 +2517,18 @@ static void player_look_vector(float *dx, float *dy, float *dz) {
     *dz =  cosf(yaw) * cp;
 }
 
+static void pex_touch_aware_look_vector(float *dx, float *dy, float *dz) {
+#ifdef PEX_PLATFORM_ANDROID
+    if (g_android_touch_pick_active) {
+        *dx = g_android_touch_ray_dx;
+        *dy = g_android_touch_ray_dy;
+        *dz = g_android_touch_ray_dz;
+        return;
+    }
+#endif
+    player_look_vector(dx, dy, dz);
+}
+
 static void spawn_item_stack(float x, float y, float z, ItemStack st, int random_spread) {
     if (stack_empty(&st)) return;
     int slot = -1;
@@ -2538,7 +2550,7 @@ static void spawn_item_stack(float x, float y, float z, ItemStack st, int random
         e->mz = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
     } else {
         float lx, ly, lz;
-        player_look_vector(&lx, &ly, &lz);
+        pex_touch_aware_look_vector(&lx, &ly, &lz);
         e->mx = lx * 0.3f;
         e->my = 0.1f + ly * 0.1f;
         e->mz = lz * 0.3f;
@@ -3415,7 +3427,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
 static FlatRayHit flat_raycast(void) {
     FlatRayHit h; memset(&h, 0, sizeof(h)); h.face = 1;
     float dx, dy, dz;
-    player_look_vector(&dx, &dy, &dz);
+    pex_touch_aware_look_vector(&dx, &dy, &dz);
     float px = g_player_x;
     float py = g_player_y;
     float pz = g_player_z;
@@ -3514,7 +3526,7 @@ static FlatRayHit flat_raycast(void) {
    liquids). Stops at the first solid block. Only level-0 sources are pickable. */
 static int flat_raycast_liquid_source(int *ox, int *oy, int *oz) {
     float dx, dy, dz;
-    player_look_vector(&dx, &dy, &dz);
+    pex_touch_aware_look_vector(&dx, &dy, &dz);
     for (float t = 0.0f; t <= 5.0f; t += 0.05f) {
         int bx = (int)floorf(g_player_x + dx * t);
         int by = (int)floorf(g_player_y + dy * t);

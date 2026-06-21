@@ -45,4 +45,4 @@ Optional:
 
 - `SIGNING_KEY_ALIAS` or `SIGN_KEY_ALIAS`: defaults to `pexcraft_android_tv`.
 
-The workflow validates the decoded keystore, alias, and key password before Gradle packages the APK. Telegram receives only the Android TV APK, and only after that APK artifact is produced successfully.
+The workflow validates the decoded keystore, alias, and key password before Gradle packages the APK. Telegram uploads all successful build artifacts, including this APK when the Android TV job succeeds.
