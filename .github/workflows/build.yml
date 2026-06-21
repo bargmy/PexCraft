@@ -1,4 +1,4 @@
-name: Build client Windows x86/x64 and upload to Telegram
+name: Build all PexCraft targets and upload to Telegram
 
 run-name: Build "${{ github.event.head_commit.message || github.ref_name }}"
 
@@ -15,8 +15,8 @@ env:
   CHAT_ID: '-1004462705182'
 
 jobs:
-  build:
-    name: client ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
+  windows:
+    name: Windows ${{ matrix.arch }} MinGW - ${{ github.event.head_commit.message || github.ref_name }}
     runs-on: windows-latest
 
     strategy:
@@ -28,11 +28,13 @@ jobs:
             gcc_package: mingw-w64-i686-gcc
             zlib_package: mingw-w64-i686-zlib
             out_exe: pexcraft-win-x86.exe
+            artifact_prefix: pexcraft-windows-x86
           - arch: x64
             msystem: MINGW64
             gcc_package: mingw-w64-x86_64-gcc
             zlib_package: mingw-w64-x86_64-zlib
             out_exe: pexcraft-win-x64.exe
+            artifact_prefix: pexcraft-windows-x64
 
     steps:
       - name: Checkout
@@ -45,10 +47,11 @@ jobs:
           name="$(git log -1 --pretty=%s)"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
+
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-          echo "### Windows ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Windows ${{ matrix.arch }} MinGW" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit SHA: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
@@ -63,50 +66,48 @@ jobs:
             ${{ matrix.zlib_package }}
             zip
 
-      - name: Build client
+      - name: Build Windows client
         shell: msys2 {0}
         run: |
           set -euxo pipefail
-          mkdir -p logs
+          mkdir -p build logs dist
 
           {
             echo "Commit name: ${{ steps.commit.outputs.name }}"
             echo "Commit SHA:  $GITHUB_SHA"
-            echo "MSYSTEM:     ${{ matrix.msystem }}"
-            echo "ARCH:        ${{ matrix.arch }}"
+            echo "Builder:     Windows ${{ matrix.arch }} MinGW / ${{ matrix.msystem }}"
             echo
             gcc --version
 
-            gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o pexcraft.exe \
+            gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
               -static -static-libgcc \
               -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
               -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
 
-            objdump -p pexcraft.exe | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > imported-dlls.txt || true
-            echo "Imported DLLs:"
-            cat imported-dlls.txt || true
+            objdump -p build/${{ matrix.out_exe }} | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > build/imported-dlls.txt || true
+            cat build/imported-dlls.txt || true
           } 2>&1 | tee logs/build-windows-${{ matrix.arch }}.log
 
-      - name: Package zip
+      - name: Package Windows zip
         shell: pwsh
         run: |
           $arch = '${{ matrix.arch }}'
           $commitName = '${{ steps.commit.outputs.name }}'
           $safeCommitName = '${{ steps.commit.outputs.safe }}'
-          $distRoot = Join-Path $env:GITHUB_WORKSPACE 'dist'
-          $packageName = "client-windows-$arch"
-          $packageDir = Join-Path $distRoot $packageName
+          $artifactPrefix = '${{ matrix.artifact_prefix }}'
 
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $packageDir = Join-Path 'dist' $artifactPrefix
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
-          Copy-Item 'pexcraft.exe' (Join-Path $packageDir '${{ matrix.out_exe }}') -Force
+          Copy-Item 'build/${{ matrix.out_exe }}' $packageDir -Force
 
           if (Test-Path 'assets') {
             Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force
           }
 
-          if (Test-Path 'imported-dlls.txt') {
-            Copy-Item 'imported-dlls.txt' $packageDir -Force
+          if (Test-Path 'build/imported-dlls.txt') {
+            Copy-Item 'build/imported-dlls.txt' $packageDir -Force
           }
 
           if (Test-Path 'logs') {
@@ -116,24 +117,213 @@ jobs:
           @"
           Commit name: $commitName
           Commit SHA:  $env:GITHUB_SHA
-          Builder:     Windows $arch MinGW / ${{ matrix.msystem }}
+          Builder:     Windows $arch MinGW
           "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
 
-          $zipPath = Join-Path $distRoot "$packageName-$safeCommitName.zip"
+          $zipPath = Join-Path 'dist' "$artifactPrefix-$safeCommitName.zip"
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
           "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload GitHub artifact
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: client-windows-${{ matrix.arch }}-${{ steps.commit.outputs.safe }}
+          name: ${{ matrix.artifact_prefix }}-${{ steps.commit.outputs.safe }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+
+  linux:
+    name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          name="$(git log -1 --pretty=%s)"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+          echo "### Linux SDL2/OpenGL" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit SHA: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Linux dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libcurl4-openssl-dev \
+            zlib1g-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            zip
+
+      - name: Build Linux SDL2/OpenGL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build logs dist
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Linux SDL2/OpenGL"
+            echo
+            gcc --version
+            pkg-config --modversion sdl2
+            pkg-config --modversion SDL2_image
+            pkg-config --modversion libcurl
+
+            make -f Makefile.linux_sdl2
+          } 2>&1 | tee logs/build-linux-sdl2.log
+
+      - name: Package Linux zip
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          artifact_prefix="pexcraft-linux-sdl2"
+          safe="${{ steps.commit.outputs.safe }}"
+          package_dir="dist/$artifact_prefix"
+
+          mkdir -p "$package_dir"
+
+          find . -maxdepth 3 -type f \( -name 'pexcraft_sdl2' -o -name 'pexcraft' -o -name 'pexcraft-linux*' \) -exec cp -f {} "$package_dir/" \; || true
+
+          if [ -d assets ]; then
+            cp -R assets "$package_dir/assets"
+          fi
+
+          if [ -d logs ]; then
+            cp -R logs "$package_dir/logs"
+          fi
+
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     Linux SDL2/OpenGL
+          EOF
+
+          zip_path="dist/$artifact_prefix-$safe.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-linux-sdl2-${{ steps.commit.outputs.safe }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+
+  psp:
+    name: PSP - ${{ github.event.head_commit.message || github.ref_name }}
+    runs-on: ubuntu-latest
+    container:
+      image: pspdev/pspdev:latest
+
+    steps:
+      - name: Install checkout dependencies inside PSP container
+        shell: bash
+        run: |
+          apk add --no-cache git nodejs npm zip make python3 || true
+          apt-get update && apt-get install -y git nodejs npm zip make python3 || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          name="$(git log -1 --pretty=%s)"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+          echo "### PSP" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit SHA: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build PSP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build logs dist
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     PSP"
+            echo
+            make -f Makefile.psp
+          } 2>&1 | tee logs/build-psp.log
+
+      - name: Package PSP zip
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          artifact_prefix="pexcraft-psp"
+          safe="${{ steps.commit.outputs.safe }}"
+          package_dir="dist/$artifact_prefix"
+
+          mkdir -p "$package_dir"
+
+          find . -maxdepth 4 -type f \( \
+            -name 'EBOOT.PBP' -o \
+            -name 'PARAM.SFO' -o \
+            -name '*.elf' -o \
+            -name '*.prx' -o \
+            -name '*.pbp' \
+          \) -exec cp -f {} "$package_dir/" \; || true
+
+          if [ -d assets ]; then
+            cp -R assets "$package_dir/assets"
+          fi
+
+          if [ -d logs ]; then
+            cp -R logs "$package_dir/logs"
+          fi
+
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     PSP
+          EOF
+
+          zip_path="dist/$artifact_prefix-$safe.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload PSP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-psp-${{ steps.commit.outputs.safe }}
           path: ${{ env.ZIP_PATH }}
           if-no-files-found: error
 
   telegram:
-    name: Send Telegram message with Windows x86/x64 builds
+    name: Upload all builds to Telegram
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - windows
+      - linux
+      - psp
     if: github.event_name != 'pull_request'
 
     steps:
@@ -144,108 +334,119 @@ jobs:
           name="${{ github.event.head_commit.message || github.ref_name }}"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
+
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-      - name: Download x86/x64 artifacts
+          echo "### Telegram upload" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: telegram_upload
 
-      - name: Show downloaded artifacts
+      - name: List downloaded artifacts
         shell: bash
         run: |
-          find telegram_upload -type f -maxdepth 4 -print
+          find telegram_upload -type f -print
 
-      - name: Send one Telegram message with two zip attachments
+      - name: Upload all build zips to Telegram
         env:
           TOKEN: ${{ secrets.TOKEN }}
           CHAT_ID: ${{ env.CHAT_ID }}
           COMMIT_NAME: ${{ steps.commit.outputs.name }}
+        shell: bash
         run: |
           set -euo pipefail
 
           if [ -z "${TOKEN:-}" ]; then
-            echo 'Missing Telegram bot token. Add it as repository secret TOKEN.' >&2
+            echo "Missing Telegram bot token. Add repository secret TOKEN." >&2
             exit 1
           fi
 
-          X86_ZIP="$(find telegram_upload -type f -name 'client-windows-x86-*.zip' | head -n 1)"
-          X64_ZIP="$(find telegram_upload -type f -name 'client-windows-x64-*.zip' | head -n 1)"
-
-          test -f "$X86_ZIP"
-          test -f "$X64_ZIP"
-
           python3 - <<'PY'
-          import os, sys, json, uuid, mimetypes, urllib.request
+          import os
+          import sys
+          import glob
+          import json
+          import uuid
+          import mimetypes
+          import urllib.request
 
-          token = os.environ['TOKEN']
-          chat_id = os.environ['CHAT_ID']
-          x86_zip = os.environ['X86_ZIP'] if 'X86_ZIP' in os.environ else None
-          x64_zip = os.environ['X64_ZIP'] if 'X64_ZIP' in os.environ else None
+          token = os.environ["TOKEN"]
+          chat_id = os.environ["CHAT_ID"]
+          commit_name = os.environ.get("COMMIT_NAME", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          sha = os.environ.get("GITHUB_SHA", "")
 
-          # The shell variables are local, so rediscover from files if env is absent.
-          if not x86_zip or not x64_zip:
-              import glob
-              x86 = glob.glob('telegram_upload/**/client-windows-x86-*.zip', recursive=True)
-              x64 = glob.glob('telegram_upload/**/client-windows-x64-*.zip', recursive=True)
-              if not x86 or not x64:
-                  raise SystemExit('Could not find x86/x64 zip artifacts for Telegram upload')
-              x86_zip = x86[0]
-              x64_zip = x64[0]
+          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True))
 
-          commit_name = os.environ.get('COMMIT_NAME', '')
-          repo = os.environ.get('GITHUB_REPOSITORY', '')
-          sha = os.environ.get('GITHUB_SHA', '')
+          if not files:
+              raise SystemExit("No zip artifacts found for Telegram upload")
 
           caption = (
-              'PEXCraft Windows client builds\n'
-              f'Commit name: {commit_name}\n'
-              f'Repo: {repo}\n'
-              f'Commit: {sha[:12]}'
+              "PEXCraft builds\n"
+              f"Commit name: {commit_name}\n"
+              f"Repo: {repo}\n"
+              f"Commit: {sha[:12]}"
           )
 
-          media = [
-              {'type': 'document', 'media': 'attach://client_x86', 'caption': caption},
-              {'type': 'document', 'media': 'attach://client_x64'},
-          ]
+          def send_group(group, group_index):
+              boundary = "----pexcraft-" + uuid.uuid4().hex
+              parts = []
+              media = []
 
-          boundary = '----pexcraft-' + uuid.uuid4().hex
-          parts = []
+              for i, path in enumerate(group):
+                  attach_name = f"file_{group_index}_{i}"
+                  entry = {
+                      "type": "document",
+                      "media": f"attach://{attach_name}",
+                  }
+                  if i == 0:
+                      entry["caption"] = caption
+                  media.append(entry)
 
-          def field(name, value):
-              parts.append(
-                  f'--{boundary}\r\n'
-                  f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
-                  f'{value}\r\n'
-                  .encode()
+              def field(name, value):
+                  parts.append(
+                      (
+                          f"--{boundary}\r\n"
+                          f"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                          f"{value}\r\n"
+                      ).encode()
+                  )
+
+              def filefield(name, path):
+                  filename = os.path.basename(path)
+                  ctype = mimetypes.guess_type(filename)[0] or "application/zip"
+                  parts.append(
+                      (
+                          f"--{boundary}\r\n"
+                          f"Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
+                          f"Content-Type: {ctype}\r\n\r\n"
+                      ).encode()
+                  )
+                  with open(path, "rb") as f:
+                      parts.append(f.read())
+                  parts.append(b"\r\n")
+
+              field("chat_id", chat_id)
+              field("media", json.dumps(media))
+
+              for i, path in enumerate(group):
+                  filefield(f"file_{group_index}_{i}", path)
+
+              parts.append(f"--{boundary}--\r\n".encode())
+
+              req = urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendMediaGroup",
+                  data=b"".join(parts),
+                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
               )
 
-          def filefield(name, path):
-              filename = os.path.basename(path)
-              ctype = mimetypes.guess_type(filename)[0] or 'application/zip'
-              parts.append(
-                  f'--{boundary}\r\n'
-                  f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
-                  f'Content-Type: {ctype}\r\n\r\n'
-                  .encode()
-              )
-              with open(path, 'rb') as f:
-                  parts.append(f.read())
-              parts.append(b'\r\n')
+              with urllib.request.urlopen(req, timeout=240) as r:
+                  print(r.read().decode("utf-8", "replace"))
 
-          field('chat_id', chat_id)
-          field('media', json.dumps(media))
-          filefield('client_x86', x86_zip)
-          filefield('client_x64', x64_zip)
-          parts.append(f'--{boundary}--\r\n'.encode())
-
-          req = urllib.request.Request(
-              f'https://api.telegram.org/bot{token}/sendMediaGroup',
-              data=b''.join(parts),
-              headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
-          )
-
-          with urllib.request.urlopen(req, timeout=180) as r:
-              sys.stdout.write(r.read().decode('utf-8', 'replace'))
+          for index in range(0, len(files), 10):
+              send_group(files[index:index + 10], index // 10)
           PY
