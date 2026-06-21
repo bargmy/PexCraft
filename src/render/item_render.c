@@ -107,12 +107,16 @@ static int item_is_block_id(int id) {
 
 static int block_item_should_render_3d(int id) {
     if (!item_is_block_id(id)) return 0;
-    if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+    /* Java RenderItem only sends blocks through RenderBlocks.func_1227_a when
+       RenderBlocks.func_1219_a(renderType) is true: normal cube, cactus,
+       stairs, and fence.  Everything else remains the 2-D terrain icon. */
+    if (id == BLOCK_CHEST || id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
         id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_CROPS ||
         id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN || id == BLOCK_WOOD_DOOR ||
         id == BLOCK_IRON_DOOR || id == BLOCK_LADDER || id == BLOCK_RAILS ||
-        id == BLOCK_LEVER || id == BLOCK_REEDS) return 0;
+        id == BLOCK_LEVER || id == BLOCK_REEDS || id == BLOCK_STONE_BUTTON ||
+        id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) return 0;
     return 1;
 }
 
@@ -235,23 +239,102 @@ static void draw_inventory_block_model(int id) {
     draw_inventory_cuboid_model_for_block(id, bx, by, bz, 0,0,0,1,1,1);
 }
 
+static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, float pz, float u, float v) {
+    /* Java GUI block transform collapsed to 2-D screen coordinates:
+       T(slot-2,+3) * S(10) * T(1,0.5,8) * Rx(210) * Ry(45).
+       This keeps inventory block icons visually 1:1 with the deobfuscated Java
+       path without letting old depth/cull state leak wrong cube faces into GUI. */
+    const float c45 = 0.70710678118f;
+    const float cx = -0.86602540378f;
+    const float sx = -0.5f;
+    float rx = c45 * px + c45 * pz;
+    float rz = -c45 * px + c45 * pz;
+    float ry = cx * py - sx * rz;
+    float gx = (float)(slot_x - 2) + 10.0f * (1.0f + rx);
+    float gy = (float)(slot_y + 3) + 10.0f * (0.5f + ry);
+    glTexCoord2f(u, v);
+    glVertex3f(gx, gy, 0.0f);
+}
+
+static void emit_inventory_iso_face_for_block(int id, int slot_x, int slot_y,
+                                              float x0, float y0, float z0,
+                                              float x1, float y1, float z1,
+                                              int face) {
+    int tile = 2;
+    float u0, v0, u1, v1;
+    world_style_set_pos(0, 0, 0);
+    world_face_style(id, face, &tile);
+
+    if (face == 0 || face == 1) {
+        terrain_tile_uv_subrect(tile, x0, z0, x1, z1, &u0, &v0, &u1, &v1);
+    } else if (face == 2 || face == 3) {
+        terrain_tile_uv_subrect(tile, x0, 1.0f - y1, x1, 1.0f - y0, &u0, &v0, &u1, &v1);
+    } else {
+        terrain_tile_uv_subrect(tile, z0, 1.0f - y1, z1, 1.0f - y0, &u0, &v0, &u1, &v1);
+    }
+
+    float ax0 = x0 - 0.5f, ay0 = y0 - 0.5f, az0 = z0 - 0.5f;
+    float ax1 = x1 - 0.5f, ay1 = y1 - 0.5f, az1 = z1 - 0.5f;
+
+    if (face == 1) {
+        inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az1, u1, v1);
+        inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az0, u1, v0);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az0, u0, v0);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u0, v1);
+    } else if (face == 3) {
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u0, v0);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az1, u0, v1);
+        inventory_iso_vertex(slot_x, slot_y, ax1, ay0, az1, u1, v1);
+        inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az1, u1, v0);
+    } else if (face == 4) {
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u1, v0);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az0, u0, v0);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az0, u0, v1);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az1, u1, v1);
+    }
+}
+
+static void draw_inventory_iso_cuboid_for_block(int id, int slot_x, int slot_y,
+                                                float x0, float y0, float z0,
+                                                float x1, float y1, float z1) {
+    glBegin(GL_QUADS);
+    /* At Java's inventory rotation the visible faces are x-min, z-max, and top.
+       Emit only those faces, in painter order, so no back/inside face can bleed
+       through on PSP/D3D compatibility paths. */
+    emit_inventory_iso_face_for_block(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
+    emit_inventory_iso_face_for_block(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
+    emit_inventory_iso_face_for_block(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
+    glEnd();
+}
+
+static void draw_inventory_iso_block_model(int id, int slot_x, int slot_y) {
+    if (id == BLOCK_SLAB) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_CACTUS) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_FENCE) {
+        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        return;
+    }
+    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
+        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.5f,1);
+        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.5f,0.5f,0,1,1,1);
+        return;
+    }
+    draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,1,1);
+}
+
 static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     if (stack_empty(st) || !tex_terrain.id) return;
-    glPushMatrix();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
     glDepthMask(GL_TRUE);
-    /* Java RenderItem does not clear the whole depth buffer for every slot.
-       Clearing it made 3D blocks interact badly with the GUI and caused odd
-       facing/depth artifacts. */
-    /* Match Java inventory rendering: with Java-accurate face winding on the
-       inventory cuboid path, normal back-face culling shows only the intended
-       visible sides. */
-    glEnable(GL_CULL_FACE);
     glColorMask(1,1,1,1);
     glColor4f(1,1,1,1);
+
     int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);
     if (cutout_item) {
         glEnable(GL_ALPHA_TEST);
@@ -259,27 +342,19 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
         glDisable(GL_BLEND);
     } else {
         glDisable(GL_ALPHA_TEST);
-        glDisable(GL_BLEND);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
 
-    /* Match Java RenderItem.renderItemIntoGUI: translate to slot-2/+3, scale,
-       translate to the block center, then rotate. */
-    glTranslatef((float)(x - 2), (float)(y + 3), 0.0f);
-    glScalef(10.0f, 10.0f, 10.0f);
-    glTranslatef(1.0f, 0.5f, 8.0f);
-    glRotatef(210.0f, 1.0f, 0.0f, 0.0f);
-    glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
     g_force_fullbright_item_model++;
-    draw_inventory_block_model(st->id);
+    draw_inventory_iso_block_model(st->id, x, y);
     g_force_fullbright_item_model--;
 
-    glDisable(GL_DEPTH_TEST);
     glDisable(GL_ALPHA_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(1,1,1,1);
-    glPopMatrix();
 }
 
 
