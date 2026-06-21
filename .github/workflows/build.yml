@@ -39,12 +39,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
 
       - name: Read commit name
         id: commit
         shell: bash
         run: |
-          name="$(git log -1 --pretty=%s)"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
@@ -150,12 +154,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
 
       - name: Read commit name
         id: commit
         shell: bash
         run: |
-          name="$(git log -1 --pretty=%s)"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
@@ -250,24 +258,44 @@ jobs:
       image: pspdev/pspdev:latest
 
     steps:
-      - name: Install checkout dependencies inside PSP container
+      - name: Install checkout/build dependencies inside PSP container
         shell: bash
         run: |
-          apk add --no-cache git nodejs npm zip make python3 || true
-          apt-get update && apt-get install -y git nodejs npm zip make python3 || true
+          apk add --no-cache git nodejs npm zip make python3 py3-pillow || true
+          apt-get update && apt-get install -y git nodejs npm zip make python3 python3-pil || true
+          python3 - <<'PY'
+          try:
+              import PIL
+          except Exception:
+              raise SystemExit("Pillow is missing; install py3-pillow/python3-pil in the PSP container")
+          PY
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
 
       - name: Read commit name
         id: commit
         shell: bash
         run: |
-          name="$(git log -1 --pretty=%s)"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
           safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Generate PSP embedded assets
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 tools/prepare_psp_assets.py \
+            build/psp_generated/assets \
+            src/assets/psp_embedded_classic_pack.c \
+            build/psp_generated/psp_mcrw_assets.pak \
+            build/psp_generated/psp_mcrw_assets.S
 
       - name: Build PSP
         shell: bash
