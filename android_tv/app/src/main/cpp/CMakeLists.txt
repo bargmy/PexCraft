@@ -51,6 +51,8 @@ target_compile_options(main PRIVATE
     -Wno-unused-function
     -Wno-unused-variable
     -Wno-unused-parameter
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:RelWithDebInfo>:-O3>
 )
 
 target_link_libraries(main

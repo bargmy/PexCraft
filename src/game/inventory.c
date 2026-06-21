@@ -5614,6 +5614,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
             }
         }
     }
+    flat_gl_cpu_mesh_remap_after_shift(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
     g_flat_renderer_sort_dirty = 1;
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;

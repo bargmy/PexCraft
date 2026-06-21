@@ -732,6 +732,56 @@ static void flat_gl_cpu_mesh_free_all(void) {
     }
 }
 
+static void flat_gl_cpu_mesh_remap_after_shift(int old_origin_x, int old_origin_z,
+                                                int new_origin_x, int new_origin_z) {
+    /* Android/OpenGL CPU meshes are stored outside the normal section-handle
+       arrays.  When the 256x256 active window slides, keep meshes for chunks
+       that remain in the window instead of dropping every section and forcing a
+       full-world rebuild on the next frame. */
+    if (old_origin_x == new_origin_x && old_origin_z == new_origin_z) return;
+    if (flat_direct_backend()) return;
+
+    FlatGLCpuMesh old_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
+    memcpy(old_mesh, g_flat_section_gl_cpu_mesh, sizeof(old_mesh));
+    memset(g_flat_section_gl_cpu_mesh, 0, sizeof(g_flat_section_gl_cpu_mesh));
+
+    int old_base_cx = floor_div16(old_origin_x);
+    int old_base_cz = floor_div16(old_origin_z);
+    int new_base_cx = floor_div16(new_origin_x);
+    int new_base_cz = floor_div16(new_origin_z);
+
+    for (int ncz = 0; ncz < FLAT_RENDER_CHUNKS; ++ncz) {
+        for (int ncx = 0; ncx < FLAT_RENDER_CHUNKS; ++ncx) {
+            int wcx = new_base_cx + ncx;
+            int wcz = new_base_cz + ncz;
+            if (!stream_world_chunk_in_window(wcx, wcz, old_origin_x, old_origin_z)) continue;
+            int ocx = wcx - old_base_cx;
+            int ocz = wcz - old_base_cz;
+            if (ocx < 0 || ocx >= FLAT_RENDER_CHUNKS || ocz < 0 || ocz >= FLAT_RENDER_CHUNKS) continue;
+            for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+                for (int pass = 0; pass < 2; ++pass) {
+                    g_flat_section_gl_cpu_mesh[sy][ncz][ncx][pass] = old_mesh[sy][ocz][ocx][pass];
+                    g_flat_section_gl_cpu_mesh[sy][ncz][ncx][pass].origin_x = new_origin_x;
+                    g_flat_section_gl_cpu_mesh[sy][ncz][ncx][pass].origin_z = new_origin_z;
+                    memset(&old_mesh[sy][ocz][ocx][pass], 0, sizeof(old_mesh[sy][ocz][ocx][pass]));
+                }
+            }
+        }
+    }
+
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+            for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+                flat_gl_cpu_mesh_free(&old_mesh[sy][cz][cx][0]);
+                flat_gl_cpu_mesh_free(&old_mesh[sy][cz][cx][1]);
+            }
+        }
+    }
+
+    g_flat_gl_cpu_mesh_origin_x = new_origin_x;
+    g_flat_gl_cpu_mesh_origin_z = new_origin_z;
+}
+
 static void flat_gl_cpu_mesh_check_origin(void) {
     if (g_flat_gl_cpu_mesh_origin_x == g_flat_world_origin_x &&
         g_flat_gl_cpu_mesh_origin_z == g_flat_world_origin_z) return;

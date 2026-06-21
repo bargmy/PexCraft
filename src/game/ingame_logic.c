@@ -151,10 +151,16 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
-        /* Terrain streaming is owned by the background streaming service.  The
-           game thread must not generate, install, remap, or flush chunk lighting
-           here; doing that was the visible World streaming spike in-game. */
+        /* Android/GLES reads the section mesh arrays on the render thread.  Keep
+           streaming/remap/light commits on this game thread there; the generic
+           background service can race the renderer and corrupt the visible world
+           while the active window slides. */
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+        update_infinite_world_streaming();
+        flat_flush_pending_lighting();
+#else
         world_stream_service_ensure();
+#endif
         prof_part = pex_profile_begin();
         update_liquids();
         pex_profile_add(PROF_LIQUIDS, prof_part);

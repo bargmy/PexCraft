@@ -1151,6 +1151,7 @@ static void flat_world_finish_initial_generation(void);
 static void mark_flat_render_chunks_dirty_all(void);
 static void worldgen_mesh_prep_reset(void);
 static int worldgen_mesh_prep_step(int max_rebuilds);
+static void flat_gl_cpu_mesh_remap_after_shift(int old_origin_x, int old_origin_z, int new_origin_x, int new_origin_z);
 static int worldgen_mesh_prep_total(void);
 static int worldgen_mesh_prep_done(void);
 static void inventory_reset(void);

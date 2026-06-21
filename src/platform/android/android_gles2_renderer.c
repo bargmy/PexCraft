@@ -35,6 +35,7 @@ typedef struct AndroidTVList { AndroidTVBatch *first, *last; } AndroidTVList;
 
 static GLuint g_android_tv_program = 0;
 static GLuint g_android_tv_vbo = 0;
+static GLuint g_android_tv_ebo = 0;
 static GLint g_android_tv_a_pos = -1;
 static GLint g_android_tv_a_uv = -1;
 static GLint g_android_tv_a_color = -1;
@@ -87,6 +88,8 @@ static GLsizei g_android_tv_color_stride = 0;
 static int g_android_tv_vertex_array_enabled = 0;
 static int g_android_tv_texcoord_array_enabled = 0;
 static int g_android_tv_color_array_enabled = 0;
+static GLushort *g_android_tv_index16_tmp = NULL;
+static int g_android_tv_index16_cap = 0;
 
 static void android_tv_mat_identity(AndroidTVMat4 *m) {
     memset(m->m, 0, sizeof(m->m));
@@ -196,6 +199,7 @@ static int pex_android_tv_gles2_init(void) {
     g_android_tv_u_alpha_enabled = glGetUniformLocation(g_android_tv_program, "u_alpha_enabled");
     g_android_tv_u_alpha_ref = glGetUniformLocation(g_android_tv_program, "u_alpha_ref");
     glGenBuffers(1, &g_android_tv_vbo);
+    glGenBuffers(1, &g_android_tv_ebo);
     android_tv_mat_identity(&g_android_tv_model_stack[0]);
     android_tv_mat_identity(&g_android_tv_proj_stack[0]);
     glUseProgram(g_android_tv_program);
@@ -483,8 +487,94 @@ static void pex_android_tv_glDisableClientState(GLenum array) { if (array == GL_
 static void pex_android_tv_glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_android_tv_vertex_size=size; g_android_tv_vertex_type=type; g_android_tv_vertex_stride=stride; g_android_tv_vertex_ptr=pointer; }
 static void pex_android_tv_glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_android_tv_texcoord_size=size; g_android_tv_texcoord_type=type; g_android_tv_texcoord_stride=stride; g_android_tv_texcoord_ptr=pointer; }
 static void pex_android_tv_glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_android_tv_color_size=size; g_android_tv_color_type=type; g_android_tv_color_stride=stride; g_android_tv_color_ptr=pointer; }
+static int android_tv_ensure_index16_tmp(int needed) {
+    if (needed <= g_android_tv_index16_cap) return 1;
+    int cap = g_android_tv_index16_cap ? g_android_tv_index16_cap : 4096;
+    while (cap < needed) cap *= 2;
+    GLushort *ni = (GLushort*)realloc(g_android_tv_index16_tmp, (size_t)cap * sizeof(*ni));
+    if (!ni) return 0;
+    g_android_tv_index16_tmp = ni;
+    g_android_tv_index16_cap = cap;
+    return 1;
+}
+
+static int android_tv_arrays_are_pexvertex_interleaved(const unsigned char **base_out, GLsizei *stride_out) {
+    if (!g_android_tv_vertex_array_enabled || !g_android_tv_texcoord_array_enabled || !g_android_tv_color_array_enabled) return 0;
+    if (!g_android_tv_vertex_ptr || !g_android_tv_texcoord_ptr || !g_android_tv_color_ptr) return 0;
+    if (g_android_tv_vertex_size != 3 || g_android_tv_vertex_type != GL_FLOAT) return 0;
+    if (g_android_tv_texcoord_size != 2 || g_android_tv_texcoord_type != GL_FLOAT) return 0;
+    if (g_android_tv_color_size != 4 || g_android_tv_color_type != GL_UNSIGNED_BYTE) return 0;
+    GLsizei vs = g_android_tv_vertex_stride ? g_android_tv_vertex_stride : (GLsizei)(3 * sizeof(GLfloat));
+    GLsizei ts = g_android_tv_texcoord_stride ? g_android_tv_texcoord_stride : (GLsizei)(2 * sizeof(GLfloat));
+    GLsizei cs = g_android_tv_color_stride ? g_android_tv_color_stride : (GLsizei)(4 * sizeof(GLubyte));
+    if (vs != (GLsizei)sizeof(PexVertex) || ts != (GLsizei)sizeof(PexVertex) || cs != (GLsizei)sizeof(PexVertex)) return 0;
+    const unsigned char *base = ((const unsigned char*)g_android_tv_vertex_ptr) - offsetof(PexVertex, x);
+    if ((const unsigned char*)g_android_tv_texcoord_ptr != base + offsetof(PexVertex, u)) return 0;
+    if ((const unsigned char*)g_android_tv_color_ptr != base + offsetof(PexVertex, color)) return 0;
+    if (base_out) *base_out = base;
+    if (stride_out) *stride_out = vs;
+    return 1;
+}
+
+static int android_tv_draw_elements_fast(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) {
+    if (!g_android_tv_program || !g_android_tv_vbo || !g_android_tv_ebo) return 0;
+    if (mode != GL_TRIANGLES && mode != GL_LINES && mode != GL_LINE_STRIP && mode != GL_TRIANGLE_STRIP) return 0;
+    const unsigned char *base = NULL;
+    GLsizei stride = 0;
+    if (!android_tv_arrays_are_pexvertex_interleaved(&base, &stride)) return 0;
+    if (type != GL_UNSIGNED_INT && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_BYTE) return 0;
+
+    unsigned int max_idx = 0;
+    for (int i = 0; i < count; ++i) {
+        unsigned int idx = android_tv_read_index(indices, type, i);
+        if (idx > max_idx) max_idx = idx;
+    }
+    if (max_idx > 262143u) return 0;
+    if (type == GL_UNSIGNED_INT && max_idx > 65535u) return 0;
+
+    AndroidTVMat4 mvp;
+    android_tv_make_mvp(&mvp);
+    glUseProgram(g_android_tv_program);
+    if (g_android_tv_u_mvp >= 0) glUniformMatrix4fv(g_android_tv_u_mvp, 1, GL_FALSE, mvp.m);
+    android_tv_apply_state_for_batch(NULL);
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_android_tv_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(((size_t)max_idx + 1u) * (size_t)stride), base, GL_DYNAMIC_DRAW);
+    if (g_android_tv_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)g_android_tv_a_pos);
+        glVertexAttribPointer((GLuint)g_android_tv_a_pos, 3, GL_FLOAT, GL_FALSE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, x));
+    }
+    if (g_android_tv_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)g_android_tv_a_uv);
+        glVertexAttribPointer((GLuint)g_android_tv_a_uv, 2, GL_FLOAT, GL_FALSE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, u));
+    }
+    if (g_android_tv_a_color >= 0) {
+        glEnableVertexAttribArray((GLuint)g_android_tv_a_color);
+        glVertexAttribPointer((GLuint)g_android_tv_a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, color));
+    }
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_android_tv_ebo);
+    GLenum draw_type = type;
+    const GLvoid *draw_offset = (const GLvoid*)0;
+    if (type == GL_UNSIGNED_INT && max_idx <= 65535u) {
+        if (!android_tv_ensure_index16_tmp(count)) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, 0); return 0; }
+        const GLuint *src = (const GLuint*)indices;
+        for (int i = 0; i < count; ++i) g_android_tv_index16_tmp[i] = (GLushort)src[i];
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(GLushort)), g_android_tv_index16_tmp, GL_DYNAMIC_DRAW);
+        draw_type = GL_UNSIGNED_SHORT;
+    } else {
+        int index_size = android_tv_sizeof_type(type);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * (size_t)index_size), indices, GL_DYNAMIC_DRAW);
+    }
+    glDrawElements(mode, count, draw_type, draw_offset);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    return 1;
+}
+
 static void pex_android_tv_glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) {
     if (count <= 0 || !indices) return;
+    if (android_tv_draw_elements_fast(mode, count, type, indices)) return;
     AndroidTVVertex *tmp = (AndroidTVVertex*)malloc((size_t)count * sizeof(*tmp));
     if (!tmp) return;
     for (int i = 0; i < count; ++i) tmp[i] = android_tv_vertex_from_arrays(android_tv_read_index(indices, type, i));
@@ -511,6 +601,8 @@ static int pex_android_tv_gluProject(GLdouble objx, GLdouble objy, GLdouble objz
 static void pex_android_tv_gles2_shutdown(void) {
     for (GLuint i = 1; i < PEX_ANDROID_TV_MAX_LISTS; ++i) android_tv_list_free(i);
     free(g_android_tv_imm); g_android_tv_imm = NULL; g_android_tv_imm_cap = 0;
+    free(g_android_tv_index16_tmp); g_android_tv_index16_tmp = NULL; g_android_tv_index16_cap = 0;
+    if (g_android_tv_ebo) { glDeleteBuffers(1, &g_android_tv_ebo); g_android_tv_ebo = 0; }
     if (g_android_tv_vbo) { glDeleteBuffers(1, &g_android_tv_vbo); g_android_tv_vbo = 0; }
     if (g_android_tv_program) { glDeleteProgram(g_android_tv_program); g_android_tv_program = 0; }
 }
