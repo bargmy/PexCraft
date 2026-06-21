@@ -54,22 +54,27 @@ static void apply_source_like_fog(void) {
     float start = end * 0.25f;
     float fog_col[4] = {0.49f, 0.65f, 1.0f, 1.0f};
 
-    /* Visual underwater/lava fog follows the camera/head, not body collision.
-       This stops shallow water from tinting the screen while the player can
-       still breathe and see above the surface. */
+    int fog_mode = GL_LINEAR;
+    float fog_density = 0.0f;
+
+    /* Java EntityRenderer.func_4140_a uses exponential fog when the camera is
+       inside water/lava.  That is what makes deeper water become darker instead
+       of simply fading to a short linear blue wall. */
     if (flat_player_head_in_water()) {
         fog_col[0] = 0.05f; fog_col[1] = 0.20f; fog_col[2] = 0.70f;
-        start = 0.0f; end = 24.0f;
+        fog_mode = GL_EXP;
+        fog_density = 0.10f;
     } else if (flat_player_head_in_lava()) {
         fog_col[0] = 0.60f; fog_col[1] = 0.10f; fog_col[2] = 0.00f;
-        start = 0.0f; end = 8.0f;
+        fog_mode = GL_EXP;
+        fog_density = 2.00f;
     }
 
     glEnable(GL_FOG);
-    glFogi(GL_FOG_MODE, GL_LINEAR);
+    glFogi(GL_FOG_MODE, fog_mode);
     glFogfv(GL_FOG_COLOR, fog_col);
-    glFogf(GL_FOG_START, start);
-    glFogf(GL_FOG_END, end);
+    if (fog_mode == GL_EXP) glFogf(GL_FOG_DENSITY, fog_density);
+    else { glFogf(GL_FOG_START, start); glFogf(GL_FOG_END, end); }
 }
 
 
@@ -182,7 +187,8 @@ static void draw_source_fancy_clouds(float partial) {
     glDepthMask(GL_FALSE);
 
     for (int pass = 0; pass < 2; ++pass) {
-        float alpha = (pass == 0) ? 0.02f : 0.8f; /* color-mask substitute for PSP shim */
+        glColorMask(pass != 0, pass != 0, pass != 0, pass != 0);
+        float alpha = 0.8f;
         for (int cz = -radius_cells + 1; cz <= radius_cells; ++cz) {
             for (int cx = -radius_cells + 1; cx <= radius_cells; ++cx) {
                 float gx0 = (float)(cx * cell) - frac_x;
@@ -240,6 +246,7 @@ static void draw_source_fancy_clouds(float partial) {
         }
     }
 
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
@@ -260,6 +267,7 @@ static void setup_world_projection(void) {
         float far_plane = current_render_distance_blocks() + 64.0f;
         if (far_plane < 1024.0f) far_plane = 1024.0f; /* clouds are independent from terrain distance */
         double fov = (double)g_opts.fov;
+        if (flat_player_head_in_water() && fov > 60.0) fov = 60.0;
         if (fov < 30.0) fov = 30.0;
         if (fov > 110.0) fov = 110.0;
         gluPerspective(fov, (double)aspect, 0.05, (double)far_plane);
@@ -284,6 +292,23 @@ static void apply_view_bobbing(float partial) {
     glRotatef(cam_pitch, 1.0f, 0.0f, 0.0f);
 }
 
+
+static void apply_hurt_camera_effect(float partial) {
+    if (g_player_dead) {
+        float f = (float)g_player_death_time + partial;
+        glRotatef(40.0f - 8000.0f / (f + 200.0f), 0.0f, 0.0f, 1.0f);
+        return;
+    }
+    if (g_player_hurt_time <= 0 || g_player_max_hurt_time <= 0) return;
+    float f = (float)g_player_hurt_time - partial;
+    if (f <= 0.0f) return;
+    f /= (float)g_player_max_hurt_time;
+    f = sinf(f * f * f * f * (float)M_PI);
+    glRotatef(-g_player_attacked_at_yaw, 0.0f, 1.0f, 0.0f);
+    glRotatef(-f * 14.0f, 0.0f, 0.0f, 1.0f);
+    glRotatef(g_player_attacked_at_yaw, 0.0f, 1.0f, 0.0f);
+}
+
 static void apply_player_camera(float partial) {
     float x = g_player_prev_x + (g_player_x - g_player_prev_x) * partial;
     float y = g_player_prev_y + (g_player_y - g_player_prev_y) * partial;
@@ -293,6 +318,8 @@ static void apply_player_camera(float partial) {
 
     /* Sneaking lowers the player camera/eye a bit, like the earlier patch. */
     if (g_screen == SCREEN_INGAME && key_down_vk(g_opts.keys[5])) y -= 0.18f;
+
+    apply_hurt_camera_effect(partial);
 
     if (g_third_person_view) {
         /* Source reference: B1.0.0 kq.java::g(float), toggled by F5 in
@@ -453,6 +480,92 @@ static void flat_direct_set_color4f(float r, float g, float b, float a) {
     }
 }
 
+static PEX_THREAD_LOCAL int g_world_style_x = 0;
+static PEX_THREAD_LOCAL int g_world_style_y = 64;
+static PEX_THREAD_LOCAL int g_world_style_z = 0;
+
+static void world_style_set_pos(int x, int y, int z) {
+    g_world_style_x = x;
+    g_world_style_y = y;
+    g_world_style_z = z;
+}
+
+static int java_light_blocks_sky(int id) {
+    if (id == 0) return 0;
+    if (block_is_liquid(id)) return 0;
+    if (id == BLOCK_GLASS || id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+        id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
+        id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_FIRE ||
+        id == BLOCK_SNOW_LAYER || id == BLOCK_RAILS || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REEDS ||
+        id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN || id == BLOCK_LADDER) return 0;
+    /* Java-style tree shade is not a projected shadow; leaves reduce skylight.
+       Fancy leaves are not opaque for face culling, but still darken the ground
+       under trees enough to match the Beta visual target. */
+    if (id == BLOCK_LEAVES) return 1;
+    return 1;
+}
+
+static float java_world_brightness_at(int x, int y, int z) {
+    if (y < FLAT_WORLD_Y_MIN) y = FLAT_WORLD_Y_MIN;
+    if (y > FLAT_WORLD_Y_MAX) y = FLAT_WORLD_Y_MAX;
+    int id_here = flat_get_block(x, y, z);
+    if (id_here == BLOCK_LAVA || id_here == BLOCK_STILL_LAVA || id_here == BLOCK_FIRE ||
+        id_here == BLOCK_TORCH || id_here == BLOCK_REDSTONE_TORCH_ON || id_here == BLOCK_FURNACE_LIT) return 1.0f;
+    int blocked = 0;
+    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
+        int id = flat_get_block(x, yy, z);
+        if (java_light_blocks_sky(id)) { blocked = 1; break; }
+    }
+    float b = blocked ? 0.55f : 1.0f;
+    if (y < 64) {
+        float cave = 0.35f + ((float)y / 64.0f) * 0.25f;
+        if (b > cave) b = cave;
+    }
+    if (b < 0.25f) b = 0.25f;
+    if (b > 1.0f) b = 1.0f;
+    return b;
+}
+
+static int colorizer_lookup(Texture *tex, float temp, float humid, int fallback_rgb) {
+    if (!tex || !tex->rgba || tex->w <= 0 || tex->h <= 0) return fallback_rgb;
+    if (temp < 0.0f) temp = 0.0f; if (temp > 1.0f) temp = 1.0f;
+    if (humid < 0.0f) humid = 0.0f; if (humid > 1.0f) humid = 1.0f;
+    humid *= temp;
+    int ix = (int)((1.0f - temp) * (float)(tex->w - 1));
+    int iy = (int)((1.0f - humid) * (float)(tex->h - 1));
+    if (ix < 0) ix = 0; if (ix >= tex->w) ix = tex->w - 1;
+    if (iy < 0) iy = 0; if (iy >= tex->h) iy = tex->h - 1;
+    unsigned char *p = &tex->rgba[((iy * tex->w) + ix) * 4];
+    return ((int)p[0] << 16) | ((int)p[1] << 8) | (int)p[2];
+}
+
+static void biome_temp_humid_at(int x, int z, float *temp, float *humid) {
+    static PEX_THREAD_LOCAL BiomeManager mgr;
+    static PEX_THREAD_LOCAL int ready = 0;
+    static PEX_THREAD_LOCAL long long seed = 0;
+    if (!ready || seed != g_world_seed) {
+        if (ready) { free(mgr.temp); free(mgr.humid); free(mgr.weird); memset(&mgr, 0, sizeof(mgr)); }
+        biome_manager_init(&mgr, g_world_seed);
+        seed = g_world_seed;
+        ready = 1;
+    }
+    biome_manager_get(&mgr, x, z, 1, 1);
+    *temp = (float)mgr.temp[0];
+    *humid = (float)mgr.humid[0];
+}
+
+static int java_grass_color_at(int x, int z) {
+    float t = 0.8f, h = 0.4f;
+    biome_temp_humid_at(x, z, &t, &h);
+    return colorizer_lookup(&tex_grasscolor, t, h, 0x6FAD3A);
+}
+
+static int java_foliage_color_at(int x, int z) {
+    float t = 0.8f, h = 0.4f;
+    biome_temp_humid_at(x, z, &t, &h);
+    return colorizer_lookup(&tex_foliagecolor, t, h, 0x59A83A);
+}
+
 static int flat_direct_reserve(FlatDirectMeshBuilder *b, uint32_t add_v, uint32_t add_i) {
     if (!b) return 0;
     if (b->vcount + add_v > b->vcap) {
@@ -567,10 +680,14 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
 }
 
 static void world_set_shade(float shade) {
+    float light = flat_light_brightness(g_world_style_x, g_world_style_y, g_world_style_z);
+    shade *= light;
     flat_direct_set_color4f(shade, shade, shade, 1.0f);
 }
 
 static void world_set_color_shade(int rgb, float shade) {
+    float light = flat_light_brightness(g_world_style_x, g_world_style_y, g_world_style_z);
+    shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
     float b = (rgb & 255) / 255.0f;
@@ -697,6 +814,7 @@ static void add_dig_particle(float x, float y, float z, float mx, float my, floa
     DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
     memset(p, 0, sizeof(*p));
     p->active = 1;
+    p->kind = PARTICLE_DIG;
     p->tile = tile;
     p->x = p->prev_x = x;
     p->y = p->prev_y = y;
@@ -766,6 +884,66 @@ static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block
                      0.2f, 0.6f);
 }
 
+
+static void add_bubble_particle(float x, float y, float z, float mx, float my, float mz) {
+    DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
+    memset(p, 0, sizeof(*p));
+    p->active = 1;
+    p->kind = PARTICLE_BUBBLE;
+    p->tile = 32;
+    p->x = p->prev_x = x;
+    p->y = p->prev_y = y;
+    p->z = p->prev_z = z;
+    p->r = p->g = p->b = 1.0f;
+    p->scale = ((frand01() * 0.5f + 0.5f) * 2.0f) * (frand01() * 0.6f + 0.2f);
+    p->mx = mx * 0.2f + (frand01() * 2.0f - 1.0f) * 0.02f;
+    p->my = my * 0.2f + (frand01() * 2.0f - 1.0f) * 0.02f;
+    p->mz = mz * 0.2f + (frand01() * 2.0f - 1.0f) * 0.02f;
+    p->gravity = -0.05f; /* bubble onUpdate adds +0.002 Y, so negative gravity in the shared updater. */
+    p->max_age = (int)(8.0f / (frand01() * 0.8f + 0.2f));
+    if (p->max_age < 1) p->max_age = 1;
+}
+
+static void add_splash_particle(float x, float y, float z, float mx, float my, float mz) {
+    DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
+    memset(p, 0, sizeof(*p));
+    p->active = 1;
+    p->kind = PARTICLE_SPLASH;
+    p->tile = 20 + (rand() & 3); /* EntityRainFX 19..22 then EntitySplashFX increments. */
+    p->x = p->prev_x = x;
+    p->y = p->prev_y = y;
+    p->z = p->prev_z = z;
+    p->r = p->g = p->b = 1.0f;
+    p->scale = (frand01() * 0.5f + 0.5f) * 2.0f;
+    p->mx = (frand01() * 2.0f - 1.0f) * 0.4f * 0.3f;
+    p->my = frand01() * 0.2f + 0.1f;
+    p->mz = (frand01() * 2.0f - 1.0f) * 0.4f * 0.3f;
+    if (my == 0.0f && (mx != 0.0f || mz != 0.0f)) {
+        p->mx = mx;
+        p->my = my + 0.1f;
+        p->mz = mz;
+    }
+    p->gravity = 1.0f;
+    p->max_age = (int)(8.0f / (frand01() * 0.8f + 0.2f));
+    if (p->max_age < 1) p->max_age = 1;
+}
+
+static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz) {
+    float width = 0.6f; /* player width in Entity.java */
+    int n = (int)(1.0f + width * 20.0f);
+    float floor_y = floorf(y);
+    for (int i = 0; i < n; ++i) {
+        float ox = (frand01() * 2.0f - 1.0f) * width;
+        float oz = (frand01() * 2.0f - 1.0f) * width;
+        add_bubble_particle(x + ox, floor_y + 1.0f, z + oz, mx, -frand01() * 0.2f, mz);
+    }
+    for (int i = 0; i < n; ++i) {
+        float ox = (frand01() * 2.0f - 1.0f) * width;
+        float oz = (frand01() * 2.0f - 1.0f) * width;
+        add_splash_particle(x + ox, floor_y + 1.0f, z + oz, mx, 0.0f, mz);
+    }
+}
+
 static void update_dig_particles(void) {
     for (int i = 0; i < MAX_DIG_PARTICLES; i++) {
         DigParticle *p = &g_dig_particles[i];
@@ -778,22 +956,33 @@ static void update_dig_particles(void) {
             continue;
         }
 
-        p->my -= 0.04f * p->gravity;
-        p->x += p->mx;
-        p->y += p->my;
-        p->z += p->mz;
+        if (p->kind == PARTICLE_BUBBLE) {
+            p->my += 0.002f;
+            p->x += p->mx;
+            p->y += p->my;
+            p->z += p->mz;
+            p->mx *= 0.85f;
+            p->my *= 0.85f;
+            p->mz *= 0.85f;
+            if (!block_is_water(flat_get_block((int)floorf(p->x), (int)floorf(p->y), (int)floorf(p->z)))) p->active = 0;
+        } else {
+            p->my -= (p->kind == PARTICLE_SPLASH ? 0.06f : 0.04f) * p->gravity;
+            p->x += p->mx;
+            p->y += p->my;
+            p->z += p->mz;
 
-        /* Simple ground collision to match EntityFX damping when onGround. */
-        if (p->y < 0.02f) {
-            p->y = 0.02f;
-            p->my = 0.0f;
-            p->mx *= 0.7f;
-            p->mz *= 0.7f;
+            if (p->y < 0.02f) {
+                p->y = 0.02f;
+                if (p->kind == PARTICLE_SPLASH && frand01() < 0.5f) p->active = 0;
+                p->my = 0.0f;
+                p->mx *= 0.7f;
+                p->mz *= 0.7f;
+            }
+
+            p->mx *= 0.98f;
+            p->my *= 0.98f;
+            p->mz *= 0.98f;
         }
-
-        p->mx *= 0.98f;
-        p->my *= 0.98f;
-        p->mz *= 0.98f;
     }
 }
 
@@ -819,7 +1008,7 @@ static void draw_dig_particles(float partial) {
     glBegin(GL_QUADS);
     for (int i = 0; i < MAX_DIG_PARTICLES; i++) {
         DigParticle *p = &g_dig_particles[i];
-        if (!p->active) continue;
+        if (!p->active || p->kind != PARTICLE_DIG) continue;
 
         float u0, v0, u1, v1;
         terrain_tile_uv(p->tile, &u0, &v0, &u1, &v1);
@@ -844,6 +1033,30 @@ static void draw_dig_particles(float partial) {
         world_tex_vertex(px + cos_yaw * q - x_rot * q, py - yz_rot * q, pz + sin_yaw * q - z_rot * q, su1, sv1);
     }
     glEnd();
+
+    if (tex_particles.id) {
+        glBindTexture(GL_TEXTURE_2D, tex_particles.id);
+        glBegin(GL_QUADS);
+        for (int i = 0; i < MAX_DIG_PARTICLES; i++) {
+            DigParticle *p = &g_dig_particles[i];
+            if (!p->active || p->kind == PARTICLE_DIG) continue;
+            float u0 = (float)(p->tile % 16) / 16.0f;
+            float u1 = u0 + 0.999f / 16.0f;
+            float v0 = (float)(p->tile / 16) / 16.0f;
+            float v1 = v0 + 0.999f / 16.0f;
+            float px = p->prev_x + (p->x - p->prev_x) * partial;
+            float py = p->prev_y + (p->y - p->prev_y) * partial;
+            float pz = p->prev_z + (p->z - p->prev_z) * partial;
+            float q = 0.1f * p->scale;
+            float br = flat_light_brightness((int)floorf(px), (int)floorf(py), (int)floorf(pz));
+            glColor4f(p->r * br, p->g * br, p->b * br, 1.0f);
+            world_tex_vertex(px - cos_yaw * q - x_rot * q, py - yz_rot * q, pz - sin_yaw * q - z_rot * q, u0, v1);
+            world_tex_vertex(px - cos_yaw * q + x_rot * q, py + yz_rot * q, pz - sin_yaw * q + z_rot * q, u0, v0);
+            world_tex_vertex(px + cos_yaw * q + x_rot * q, py + yz_rot * q, pz + sin_yaw * q + z_rot * q, u1, v0);
+            world_tex_vertex(px + cos_yaw * q - x_rot * q, py - yz_rot * q, pz + sin_yaw * q - z_rot * q, u1, v1);
+        }
+        glEnd();
+    }
 
     glColor4f(1, 1, 1, 1);
     glDisable(GL_ALPHA_TEST);
@@ -1232,6 +1445,8 @@ static void draw_break_overlay_cube(float x, float y, float z, int stage) {
 }
 
 
+static void draw_java_entity_shadow(float x, float y, float z, float shadow_size, float shadow_alpha);
+
 static void draw_falling_blocks(float partial) {
     if (!tex_terrain.id) return;
     glEnable(GL_TEXTURE_2D);
@@ -1258,6 +1473,8 @@ static void draw_falling_blocks(float partial) {
             y = fb->prev_y + (fb->y - fb->prev_y) * partial;
             z = fb->prev_z + (fb->z - fb->prev_z) * partial;
         }
+        draw_java_entity_shadow(x, y, z, 0.50f, 1.0f);
+
         glPushMatrix();
         glTranslatef(x, y, z);
         draw_world_block_id(fb->block_id, -0.5f, -0.5f, -0.5f);
@@ -1277,40 +1494,58 @@ static void draw_remote_break_overlays(void) {
     }
 }
 
-static float dropped_item_shadow_y(float x, float y, float z) {
-    int ix = (int)floorf(x);
-    int iz = (int)floorf(z);
-    int start = (int)floorf(y);
-    if (start > FLAT_WORLD_Y_MAX) start = FLAT_WORLD_Y_MAX;
-    for (int yy = start; yy >= FLAT_WORLD_Y_MIN; yy--) {
-        if (flat_get_block(ix, yy, iz) != 0) return (float)yy + 1.002f;
+static int java_shadow_block_top(int x, int y, int z, float *top_y, float *brightness) {
+    for (int yy = y; yy >= y - 4 && yy >= FLAT_WORLD_Y_MIN; --yy) {
+        int id = flat_get_block(x, yy, z);
+        if (!id || block_is_liquid(id) || !flat_block_is_solid_for_collision(id)) continue;
+        *top_y = (float)yy + 1.002f;
+        *brightness = flat_light_brightness(x, yy + 1, z);
+        return 1;
     }
-    return 0.002f;
+    return 0;
 }
 
-static void draw_dropped_item_shadow(float x, float y, float z, float radius) {
-    float sy = dropped_item_shadow_y(x, y, z);
-    float dy = y - sy;
-    if (dy < 0.0f || dy > 4.0f) return;
-    float alpha = (1.0f - dy / 4.0f) * 0.35f;
-    if (alpha <= 0.0f) return;
-    float r = radius * (1.0f - dy / 8.0f);
-    if (r < radius * 0.5f) r = radius * 0.5f;
-
-    glDisable(GL_TEXTURE_2D);
+static void draw_java_entity_shadow(float x, float y, float z, float shadow_size, float shadow_alpha) {
+    if (!g_opts.fancy_graphics || !tex_shadow.id || shadow_size <= 0.0f || shadow_alpha <= 0.0f) return;
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_shadow.id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.0f, 0.0f, 0.0f, alpha);
+    glDepthMask(GL_FALSE);
+    glColor4f(1, 1, 1, 1);
 
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex3f(x, sy, z);
-    for (int i = 0; i <= 24; i++) {
-        float a = (float)i * (float)M_PI * 2.0f / 24.0f;
-        glVertex3f(x + cosf(a) * r, sy, z + sinf(a) * r);
+    float radius = shadow_size;
+    int x0 = (int)floorf(x - radius - 1.0f);
+    int x1 = (int)floorf(x + radius + 1.0f);
+    int z0 = (int)floorf(z - radius - 1.0f);
+    int z1 = (int)floorf(z + radius + 1.0f);
+    int cy = (int)floorf(y);
+    glBegin(GL_QUADS);
+    for (int bz = z0; bz <= z1; ++bz) {
+        for (int bx = x0; bx <= x1; ++bx) {
+            float sy = 0.0f, br = 1.0f;
+            if (!java_shadow_block_top(bx, cy, bz, &sy, &br)) continue;
+            float dy = y - sy;
+            if (dy < 0.0f || dy > 4.0f) continue;
+            float cx = (float)bx + 0.5f;
+            float cz = (float)bz + 0.5f;
+            float dx = (cx - x) / radius;
+            float dz = (cz - z) / radius;
+            float dist = sqrtf(dx * dx + dz * dz);
+            if (dist > 1.35f) continue;
+            float alpha = (shadow_alpha - dy / 2.0f) * (1.0f - dist / 1.35f) * br;
+            if (alpha <= 0.0f) continue;
+            glColor4f(1.0f, 1.0f, 1.0f, alpha);
+            glTexCoord2f(0, 1); glVertex3f((float)bx,     sy, (float)bz + 1);
+            glTexCoord2f(1, 1); glVertex3f((float)bx + 1, sy, (float)bz + 1);
+            glTexCoord2f(1, 0); glVertex3f((float)bx + 1, sy, (float)bz);
+            glTexCoord2f(0, 0); glVertex3f((float)bx,     sy, (float)bz);
+        }
     }
     glEnd();
 
-    glEnable(GL_TEXTURE_2D);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
 }
 
@@ -1442,7 +1677,7 @@ static void draw_dropped_items(void) {
         float bob = sinf(((float)e->age + g_frame_partial) / 10.0f + e->rot) * 0.1f + 0.1f;
         int copies = dropped_item_copy_count(e->stack.count);
 
-        draw_dropped_item_shadow(x, y, z, 0.28f);
+        draw_java_entity_shadow(x, y, z, 0.15f, 1.0f);
 
         glPushMatrix();
         glTranslatef(x, y + bob, z);
@@ -1492,6 +1727,42 @@ static void draw_dropped_items(void) {
             }
         }
 
+        glPopMatrix();
+    }
+}
+
+
+static void draw_pickup_fx_items(void) {
+    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, g_frame_partial);
+    for (int i = 0; i < MAX_PICKUP_FX; ++i) {
+        PickupFx *fx = &g_pickup_fx[i];
+        if (!fx->active) continue;
+        float t = ((float)fx->age + g_frame_partial) / (float)(fx->max_age > 0 ? fx->max_age : 3);
+        if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+        t = t * t;
+        float px = g_player_prev_x + (g_player_x - g_player_prev_x) * g_frame_partial;
+        float py = g_player_prev_y + (g_player_y - g_player_prev_y) * g_frame_partial - 0.5f;
+        float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * g_frame_partial;
+        float x = fx->start_x + (px - fx->start_x) * t;
+        float y = fx->start_y + (py - fx->start_y) * t;
+        float z = fx->start_z + (pz - fx->start_z) * t;
+
+        glPushMatrix();
+        glTranslatef(x, y, z);
+        glRotatef((((float)fx->age + g_frame_partial) / 20.0f + fx->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
+        if (render_item_as_block_id(fx->stack.id) && tex_terrain.id) {
+            glScalef(0.25f, 0.25f, 0.25f);
+            glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+            draw_held_or_dropped_block_item_model(fx->stack.id, -0.5f, -0.5f, -0.5f);
+        } else if (world_item_is_block_id(fx->stack.id) && tex_terrain.id) {
+            glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
+            glScalef(0.5f, 0.5f, 0.5f);
+            draw_dropped_terrain_sprite(world_block_item_sprite_tile_for_id(fx->stack.id));
+        } else if (tex_items.id) {
+            glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
+            glScalef(0.5f, 0.5f, 0.5f);
+            draw_dropped_item_sprite(item_icon_tile(fx->stack.id));
+        }
         glPopMatrix();
     }
 }
@@ -1666,7 +1937,7 @@ static void world_face_style(int id, int face, int *tile) {
     else if (face == 4 || face == 5) shade = 0.60f;
 
     if (id == BLOCK_GRASS) {
-        if (face == 1) { *tile = 0; world_set_color_shade(0x6FAD3A, shade); return; }
+        if (face == 1) { *tile = 0; world_set_color_shade(java_grass_color_at(g_world_style_x, g_world_style_z), shade); return; }
         if (face == 0) { *tile = 2; world_set_shade(shade); return; }
         *tile = 3; world_set_shade(shade); return;
     }
@@ -1770,7 +2041,7 @@ static void world_face_style(int id, int face, int *tile) {
            the opaque leaf texture 53.  Fast graphics must not alpha-test the
            transparent leaf tile. */
         *tile = g_opts.fancy_graphics ? 52 : 53;
-        world_set_color_shade(0x59A83A, shade);
+        world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
         return;
     }
     if (id == BLOCK_SPONGE) { *tile = 48; world_set_shade(shade); return; }
@@ -1813,6 +2084,7 @@ static void world_face_style(int id, int face, int *tile) {
 }
 
 static void world_face_style_at(int id, int x, int y, int z, int face, int *tile) {
+    world_style_set_pos(x, y, z);
     /* BlockGrass.getBlockTexture(): when snow/snow block is above grass, side
        faces use tile 68 instead of the normal grass-side tile 3.  This is only
        a visual overlay choice; the block underneath remains grass. */
@@ -1908,6 +2180,7 @@ static void emit_world_block_face_float(int id, float x, float y, float z, int f
     float z0 = z, z1 = z + 1.0f;
     float u0,v0,u1,v1;
     int tile = 2;
+    world_style_set_pos((int)floorf(x), (int)floorf(y), (int)floorf(z));
     world_face_style(id, face, &tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     if (face == 1) { /* top */
@@ -1963,6 +2236,8 @@ static void terrain_tile_uv_subrect(int tile, float su0, float sv0, float su1, f
     *v1 = tv0 + (tv1 - tv0) * sv1;
 }
 
+static int g_render_flip_texture_once = 0;
+
 static void emit_cuboid_face_tile(float x0, float y0, float z0, float x1, float y1, float z1,
                                   float lx0, float ly0, float lz0, float lx1, float ly1, float lz1,
                                   int face, int tile) {
@@ -1978,6 +2253,7 @@ static void emit_cuboid_face_tile(float x0, float y0, float z0, float x1, float 
     } else {
         terrain_tile_uv_subrect(tile, lz0, 1.0f - ly1, lz1, 1.0f - ly0, &u0, &v0, &u1, &v1);
     }
+    if (g_render_flip_texture_once) { float tu = u0; u0 = u1; u1 = tu; }
 
     if (face == 1) {
         world_set_shade(1.0f);
@@ -2010,6 +2286,7 @@ static void emit_cuboid_block_faces_local(int id, float x0, float y0, float z0, 
                                           float lx0, float ly0, float lz0, float lx1, float ly1, float lz1) {
     for (int face = 0; face < 6; face++) {
         int tile = 2;
+        world_style_set_pos((int)floorf(x0), (int)floorf(y0), (int)floorf(z0));
         world_face_style(id, face, &tile);
         emit_cuboid_face_tile(x0, y0, z0, x1, y1, z1,
                               lx0, ly0, lz0, lx1, ly1, lz1, face, tile);
@@ -2411,11 +2688,21 @@ static void draw_ladder_block_model(int x, int y, int z) {
     glEnd(); glDisable(GL_ALPHA_TEST);
 }
 
-static int door_texture_tile_for_half(int id, int upper) {
-    /* Source terrain layout: wooden lower/upper = 97/81, iron lower/upper = 98/82.
-       The previous model used the iron lower tile for the wooden upper half. */
+static int door_java_state(int meta) {
+    return (meta & 4) == 0 ? ((meta - 1) & 3) : (meta & 3);
+}
+
+static int door_java_texture_for_face(int id, int meta, int face, int *flip) {
     int base = (id == BLOCK_IRON_DOOR) ? 98 : 97;
-    return upper ? (base - 16) : base;
+    if (flip) *flip = 0;
+    if (face == 0 || face == 1) return base;
+    int state = door_java_state(meta);
+    if (((state == 0 || state == 2) ? 1 : 0) ^ (face <= 3)) return base;
+    int v = state / 2 + ((face & 1) ^ state);
+    v += (meta & 4) / 4;
+    int tile = base - (meta & 8) * 2;
+    if (v & 1) { if (flip) *flip = 1; }
+    return tile;
 }
 
 static void draw_door_block_model(int id, int x, int y, int z) {
@@ -2423,34 +2710,30 @@ static void draw_door_block_model(int id, int x, int y, int z) {
     int upper = door_meta_is_upper(meta);
     int ly = upper ? y - 1 : y;
     int lower_meta = flat_get_meta(x, ly, z);
-    int dir = lower_meta & 3;
-    int open = door_meta_is_open(lower_meta);
-    int door_tile = door_texture_tile_for_half(id, upper);
-    int edge_tile = (id == BLOCK_IRON_DOOR) ? 38 : 4;
+    int state = door_java_state(lower_meta);
     float t = 3.0f / 16.0f;
     float x0 = (float)x, x1 = (float)x + 1.0f;
     float y0 = (float)y, y1 = (float)y + 1.0f;
     float z0 = (float)z, z1 = (float)z + 1.0f;
 
-    /* Keep the existing metadata semantics so collision/raycasting stay in sync,
-       but render an actual cheap slab instead of one paper-thin quad.  This is
-       at most six quads per half-door, not a high-poly panel/window mesh. */
-    if (open) dir = (dir + 1) & 3;
-    if (dir == 0) z1 = z0 + t;
-    else if (dir == 2) z0 = z1 - t;
-    else if (dir == 1) x0 = x1 - t;
+    if (state == 0) z1 = z0 + t;
+    else if (state == 1) x0 = x1 - t;
+    else if (state == 2) z0 = z1 - t;
     else x1 = x0 + t;
 
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
     glBegin(GL_QUADS);
+    world_style_set_pos(x, y, z);
     for (int face = 0; face < 6; face++) {
         if (!upper && face == 1 && flat_get_block(x, y + 1, z) == id) continue;
         if (upper && face == 0 && flat_get_block(x, y - 1, z) == id) continue;
-        int tile = edge_tile;
-        if ((dir == 0 || dir == 2) && (face == 2 || face == 3)) tile = door_tile;
-        if ((dir == 1 || dir == 3) && (face == 4 || face == 5)) tile = door_tile;
+        int flip = 0;
+        int tile = door_java_texture_for_face(id, meta, face, &flip);
+        if (tile < 0) { tile = -tile; flip = 1; }
+        g_render_flip_texture_once = flip;
         emit_cuboid_face_tile_auto(x0, y0, z0, x1, y1, z1, face, tile);
+        g_render_flip_texture_once = 0;
     }
     glEnd();
     glDisable(GL_ALPHA_TEST);
@@ -2621,9 +2904,10 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
     float z0 = (float)z, z1 = (float)z + 1.0f;
     float u0, v0, u1, v1;
 
-    flat_direct_set_color4f(1.0f, 1.0f, 1.0f, is_water ? 0.72f : 0.88f);
+    world_style_set_pos(x, y, z);
 
     if (liquid_face_exposed(x, y, z, 1)) {
+        world_set_shade(1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
         liquid_top_uvs_source(top_tile, liquid_flow_angle_at(x, y, z, is_water),
                               &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
@@ -2633,7 +2917,17 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         world_tex_vertex(x1, (float)y + h10, z0, u10, v10);
     }
 
+    if (liquid_face_exposed(x, y, z, 0)) {
+        world_set_shade(0.5f);
+        terrain_tile_uv(top_tile, &u0, &v0, &u1, &v1);
+        world_tex_vertex(x0, y0, z1, u0, v0);
+        world_tex_vertex(x1, y0, z1, u1, v0);
+        world_tex_vertex(x1, y0, z0, u1, v1);
+        world_tex_vertex(x0, y0, z0, u0, v1);
+    }
+
     terrain_tile_uv(side_tile, &u0, &v0, &u1, &v1);
+    world_set_shade(0.8f);
     if (liquid_face_exposed(x, y, z, 2)) {
         world_tex_vertex(x1, (float)y + h10, z0, u0, v0);
         world_tex_vertex(x0, (float)y + h00, z0, u1, v0);
@@ -2647,12 +2941,14 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         world_tex_vertex(x0, y0, z1, u0, v1);
     }
     if (liquid_face_exposed(x, y, z, 4)) {
+        world_set_shade(0.6f);
         world_tex_vertex(x0, (float)y + h00, z0, u0, v0);
         world_tex_vertex(x0, (float)y + h01, z1, u1, v0);
         world_tex_vertex(x0, y0, z1, u1, v1);
         world_tex_vertex(x0, y0, z0, u0, v1);
     }
     if (liquid_face_exposed(x, y, z, 5)) {
+        world_set_shade(0.6f);
         world_tex_vertex(x1, (float)y + h11, z1, u0, v0);
         world_tex_vertex(x1, (float)y + h10, z0, u1, v0);
         world_tex_vertex(x1, y0, z0, u1, v1);
@@ -2677,9 +2973,10 @@ static void draw_liquid_block(int id, float x, float y, float z) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
-    flat_direct_set_color4f(1.0f, 1.0f, 1.0f, is_water ? 0.72f : 0.88f);
+    world_style_set_pos(ix, iy, iz);
 
     if (liquid_face_exposed(ix, iy, iz, 1)) {
+        world_set_shade(1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
         liquid_top_uvs_source(top_tile, liquid_flow_angle_at(ix, iy, iz, is_water),
                               &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
@@ -2691,8 +2988,17 @@ static void draw_liquid_block(int id, float x, float y, float z) {
         glEnd();
     }
 
+    if (liquid_face_exposed(ix, iy, iz, 0)) {
+        world_set_shade(0.5f);
+        terrain_tile_uv(top_tile, &u0, &v0, &u1, &v1);
+        glBegin(GL_QUADS);
+        world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        glEnd();
+    }
+
     terrain_tile_uv(side_tile, &u0, &v0, &u1, &v1);
     glBegin(GL_QUADS);
+    world_set_shade(0.8f);
     if (liquid_face_exposed(ix, iy, iz, 2)) {
         world_tex_vertex(x1,y+h10,z0,u0,v0); world_tex_vertex(x0,y+h00,z0,u1,v0); world_tex_vertex(x0,y0,z0,u1,v1); world_tex_vertex(x1,y0,z0,u0,v1);
     }
@@ -2700,9 +3006,11 @@ static void draw_liquid_block(int id, float x, float y, float z) {
         world_tex_vertex(x0,y+h01,z1,u0,v0); world_tex_vertex(x1,y+h11,z1,u1,v0); world_tex_vertex(x1,y0,z1,u1,v1); world_tex_vertex(x0,y0,z1,u0,v1);
     }
     if (liquid_face_exposed(ix, iy, iz, 4)) {
+        world_set_shade(0.6f);
         world_tex_vertex(x0,y+h00,z0,u0,v0); world_tex_vertex(x0,y+h01,z1,u1,v0); world_tex_vertex(x0,y0,z1,u1,v1); world_tex_vertex(x0,y0,z0,u0,v1);
     }
     if (liquid_face_exposed(ix, iy, iz, 5)) {
+        world_set_shade(0.6f);
         world_tex_vertex(x1,y+h11,z1,u0,v0); world_tex_vertex(x1,y+h10,z0,u1,v0); world_tex_vertex(x1,y0,z0,u1,v1); world_tex_vertex(x1,y0,z1,u0,v1);
     }
     glEnd();
@@ -3202,6 +3510,8 @@ typedef struct AsyncSectionMeshJob {
     unsigned char blocks[ASYNC_SECTION_MESH_BYTES];
     unsigned char meta[ASYNC_SECTION_MESH_BYTES];
     unsigned char levels[ASYNC_SECTION_MESH_BYTES];
+    unsigned char sky_light[ASYNC_SECTION_MESH_BYTES];
+    unsigned char block_light[ASYNC_SECTION_MESH_BYTES];
 } AsyncSectionMeshJob;
 
 typedef struct AsyncSectionMeshResult {
@@ -3255,6 +3565,8 @@ static void async_section_mesh_clear_tls(void) {
     g_async_mesh_blocks = NULL;
     g_async_mesh_meta = NULL;
     g_async_mesh_levels = NULL;
+    g_async_mesh_sky_light = NULL;
+    g_async_mesh_block_light = NULL;
     g_async_mesh_x0 = g_async_mesh_y0 = g_async_mesh_z0 = 0;
     g_async_mesh_w = g_async_mesh_h = g_async_mesh_d = 0;
     g_async_mesh_origin_override = 0;
@@ -3409,6 +3721,8 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             g_async_mesh_blocks = job.blocks;
             g_async_mesh_meta = job.meta;
             g_async_mesh_levels = job.levels;
+            g_async_mesh_sky_light = job.sky_light;
+            g_async_mesh_block_light = job.block_light;
             g_async_mesh_x0 = job.origin_x + job.cx * FLAT_RENDER_CHUNK - 1;
             g_async_mesh_y0 = FLAT_WORLD_Y_MIN + job.sy * FLAT_RENDER_SECTION - 1;
             g_async_mesh_z0 = job.origin_z + job.cz * FLAT_RENDER_CHUNK - 1;
@@ -3520,6 +3834,8 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
                 job.blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
                 job.meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
                 job.levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
+                job.sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
+                job.block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
             }
         }
     }
@@ -4239,17 +4555,25 @@ static void draw_in_block_overlay(void) {
     if (!id || !tex_terrain.id) return;
 
     float u0, v0, u1, v1;
-    terrain_tile_uv(overlay_tile_for_block(id), &u0, &v0, &u1, &v1);
+    int water_overlay = (id == BLOCK_WATER || id == BLOCK_STILL_WATER) && tex_water_overlay.id;
+    if (water_overlay) {
+        float yaw = g_player_yaw / 64.0f;
+        float pitch = g_player_pitch / 64.0f;
+        u0 = 4.0f + yaw; v0 = 4.0f + pitch;
+        u1 = 0.0f + yaw; v1 = 0.0f + pitch;
+    } else {
+        terrain_tile_uv(overlay_tile_for_block(id), &u0, &v0, &u1, &v1);
+    }
 
     glDisable(GL_FOG);
     setup_gui_projection();
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glBindTexture(GL_TEXTURE_2D, water_overlay ? tex_water_overlay.id : tex_terrain.id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     if (id == BLOCK_WATER || id == BLOCK_STILL_WATER) {
-        glColor4f(0.40f, 0.40f, 0.40f, 0.50f);
+        glColor4f(1.0f, 1.0f, 1.0f, 0.50f);
     } else if (id == BLOCK_LAVA || id == BLOCK_STILL_LAVA) {
         glColor4f(1.0f, 0.35f, 0.05f, 0.55f);
     } else {
@@ -4629,6 +4953,7 @@ static void psp_fast_draw_flat_surface_world(void) {
     psp_fast_surface_draw_tiles(pcx, pcz);
     psp_fast_surface_draw_recent_edits(pcx, pcz);
     psp_fast_surface_draw_water_tiles(pcx, pcz);
+    glEnable(GL_FOG);
     draw_source_clouds();
 
     glColor4f(1,1,1,1);
@@ -4669,7 +4994,6 @@ static void draw_flat_test_world(void) {
 
     apply_player_camera(g_frame_partial);
     apply_source_like_fog();
-    draw_source_clouds();
 
     /* Java-style WorldRenderer grid: build/draw 16x16x16 render sections.
        Missing/dirty geometry is rebuilt with a small per-frame budget; terrain
@@ -4701,6 +5025,7 @@ static void draw_flat_test_world(void) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     draw_dropped_items();
+    draw_pickup_fx_items();
     draw_dig_particles(g_frame_partial);
     draw_remote_break_overlays();
     if (g_breaking_block && flat_get_block(g_break_x, g_break_y, g_break_z) != 0) {
@@ -4708,6 +5033,9 @@ static void draw_flat_test_world(void) {
         int stage = (int)(dmg * 10.0f);
         draw_break_overlay_cube((float)g_break_x, (float)g_break_y, (float)g_break_z, stage);
     }
+
+    glEnable(GL_FOG);
+    draw_source_clouds();
 
     glColor4f(1,1,1,1);
     glDisable(GL_FOG);
@@ -4828,7 +5156,9 @@ static void draw_first_person_hand(void) {
     if (swing > 1.0f) swing = 1.0f;
     float swing_sin = sinf(swing * (float)M_PI);
     float swing_sqrt_sin = sinf(sqrtf(swing) * (float)M_PI);
-    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    ItemStack *held = &g_equipped_item;
+    float equip = g_prev_equipped_progress + (g_equipped_progress - g_prev_equipped_progress) * g_frame_partial;
+    if (equip < 0.0f) equip = 0.0f; if (equip > 1.0f) equip = 1.0f;
 
     if (!stack_empty(held) && render_item_as_block_id(held->id) && tex_terrain.id) {
         /* ItemRenderer held-block branch: when a block is selected Java renders the
@@ -4836,6 +5166,7 @@ static void draw_first_person_hand(void) {
            click/use swing look different from mining with an empty hand. */
         glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
         glPushMatrix();
+        glTranslatef(0.0f, -0.6f * (1.0f - equip), 0.0f);
         float s = 0.8f;
         glTranslatef(0.7f * s, -0.65f * s, -0.9f * s);
         glTranslatef(-swing_sqrt_sin * 0.4f,
@@ -4853,6 +5184,7 @@ static void draw_first_person_hand(void) {
     } else if (!stack_empty(held) && world_item_is_block_id(held->id) && tex_terrain.id) {
         int tile = world_block_item_sprite_tile_for_id(held->id);
         glPushMatrix();
+        glTranslatef(0.0f, -0.6f * (1.0f - equip), 0.0f);
         float s = 0.8f;
         glTranslatef(-swing_sqrt_sin * 0.4f,
                      sinf(sqrtf(swing) * (float)M_PI * 2.0f) * 0.2f,
@@ -4871,6 +5203,7 @@ static void draw_first_person_hand(void) {
            lines 16-118 for the actual extruded item geometry. */
         int tile = item_icon_tile(held->id);
         glPushMatrix();
+        glTranslatef(0.0f, -0.6f * (1.0f - equip), 0.0f);
         float s = 0.8f;
         glTranslatef(-swing_sqrt_sin * 0.4f,
                      sinf(sqrtf(swing) * (float)M_PI * 2.0f) * 0.2f,
@@ -4887,6 +5220,7 @@ static void draw_first_person_hand(void) {
     } else {
         glBindTexture(GL_TEXTURE_2D, tex_steve.id);
         glPushMatrix();
+        glTranslatef(0.0f, -0.6f * (1.0f - equip), 0.0f);
         float s = 0.8f;
         glTranslatef(-swing_sqrt_sin * 0.3f,
                      sinf(sqrtf(swing) * (float)M_PI * 2.0f) * 0.4f,

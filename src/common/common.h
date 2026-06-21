@@ -379,6 +379,7 @@ static int g_player_health = 20;
 static int g_player_prev_health = 20;
 static int g_player_armor = 0;
 static int g_ingame_ticks = 0;
+static int g_hearts_life = 0;
 
 static PexGamepadState g_gamepads[PEX_GAMEPAD_MAX];
 static int g_gamepad_count = 0;
@@ -670,7 +671,18 @@ typedef struct FlatDroppedItem {
     float rot;
     int age;
     int pickup_delay;
+    int on_ground;
 } FlatDroppedItem;
+
+typedef struct PickupFx {
+    int active;
+    ItemStack stack;
+    float start_x, start_y, start_z;
+    float prev_player_x, prev_player_y, prev_player_z;
+    int age;
+    int max_age;
+    float rot;
+} PickupFx;
 
 #if defined(PEX_PLATFORM_PSP)
 #define MAX_CHEST_TILES 64
@@ -731,12 +743,19 @@ static unsigned char g_flat_meta[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT_WORLD_
 /* Parallel fluid level array (Beta water/lava metadata): 0 = source,
    1..7 = flow decay (higher = farther), bit 0x8 = falling. 0 for non-fluid. */
 static unsigned char g_flat_levels[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT_WORLD_SIZE];
+/* Java-style saved light arrays for the active streamed world.  Values are 0..15,
+   stored as bytes instead of nibbles so section snapshots can read them without
+   bit packing. */
+static unsigned char g_flat_sky_light[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT_WORLD_SIZE];
+static unsigned char g_flat_block_light[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT_WORLD_SIZE];
 /* Worker-side mesh building uses a tiny thread-local section snapshot so the
    mesh worker never reads the live world arrays while the game thread mutates
    them.  When these pointers are NULL, flat_get_block/meta read normal globals. */
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_blocks = NULL;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_meta = NULL;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_levels = NULL;
+static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_sky_light = NULL;
+static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_block_light = NULL;
 static PEX_THREAD_LOCAL int g_async_mesh_x0 = 0, g_async_mesh_y0 = 0, g_async_mesh_z0 = 0;
 static PEX_THREAD_LOCAL int g_async_mesh_w = 0, g_async_mesh_h = 0, g_async_mesh_d = 0;
 static PEX_THREAD_LOCAL int g_async_mesh_origin_override = 0;
@@ -823,7 +842,13 @@ static PressurePlateTimer g_pressure_plate_timers[MAX_PRESSURE_PLATE_TIMERS];
 static FurnaceTile g_furnace_tiles[MAX_FURNACE_TILES];
 static int g_open_furnace_index = -1;
 static ItemStack g_carried_stack;
+static ItemStack g_equipped_item;
+static int g_equipped_slot = -1;
+static float g_equipped_progress = 0.0f;
+static float g_prev_equipped_progress = 0.0f;
 static FlatDroppedItem g_drops[MAX_DROP_ENTITIES];
+#define MAX_PICKUP_FX 32
+static PickupFx g_pickup_fx[MAX_PICKUP_FX];
 static FlatFallingBlock g_falling_blocks[MAX_FALLING_BLOCK_ENTITIES];
 
 typedef struct PexSaveChunkSnapshot {
@@ -870,9 +895,12 @@ static CRITICAL_SECTION g_save_cs;
 #else
 #define MAX_DIG_PARTICLES 384
 #endif
+typedef enum ParticleKind { PARTICLE_DIG = 0, PARTICLE_BUBBLE = 1, PARTICLE_SPLASH = 2 } ParticleKind;
+
 typedef struct DigParticle {
     int active;
     int tile;
+    int kind;
     float x, y, z;
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
@@ -927,6 +955,7 @@ static int g_suffocation_damage_timer = 0;
 static float g_player_yaw = 0.0f, g_player_pitch = 0.0f;
 static float g_player_prev_yaw = 0.0f, g_player_prev_pitch = 0.0f;
 static int g_player_on_ground = 1;
+static int g_player_was_in_water = 0;
 static float g_distance_walked = 0.0f, g_prev_distance_walked = 0.0f;
 static float g_limb_swing = 0.0f, g_prev_limb_swing = 0.0f;
 static float g_limb_swing_amount = 0.0f, g_prev_limb_swing_amount = 0.0f;
@@ -1033,6 +1062,7 @@ static double g_last_time = 0.0;
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
 static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
+static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;
 static int font_widths[256];
 
 static const char *TITLE_BLOCKS[5] = {
@@ -1139,11 +1169,13 @@ static void world_left_mouse_released(void);
 static void ingame_right_click(void);
 static void spawn_block_destroy_particles(int bx, int by, int bz, int block_id);
 static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block_id);
+static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz);
 static void update_dig_particles(void);
 static void draw_item_stack_gui(const ItemStack *st, int x, int y);
 static void draw_carried_stack(void);
 static void update_breaking(void);
 static void update_dropped_items(void);
+static void update_equipped_item(void);
 static int flat_player_aabb_collides(float px, float py, float pz);
 static int flat_player_has_sneak_support(float px, float py, float pz);
 static int flat_player_has_water_exit_ledge(float px, float py, float pz, float dx, float dz);

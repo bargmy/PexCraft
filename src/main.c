@@ -18,6 +18,7 @@ static void apply_texture_pack_index(int index);
 #define glBlendFunc pex_glBlendFunc
 #define glDepthFunc pex_glDepthFunc
 #define glDepthMask pex_glDepthMask
+#define glColorMask pex_glColorMask
 #define glAlphaFunc pex_glAlphaFunc
 #define glLineWidth pex_glLineWidth
 #define glColor4f pex_glColor4f

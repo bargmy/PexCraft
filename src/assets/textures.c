@@ -123,7 +123,11 @@ static void psp_drop_gui_texture_cpu_copies(void) {
     psp_drop_texture_cpu_copy(&tex_chest_gui);
     psp_drop_texture_cpu_copy(&tex_items);
     psp_drop_texture_cpu_copy(&tex_clouds);
+    psp_drop_texture_cpu_copy(&tex_water_overlay);
+    psp_drop_texture_cpu_copy(&tex_shadow);
+    psp_drop_texture_cpu_copy(&tex_particles);
 }
+
 #endif
 
 static const unsigned char *psp_mcrw_pak_data(size_t *out_len) {
@@ -567,6 +571,11 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
     PEX_PSP_LOAD_REQ(&tex_clouds, "environment_clouds.mcrw", 1, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
+    PEX_PSP_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
     psp_drop_gui_texture_cpu_copies();
     PEX_PSP_LOGF("load_default_textures PSP done: missing_required=%d embedded_count=%u free=%u", missing, psp_embedded_mcrw_count(), (unsigned)sceKernelTotalFreeMemSize());
 #undef PEX_PSP_LOAD_REQ
@@ -592,6 +601,11 @@ static int load_default_textures(void) {
     load_mcrw(&tex_items, "gui_items.mcrw", 0);
     ok = load_mcrw(&tex_steve, "mob_char.mcrw", 0) && ok;
     load_mcrw(&tex_clouds, "environment_clouds.mcrw", 1);
+    load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
+    load_mcrw(&tex_shadow, "misc_shadow.mcrw", 0);
+    load_mcrw(&tex_grasscolor, "misc_grasscolor.mcrw", 0);
+    load_mcrw(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0);
+    load_mcrw(&tex_particles, "particles.mcrw", 0);
     return ok;
 #endif
 }
@@ -599,6 +613,9 @@ static int load_default_textures(void) {
 static void try_pack_texture(TexturePackEntry *e, Texture *tex, const char *rel, int repeat) {
     char path[MAX_PATHBUF];
     snprintf(path, sizeof(path), "%s\\%s", e->path, rel);
+    if (load_png_texture(tex, path, repeat)) return;
+    snprintf(path, sizeof(path), "%s/%s", e->path, rel);
+    for (char *c = path; *c; ++c) if (*c == '\\') *c = '/';
     load_png_texture(tex, path, repeat);
 }
 
@@ -634,6 +651,12 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_items, "gui\\items.png", 0);
         try_pack_texture(e, &tex_steve, "mob\\char.png", 0);
         try_pack_texture(e, &tex_steve, "char.png", 0);
+        try_pack_texture(e, &tex_clouds, "environment\\clouds.png", 1);
+        try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
+        try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
+        try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
+        try_pack_texture(e, &tex_foliagecolor, "misc\\foliagecolor.png", 0);
+        try_pack_texture(e, &tex_particles, "particles.png", 0);
 #endif
     }
     if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0);

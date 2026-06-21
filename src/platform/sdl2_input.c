@@ -23,7 +23,14 @@ static void set_mouse_grabbed(int grabbed) {
     SDL_SetRelativeMouseMode(grabbed ? SDL_TRUE : SDL_FALSE);
     SDL_ShowCursor(grabbed ? SDL_DISABLE : SDL_ENABLE);
     g_cursor_hidden = grabbed;
-    if (grabbed) center_mouse_in_window();
+    if (grabbed) {
+        /* SDL relative mode already gives Java MouseHelper-style deltas.
+           Do not warp to the center here: the warp generates a fake xrel/yrel
+           spike on some SDL backends, which made the camera jump on grab. */
+        int dx = 0, dy = 0;
+        SDL_GetRelativeMouseState(&dx, &dy);
+        g_recentering_mouse = 0;
+    }
 }
 
 static float lerp_angle(float a, float b, float partial) {
@@ -53,7 +60,9 @@ static void player_turn_from_mouse(int dx, int dy_java) {
 
 static void handle_grabbed_mouse_move(int px, int py) {
     if (!g_mouse_grabbed || g_screen != SCREEN_INGAME) return;
-    player_turn_from_mouse(px, -py);
+    /* px/py are SDL relative deltas from SDL_MOUSEMOTION.xrel/yrel.
+       Java/LWJGL Mouse.getDY() is positive upward, SDL yrel is positive down. */
+    if (px || py) player_turn_from_mouse(px, -py);
 }
 
 static int key_down_vk(int vk) {

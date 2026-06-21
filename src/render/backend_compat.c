@@ -64,6 +64,7 @@ typedef struct PexD3DStateSnap {
     float fog_start, fog_end;
     DWORD fog_color;
     int cull_enabled;
+    DWORD color_write_mask;
 } PexD3DStateSnap;
 typedef struct PexD3DBatch {
     int mode;
@@ -135,6 +136,7 @@ typedef struct PexD3DBackend {
     int fog_enabled;
     float fog_start, fog_end;
     DWORD fog_color;
+    DWORD color_write_mask;
     float color[4];
     DWORD clear_color;
     GLenum matrix_mode;
@@ -191,6 +193,7 @@ typedef struct PexD3D11Backend {
     ID3D11BlendState *blend_off;
     ID3D11BlendState *blend_alpha;
     ID3D11BlendState *blend_multiply;
+    ID3D11BlendState *blend_color_off;
     ID3D11DepthStencilState *depth_on_write;
     ID3D11DepthStencilState *depth_on_nowrite;
     ID3D11DepthStencilState *depth_off;
@@ -618,6 +621,7 @@ static void pex_capture_state(PexD3DStateSnap *s) {
     s->fog_end = g_d3d9.fog_end;
     s->fog_color = g_d3d9.fog_color;
     s->cull_enabled = g_d3d9.cull_enabled;
+    s->color_write_mask = g_d3d9.color_write_mask;
 }
 
 static void pex_d3d_apply_state(const PexD3DStateSnap *s) {
@@ -632,6 +636,7 @@ static void pex_d3d_apply_state(const PexD3DStateSnap *s) {
     pex_d3d_set_render_state(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
     pex_d3d_set_render_state(D3DRS_ALPHAREF, 25);
     pex_d3d_set_render_state(D3DRS_CULLMODE, D3DCULL_NONE);
+    pex_d3d_set_render_state(D3DRS_COLORWRITEENABLE, s->color_write_mask);
     pex_d3d_set_render_state(D3DRS_FOGENABLE, s->fog_enabled ? TRUE : FALSE);
     pex_d3d_set_render_state(D3DRS_FOGCOLOR, s->fog_color);
     pex_d3d_set_render_state(D3DRS_FOGTABLEMODE, D3DFOG_LINEAR);
@@ -761,6 +766,7 @@ static int pex_renderer_d3d9_init(HWND hwnd) {
     g_d3d9.blend_enabled = 1;
     g_d3d9.src_blend = D3DBLEND_SRCALPHA;
     g_d3d9.dst_blend = D3DBLEND_INVSRCALPHA;
+    g_d3d9.color_write_mask = D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA;
     g_d3d9.depth_enabled = 0;
     g_d3d9.depth_write = 1;
     g_d3d9.depth_func = D3DCMP_LESSEQUAL;
@@ -897,6 +903,7 @@ static void pex_d3d11_release_pipeline(void) {
     if (g_d3d11.blend_off) { ID3D11BlendState_Release(g_d3d11.blend_off); g_d3d11.blend_off = NULL; }
     if (g_d3d11.blend_alpha) { ID3D11BlendState_Release(g_d3d11.blend_alpha); g_d3d11.blend_alpha = NULL; }
     if (g_d3d11.blend_multiply) { ID3D11BlendState_Release(g_d3d11.blend_multiply); g_d3d11.blend_multiply = NULL; }
+    if (g_d3d11.blend_color_off) { ID3D11BlendState_Release(g_d3d11.blend_color_off); g_d3d11.blend_color_off = NULL; }
     if (g_d3d11.depth_on_write) { ID3D11DepthStencilState_Release(g_d3d11.depth_on_write); g_d3d11.depth_on_write = NULL; }
     if (g_d3d11.depth_on_nowrite) { ID3D11DepthStencilState_Release(g_d3d11.depth_on_nowrite); g_d3d11.depth_on_nowrite = NULL; }
     if (g_d3d11.depth_off) { ID3D11DepthStencilState_Release(g_d3d11.depth_off); g_d3d11.depth_off = NULL; }
@@ -942,6 +949,8 @@ static int pex_d3d11_create_pipeline(void) {
     ID3D11Device_CreateSamplerState(g_d3d11.dev, &sd, &g_d3d11.sampler_clamp);
     D3D11_BLEND_DESC bd; memset(&bd,0,sizeof(bd)); bd.RenderTarget[0].RenderTargetWriteMask=D3D11_COLOR_WRITE_ENABLE_ALL;
     ID3D11Device_CreateBlendState(g_d3d11.dev, &bd, &g_d3d11.blend_off);
+    D3D11_BLEND_DESC bd_mask = bd; bd_mask.RenderTarget[0].RenderTargetWriteMask = 0;
+    ID3D11Device_CreateBlendState(g_d3d11.dev, &bd_mask, &g_d3d11.blend_color_off);
     bd.RenderTarget[0].BlendEnable=TRUE; bd.RenderTarget[0].SrcBlend=D3D11_BLEND_SRC_ALPHA; bd.RenderTarget[0].DestBlend=D3D11_BLEND_INV_SRC_ALPHA; bd.RenderTarget[0].BlendOp=D3D11_BLEND_OP_ADD; bd.RenderTarget[0].SrcBlendAlpha=D3D11_BLEND_ONE; bd.RenderTarget[0].DestBlendAlpha=D3D11_BLEND_INV_SRC_ALPHA; bd.RenderTarget[0].BlendOpAlpha=D3D11_BLEND_OP_ADD;
     ID3D11Device_CreateBlendState(g_d3d11.dev, &bd, &g_d3d11.blend_alpha);
     bd.RenderTarget[0].SrcBlend=D3D11_BLEND_DEST_COLOR; bd.RenderTarget[0].DestBlend=D3D11_BLEND_SRC_COLOR; bd.RenderTarget[0].BlendOp=D3D11_BLEND_OP_ADD; bd.RenderTarget[0].SrcBlendAlpha=D3D11_BLEND_ONE; bd.RenderTarget[0].DestBlendAlpha=D3D11_BLEND_ZERO; bd.RenderTarget[0].BlendOpAlpha=D3D11_BLEND_OP_ADD;
@@ -952,7 +961,7 @@ static int pex_d3d11_create_pipeline(void) {
     dsd.DepthEnable=FALSE; ID3D11Device_CreateDepthStencilState(g_d3d11.dev, &dsd, &g_d3d11.depth_off);
     D3D11_RASTERIZER_DESC rd; memset(&rd,0,sizeof(rd)); rd.FillMode=D3D11_FILL_SOLID; rd.CullMode=D3D11_CULL_NONE; rd.DepthClipEnable=TRUE;
     ID3D11Device_CreateRasterizerState(g_d3d11.dev, &rd, &g_d3d11.rast_nocull);
-    return g_d3d11.sampler_wrap && g_d3d11.sampler_clamp && g_d3d11.blend_off && g_d3d11.blend_alpha && g_d3d11.blend_multiply && g_d3d11.depth_on_write && g_d3d11.depth_on_nowrite && g_d3d11.depth_off && g_d3d11.rast_nocull;
+    return g_d3d11.sampler_wrap && g_d3d11.sampler_clamp && g_d3d11.blend_off && g_d3d11.blend_alpha && g_d3d11.blend_multiply && g_d3d11.blend_color_off && g_d3d11.depth_on_write && g_d3d11.depth_on_nowrite && g_d3d11.depth_off && g_d3d11.rast_nocull;
 }
 
 static int pex_renderer_d3d11_init(HWND hwnd) {
@@ -961,6 +970,7 @@ static int pex_renderer_d3d11_init(HWND hwnd) {
     g_d3d9.next_texture = 1; g_d3d9.next_list = 1;
     g_d3d9.texture_enabled = 1; g_d3d9.blend_enabled = 1;
     g_d3d9.src_blend = D3DBLEND_SRCALPHA; g_d3d9.dst_blend = D3DBLEND_INVSRCALPHA;
+    g_d3d9.color_write_mask = D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA;
     g_d3d9.depth_enabled = 0; g_d3d9.depth_write = 1; g_d3d9.depth_func = D3DCMP_LESSEQUAL;
     g_d3d9.color[0]=g_d3d9.color[1]=g_d3d9.color[2]=g_d3d9.color[3]=1.0f;
     g_d3d9.clear_color = D3DCOLOR_XRGB(0, 0, 0);
@@ -1094,8 +1104,8 @@ static void pex_d3d11_bind_compat_pipeline(void) {
 static void pex_d3d11_apply_state(const PexD3DStateSnap *s) {
     if (!g_d3d11.ctx) return;
     pex_d3d11_bind_compat_pipeline();
-    ID3D11BlendState *blend = g_d3d11.blend_off;
-    if (s->blend_enabled) {
+    ID3D11BlendState *blend = (s->color_write_mask == 0) ? g_d3d11.blend_color_off : g_d3d11.blend_off;
+    if (s->color_write_mask != 0 && s->blend_enabled) {
         if (s->src_blend == D3DBLEND_DESTCOLOR && s->dst_blend == D3DBLEND_SRCCOLOR) blend = g_d3d11.blend_multiply;
         else blend = g_d3d11.blend_alpha;
     }
@@ -1176,7 +1186,8 @@ static int pex_gpu_state_equal(const PexD3DStateSnap *a, const PexD3DStateSnap *
            a->fog_start == b->fog_start &&
            a->fog_end == b->fog_end &&
            a->fog_color == b->fog_color &&
-           a->cull_enabled == b->cull_enabled;
+           a->cull_enabled == b->cull_enabled &&
+           a->color_write_mask == b->color_write_mask;
 }
 
 static int pex_gpu_stream_reserve(int add) {
@@ -1327,6 +1338,18 @@ static void pex_glEnable(GLenum cap) { if (g_pex_suppress_gl_immediate) return; 
 static void pex_glBlendFunc(GLenum s, GLenum d) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glBlendFunc(s,d); return; } g_d3d9.src_blend=pex_convert_blend(s); g_d3d9.dst_blend=pex_convert_blend(d); }
 static void pex_glDepthFunc(GLenum f) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glDepthFunc(f); return; } g_d3d9.depth_func = pex_convert_depth_func(f); }
 static void pex_glDepthMask(GLboolean b) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glDepthMask(b); return; } g_d3d9.depth_write = b ? 1 : 0; }
+static void pex_glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+    if (g_pex_suppress_gl_immediate) return;
+    if (!pex_using_gpu_backend()) { glColorMask(r,g,b,a); return; }
+    pex_gpu_flush_immediate_stream();
+    DWORD mask = 0;
+    if (r) mask |= D3DCOLORWRITEENABLE_RED;
+    if (g) mask |= D3DCOLORWRITEENABLE_GREEN;
+    if (b) mask |= D3DCOLORWRITEENABLE_BLUE;
+    if (a) mask |= D3DCOLORWRITEENABLE_ALPHA;
+    g_d3d9.color_write_mask = mask;
+    if (pex_using_d3d9() && g_d3d9.dev) pex_d3d_set_render_state(D3DRS_COLORWRITEENABLE, mask);
+}
 static void pex_glAlphaFunc(GLenum f, GLclampf ref) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glAlphaFunc(f,ref); return; } (void)f; (void)ref; }
 static void pex_glLineWidth(GLfloat w) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) glLineWidth(w); else (void)w; }
 static void pex_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glColor4f(r,g,b,a); return; } g_d3d9.color[0]=r;g_d3d9.color[1]=g;g_d3d9.color[2]=b;g_d3d9.color[3]=a; }

@@ -57,10 +57,19 @@ static void draw_hud(void) {
     int hp = g_player_health;
     if (hp < 0) hp = 0;
     if (hp > 20) hp = 20;
+    int prev_hp = g_player_prev_health;
+    if (prev_hp < 0) prev_hp = 0;
+    if (prev_hp > 20) prev_hp = 20;
+    int flash_old = (g_hearts_life > g_ingame_ticks) && (((g_hearts_life - g_ingame_ticks) / 3) & 1);
     for (int i = 0; i < 10; i++) {
         int x = w / 2 - 91 + i * 8;
         int y = h - 32;
+        if (hp <= 4 && hp > 0) y += rand() & 1;
         draw_textured_rect_tex(&tex_icons, x, y, 16, 0, 9, 9, 0xFFFFFF);
+        if (flash_old) {
+            if (i * 2 + 1 < prev_hp) draw_textured_rect_tex(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == prev_hp) draw_textured_rect_tex(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
+        }
         if (i * 2 + 1 < hp) draw_textured_rect_tex(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
         else if (i * 2 + 1 == hp) draw_textured_rect_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
     }

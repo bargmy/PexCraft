@@ -38,6 +38,7 @@ static int floor_div16(int v);
 static void mark_flat_render_chunks_dirty_around(int x, int z);
 static void mark_flat_render_sections_dirty_around_block(int x, int y, int z);
 static void flat_mark_section_after_generation(int lcx, int lcz, int sy);
+static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy);
 static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
@@ -183,6 +184,257 @@ static int flat_get_level(int x, int y, int z) {
     return g_flat_levels[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
 }
 
+
+static int flat_get_sky_light(int x, int y, int z) {
+    if (g_async_mesh_sky_light) {
+        if (x < g_async_mesh_x0 || y < g_async_mesh_y0 || z < g_async_mesh_z0 ||
+            x >= g_async_mesh_x0 + g_async_mesh_w ||
+            y >= g_async_mesh_y0 + g_async_mesh_h ||
+            z >= g_async_mesh_z0 + g_async_mesh_d) return 15;
+        int ix = x - g_async_mesh_x0;
+        int iy = y - g_async_mesh_y0;
+        int iz = z - g_async_mesh_z0;
+        return g_async_mesh_sky_light[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix] & 15;
+    }
+    if (y < FLAT_WORLD_Y_MIN) return 0;
+    if (y > FLAT_WORLD_Y_MAX) return 15;
+    if (!flat_in_bounds(x, y, z)) return 15;
+    return g_flat_sky_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
+}
+
+static int flat_get_block_light(int x, int y, int z) {
+    if (g_async_mesh_block_light) {
+        if (x < g_async_mesh_x0 || y < g_async_mesh_y0 || z < g_async_mesh_z0 ||
+            x >= g_async_mesh_x0 + g_async_mesh_w ||
+            y >= g_async_mesh_y0 + g_async_mesh_h ||
+            z >= g_async_mesh_z0 + g_async_mesh_d) return 0;
+        int ix = x - g_async_mesh_x0;
+        int iy = y - g_async_mesh_y0;
+        int iz = z - g_async_mesh_z0;
+        return g_async_mesh_block_light[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix] & 15;
+    }
+    if (!flat_in_bounds(x, y, z)) return 0;
+    return g_flat_block_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
+}
+
+static int flat_light_opacity_for_id(int id) {
+    if (id == 0) return 0;
+    if (id == BLOCK_WATER || id == BLOCK_STILL_WATER || id == BLOCK_ICE) return 3;
+    if (id == BLOCK_LEAVES) return 1;
+    if (id == BLOCK_GLASS || id == BLOCK_SNOW_LAYER) return 0;
+    if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+        id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
+        id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REDSTONE_TORCH_OFF ||
+        id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_REEDS || id == BLOCK_LADDER ||
+        id == BLOCK_RAILS || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
+        id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_WOOD_DOOR ||
+        id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL) return 0;
+    if (id == BLOCK_SLAB || id == BLOCK_FARMLAND || id == BLOCK_WOOD_STAIRS ||
+        id == BLOCK_COBBLE_STAIRS || id == BLOCK_FENCE || id == BLOCK_CACTUS) return 0;
+    return 255;
+}
+
+static int flat_block_light_value_for_id(int id) {
+    switch (id) {
+        case BLOCK_LAVA:
+        case BLOCK_STILL_LAVA:
+        case BLOCK_FIRE:
+        case BLOCK_GLOWSTONE:
+        case BLOCK_JACK_O_LANTERN:
+            return 15;
+        case BLOCK_FURNACE_LIT:
+            return 13;
+        case BLOCK_TORCH:
+            return 14;
+        case BLOCK_REDSTONE_TORCH_ON:
+            return 7;
+        case BLOCK_REDSTONE_ORE_GLOWING:
+            return 9;
+        case BLOCK_PORTAL:
+            return 11;
+        default:
+            return 0;
+    }
+}
+
+static const float g_java_light_brightness_table[16] = {
+    0.050000f, 0.066667f, 0.085714f, 0.107692f,
+    0.133333f, 0.163636f, 0.200000f, 0.244444f,
+    0.300000f, 0.371429f, 0.466667f, 0.600000f,
+    0.800000f, 0.942857f, 0.971429f, 1.000000f
+};
+
+static int flat_combined_light_value(int x, int y, int z) {
+    int sky = flat_get_sky_light(x, y, z); /* skylightSubtracted is zero in this client. */
+    int block = flat_get_block_light(x, y, z);
+    return (sky > block) ? sky : block;
+}
+
+static float flat_light_brightness(int x, int y, int z) {
+    int l = flat_combined_light_value(x, y, z);
+    if (l < 0) l = 0;
+    if (l > 15) l = 15;
+    return g_java_light_brightness_table[l];
+}
+
+typedef struct FlatLightQueueCell { short x, y, z; } FlatLightQueueCell;
+
+static void flat_light_enqueue(FlatLightQueueCell *q, int *tail, int cap, int x, int y, int z,
+                               int x0, int y0, int z0) {
+    if (*tail >= cap) return;
+    q[*tail].x = (short)(x - x0);
+    q[*tail].y = (short)(y - y0);
+    q[*tail].z = (short)(z - z0);
+    (*tail)++;
+}
+
+static void flat_propagate_light_region(unsigned char *arr, int x0, int y0, int z0, int x1, int y1, int z1,
+                                        FlatLightQueueCell *q, int head, int tail) {
+    int w = x1 - x0 + 1;
+    int h = y1 - y0 + 1;
+    int d = z1 - z0 + 1;
+    const int dx[6] = { 1, -1, 0, 0, 0, 0 };
+    const int dy[6] = { 0, 0, 1, -1, 0, 0 };
+    const int dz[6] = { 0, 0, 0, 0, 1, -1 };
+    while (head < tail) {
+        int lx = q[head].x, ly = q[head].y, lz = q[head].z;
+        head++;
+        int idx = ((ly * d) + lz) * w + lx;
+        int src = arr[idx] & 15;
+        if (src <= 1) continue;
+        int wx = x0 + lx, wy = y0 + ly, wz = z0 + lz;
+        for (int i = 0; i < 6; ++i) {
+            int nx = wx + dx[i], ny = wy + dy[i], nz = wz + dz[i];
+            if (nx < x0 || nx > x1 || ny < y0 || ny > y1 || nz < z0 || nz > z1) continue;
+            int opacity = flat_light_opacity_for_id(flat_get_block(nx, ny, nz));
+            if (opacity < 1) opacity = 1;
+            int nv = src - opacity;
+            if (nv <= 0) continue;
+            int nlx = nx - x0, nly = ny - y0, nlz = nz - z0;
+            int nidx = ((nly * d) + nlz) * w + nlx;
+            if (nv > (arr[nidx] & 15)) {
+                arr[nidx] = (unsigned char)nv;
+                if (tail < w * h * d) {
+                    q[tail].x = (short)nlx;
+                    q[tail].y = (short)nly;
+                    q[tail].z = (short)nlz;
+                    tail++;
+                }
+            }
+        }
+    }
+}
+
+static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
+    if (rx1 < rx0) { int t = rx0; rx0 = rx1; rx1 = t; }
+    if (rz1 < rz0) { int t = rz0; rz0 = rz1; rz1 = t; }
+    const int margin = 16;
+    int x0 = rx0 - margin, x1 = rx1 + margin;
+    int z0 = rz0 - margin, z1 = rz1 + margin;
+    if (x0 < g_flat_world_origin_x) x0 = g_flat_world_origin_x;
+    if (z0 < g_flat_world_origin_z) z0 = g_flat_world_origin_z;
+    if (x1 >= g_flat_world_origin_x + FLAT_WORLD_SIZE) x1 = g_flat_world_origin_x + FLAT_WORLD_SIZE - 1;
+    if (z1 >= g_flat_world_origin_z + FLAT_WORLD_SIZE) z1 = g_flat_world_origin_z + FLAT_WORLD_SIZE - 1;
+    int y0 = FLAT_WORLD_Y_MIN, y1 = FLAT_WORLD_Y_MAX;
+    if (x1 < x0 || z1 < z0) return;
+    int w = x1 - x0 + 1;
+    int h = y1 - y0 + 1;
+    int d = z1 - z0 + 1;
+    int cap = w * h * d;
+    unsigned char *sky = (unsigned char*)calloc((size_t)cap, 1);
+    unsigned char *block = (unsigned char*)calloc((size_t)cap, 1);
+    FlatLightQueueCell *q = (FlatLightQueueCell*)malloc(sizeof(FlatLightQueueCell) * (size_t)cap);
+    if (!sky || !block || !q) { free(sky); free(block); free(q); return; }
+
+    int tail = 0;
+    for (int z = z0; z <= z1; ++z) {
+        for (int x = x0; x <= x1; ++x) {
+            int light = 15;
+            for (int y = y1; y >= y0; --y) {
+                int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
+                sky[idx] = (unsigned char)light;
+                if (light > 1) flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
+                int opacity = flat_light_opacity_for_id(flat_get_block(x, y, z));
+                if (opacity > 0 && light > 0) {
+                    int dec = opacity < 1 ? 1 : opacity;
+                    light -= dec;
+                    if (light < 0) light = 0;
+                }
+            }
+        }
+    }
+    flat_propagate_light_region(sky, x0, y0, z0, x1, y1, z1, q, 0, tail);
+
+    tail = 0;
+    for (int z = z0; z <= z1; ++z) {
+        for (int x = x0; x <= x1; ++x) {
+            for (int y = y0; y <= y1; ++y) {
+                int v = flat_block_light_value_for_id(flat_get_block(x, y, z));
+                if (v <= 0) continue;
+                int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
+                block[idx] = (unsigned char)v;
+                flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
+            }
+        }
+    }
+    flat_propagate_light_region(block, x0, y0, z0, x1, y1, z1, q, 0, tail);
+
+    for (int z = z0; z <= z1; ++z) {
+        int fz = flat_z_index(z);
+        for (int x = x0; x <= x1; ++x) {
+            int fx = flat_index(x);
+            for (int y = y0; y <= y1; ++y) {
+                int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
+                g_flat_sky_light[flat_y_index(y)][fz][fx] = sky[idx] & 15;
+                g_flat_block_light[flat_y_index(y)][fz][fx] = block[idx] & 15;
+            }
+        }
+    }
+    int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
+    int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
+    for (int cz = cz0; cz <= cz1; ++cz) {
+        for (int cx = cx0; cx <= cx1; ++cx) {
+            int lcx = stream_world_chunk_local_x(cx);
+            int lcz = stream_world_chunk_local_z(cz);
+            if (flat_local_chunk_valid(lcx, lcz)) {
+                for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+            }
+        }
+    }
+    free(sky); free(block); free(q);
+}
+
+static void flat_recalculate_lighting_chunk(int cx, int cz) {
+    flat_recalculate_lighting_region(cx * 16, cz * 16, cx * 16 + 15, cz * 16 + 15);
+}
+
+static int g_flat_light_dirty = 0;
+static int g_flat_light_x0 = 0, g_flat_light_z0 = 0, g_flat_light_x1 = 0, g_flat_light_z1 = 0;
+
+static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1) {
+    if (!g_flat_light_dirty) {
+        g_flat_light_dirty = 1;
+        g_flat_light_x0 = x0; g_flat_light_z0 = z0; g_flat_light_x1 = x1; g_flat_light_z1 = z1;
+    } else {
+        if (x0 < g_flat_light_x0) g_flat_light_x0 = x0;
+        if (z0 < g_flat_light_z0) g_flat_light_z0 = z0;
+        if (x1 > g_flat_light_x1) g_flat_light_x1 = x1;
+        if (z1 > g_flat_light_z1) g_flat_light_z1 = z1;
+    }
+}
+
+static void flat_note_lighting_dirty_around_block(int x, int y, int z) {
+    (void)y;
+    flat_note_lighting_dirty_region(x, z, x, z);
+}
+
+static void flat_flush_pending_lighting(void) {
+    if (!g_flat_light_dirty) return;
+    int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
+    g_flat_light_dirty = 0;
+    flat_recalculate_lighting_region(x0, z0, x1, z1);
+}
+
 static void flat_set_level_raw(int x, int y, int z, int level) {
     if (!flat_in_bounds(x, y, z)) return;
     int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
@@ -215,6 +467,7 @@ static void flat_set_meta_raw(int x, int y, int z, int meta) {
 static int block_is_door_id(int id) { return id == BLOCK_WOOD_DOOR || id == BLOCK_IRON_DOOR; }
 static int door_meta_is_upper(int meta) { return (meta & 8) != 0; }
 static int door_meta_is_open(int meta) { return (meta & 4) != 0; }
+static int door_collision_state_from_meta(int meta) { return (meta & 4) == 0 ? ((meta - 1) & 3) : (meta & 3); }
 
 static int door_lower_y_at(int x, int y, int z) {
     int id = flat_get_block(x, y, z);
@@ -428,6 +681,7 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+    flat_recalculate_lighting_chunk(cx, cz);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_surface_mark_dirty_block(cx * 16 + 8, cz * 16 + 8);
 #endif
@@ -485,6 +739,7 @@ static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
             }
         }
     }
+    flat_recalculate_lighting_chunk(cx, cz);
     free(buf);
     free(meta);
 }
@@ -570,6 +825,7 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+    flat_recalculate_lighting_chunk(cx, cz);
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
@@ -809,6 +1065,7 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
     if (!flat_in_bounds(x, y, z)) return;
     int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
     unsigned char *cell = &g_flat_blocks[yi][zi][xi];
+    int old_id = *cell;
     /* Plain block writes clear both general metadata and liquid metadata.
        The fluid simulation uses flat_set_fluid() to update id + level together. */
     g_flat_levels[yi][zi][xi] = 0;
@@ -817,6 +1074,10 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
         g_flat_meta[yi][zi][xi] = 0;
         flat_update_section_occupancy_after_block_change(x, y, z, id);
         mark_flat_render_sections_dirty_around_block(x, y, z);
+        if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
+            flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
+            flat_note_lighting_dirty_around_block(x, y, z);
+        }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
         psp_fast_surface_mark_dirty_block(x, z);
         psp_fast_surface_note_edit_block(x, y, z);
@@ -835,6 +1096,7 @@ static void flat_set_fluid(int x, int y, int z, int id, int level) {
     if (!flat_in_bounds(x, y, z)) return;
     int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
     unsigned char *cell = &g_flat_blocks[yi][zi][xi];
+    int old_id = *cell;
     unsigned char *lvl = &g_flat_levels[yi][zi][xi];
     unsigned char want_level = (unsigned char)(level & 15);
     if (*cell != (unsigned char)id || *lvl != want_level || g_flat_meta[yi][zi][xi] != want_level) {
@@ -843,6 +1105,10 @@ static void flat_set_fluid(int x, int y, int z, int id, int level) {
         g_flat_meta[yi][zi][xi] = want_level;
         flat_update_section_occupancy_after_block_change(x, y, z, id);
         mark_flat_render_sections_dirty_around_block(x, y, z);
+        if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
+            flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
+            flat_note_lighting_dirty_around_block(x, y, z);
+        }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
         psp_fast_surface_mark_dirty_block(x, z);
         psp_fast_surface_note_edit_block(x, y, z);
@@ -1114,6 +1380,9 @@ static void flat_world_prepare_initial_generation(void) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     memset(g_flat_meta, 0, sizeof(g_flat_meta));
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
+    memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
+    memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+    g_flat_light_dirty = 0;
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -1209,6 +1478,9 @@ static void flat_world_generate_blocks_for_current_origin(void) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     memset(g_flat_meta, 0, sizeof(g_flat_meta));
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
+    memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
+    memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+    g_flat_light_dirty = 0;
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -1377,9 +1649,8 @@ static int aabb_intersects_box(float minx, float maxx, float miny, float maxy, f
 }
 
 static int door_thin_aabb_intersects(float minx, float maxx, float miny, float maxy, float minz, float maxz, int x, int y, int z) {
-    if (door_is_open_at(x, y, z)) return 0;
     int ly = door_lower_y_at(x, y, z);
-    int dir = flat_get_meta(x, ly, z) & 3;
+    int dir = door_collision_state_from_meta(flat_get_meta(x, ly, z));
     float t = 3.0f / 16.0f;
     float x0 = (float)x, x1 = (float)(x + 1);
     float z0 = (float)z, z1 = (float)(z + 1);
@@ -1885,6 +2156,132 @@ static int flat_item_aabb_collides(float px, float py, float pz) {
     return 0;
 }
 
+
+typedef struct FlatAABB { float minx, miny, minz, maxx, maxy, maxz; } FlatAABB;
+
+static int flat_aabb_intersects_aabb(const FlatAABB *a, const FlatAABB *b) {
+    return a->maxx > b->minx && a->minx < b->maxx &&
+           a->maxy > b->miny && a->miny < b->maxy &&
+           a->maxz > b->minz && a->minz < b->maxz;
+}
+
+static void flat_add_collision_box(FlatAABB *boxes, int *count, int max_boxes, const FlatAABB *query,
+                                   float minx, float miny, float minz, float maxx, float maxy, float maxz) {
+    if (*count >= max_boxes) return;
+    FlatAABB b = { minx, miny, minz, maxx, maxy, maxz };
+    if (!flat_aabb_intersects_aabb(query, &b)) return;
+    boxes[(*count)++] = b;
+}
+
+static void flat_block_add_collision_boxes(int id, int x, int y, int z, const FlatAABB *query, FlatAABB *boxes, int *count, int max_boxes) {
+    if (id <= 0 || block_is_liquid(id)) return;
+    if (block_is_door_id(id)) {
+        int m = flat_get_meta(x, y, z);
+        int lower_y = door_meta_is_upper(m) ? y - 1 : y;
+        int lm = flat_get_meta(x, lower_y, z);
+        int dir = door_collision_state_from_meta(lm);
+        const float t = 3.0f / 16.0f;
+        if (dir == 0) flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 1.0f, z + t);
+        else if (dir == 1) flat_add_collision_box(boxes, count, max_boxes, query, x + 1.0f - t, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
+        else if (dir == 2) flat_add_collision_box(boxes, count, max_boxes, query, x, y, z + 1.0f - t, x + 1.0f, y + 1.0f, z + 1.0f);
+        else flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + t, y + 1.0f, z + 1.0f);
+        return;
+    }
+    if (id == BLOCK_LADDER) return;
+    if (id == BLOCK_SLAB) { flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f); return; }
+    if (id == BLOCK_CHEST) { flat_add_collision_box(boxes, count, max_boxes, query, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 14.0f/16.0f, z + 15.0f/16.0f); return; }
+    if (id == BLOCK_CACTUS) { flat_add_collision_box(boxes, count, max_boxes, query, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 1.0f, z + 15.0f/16.0f); return; }
+    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
+        flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f);
+        int dir = flat_get_meta(x, y, z) & 3;
+        if (dir == 0) flat_add_collision_box(boxes, count, max_boxes, query, x + 0.5f, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 1.0f);
+        else if (dir == 1) flat_add_collision_box(boxes, count, max_boxes, query, x, y + 0.5f, z, x + 0.5f, y + 1.0f, z + 1.0f);
+        else if (dir == 2) flat_add_collision_box(boxes, count, max_boxes, query, x, y + 0.5f, z + 0.5f, x + 1.0f, y + 1.0f, z + 1.0f);
+        else flat_add_collision_box(boxes, count, max_boxes, query, x, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 0.5f);
+        return;
+    }
+    if (id == BLOCK_FENCE) {
+        flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z + 0.375f, x + 0.625f, y + 1.5f, z + 0.625f);
+        if (flat_block_is_solid_for_collision(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
+            flat_add_collision_box(boxes, count, max_boxes, query, x, y, z + 0.375f, x + 0.5f, y + 1.5f, z + 0.625f);
+        if (flat_block_is_solid_for_collision(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
+            flat_add_collision_box(boxes, count, max_boxes, query, x + 0.5f, y, z + 0.375f, x + 1.0f, y + 1.5f, z + 0.625f);
+        if (flat_block_is_solid_for_collision(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
+            flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z, x + 0.625f, y + 1.5f, z + 0.5f);
+        if (flat_block_is_solid_for_collision(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
+            flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z + 0.5f, x + 0.625f, y + 1.5f, z + 1.0f);
+        return;
+    }
+    if (flat_block_is_solid_for_collision(id)) flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
+}
+
+static int flat_get_colliding_bounding_boxes(const FlatAABB *query, FlatAABB *boxes, int max_boxes) {
+    int count = 0;
+    int x0 = (int)floorf(query->minx);
+    int x1 = (int)floorf(query->maxx + 1.0f);
+    int y0 = (int)floorf(query->miny);
+    int y1 = (int)floorf(query->maxy + 1.0f);
+    int z0 = (int)floorf(query->minz);
+    int z1 = (int)floorf(query->maxz + 1.0f);
+    for (int x = x0; x < x1; ++x) {
+        for (int z = z0; z < z1; ++z) {
+            for (int y = y0 - 1; y < y1; ++y) {
+                flat_block_add_collision_boxes(flat_get_block(x, y, z), x, y, z, query, boxes, &count, max_boxes);
+            }
+        }
+    }
+    return count;
+}
+
+static float aabb_clip_x(const FlatAABB *b, const FlatAABB *a, float dx) {
+    if (a->maxy <= b->miny || a->miny >= b->maxy || a->maxz <= b->minz || a->minz >= b->maxz) return dx;
+    if (dx > 0.0f && a->maxx <= b->minx) { float v = b->minx - a->maxx; if (v < dx) dx = v; }
+    if (dx < 0.0f && a->minx >= b->maxx) { float v = b->maxx - a->minx; if (v > dx) dx = v; }
+    return dx;
+}
+static float aabb_clip_y(const FlatAABB *b, const FlatAABB *a, float dy) {
+    if (a->maxx <= b->minx || a->minx >= b->maxx || a->maxz <= b->minz || a->minz >= b->maxz) return dy;
+    if (dy > 0.0f && a->maxy <= b->miny) { float v = b->miny - a->maxy; if (v < dy) dy = v; }
+    if (dy < 0.0f && a->miny >= b->maxy) { float v = b->maxy - a->miny; if (v > dy) dy = v; }
+    return dy;
+}
+static float aabb_clip_z(const FlatAABB *b, const FlatAABB *a, float dz) {
+    if (a->maxx <= b->minx || a->minx >= b->maxx || a->maxy <= b->miny || a->miny >= b->maxy) return dz;
+    if (dz > 0.0f && a->maxz <= b->minz) { float v = b->minz - a->maxz; if (v < dz) dz = v; }
+    if (dz < 0.0f && a->minz >= b->maxz) { float v = b->maxz - a->minz; if (v > dz) dz = v; }
+    return dz;
+}
+
+static void aabb_offset(FlatAABB *a, float dx, float dy, float dz) {
+    a->minx += dx; a->maxx += dx;
+    a->miny += dy; a->maxy += dy;
+    a->minz += dz; a->maxz += dz;
+}
+
+static void dropped_item_move_entity(FlatDroppedItem *e, float dx, float dy, float dz) {
+    FlatAABB box = { e->x - 0.125f, e->y - 0.125f, e->z - 0.125f, e->x + 0.125f, e->y + 0.125f, e->z + 0.125f };
+    FlatAABB sweep = box;
+    if (dx < 0) sweep.minx += dx; else sweep.maxx += dx;
+    if (dy < 0) sweep.miny += dy; else sweep.maxy += dy;
+    if (dz < 0) sweep.minz += dz; else sweep.maxz += dz;
+    FlatAABB boxes[128];
+    int n = flat_get_colliding_bounding_boxes(&sweep, boxes, 128);
+    float odx = dx, ody = dy, odz = dz;
+    for (int i = 0; i < n; ++i) dy = aabb_clip_y(&boxes[i], &box, dy);
+    aabb_offset(&box, 0.0f, dy, 0.0f);
+    for (int i = 0; i < n; ++i) dx = aabb_clip_x(&boxes[i], &box, dx);
+    aabb_offset(&box, dx, 0.0f, 0.0f);
+    for (int i = 0; i < n; ++i) dz = aabb_clip_z(&boxes[i], &box, dz);
+    aabb_offset(&box, 0.0f, 0.0f, dz);
+    e->x = (box.minx + box.maxx) * 0.5f;
+    e->y = (box.miny + box.maxy) * 0.5f;
+    e->z = (box.minz + box.maxz) * 0.5f;
+    e->on_ground = (ody != dy && ody < 0.0f) ? 1 : 0;
+    if (odx != dx) e->mx = 0.0f;
+    if (ody != dy) e->my = 0.0f;
+    if (odz != dz) e->mz = 0.0f;
+}
+
 static void inventory_reset(void) {
     memset(g_inventory, 0, sizeof(g_inventory));
     memset(g_craft_grid, 0, sizeof(g_craft_grid));
@@ -1915,6 +2312,9 @@ static void inventory_reset(void) {
     g_inventory[21] = make_stack(BLOCK_SAND, 64, 0);
     g_inventory[22] = make_stack(BLOCK_GRAVEL, 64, 0);
     g_inventory[23] = make_stack(BLOCK_CHEST, 1, 0);
+    g_equipped_item = g_inventory[g_selected_hotbar_slot];
+    g_equipped_slot = g_selected_hotbar_slot;
+    g_equipped_progress = g_prev_equipped_progress = 1.0f;
 }
 
 static int inventory_add_stack(ItemStack st) {
@@ -2911,8 +3311,7 @@ static FlatRayHit flat_raycast(void) {
             } else if (block_is_door_id(ray_id)) {
                 int ly = door_lower_y_at(bx, by, bz);
                 int meta = flat_get_meta(bx, ly, bz);
-                int dir = meta & 3;
-                if (door_meta_is_open(meta)) dir = (dir + 1) & 3;
+                int dir = door_collision_state_from_meta(meta);
                 float local_x = x - floorf(x), local_z = z - floorf(z);
                 int ok = 0;
                 if (dir == 0) ok = local_z < 0.20f;
@@ -3021,12 +3420,13 @@ static int furnace_facing_from_yaw(void) {
 static void door_toggle_at(int x, int y, int z) {
     int id = flat_get_block(x, y, z);
     if (!block_is_door_id(id)) return;
+    if (id == BLOCK_IRON_DOOR) return; /* Java iron doors ignore player click; redstone toggles them. */
     int ly = door_lower_y_at(x, y, z);
     int meta = flat_get_meta(x, ly, z);
     meta ^= 4;
     if (!g_mp_connected) flat_begin_persistent_edit();
     flat_set_meta_raw(x, ly, z, meta);
-    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, 8 | (meta & 4));
+    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, (meta ^ 4) + 8);
     if (!g_mp_connected) flat_end_persistent_edit();
     if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, ly == y ? x : x, ly, z, 0, id);
     restart_hand_swing();
@@ -3200,7 +3600,7 @@ static void redstone_set_door_open_if_needed(int x, int y, int z) {
     if (should_open == is_open) return;
     lower_meta = should_open ? (lower_meta | 4) : (lower_meta & ~4);
     flat_set_meta_raw(x, ly, z, lower_meta);
-    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, 8 | (lower_meta & 4));
+    if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, (lower_meta ^ 4) + 8);
 }
 
 static void redstone_update_near(int cx, int cy, int cz) {
@@ -3866,6 +4266,32 @@ static void merge_nearby_dropped_items(int idx) {
     }
 }
 
+
+static void spawn_pickup_fx_from_drop(const FlatDroppedItem *drop) {
+    if (!drop || stack_empty(&drop->stack)) return;
+    int slot = -1;
+    for (int i = 0; i < MAX_PICKUP_FX; ++i) if (!g_pickup_fx[i].active) { slot = i; break; }
+    if (slot < 0) slot = 0;
+    PickupFx *fx = &g_pickup_fx[slot];
+    memset(fx, 0, sizeof(*fx));
+    fx->active = 1;
+    fx->stack = drop->stack;
+    fx->start_x = drop->x;
+    fx->start_y = drop->y;
+    fx->start_z = drop->z;
+    fx->prev_player_x = g_player_prev_x;
+    fx->prev_player_y = g_player_prev_y;
+    fx->prev_player_z = g_player_prev_z;
+    fx->age = 0;
+    fx->max_age = 3;
+    fx->rot = drop->rot;
+}
+
+static float block_slipperiness_for_item(int id) {
+    if (id == BLOCK_ICE) return 0.98f;
+    return 0.60f;
+}
+
 static void inventory_drop_all_items_on_death(void) {
     for (int i = 0; i < 36; i++) {
         if (!stack_empty(&g_inventory[i])) {
@@ -3893,6 +4319,10 @@ static int dropped_item_touches_player(const FlatDroppedItem *e) {
 }
 
 static void update_dropped_items(void) {
+    for (int i = 0; i < MAX_PICKUP_FX; ++i) {
+        if (!g_pickup_fx[i].active) continue;
+        if (++g_pickup_fx[i].age >= g_pickup_fx[i].max_age) g_pickup_fx[i].active = 0;
+    }
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &g_drops[i];
         if (!e->active) continue;
@@ -3907,40 +4337,41 @@ static void update_dropped_items(void) {
         }
         e->prev_x = e->x; e->prev_y = e->y; e->prev_z = e->z;
         if (e->pickup_delay > 0) e->pickup_delay--;
-        /* Deobf EntityItem has no magnetic pull; pickup happens on player collision. */
+        /* Deobf EntityItem has no magnetic pull; pickup happens on entity collision. */
         e->my -= 0.04f;
-
-        e->x += e->mx;
-        if (flat_item_aabb_collides(e->x, e->y, e->z)) {
-            e->x = e->prev_x;
-            e->mx *= -0.5f;
+        int fluid_here = flat_get_block((int)floorf(e->x), (int)floorf(e->y), (int)floorf(e->z));
+        if (fluid_here == BLOCK_LAVA || fluid_here == BLOCK_STILL_LAVA) {
+            e->my = 0.20f;
+            e->mx = ((float)rand() / (float)RAND_MAX - 0.5f) * 0.20f;
+            e->mz = ((float)rand() / (float)RAND_MAX - 0.5f) * 0.20f;
         }
 
-        e->z += e->mz;
-        if (flat_item_aabb_collides(e->x, e->y, e->z)) {
-            e->z = e->prev_z;
-            e->mz *= -0.5f;
-        }
+        /* Java Entity.moveEntity-style world collision: build all block AABBs
+           around the swept item box, clip Y/X/Z offsets in that order, move the
+           bounding box, then zero collided motion components.  This removes the
+           old PexCraft axis rewind/bounce that made dropped items jitter. */
+        dropped_item_move_entity(e, e->mx, e->my, e->mz);
 
-        e->y += e->my;
-        int on_ground = 0;
-        if (flat_item_aabb_collides(e->x, e->y, e->z)) {
-            e->y = e->prev_y;
-            if (e->my < 0.0f) on_ground = 1;
-            e->my *= -0.5f;
+        float friction = 0.98f;
+        if (e->on_ground) {
+            int below = flat_get_block((int)floorf(e->x), (int)floorf(e->y - 0.25f), (int)floorf(e->z));
+            friction = block_slipperiness_for_item(below) * 0.98f;
         }
-
-        float friction = on_ground ? 0.58800006f : 0.98f;
         e->mx *= friction;
         e->my *= 0.98f;
         e->mz *= friction;
+        if (e->on_ground) e->my *= -0.5f;
         e->age++;
         if (e->age >= 6000 || e->y < -24.0f) { e->active = 0; continue; }
 
         if (!g_player_dead && g_screen == SCREEN_INGAME && e->pickup_delay <= 0 && dropped_item_touches_player(e)) {
-            if (inventory_add_stack(e->stack)) { e->active = 0; g_save_dirty = 1; }
+            if (inventory_add_stack(e->stack)) {
+                spawn_pickup_fx_from_drop(e);
+                e->active = 0;
+                g_save_dirty = 1;
+            }
         }
-        if (e->active) merge_nearby_dropped_items(i);
+        /* Java EntityItem in this source does not merge nearby drops. */
     }
 }
 

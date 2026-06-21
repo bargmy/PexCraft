@@ -53,6 +53,8 @@ static void player_die(const char *reason) {
 
 static void player_take_damage(int amount, const char *reason) {
     if (amount <= 0 || g_player_dead) return;
+    g_player_prev_health = g_player_health;
+    g_hearts_life = g_ingame_ticks + 20;
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_attacked_at_yaw = 0.0f;
     g_player_health -= amount;
@@ -66,12 +68,34 @@ static void player_take_damage(int amount, const char *reason) {
     }
 }
 
+
+static int equipped_stack_matches_current(const ItemStack *cur) {
+    if (stack_empty(cur) && stack_empty(&g_equipped_item)) return 1;
+    if (g_equipped_slot != g_selected_hotbar_slot) return 0;
+    return stack_same_item(cur, &g_equipped_item);
+}
+
+static void update_equipped_item(void) {
+    ItemStack *cur = &g_inventory[g_selected_hotbar_slot];
+    g_prev_equipped_progress = g_equipped_progress;
+    float target = equipped_stack_matches_current(cur) ? 1.0f : 0.0f;
+    float delta = target - g_equipped_progress;
+    if (delta < -0.4f) delta = -0.4f;
+    if (delta > 0.4f) delta = 0.4f;
+    g_equipped_progress += delta;
+    if (g_equipped_progress < 0.1f) {
+        g_equipped_item = *cur;
+        g_equipped_slot = g_selected_hotbar_slot;
+    }
+}
+
 static void player_respawn(void) {
     g_player_dead = 0;
     g_player_death_time = 0;
     g_player_health = 20;
     g_player_prev_health = 20;
     g_player_armor = 0;
+    g_hearts_life = 0;
     g_player_hurt_time = 0;
     g_player_attacked_at_yaw = 0.0f;
     reset_flat_player_spawn();
@@ -111,6 +135,7 @@ static void ingame_tick(void) {
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
     prof_part = pex_profile_begin();
     inventory_tick();
+    update_equipped_item();
     pex_profile_add(PROF_INVENTORY, prof_part);
     prof_part = pex_profile_begin();
     furnace_tick_all();
@@ -141,6 +166,9 @@ static void ingame_tick(void) {
         pex_profile_add(PROF_LIQUIDS, prof_part);
 #endif
     }
+    prof_part = pex_profile_begin();
+    flat_flush_pending_lighting();
+    pex_profile_add(PROF_WORLD_STREAM, prof_part);
     prof_part = pex_profile_begin();
     update_buttons_and_pressure_plates();
     pex_profile_add(PROF_BUTTONS, prof_part);
@@ -242,6 +270,10 @@ static void ingame_tick(void) {
 
     int in_water = flat_player_in_water();
     int in_lava = flat_player_in_lava();
+    if (in_water && !g_player_was_in_water) {
+        spawn_water_entry_particles(g_player_x, g_player_y - 1.0f, g_player_z, g_player_motion_x, g_player_motion_z);
+    }
+    g_player_was_in_water = in_water;
     int in_ladder = flat_player_in_ladder();
     if (in_water || in_lava || in_ladder) {
         g_player_fall_distance = 0.0f;

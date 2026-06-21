@@ -498,6 +498,18 @@ static const char *item_display_name(int id) {
 
 static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
     if (stack_empty(st)) return;
+    int pushed = 0;
+    if (st->pop_time > 0) {
+        float f = ((float)st->pop_time - g_frame_partial) / 5.0f;
+        if (f < 0.0f) f = 0.0f;
+        float sx = 1.0f / (1.0f + f);
+        float sy = (1.0f + f) * 0.5f + 0.5f;
+        glPushMatrix();
+        glTranslatef((float)(x + 8), (float)(y + 12), 0.0f);
+        glScalef(sx, sy, 1.0f);
+        glTranslatef((float)-(x + 8), (float)-(y + 12), 0.0f);
+        pushed = 1;
+    }
     if (item_is_block_id(st->id)) {
         if (block_item_should_render_3d(st->id)) draw_block_item_3d_gui(st, x, y);
         else draw_block_item_icon_gui(st->id, x, y);
@@ -507,6 +519,7 @@ static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
         snprintf(num, sizeof(num), "%d", st->count);
         draw_text(num, x + 19 - 2 - text_width(num), y + 6 + 3, 16777215);
     }
+    if (pushed) glPopMatrix();
 }
 
 static void draw_carried_stack(void) {

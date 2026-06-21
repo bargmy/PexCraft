@@ -57,6 +57,12 @@
 #ifndef GL_FOG_COLOR
 #define GL_FOG_COLOR 0x0B66
 #endif
+#ifndef GL_FOG_DENSITY
+#define GL_FOG_DENSITY 0x0B62
+#endif
+#ifndef GL_EXP
+#define GL_EXP 0x0800
+#endif
 
 /* Minimal Win32-shaped compatibility types used by the old code. */
 typedef uint8_t BYTE;

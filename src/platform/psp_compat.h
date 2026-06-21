@@ -129,6 +129,8 @@ typedef unsigned char GLboolean;
 #define GL_FOG_START 0x0B63
 #define GL_FOG_END 0x0B64
 #define GL_FOG_COLOR 0x0B66
+#define GL_FOG_DENSITY 0x0B62
+#define GL_EXP 0x0800
 #define GL_MODELVIEW_MATRIX 0x0BA6
 #define GL_PROJECTION_MATRIX 0x0BA7
 #define GL_TEXTURE_ENV 0x2300

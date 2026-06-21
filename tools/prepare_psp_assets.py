@@ -132,6 +132,11 @@ def main():
         'gui/container.png': 'gui_chest.mcrw',
         'title/black.png': 'title_black.mcrw',
         'environment/clouds.png': 'environment_clouds.mcrw',
+        'misc/water.png': 'misc_water.mcrw',
+        'misc/shadow.png': 'misc_shadow.mcrw',
+        'misc/grasscolor.png': 'misc_grasscolor.mcrw',
+        'misc/foliagecolor.png': 'misc_foliagecolor.mcrw',
+        'particles.png': 'particles.mcrw',
     }
     # Start with existing fallback assets, then overwrite with Java's assets.
     src_assets = Path('assets')
@@ -159,7 +164,7 @@ def main():
                     continue
                 if name == 'pack.png':
                     continue
-                if name == 'terrain.png' or name.startswith(('gui/','font/','mob/','title/','environment/')):
+                if name == 'terrain.png' or name == 'particles.png' or name.startswith(('gui/','font/','mob/','title/','environment/','misc/')):
                     dest = classic / name
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(zf.read(name))
