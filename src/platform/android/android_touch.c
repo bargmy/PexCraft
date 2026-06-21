@@ -41,8 +41,13 @@ static int g_android_jump_down = 0;
 static int g_android_sneak_down = 0; /* latched toggle, not press-and-hold */
 static int g_android_inv_dragging = 0;
 static int g_android_inv_drag_start_slot = -1;
+static int g_android_inv_drag_down_x = 0;
+static int g_android_inv_drag_down_y = 0;
 static int g_android_inv_drag_last_x = 0;
 static int g_android_inv_drag_last_y = 0;
+static double g_android_inv_drag_down_time = 0.0;
+static int g_android_inv_drag_moved = 0;
+static int g_android_inv_hold_split_done = 0;
 
 static void pex_android_touch_set_focus(void) {
     g_input_focus_mode = PEX_INPUT_FOCUS_TOUCH;
@@ -229,6 +234,18 @@ static void pex_android_touch_begin_break(void) {
     mouse_down(g_mouse_x, g_mouse_y);
 }
 
+static void pex_android_touch_ui_reset_inventory_touch(void) {
+    g_android_inv_dragging = 0;
+    g_android_inv_drag_start_slot = -1;
+    g_android_inv_drag_down_x = 0;
+    g_android_inv_drag_down_y = 0;
+    g_android_inv_drag_last_x = 0;
+    g_android_inv_drag_last_y = 0;
+    g_android_inv_drag_down_time = 0.0;
+    g_android_inv_drag_moved = 0;
+    g_android_inv_hold_split_done = 0;
+}
+
 static void pex_android_touch_ui_down(SDL_FingerID id, int x, int y) {
     pex_android_touch_set_focus();
     g_android_ui_finger = id;
@@ -237,13 +254,23 @@ static void pex_android_touch_ui_down(SDL_FingerID id, int x, int y) {
     if (pex_android_touch_inventory_screen() && pex_android_touch_button_close(x, y)) {
         set_screen(SCREEN_INGAME);
         g_android_ui_finger = PEX_ANDROID_TOUCH_NONE;
+        pex_android_touch_ui_reset_inventory_touch();
         return;
     }
     if (pex_android_touch_inventory_screen()) {
+        /* Do not left-click immediately on Android inventory screens.  A
+           touch-down may become a long-press stack split, so defer the normal
+           left-click until release. */
         g_android_inv_dragging = 1;
         g_android_inv_drag_start_slot = inventory_slot_at(x, y);
+        g_android_inv_drag_down_x = x;
+        g_android_inv_drag_down_y = y;
         g_android_inv_drag_last_x = x;
         g_android_inv_drag_last_y = y;
+        g_android_inv_drag_down_time = now_seconds();
+        g_android_inv_drag_moved = 0;
+        g_android_inv_hold_split_done = 0;
+        return;
     }
     mouse_down(x, y);
 }
@@ -255,6 +282,11 @@ static void pex_android_touch_ui_motion(SDL_FingerID id, int x, int y) {
     if (g_drag_slider) update_slider(g_drag_slider, x);
     if (g_screen == SCREEN_TEXPACK) texpack_mouse_drag(y);
     if (g_android_inv_dragging) {
+        int dx = x - g_android_inv_drag_down_x;
+        int dy = y - g_android_inv_drag_down_y;
+        int threshold = g_gui_h / 96;
+        if (threshold < 4) threshold = 4;
+        if (dx * dx + dy * dy > threshold * threshold) g_android_inv_drag_moved = 1;
         g_android_inv_drag_last_x = x;
         g_android_inv_drag_last_y = y;
     }
@@ -266,13 +298,26 @@ static void pex_android_touch_ui_up(SDL_FingerID id, int x, int y) {
     g_mouse_y = y;
     if (g_android_inv_dragging) {
         int end_slot = inventory_slot_at(x, y);
-        if (end_slot >= 0 && end_slot != g_android_inv_drag_start_slot) {
-            inventory_mouse_click(x, y, 0);
+        if (!g_android_inv_hold_split_done) {
+            if (g_android_inv_drag_start_slot >= 0 &&
+                end_slot >= 0 && end_slot != g_android_inv_drag_start_slot) {
+                /* Dragging an item from one slot to another should still work
+                   even though Android now defers the initial pick-up click. */
+                inventory_mouse_click(g_android_inv_drag_down_x, g_android_inv_drag_down_y, 0);
+                inventory_mouse_click(x, y, 0);
+            } else if (g_android_inv_drag_start_slot >= 0 &&
+                       end_slot < 0 && g_android_inv_drag_moved) {
+                /* Match the old Android behavior for dragging a stack out of
+                   the GUI: pick it up and leave it on the cursor. */
+                inventory_mouse_click(g_android_inv_drag_down_x, g_android_inv_drag_down_y, 0);
+            } else {
+                inventory_mouse_click(x, y, 0);
+            }
         }
+        pex_android_touch_ui_reset_inventory_touch();
+    } else {
+        mouse_up(x, y);
     }
-    mouse_up(x, y);
-    g_android_inv_dragging = 0;
-    g_android_inv_drag_start_slot = -1;
     g_android_ui_finger = PEX_ANDROID_TOUCH_NONE;
 }
 
@@ -350,7 +395,7 @@ static void pex_android_touch_ingame_up(SDL_FingerID id, int x, int y) {
     }
 }
 
-static void pex_android_touch_tick(void) {
+static void pex_android_touch_world_tick(void) {
     if (g_screen != SCREEN_INGAME) { pex_android_touch_stop_break(); return; }
     if (g_android_world_finger != PEX_ANDROID_TOUCH_NONE && !g_android_world_moved) {
         if (!g_android_world_breaking && now_seconds() - g_android_world_down_time > 0.35) {
@@ -360,6 +405,31 @@ static void pex_android_touch_tick(void) {
     } else if (!g_android_world_breaking) {
         pex_android_touch_clear_pick_ray();
     }
+}
+
+static void pex_android_touch_inventory_tick(void) {
+    if (!pex_android_touch_inventory_screen()) {
+        pex_android_touch_ui_reset_inventory_touch();
+        return;
+    }
+    if (g_android_ui_finger == PEX_ANDROID_TOUCH_NONE || !g_android_inv_dragging) return;
+    if (g_android_inv_hold_split_done) return;
+    if (g_android_inv_drag_start_slot < 0) return;
+    if (g_android_inv_drag_moved) return;
+
+    double held = now_seconds() - g_android_inv_drag_down_time;
+    if (held < 0.45) return;
+
+    int cur_slot = inventory_slot_at(g_android_inv_drag_last_x, g_android_inv_drag_last_y);
+    if (cur_slot != g_android_inv_drag_start_slot) return;
+
+    /* Android long-press in inventory maps to the desktop right-click action:
+       with an empty cursor it takes half of the stack, and with a carried
+       stack it places one item. */
+    g_mouse_x = g_android_inv_drag_last_x;
+    g_mouse_y = g_android_inv_drag_last_y;
+    inventory_mouse_click(g_mouse_x, g_mouse_y, 1);
+    g_android_inv_hold_split_done = 1;
 }
 
 static int pex_android_handle_touch_event(SDL_Event *e) {
@@ -397,7 +467,8 @@ static void pex_android_touch_apply_virtual_keys(void) {
 }
 
 static void pex_android_touch_ingame_update(void) {
-    pex_android_touch_tick();
+    pex_android_touch_world_tick();
+    pex_android_touch_inventory_tick();
 }
 
 static void draw_android_touch_controls(void) {
@@ -405,7 +476,7 @@ static void draw_android_touch_controls(void) {
     if (pex_android_touch_inventory_screen()) {
         draw_rect(g_gui_w - 38, 6, g_gui_w - 6, 30, (int)0xAA000000u);
         draw_text("X", g_gui_w - 25, 14, 0xFFFFFF);
-        draw_text("Tap/drag slots directly. Tap X or Android Back to close.", 8, g_gui_h - 12, 0xE0E0E0);
+        draw_text("Tap/drag slots. Hold stack to split half. Tap X or Android Back to close.", 8, g_gui_h - 12, 0xE0E0E0);
         return;
     }
 
