@@ -1,6 +1,29 @@
 /* LG webOS native SDL2 window, OpenGL ES context, renderer-present, and main loop.
    No LG-specific input mapping is added here yet; this reuses the existing SDL event path. */
 
+#define PEX_LGWEBOS_TARGET_W 1280
+#define PEX_LGWEBOS_TARGET_H 720
+
+static void lgwebos_apply_720p_display_mode(void) {
+    if (!g_hwnd) return;
+    SDL_DisplayMode mode;
+    memset(&mode, 0, sizeof(mode));
+    if (SDL_GetDesktopDisplayMode(0, &mode) != 0) memset(&mode, 0, sizeof(mode));
+    mode.w = PEX_LGWEBOS_TARGET_W;
+    mode.h = PEX_LGWEBOS_TARGET_H;
+    mode.refresh_rate = 60;
+    SDL_SetWindowDisplayMode(g_hwnd, &mode);
+    SDL_SetWindowSize(g_hwnd, PEX_LGWEBOS_TARGET_W, PEX_LGWEBOS_TARGET_H);
+}
+
+static void lgwebos_apply_tv_performance_profile(void) {
+    if (g_opts.render_distance > 4) g_opts.render_distance = 4;
+    if (g_opts.render_distance < 2) g_opts.render_distance = 2;
+    g_opts.fancy_graphics = 0;
+    g_opts.renderer_backend = RENDERER_OPENGL;
+    g_selected_renderer_backend = RENDERER_OPENGL;
+}
+
 static int init_gl(SDL_Window *window) {
     (void)window;
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -44,6 +67,7 @@ static void apply_vsync_setting(void) {
 
 static void refresh_window_size_after_mode_change(void) {
     if (!g_hwnd) return;
+    lgwebos_apply_720p_display_mode();
     SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
     if (g_win_w < 1) g_win_w = 1;
     if (g_win_h < 1) g_win_h = 1;
@@ -58,6 +82,7 @@ static void set_fullscreen_enabled(int enabled) {
     (void)enabled;
     g_opts.fullscreen = 1;
     if (g_hwnd) {
+        lgwebos_apply_720p_display_mode();
         SDL_SetWindowFullscreen(g_hwnd, SDL_WINDOW_FULLSCREEN);
         refresh_window_size_after_mode_change();
     }
@@ -274,6 +299,9 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+#ifdef SDL_HINT_VIDEO_HIGHDPI_DISABLED
+    SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "1");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
@@ -287,18 +315,21 @@ int main(int argc, char **argv) {
 
     init_dirs();
     load_options();
+    lgwebos_apply_tv_performance_profile();
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_opts.last_server);
     snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username[0] ? g_opts.username : "Player");
 
-    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI;
-    g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, flags);
+    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
+    g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                              PEX_LGWEBOS_TARGET_W, PEX_LGWEBOS_TARGET_H, flags);
     if (!g_hwnd) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         IMG_Quit(); SDL_Quit();
         return 2;
     }
+    lgwebos_apply_720p_display_mode();
     SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
     g_render_w = g_win_w; g_render_h = g_win_h;
     setup_scale();

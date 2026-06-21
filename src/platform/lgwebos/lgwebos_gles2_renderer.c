@@ -35,6 +35,7 @@ typedef struct LgWebOSList { LgWebOSBatch *first, *last; } LgWebOSList;
 
 static GLuint g_lgwebos_program = 0;
 static GLuint g_lgwebos_vbo = 0;
+static GLuint g_lgwebos_ebo = 0;
 static GLint g_lgwebos_a_pos = -1;
 static GLint g_lgwebos_a_uv = -1;
 static GLint g_lgwebos_a_color = -1;
@@ -87,6 +88,8 @@ static GLsizei g_lgwebos_color_stride = 0;
 static int g_lgwebos_vertex_array_enabled = 0;
 static int g_lgwebos_texcoord_array_enabled = 0;
 static int g_lgwebos_color_array_enabled = 0;
+static GLushort *g_lgwebos_index16_tmp = NULL;
+static int g_lgwebos_index16_cap = 0;
 
 static void lgwebos_mat_identity(LgWebOSMat4 *m) {
     memset(m->m, 0, sizeof(m->m));
@@ -196,6 +199,7 @@ static int pex_lgwebos_gles2_init(void) {
     g_lgwebos_u_alpha_enabled = glGetUniformLocation(g_lgwebos_program, "u_alpha_enabled");
     g_lgwebos_u_alpha_ref = glGetUniformLocation(g_lgwebos_program, "u_alpha_ref");
     glGenBuffers(1, &g_lgwebos_vbo);
+    glGenBuffers(1, &g_lgwebos_ebo);
     lgwebos_mat_identity(&g_lgwebos_model_stack[0]);
     lgwebos_mat_identity(&g_lgwebos_proj_stack[0]);
     glUseProgram(g_lgwebos_program);
@@ -483,8 +487,94 @@ static void pex_lgwebos_glDisableClientState(GLenum array) { if (array == GL_VER
 static void pex_lgwebos_glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_lgwebos_vertex_size=size; g_lgwebos_vertex_type=type; g_lgwebos_vertex_stride=stride; g_lgwebos_vertex_ptr=pointer; }
 static void pex_lgwebos_glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_lgwebos_texcoord_size=size; g_lgwebos_texcoord_type=type; g_lgwebos_texcoord_stride=stride; g_lgwebos_texcoord_ptr=pointer; }
 static void pex_lgwebos_glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_lgwebos_color_size=size; g_lgwebos_color_type=type; g_lgwebos_color_stride=stride; g_lgwebos_color_ptr=pointer; }
+static int lgwebos_ensure_index16_tmp(int needed) {
+    if (needed <= g_lgwebos_index16_cap) return 1;
+    int cap = g_lgwebos_index16_cap ? g_lgwebos_index16_cap : 4096;
+    while (cap < needed) cap *= 2;
+    GLushort *ni = (GLushort*)realloc(g_lgwebos_index16_tmp, (size_t)cap * sizeof(*ni));
+    if (!ni) return 0;
+    g_lgwebos_index16_tmp = ni;
+    g_lgwebos_index16_cap = cap;
+    return 1;
+}
+
+static int lgwebos_arrays_are_pexvertex_interleaved(const unsigned char **base_out, GLsizei *stride_out) {
+    if (!g_lgwebos_vertex_array_enabled || !g_lgwebos_texcoord_array_enabled || !g_lgwebos_color_array_enabled) return 0;
+    if (!g_lgwebos_vertex_ptr || !g_lgwebos_texcoord_ptr || !g_lgwebos_color_ptr) return 0;
+    if (g_lgwebos_vertex_size != 3 || g_lgwebos_vertex_type != GL_FLOAT) return 0;
+    if (g_lgwebos_texcoord_size != 2 || g_lgwebos_texcoord_type != GL_FLOAT) return 0;
+    if (g_lgwebos_color_size != 4 || g_lgwebos_color_type != GL_UNSIGNED_BYTE) return 0;
+    GLsizei vs = g_lgwebos_vertex_stride ? g_lgwebos_vertex_stride : (GLsizei)(3 * sizeof(GLfloat));
+    GLsizei ts = g_lgwebos_texcoord_stride ? g_lgwebos_texcoord_stride : (GLsizei)(2 * sizeof(GLfloat));
+    GLsizei cs = g_lgwebos_color_stride ? g_lgwebos_color_stride : (GLsizei)(4 * sizeof(GLubyte));
+    if (vs != (GLsizei)sizeof(PexVertex) || ts != (GLsizei)sizeof(PexVertex) || cs != (GLsizei)sizeof(PexVertex)) return 0;
+    const unsigned char *base = ((const unsigned char*)g_lgwebos_vertex_ptr) - offsetof(PexVertex, x);
+    if ((const unsigned char*)g_lgwebos_texcoord_ptr != base + offsetof(PexVertex, u)) return 0;
+    if ((const unsigned char*)g_lgwebos_color_ptr != base + offsetof(PexVertex, color)) return 0;
+    if (base_out) *base_out = base;
+    if (stride_out) *stride_out = vs;
+    return 1;
+}
+
+static int lgwebos_draw_elements_fast(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) {
+    if (!g_lgwebos_program || !g_lgwebos_vbo || !g_lgwebos_ebo) return 0;
+    if (mode != GL_TRIANGLES && mode != GL_LINES && mode != GL_LINE_STRIP && mode != GL_TRIANGLE_STRIP) return 0;
+    const unsigned char *base = NULL;
+    GLsizei stride = 0;
+    if (!lgwebos_arrays_are_pexvertex_interleaved(&base, &stride)) return 0;
+    if (type != GL_UNSIGNED_INT && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_BYTE) return 0;
+
+    unsigned int max_idx = 0;
+    for (int i = 0; i < count; ++i) {
+        unsigned int idx = lgwebos_read_index(indices, type, i);
+        if (idx > max_idx) max_idx = idx;
+    }
+    if (max_idx > 262143u) return 0;
+    if (type == GL_UNSIGNED_INT && max_idx > 65535u) return 0;
+
+    LgWebOSMat4 mvp;
+    lgwebos_make_mvp(&mvp);
+    glUseProgram(g_lgwebos_program);
+    if (g_lgwebos_u_mvp >= 0) glUniformMatrix4fv(g_lgwebos_u_mvp, 1, GL_FALSE, mvp.m);
+    lgwebos_apply_state_for_batch(NULL);
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_lgwebos_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(((size_t)max_idx + 1u) * (size_t)stride), base, GL_DYNAMIC_DRAW);
+    if (g_lgwebos_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)g_lgwebos_a_pos);
+        glVertexAttribPointer((GLuint)g_lgwebos_a_pos, 3, GL_FLOAT, GL_FALSE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, x));
+    }
+    if (g_lgwebos_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)g_lgwebos_a_uv);
+        glVertexAttribPointer((GLuint)g_lgwebos_a_uv, 2, GL_FLOAT, GL_FALSE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, u));
+    }
+    if (g_lgwebos_a_color >= 0) {
+        glEnableVertexAttribArray((GLuint)g_lgwebos_a_color);
+        glVertexAttribPointer((GLuint)g_lgwebos_a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, color));
+    }
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_lgwebos_ebo);
+    GLenum draw_type = type;
+    const GLvoid *draw_offset = (const GLvoid*)0;
+    if (type == GL_UNSIGNED_INT && max_idx <= 65535u) {
+        if (!lgwebos_ensure_index16_tmp(count)) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, 0); return 0; }
+        const GLuint *src = (const GLuint*)indices;
+        for (int i = 0; i < count; ++i) g_lgwebos_index16_tmp[i] = (GLushort)src[i];
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(GLushort)), g_lgwebos_index16_tmp, GL_DYNAMIC_DRAW);
+        draw_type = GL_UNSIGNED_SHORT;
+    } else {
+        int index_size = lgwebos_sizeof_type(type);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * (size_t)index_size), indices, GL_DYNAMIC_DRAW);
+    }
+    glDrawElements(mode, count, draw_type, draw_offset);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    return 1;
+}
+
 static void pex_lgwebos_glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) {
     if (count <= 0 || !indices) return;
+    if (lgwebos_draw_elements_fast(mode, count, type, indices)) return;
     LgWebOSVertex *tmp = (LgWebOSVertex*)malloc((size_t)count * sizeof(*tmp));
     if (!tmp) return;
     for (int i = 0; i < count; ++i) tmp[i] = lgwebos_vertex_from_arrays(lgwebos_read_index(indices, type, i));
@@ -511,6 +601,8 @@ static int pex_lgwebos_gluProject(GLdouble objx, GLdouble objy, GLdouble objz,
 static void pex_lgwebos_gles2_shutdown(void) {
     for (GLuint i = 1; i < PEX_LGWEBOS_MAX_LISTS; ++i) lgwebos_list_free(i);
     free(g_lgwebos_imm); g_lgwebos_imm = NULL; g_lgwebos_imm_cap = 0;
+    free(g_lgwebos_index16_tmp); g_lgwebos_index16_tmp = NULL; g_lgwebos_index16_cap = 0;
+    if (g_lgwebos_ebo) { glDeleteBuffers(1, &g_lgwebos_ebo); g_lgwebos_ebo = 0; }
     if (g_lgwebos_vbo) { glDeleteBuffers(1, &g_lgwebos_vbo); g_lgwebos_vbo = 0; }
     if (g_lgwebos_program) { glDeleteProgram(g_lgwebos_program); g_lgwebos_program = 0; }
 }
