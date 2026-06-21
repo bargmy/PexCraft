@@ -612,13 +612,40 @@ jobs:
       - name: Decode release signing key
         env:
           SIGN_BASE64: ${{ secrets.sign }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
         shell: bash
         run: |
           if [ -n "${SIGN_BASE64:-}" ]; then
             mkdir -p android_tv/app/signing
-            printf '%s' "$SIGN_BASE64" | base64 -d > android_tv/app/signing/release.jks
+            printf '%s' "$SIGN_BASE64" | tr -d '\r\n ' | base64 -d > android_tv/app/signing/release.jks
             echo "SIGNING_STORE_FILE=$PWD/android_tv/app/signing/release.jks" >> "$GITHUB_ENV"
             echo "Android TV signing key decoded from repository secret: sign"
+
+            if [ -n "${SIGNING_STORE_PASSWORD:-}" ]; then
+              alias_name="${SIGNING_KEY_ALIAS:-pexcraft_android_tv}"
+              keytool -list \
+                -keystore android_tv/app/signing/release.jks \
+                -storepass "$SIGNING_STORE_PASSWORD" \
+                -alias "$alias_name" >/dev/null
+              echo "Android TV signing key alias validated: $alias_name"
+
+              key_password="${SIGNING_KEY_PASSWORD:-$SIGNING_STORE_PASSWORD}"
+              tmpdir="$(mktemp -d)"
+              printf 'pexcraft signing smoke test\n' > "$tmpdir/test.txt"
+              (cd "$tmpdir" && jar cf signing-test.jar test.txt)
+              jarsigner \
+                -keystore android_tv/app/signing/release.jks \
+                -storepass "$SIGNING_STORE_PASSWORD" \
+                -keypass "$key_password" \
+                "$tmpdir/signing-test.jar" \
+                "$alias_name" >/dev/null
+              echo "Android TV signing key password validated."
+            else
+              echo "Repository secret SIGNING_STORE_PASSWORD is missing. Gradle signing will fail unless the APK is built unsigned." >&2
+              exit 1
+            fi
           else
             echo "No repository secret named 'sign' was provided; Gradle will produce an unsigned release APK."
           fi
@@ -626,7 +653,7 @@ jobs:
       - name: Build Android TV APK
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS || 'pexcraft_android_tv' }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
         shell: bash
         run: |
@@ -648,8 +675,9 @@ jobs:
             else
               echo "ANDROID_TV_BUILD_OK=0" >> "$GITHUB_ENV"
             fi
-            exit 0
+            exit "$status"
           } 2>&1 | tee logs/build-android-tv.log
+          exit ${PIPESTATUS[0]}
 
       - name: Package Android TV APK
         if: env.ANDROID_TV_BUILD_OK == '1'
@@ -672,7 +700,7 @@ jobs:
           if-no-files-found: error
 
       - name: Mark failed build in summary
-        if: env.ANDROID_TV_BUILD_OK != '1'
+        if: always() && env.ANDROID_TV_BUILD_OK != '1'
         shell: bash
         run: |
           echo "### Android TV APK failed" >> "$GITHUB_STEP_SUMMARY"
@@ -681,15 +709,11 @@ jobs:
 
 
   telegram:
-    name: Upload successful builds to Telegram
+    name: Upload Android TV APK to Telegram
     runs-on: ubuntu-latest
     needs:
-      - windows
-      - linux
-      - psp
-      - lgwebos
       - android_tv
-    if: always() && github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && needs.android_tv.result == 'success'
 
     steps:
       - name: Read commit name
@@ -702,13 +726,13 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-      - name: Download successful artifacts
+      - name: Download Android TV APK artifact
         uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
+          name: pexcraft-android-tv
           path: telegram_upload
 
-      - name: Upload successful build zips to Telegram
+      - name: Upload Android TV APK to Telegram
         env:
           TOKEN: ${{ secrets.TOKEN }}
           CHAT_ID: ${{ env.CHAT_ID }}
@@ -722,93 +746,58 @@ jobs:
             exit 1
           fi
 
-          python3 - <<'PY'
-          import os, sys, glob, json, uuid, mimetypes, urllib.request, urllib.parse
+          apk="$(find telegram_upload -type f -name '*.apk' -print -quit)"
+          if [ -z "$apk" ]; then
+            echo "Android TV job succeeded, but no APK artifact was downloaded." >&2
+            exit 1
+          fi
 
+          python3 - "$apk" <<'PY'
+          import os, sys, uuid, mimetypes, urllib.request
+
+          apk_path = sys.argv[1]
           token = os.environ["TOKEN"]
           chat_id = os.environ["CHAT_ID"]
           commit_name = os.environ.get("COMMIT_NAME", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           sha = os.environ.get("GITHUB_SHA", "")
 
-          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True) + glob.glob("telegram_upload/**/*.apk", recursive=True))
-
           caption = (
-              "PEXCraft successful builds\n"
+              "PEXCraft Android TV APK built successfully\n"
               f"Commit name: {commit_name}\n"
               f"Repo: {repo}\n"
-              f"Commit: {sha[:12]}\n"
-              f"Built artifacts: {len(files)}"
+              f"Commit: {sha[:12]}"
           )
 
-          def send_text(text):
-              data = urllib.parse.urlencode({
-                  "chat_id": chat_id,
-                  "text": text,
-              }).encode()
-              req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-              with urllib.request.urlopen(req, timeout=120) as r:
-                  print(r.read().decode("utf-8", "replace"))
+          boundary = "----pexcraft-" + uuid.uuid4().hex
+          filename = os.path.basename(apk_path)
+          ctype = mimetypes.guess_type(filename)[0] or "application/vnd.android.package-archive"
 
-          if not files:
-              send_text(caption + "\nNo successful build artifacts were produced.")
-              raise SystemExit(0)
+          parts = []
+          def field(name, value):
+              parts.append((
+                  f"--{boundary}\r\n"
+                  f"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                  f"{value}\r\n"
+              ).encode())
 
-          def send_group(group, group_index):
-              boundary = "----pexcraft-" + uuid.uuid4().hex
-              parts = []
-              media = []
+          field("chat_id", chat_id)
+          field("caption", caption)
+          parts.append((
+              f"--{boundary}\r\n"
+              f"Content-Disposition: form-data; name=\"document\"; filename=\"{filename}\"\r\n"
+              f"Content-Type: {ctype}\r\n\r\n"
+          ).encode())
+          with open(apk_path, "rb") as f:
+              parts.append(f.read())
+          parts.append(b"\r\n")
+          parts.append(f"--{boundary}--\r\n".encode())
 
-              for i, path in enumerate(group):
-                  attach_name = f"file_{group_index}_{i}"
-                  entry = {
-                      "type": "document",
-                      "media": f"attach://{attach_name}",
-                  }
-                  if i == 0:
-                      entry["caption"] = caption
-                  media.append(entry)
-
-              def field(name, value):
-                  parts.append(
-                      (
-                          f"--{boundary}\r\n"
-                          f"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n"
-                          f"{value}\r\n"
-                      ).encode()
-                  )
-
-              def filefield(name, path):
-                  filename = os.path.basename(path)
-                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.android.package-archive" if filename.endswith(".apk") else ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else "application/zip"))
-                  parts.append(
-                      (
-                          f"--{boundary}\r\n"
-                          f"Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
-                          f"Content-Type: {ctype}\r\n\r\n"
-                      ).encode()
-                  )
-                  with open(path, "rb") as f:
-                      parts.append(f.read())
-                  parts.append(b"\r\n")
-
-              field("chat_id", chat_id)
-              field("media", json.dumps(media))
-
-              for i, path in enumerate(group):
-                  filefield(f"file_{group_index}_{i}", path)
-
-              parts.append(f"--{boundary}--\r\n".encode())
-
-              req = urllib.request.Request(
-                  f"https://api.telegram.org/bot{token}/sendMediaGroup",
-                  data=b"".join(parts),
-                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-              )
-
-              with urllib.request.urlopen(req, timeout=240) as r:
-                  print(r.read().decode("utf-8", "replace"))
-
-          for index in range(0, len(files), 10):
-              send_group(files[index:index + 10], index // 10)
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendDocument",
+              data=b"".join(parts),
+              headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+          )
+          with urllib.request.urlopen(req, timeout=240) as r:
+              print(r.read().decode("utf-8", "replace"))
           PY

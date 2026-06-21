@@ -29,7 +29,7 @@ android {
             if (file(store).exists()) {
                 storeFile file(store)
                 storePassword System.getenv('SIGNING_STORE_PASSWORD') ?: System.getenv('SIGN_STORE_PASSWORD') ?: 'pexcraft'
-                keyAlias System.getenv('SIGNING_KEY_ALIAS') ?: System.getenv('SIGN_KEY_ALIAS') ?: 'pexcraft'
+                keyAlias System.getenv('SIGNING_KEY_ALIAS') ?: System.getenv('SIGN_KEY_ALIAS') ?: 'pexcraft_android_tv'
                 keyPassword System.getenv('SIGNING_KEY_PASSWORD') ?: System.getenv('SIGN_KEY_PASSWORD') ?: (System.getenv('SIGNING_STORE_PASSWORD') ?: System.getenv('SIGN_STORE_PASSWORD') ?: 'pexcraft')
             }
         }

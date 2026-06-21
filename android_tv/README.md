@@ -28,7 +28,7 @@ cd android_tv
 ./gradlew assembleRelease 2>/dev/null || gradle assembleRelease
 ```
 
-`prepare_sdl2.sh` downloads the current SDL2 Android development archive from the official libsdl-org GitHub releases, copies the SDL2 AAR, headers, and `libSDL2.so` files into the Android project, then CMake links the native game against them.
+`prepare_sdl2.sh` downloads SDL2 source from libsdl-org, copies the Android Java shim into the project, and lets CMake build/link SDL2 with the native game.
 
 ## GitHub signing secrets
 
@@ -36,10 +36,13 @@ Required by this workflow if you want a signed release APK:
 
 - `sign`: base64 of the Android keystore/JKS file.
 
-Optional, depending on how the keystore was created:
+Also required for signing:
 
-- `SIGNING_STORE_PASSWORD` or `SIGN_STORE_PASSWORD`
-- `SIGNING_KEY_ALIAS` or `SIGN_KEY_ALIAS`
-- `SIGNING_KEY_PASSWORD` or `SIGN_KEY_PASSWORD`
+- `SIGNING_STORE_PASSWORD` or `SIGN_STORE_PASSWORD`: the keystore password.
+- `SIGNING_KEY_PASSWORD` or `SIGN_KEY_PASSWORD`: the key password. If you pressed Enter at the key password prompt, use the same value as the store password.
 
-If the password/alias secrets are omitted, the Gradle config defaults to `pexcraft` for local/dev keystores.
+Optional:
+
+- `SIGNING_KEY_ALIAS` or `SIGN_KEY_ALIAS`: defaults to `pexcraft_android_tv`.
+
+The workflow validates the decoded keystore, alias, and key password before Gradle packages the APK. Telegram receives only the Android TV APK, and only after that APK artifact is produced successfully.
