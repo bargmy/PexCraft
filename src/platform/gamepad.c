@@ -548,7 +548,21 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
 #ifdef PEX_PLATFORM_PSP
     if (p->lb && !p->prev_lb) mouse_right_down(g_gui_w / 2, g_gui_h / 2); /* L = place/use */
     if (p->dpad_up && !p->prev_dpad_up) { set_screen(SCREEN_INVENTORY); return; }
-    if (p->start && !p->prev_start) set_screen(SCREEN_PAUSE);
+
+    /* PSP has no keyboard F3 key.  Use the requested in-game combo:
+       Select/jump + Start/pause toggles the F3 debug overlay.  Treat the
+       combo as a chord edge so holding both buttons toggles only once, and
+       consume Start so the game does not immediately open the pause menu. */
+    {
+        int debug_combo = p->back && p->start;
+        int debug_combo_prev = p->prev_back && p->prev_start;
+        if (debug_combo && !debug_combo_prev) {
+            g_debug_menu_shown = !g_debug_menu_shown;
+            return;
+        }
+    }
+
+    if (p->start && !p->prev_start && !p->back) set_screen(SCREEN_PAUSE);
     if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #else
@@ -747,7 +761,7 @@ static void draw_system_info_screen(void) {
     }
     #ifdef PEX_PLATFORM_PSP
     draw_text("PSP: D-pad menu, Cross selects, Circle backs. Sliders: Left/Right.", x, g_gui_h - 44, 10526880);
-    draw_text("PSP game: analog move, Square/Circle turn, Triangle/X look, Select jump.", x, g_gui_h - 34, 10526880);
+    draw_text("PSP game: analog move, face buttons look, Select jump, Start pause, Select+Start F3.", x, g_gui_h - 34, 10526880);
 #elif defined(PEX_PLATFORM_ANDROID)
     draw_text("Touch: left stick moves, right side drags look, tap places/uses, hold mines.", x, g_gui_h - 44, 10526880);
     draw_text("Buttons: Jump, Sneak, Inv, Pause. Tap hotbar slots to select.", x, g_gui_h - 34, 10526880);
