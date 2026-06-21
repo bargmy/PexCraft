@@ -2107,12 +2107,17 @@ static int flat_face_exposed_for_block(int id, int x, int y, int z, int face) {
     if (face == 0 && y <= FLAT_WORLD_Y_MIN) return 0; /* bottom of bedrock never needs drawing */
     int n = neighbor_for_face(x, y, z, face);
 
-    /* Practical OpenGL fix: do not emit leaf faces between leaf blocks.  The
-       Java fancy path may allow more internal faces, but with this renderer's
-       cutout atlas and old face emitters those hidden internal quads produce
-       the heavy z/alpha overlap seen inside trees.  External leaf faces still
-       use the fancy leaf texture and alpha test. */
-    if (id == BLOCK_LEAVES && n == BLOCK_LEAVES) return 0;
+    /* Java BlockLeavesBase:
+       - Fast leaves hide faces against the same block.
+       - Fancy leaves render through neighboring leaf blocks because leaves are
+         not opaque.  This renderer is two-sided on the terrain path, so keep
+         one canonical quad for each leaf/leaf boundary instead of two coplanar
+         quads.  That preserves the Java fancy-leaf visible interior without
+         z-fighting or texture overlap. */
+    if (id == BLOCK_LEAVES && n == BLOCK_LEAVES) {
+        if (!g_opts.fancy_graphics) return 0;
+        return (face == 1 || face == 3 || face == 5);
+    }
 
     /* A snow layer sits directly on the top face of the supporting block.
        Rendering the covered grass/dirt/stone top doubles the visible-surface
