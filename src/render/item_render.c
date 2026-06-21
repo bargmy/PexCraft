@@ -133,12 +133,10 @@ static void draw_item_icon_2d_gui(const ItemStack *st, int x, int y) {
 
 
 static void draw_inventory_block_model(int id) {
-    /* Java RenderItem.renderItemIntoGUI transforms a block rendered at the
-       normal RenderBlocks origin (0..1).  The previous Pex path drew the cube at
-       -0.5..0.5, so the Java translate/rotate sequence showed the wrong faces
-       and made GUI/HUD block items look skewed or backwards, especially on
-       OpenGL. */
-    const float bx = 0.0f, by = 0.0f, bz = 0.0f;
+    /* Match Java RenderBlocks.func_1227_a exactly: after RenderItem applies
+       its slot transform, RenderBlocks shifts the 0..1 block model by -0.5 on
+       every axis before emitting faces. */
+    const float bx = -0.5f, by = -0.5f, bz = -0.5f;
     if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
     if (id == BLOCK_SNOW_LAYER) { draw_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }

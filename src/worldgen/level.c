@@ -22,6 +22,7 @@
 #define BLK_COAL_ORE  16
 #define BLK_LOG       17
 #define BLK_LEAVES    18
+#define BLK_GLASS     20
 #define BLK_DIAMOND_ORE 56
 #define BLK_REDSTONE_ORE 73
 #define BLK_ICE       79
@@ -674,11 +675,30 @@ static int cv_is_solid_id(int id) {
            id != BLK_SNOW_LAYER && id != BLK_YELLOW_FLOWER && id != BLK_RED_ROSE && id != BLK_BROWN_MUSHROOM &&
            id != BLK_RED_MUSHROOM && id != BLK_REEDS;
 }
-static int cv_opaque_id(int id) { return cv_is_solid_id(id); }
+
+/* WorldGenTrees uses Block.opaqueCubeLookup, while World.getHeightValue uses
+   Block.lightOpacity.  Leaves are the odd Beta case: after construction they
+   are light-opaque and opaque to worldgen even though fancy rendering can draw
+   them as cutout.  Keep these Java rules separate from the C renderer/material
+   helpers so population stays 1:1 without changing unrelated gameplay checks. */
+static int cv_tree_opaque_lookup_id(int id) {
+    if(id == 0) return 0;
+    if(id == BLK_LEAVES) return 1;
+    if(cv_is_liquid_id(id) || id == BLK_GLASS || id == BLK_ICE || id == BLK_SNOW_LAYER ||
+       id == BLK_YELLOW_FLOWER || id == BLK_RED_ROSE || id == BLK_BROWN_MUSHROOM ||
+       id == BLK_RED_MUSHROOM || id == BLK_REEDS) return 0;
+    return 1;
+}
+static int cv_heightmap_light_blocks_id(int id) {
+    if(id == 0) return 0;
+    if(id == BLK_SNOW_LAYER || id == BLK_YELLOW_FLOWER || id == BLK_RED_ROSE ||
+       id == BLK_BROWN_MUSHROOM || id == BLK_RED_MUSHROOM || id == BLK_REEDS) return 0;
+    return 1; /* leaves, liquids and ice all have non-zero Java lightOpacity */
+}
+static int cv_opaque_id(int id) { return cv_tree_opaque_lookup_id(id); }
 static int canvas_top_solid(GenCanvas *cv, int wx, int wz) {
     for(int y=127;y>=0;y--) {
-        int id = canvas_get(cv, wx, y, wz);
-        if(id != 0 && id != BLK_LEAVES && id != BLK_SNOW_LAYER && !cv_is_liquid_id(id)) return y + 1;
+        if(cv_heightmap_light_blocks_id(canvas_get(cv, wx, y, wz))) return y + 1;
     }
     return 0;
 }

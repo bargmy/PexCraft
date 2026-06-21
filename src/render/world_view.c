@@ -4025,7 +4025,7 @@ static void async_section_mesh_init(void) {
     g_async_section_mesh_stop = 0;
     g_async_section_mesh_thread = CreateThread(NULL, 0, async_section_mesh_worker_proc, NULL, 0, NULL);
     g_async_section_mesh_upload_thread = CreateThread(NULL, 0, async_section_mesh_upload_worker_proc, NULL, 0, NULL);
-    if (g_async_section_mesh_thread) SetThreadPriority(g_async_section_mesh_thread, THREAD_PRIORITY_NORMAL);
+    if (g_async_section_mesh_thread) SetThreadPriority(g_async_section_mesh_thread, THREAD_PRIORITY_BELOW_NORMAL);
     if (g_async_section_mesh_upload_thread) SetThreadPriority(g_async_section_mesh_upload_thread, THREAD_PRIORITY_BELOW_NORMAL);
 }
 
@@ -4296,10 +4296,12 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
 
         if (needs) {
             if (async_mesh) {
-                int submit_result = async_section_mesh_submit(sy, cx, cz);
-                if (submit_result == 0 && direct) {
-                    rebuild_flat_world_section_list(sy, cx, cz);
-                }
+                /* Never fall back to rebuilding a direct section mesh on the
+                   render/game thread just because the worker queue is full.
+                   Leaving the section dirty for the next frame is cheaper than
+                   doing the heavy meshing work on the main thread during chunk
+                   streaming. */
+                (void)async_section_mesh_submit(sy, cx, cz);
             } else {
                 rebuild_flat_world_section_list(sy, cx, cz);
             }
