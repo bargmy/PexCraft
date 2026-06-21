@@ -554,6 +554,131 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+  android_tv:
+    name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Install Android build packages
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip python3
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;27.2.12479018"
+
+      - name: Prepare SDL2 Android dependency
+        shell: bash
+        run: |
+          android_tv/prepare_sdl2.sh
+
+      - name: Decode release signing key
+        env:
+          SIGN_BASE64: ${{ secrets.sign }}
+        shell: bash
+        run: |
+          if [ -n "${SIGN_BASE64:-}" ]; then
+            mkdir -p android_tv/app/signing
+            printf '%s' "$SIGN_BASE64" | base64 -d > android_tv/app/signing/release.jks
+            echo "SIGNING_STORE_FILE=$PWD/android_tv/app/signing/release.jks" >> "$GITHUB_ENV"
+            echo "Android TV signing key decoded from repository secret: sign"
+          else
+            echo "No repository secret named 'sign' was provided; Gradle will produce an unsigned release APK."
+          fi
+
+      - name: Build Android TV APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Android TV APK"
+            echo
+            cd android_tv
+            gradle assembleRelease
+            status=$?
+            cd ..
+            echo "$status" > build/android-tv-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "ANDROID_TV_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_TV_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit 0
+          } 2>&1 | tee logs/build-android-tv.log
+
+      - name: Package Android TV APK
+        if: env.ANDROID_TV_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apk="$(find android_tv/app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          mkdir -p dist
+          final="dist/pexcraft-android-tv.apk"
+          cp -f "$apk" "$final"
+          echo "APK_PATH=$final" >> "$GITHUB_ENV"
+
+      - name: Upload Android TV artifact
+        if: env.ANDROID_TV_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-android-tv
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: env.ANDROID_TV_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Android TV APK failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+
   telegram:
     name: Upload successful builds to Telegram
     runs-on: ubuntu-latest
@@ -562,6 +687,7 @@ jobs:
       - linux
       - psp
       - lgwebos
+      - android_tv
     if: always() && github.event_name != 'pull_request'
 
     steps:
@@ -604,7 +730,7 @@ jobs:
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           sha = os.environ.get("GITHUB_SHA", "")
 
-          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True))
+          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True) + glob.glob("telegram_upload/**/*.apk", recursive=True))
 
           caption = (
               "PEXCraft successful builds\n"
@@ -653,7 +779,7 @@ jobs:
 
               def filefield(name, path):
                   filename = os.path.basename(path)
-                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else "application/zip")
+                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.android.package-archive" if filename.endswith(".apk") else ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else "application/zip"))
                   parts.append(
                       (
                           f"--{boundary}\r\n"

@@ -170,6 +170,9 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
         if (g_gamepad_primary < 0) g_gamepad_primary = g_gamepad_count;
         g_gamepad_count++;
     }
+#ifdef PEX_PLATFORM_ANDROID_TV
+    pex_android_tv_append_remote_pad(oldpads);
+#endif
 }
 
 
@@ -521,6 +524,9 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->lb && !p->prev_lb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->rb && !p->prev_rb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #endif
+#ifdef PEX_PLATFORM_ANDROID_TV
+    pex_android_tv_ingame_update();
+#endif
 }
 
 static void pex_gamepad_update(void) {
@@ -595,6 +601,15 @@ static void pex_query_system_info(void) {
     /* Real PSP free memory is what matters for PSP-1000 testing; PPSSPP model
        selection does not enforce a true 32MB heap. */
     g_system_info.ram_available_mb = (unsigned long long)(sceKernelTotalFreeMemSize() / (1024 * 1024));
+#elif defined(PEX_PLATFORM_ANDROID_TV)
+    snprintf(g_system_info.platform, sizeof(g_system_info.platform), "Android TV / SDL2");
+    g_system_info.display_name[0] = 0;
+    int display = g_hwnd ? SDL_GetWindowDisplayIndex(g_hwnd) : 0;
+    SDL_DisplayMode mode;
+    if (display < 0) display = 0;
+    const char *dn = SDL_GetDisplayName(display);
+    snprintf(g_system_info.display_name, sizeof(g_system_info.display_name), "%s", dn ? dn : "Android TV display");
+    if (SDL_GetCurrentDisplayMode(display, &mode) == 0) g_system_info.display_refresh_hz = mode.refresh_rate;
 #elif defined(PEX_PLATFORM_SDL2)
     snprintf(g_system_info.platform, sizeof(g_system_info.platform), "Linux / SDL2");
     int display = g_hwnd ? SDL_GetWindowDisplayIndex(g_hwnd) : 0;
@@ -671,6 +686,9 @@ static void draw_system_info_screen(void) {
     #ifdef PEX_PLATFORM_PSP
     draw_text("PSP: D-pad menu, Cross selects, Circle backs. Sliders: Left/Right.", x, g_gui_h - 44, 10526880);
     draw_text("PSP game: analog move, Square/Circle turn, Triangle/X look, Select jump.", x, g_gui_h - 34, 10526880);
+#elif defined(PEX_PLATFORM_ANDROID_TV)
+    draw_text("TV remote: D-pad moves menus/game, OK selects/jumps, Back pauses.", x, g_gui_h - 44, 10526880);
+    draw_text("Colors: Red break, Green place, Yellow inventory, Blue sneak/back. 1-9 hotbar, 0 camera.", x, g_gui_h - 34, 10526880);
 #else
     draw_text("Menu: D-pad/left stick moves, A selects, B goes back. Sliders: right stick.", x, g_gui_h - 44, 10526880);
     draw_text("Gameplay: left stick move, right stick look, RT break, LT place, LB/RB hotbar.", x, g_gui_h - 34, 10526880);

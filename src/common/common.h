@@ -5,6 +5,8 @@
 // Build with MinGW32: gcc -std=c99 -O2 -mwindows main.c -o pexcraft.exe -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lwinmm
 #if defined(PEX_PLATFORM_PSP)
 #include "../platform/psp_compat.h"
+#elif defined(PEX_PLATFORM_ANDROID_TV)
+#include "../platform/android_tv/android_tv_compat.h"
 #elif defined(PEX_PLATFORM_SDL2)
 #include "../platform/sdl2_compat.h"
 #else

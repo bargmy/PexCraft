@@ -244,6 +244,17 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
 #if defined(PEX_PLATFORM_PSP)
 static int ensure_wic(void) { return 1; }
 static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
+#elif defined(PEX_PLATFORM_ANDROID_TV)
+static int ensure_wic(void) { return 1; }
+static int load_png_texture(Texture *t, const char *path, int repeat) {
+    (void)t;
+    (void)path;
+    (void)repeat;
+    /* Android TV ships with the bundled MCRW assets. External PNG texture packs
+       can be added later by routing this through Android Bitmap/asset APIs or
+       by linking SDL_image for Android. */
+    return 0;
+}
 #elif defined(PEX_PLATFORM_SDL2)
 static int ensure_wic(void) { return 1; }
 
