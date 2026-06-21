@@ -394,14 +394,10 @@ static void glDepthFunc(GLenum f){
 }
 static void glDepthMask(GLboolean flag){ sceGuDepthMask(flag?GU_FALSE:GU_TRUE); }
 static void glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a){
-    /* Java fancy clouds rely on a real no-color depth prepass.  PSP GU uses a
-       bit mask where set bits disable writes for that channel. */
-    unsigned int mask = 0;
-    if (!r) mask |= 0x000000ffu;
-    if (!g) mask |= 0x0000ff00u;
-    if (!b) mask |= 0x00ff0000u;
-    if (!a) mask |= 0xff000000u;
-    sceGuColorMask(mask);
+    (void)r; (void)g; (void)b; (void)a;
+    /* Some pspsdk builds do not expose sceGuColorMask.  The PSP path already
+       avoids the desktop-only color-mask terrain passes, so keep this shim as a
+       portable no-op instead of breaking the PSP compile. */
 }
 static void glAlphaFunc(GLenum func, GLfloat ref){ (void)func; sceGuAlphaFunc(GU_GREATER, (int)(ref*255.0f), 0xff); }
 static void glLineWidth(GLfloat w){ (void)w; }

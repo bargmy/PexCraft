@@ -301,6 +301,7 @@ jobs:
         shell: bash
         run: |
           set +e
+          set -o pipefail
           mkdir -p build logs dist
 
           {
@@ -319,8 +320,9 @@ jobs:
               echo "BUILD_OK=0" >> "$GITHUB_ENV"
             fi
 
-            exit 0
+            exit "$status"
           } 2>&1 | tee logs/build-psp.log
+          exit ${PIPESTATUS[0]}
 
       - name: Package PSP zip
         if: env.BUILD_OK == '1'
@@ -362,7 +364,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Mark failed build in summary
-        if: env.BUILD_OK != '1'
+        if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
           echo "### PSP failed" >> "$GITHUB_STEP_SUMMARY"

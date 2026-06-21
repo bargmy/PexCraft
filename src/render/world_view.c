@@ -670,7 +670,7 @@ static void pex_world_gl_end_guard(void) {
 static void pex_world_gl_enable_guard(GLenum cap) { if (!g_flat_direct_builder) glEnable(cap); }
 static void pex_world_gl_disable_guard(GLenum cap) { if (!g_flat_direct_builder) glDisable(cap); }
 static void pex_world_gl_bind_texture_guard(GLenum target, GLuint tex) { if (!g_flat_direct_builder) glBindTexture(target, tex); }
-static void pex_world_gl_alpha_func_guard(GLenum func, GLclampf ref) { if (!g_flat_direct_builder) glAlphaFunc(func, ref); }
+static void pex_world_gl_alpha_func_guard(GLenum func, GLfloat ref) { if (!g_flat_direct_builder) glAlphaFunc(func, ref); }
 static void pex_world_gl_depth_mask_guard(GLboolean flag) { if (!g_flat_direct_builder) glDepthMask(flag); }
 static void pex_world_gl_color4f_guard(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { if (!g_flat_direct_builder) glColor4f(r, g, b, a); }
 
@@ -774,6 +774,11 @@ static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
 }
 
 static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
+#if defined(PEX_PLATFORM_PSP)
+    (void)m;
+    /* PSP uses the direct PexRendererBackend mesh path.  The OpenGL client-array
+       fallback is desktop-only and pspsdk does not define GL client-array APIs. */
+#else
     if (!m || !m->valid || !m->v || !m->i || m->icount < 3) return;
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -785,6 +790,7 @@ static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
+#endif
 }
 
 static PexTextureHandle flat_direct_terrain_handle(void) {
