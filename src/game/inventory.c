@@ -3546,7 +3546,10 @@ static int door_item_for_block(int id) {
 }
 
 static int door_direction_from_yaw(void) {
-    int d = (int)floorf((g_player_yaw + 180.0f) * 4.0f / 360.0f + 0.5f) & 3;
+    /* Java ItemDoor: floor((yaw + 180) * 4 / 360 - 0.5) & 3.
+       The older +0.5 formula rotated placed doors by one quadrant, which also
+       made the door texture flip rules look wrong. */
+    int d = (int)floorf((g_player_yaw + 180.0f) * 4.0f / 360.0f - 0.5f) & 3;
     return d;
 }
 
@@ -3602,11 +3605,29 @@ static int place_door_from_item(int item_id, int x, int y, int z) {
     if (flat_get_block(x, y, z) != 0 || flat_get_block(x, y + 1, z) != 0) return 0;
     if (flat_block_intersects_player(x, y, z) || flat_block_intersects_player(x, y + 1, z)) return 0;
     int dir = door_direction_from_yaw();
+
+    int dx = 0, dz = 0;
+    if (dir == 0) dz = 1;
+    else if (dir == 1) dx = -1;
+    else if (dir == 2) dz = -1;
+    else dx = 1;
+
+    int left_solid = (flat_block_is_opaque_cube_for_snow(flat_get_block(x - dx, y, z - dz)) ? 1 : 0) +
+                     (flat_block_is_opaque_cube_for_snow(flat_get_block(x - dx, y + 1, z - dz)) ? 1 : 0);
+    int right_solid = (flat_block_is_opaque_cube_for_snow(flat_get_block(x + dx, y, z + dz)) ? 1 : 0) +
+                      (flat_block_is_opaque_cube_for_snow(flat_get_block(x + dx, y + 1, z + dz)) ? 1 : 0);
+    int left_door = flat_get_block(x - dx, y, z - dz) == block_id || flat_get_block(x - dx, y + 1, z - dz) == block_id;
+    int right_door = flat_get_block(x + dx, y, z + dz) == block_id || flat_get_block(x + dx, y + 1, z + dz) == block_id;
+    if ((left_door && !right_door) || right_solid > left_solid) {
+        dir = (dir - 1) & 3;
+        dir += 4;
+    }
+
     if (!g_mp_connected) flat_begin_persistent_edit();
     flat_set_block(x, y, z, block_id);
-    flat_set_meta_raw(x, y, z, dir & 3);
+    flat_set_meta_raw(x, y, z, dir & 7);
     flat_set_block(x, y + 1, z, block_id);
-    flat_set_meta_raw(x, y + 1, z, 8);
+    flat_set_meta_raw(x, y + 1, z, (dir & 7) + 8);
     if (!g_mp_connected) flat_end_persistent_edit();
     return 1;
 }

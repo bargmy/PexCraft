@@ -166,7 +166,8 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     /* Java RenderItem does not clear the whole depth buffer for every slot.
        Clearing it made 3D blocks interact badly with the GUI and caused odd
        facing/depth artifacts. */
-    glDisable(GL_CULL_FACE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
     glColorMask(1,1,1,1);
     glColor4f(1,1,1,1);
     int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);

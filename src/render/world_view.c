@@ -157,6 +157,7 @@ static void draw_source_fast_clouds(float partial) {
 
 static void draw_source_fancy_clouds(float partial) {
     if (!tex_clouds.id) return;
+    if (!pex_using_d3d9() && !pex_using_d3d11()) { draw_source_fast_clouds(partial); return; }
     if (!cloud_texture_has_cutout_alpha()) { draw_source_fast_clouds(partial); return; }
     float cr, cg, cb;
     cloud_color(&cr, &cg, &cb);
@@ -437,10 +438,11 @@ static int liquid_top_tile_for_block(int id) { return (id == BLOCK_WATER || id =
 static int liquid_side_tile_for_block(int id) { return (id == BLOCK_WATER || id == BLOCK_STILL_WATER) ? water_side_tile() : lava_side_tile(); }
 
 
-/* Direct D3D world mesh path ---------------------------------------------------------
-   OpenGL keeps using display lists.  D3D9/D3D11 use this backend-neutral mesh
-   builder so terrain sections upload once to native vertex/index buffers and
-   draw through renderer_d3d9.c / renderer_d3d11.c directly. */
+/* Async terrain mesh path -----------------------------------------------------------
+   D3D9/D3D11 upload worker-built CPU meshes into native vertex/index buffers.
+   OpenGL keeps the same worker-built CPU mesh and draws it with client arrays on
+   the render thread.  That removes the old glNewList/glBegin section rebuild from
+   the main thread while still keeping all GL calls on the GL-owning thread. */
 typedef struct FlatDirectMeshBuilder {
     PexVertex *v;
     uint32_t *i;
@@ -449,6 +451,19 @@ typedef struct FlatDirectMeshBuilder {
     int quad_cursor;
     uint32_t color;
 } FlatDirectMeshBuilder;
+
+typedef struct FlatGLCpuMesh {
+    PexVertex *v;
+    uint32_t *i;
+    uint32_t vcount, icount;
+    unsigned int version;
+    int origin_x, origin_z;
+    int valid;
+} FlatGLCpuMesh;
+
+static FlatGLCpuMesh g_flat_section_gl_cpu_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
+static int g_flat_gl_cpu_mesh_origin_x = 0x7fffffff;
+static int g_flat_gl_cpu_mesh_origin_z = 0x7fffffff;
 
 static PEX_THREAD_LOCAL FlatDirectMeshBuilder *g_flat_direct_builder = NULL;
 static PEX_THREAD_LOCAL int g_flat_direct_capture_only = 0;
@@ -644,6 +659,30 @@ static void flat_direct_end(void) {
     g_flat_direct_builder = NULL;
 }
 
+static void pex_world_gl_begin_guard(GLenum mode) {
+    if (!g_flat_direct_builder) glBegin(mode);
+}
+
+static void pex_world_gl_end_guard(void) {
+    if (!g_flat_direct_builder) glEnd();
+}
+
+static void pex_world_gl_enable_guard(GLenum cap) { if (!g_flat_direct_builder) glEnable(cap); }
+static void pex_world_gl_disable_guard(GLenum cap) { if (!g_flat_direct_builder) glDisable(cap); }
+static void pex_world_gl_bind_texture_guard(GLenum target, GLuint tex) { if (!g_flat_direct_builder) glBindTexture(target, tex); }
+static void pex_world_gl_alpha_func_guard(GLenum func, GLclampf ref) { if (!g_flat_direct_builder) glAlphaFunc(func, ref); }
+static void pex_world_gl_depth_mask_guard(GLboolean flag) { if (!g_flat_direct_builder) glDepthMask(flag); }
+static void pex_world_gl_color4f_guard(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { if (!g_flat_direct_builder) glColor4f(r, g, b, a); }
+
+#define glBegin(mode) pex_world_gl_begin_guard(mode)
+#define glEnd() pex_world_gl_end_guard()
+#define glEnable(cap) pex_world_gl_enable_guard(cap)
+#define glDisable(cap) pex_world_gl_disable_guard(cap)
+#define glBindTexture(target, tex) pex_world_gl_bind_texture_guard(target, tex)
+#define glAlphaFunc(func, ref) pex_world_gl_alpha_func_guard(func, ref)
+#define glDepthMask(flag) pex_world_gl_depth_mask_guard(flag)
+#define glColor4f(r,g,b,a) pex_world_gl_color4f_guard(r,g,b,a)
+
 static void flat_direct_vertex(float x, float y, float z, float u, float v) {
     FlatDirectMeshBuilder *b = g_flat_direct_builder;
     if (!b) return;
@@ -665,6 +704,87 @@ static void flat_direct_free_builder(FlatDirectMeshBuilder *b) {
     if (!b) return;
     free(b->v); free(b->i);
     memset(b, 0, sizeof(*b));
+}
+
+static int flat_async_section_mesh_enabled(void) {
+#if defined(PEX_PLATFORM_PSP)
+    return flat_direct_backend() != NULL;
+#else
+    return tex_terrain.rgba != NULL;
+#endif
+}
+
+static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
+    if (!m) return;
+    free(m->v);
+    free(m->i);
+    memset(m, 0, sizeof(*m));
+}
+
+static void flat_gl_cpu_mesh_free_all(void) {
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+            for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+                flat_gl_cpu_mesh_free(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
+                flat_gl_cpu_mesh_free(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
+            }
+        }
+    }
+}
+
+static void flat_gl_cpu_mesh_check_origin(void) {
+    if (g_flat_gl_cpu_mesh_origin_x == g_flat_world_origin_x &&
+        g_flat_gl_cpu_mesh_origin_z == g_flat_world_origin_z) return;
+    flat_gl_cpu_mesh_free_all();
+    g_flat_gl_cpu_mesh_origin_x = g_flat_world_origin_x;
+    g_flat_gl_cpu_mesh_origin_z = g_flat_world_origin_z;
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+            for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+                if (!flat_direct_backend()) {
+                    g_flat_section_valid[sy][cz][cx] = 0;
+                    g_flat_section_dirty[sy][cz][cx] = 1;
+                    flat_note_section_mesh_changed(sy, cz, cx);
+                }
+            }
+        }
+    }
+}
+
+static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirectMeshBuilder *b, int skip, unsigned int version, int origin_x, int origin_z) {
+    FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
+    flat_gl_cpu_mesh_free(m);
+    if (skip || !b || b->vcount == 0 || b->icount == 0) return;
+    m->v = b->v;
+    m->i = b->i;
+    m->vcount = b->vcount;
+    m->icount = b->icount;
+    m->version = version;
+    m->origin_x = origin_x;
+    m->origin_z = origin_z;
+    m->valid = 1;
+    memset(b, 0, sizeof(*b));
+}
+
+static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
+    FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
+    return m->valid && m->v && m->i && m->vcount > 0 && m->icount > 0 &&
+           m->version == g_flat_section_mesh_version[sy][cz][cx] &&
+           m->origin_x == g_flat_world_origin_x && m->origin_z == g_flat_world_origin_z;
+}
+
+static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
+    if (!m || !m->valid || !m->v || !m->i || m->icount < 3) return;
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&m->v[0].x);
+    glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&m->v[0].u);
+    glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&m->v[0].color);
+    glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)m->i);
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
 }
 
 static PexTextureHandle flat_direct_terrain_handle(void) {
@@ -731,14 +851,28 @@ static void world_set_shade(float shade) {
     /* During streaming, some edge columns can temporarily have no populated light
        value.  Do not let that become pure black on exposed faces; Java's brightness
        table bottoms out above black and the next light rebuild will refine it. */
-    if (!g_force_fullbright_item_model && light < 0.05f) light = 0.05f;
+    if (!g_force_fullbright_item_model) {
+        if (light < 0.05f) light = 0.05f;
+        /* The fast streaming light pass can still leave daylight terrain faces at
+           Java brightness index 0 for one or more frames.  Do not render outdoor
+           terrain as pitch-black rectangles; sealed caves below sea level can
+           still be dark. */
+        if (g_world_light_y >= 50 && light < 0.30f) light = 0.30f;
+    }
     shade *= light;
     flat_direct_set_color4f(shade, shade, shade, 1.0f);
 }
 
 static void world_set_color_shade(int rgb, float shade) {
     float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
-    if (!g_force_fullbright_item_model && light < 0.05f) light = 0.05f;
+    if (!g_force_fullbright_item_model) {
+        if (light < 0.05f) light = 0.05f;
+        /* The fast streaming light pass can still leave daylight terrain faces at
+           Java brightness index 0 for one or more frames.  Do not render outdoor
+           terrain as pitch-black rectangles; sealed caves below sea level can
+           still be dark. */
+        if (g_world_light_y >= 50 && light < 0.30f) light = 0.30f;
+    }
     shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
@@ -2405,7 +2539,8 @@ static void draw_held_or_dropped_block_item_model(int id, float x, float y, floa
     glColor4f(1,1,1,1);
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
     /* RenderItem/ItemRenderer must not turn non-full block items into solid cubes.
        This path is used for dropped block entities and first-person held blocks. */
     if (id == BLOCK_SLAB) {
@@ -2453,6 +2588,7 @@ static void draw_held_or_dropped_block_item_model(int id, float x, float y, floa
     goto done;
 done:
     if (pushed_fullbright) g_force_fullbright_item_model--;
+    glDisable(GL_CULL_FACE);
     glColor4f(1,1,1,1);
 }
 
@@ -3376,7 +3512,8 @@ static void ensure_flat_section_lists(int sy, int cz, int cx) {
 
 static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
     PexRendererBackend *rb = flat_direct_backend();
-    if (!rb || !tex_terrain.rgba) return;
+    if (!tex_terrain.rgba) return;
+    if (!g_flat_direct_capture_only && !rb) return;
     if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) return;
 
     int origin_x = g_async_mesh_origin_override ? g_async_mesh_origin_x : g_flat_world_origin_x;
@@ -3895,7 +4032,7 @@ static int async_section_mesh_pending(void) {
 }
 
 static int async_section_mesh_submit(int sy, int cx, int cz) {
-    if (!flat_direct_backend()) return 0;
+    if (!flat_async_section_mesh_enabled()) return 0;
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
     if (g_flat_section_mesh_building[sy][cz][cx]) return 1;
     async_section_mesh_init();
@@ -3981,9 +4118,12 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 else if (!renderer_d3d11_adopt_prebuilt_mesh(slot0, &r.d3d11_mesh0)) installed = 0;
                 if (r.skip1) renderer_d3d11_destroy_mesh_deferred(slot1);
                 else if (!renderer_d3d11_adopt_prebuilt_mesh(slot1, &r.d3d11_mesh1)) installed = 0;
-            } else {
+            } else if (flat_direct_backend()) {
                 flat_direct_upload_builder(r.sy, r.cz, r.cx, 0, &r.mb0);
                 flat_direct_upload_builder(r.sy, r.cz, r.cx, 1, &r.mb1);
+            } else {
+                flat_gl_cpu_mesh_install(r.sy, r.cz, r.cx, 0, &r.mb0, r.skip0, r.version, r.origin_x, r.origin_z);
+                flat_gl_cpu_mesh_install(r.sy, r.cz, r.cx, 1, &r.mb1, r.skip1, r.version, r.origin_x, r.origin_z);
             }
             g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
             if (installed) {
@@ -4101,7 +4241,9 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
 }
 
 static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int count) {
+    flat_gl_cpu_mesh_check_origin();
     int direct = flat_direct_backend() ? 1 : 0;
+    int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
     int streaming = stream_generation_active() ? 1 : 0;
     if (g_async_section_mesh_initialized) {
         EnterCriticalSection(&g_async_section_mesh_cs);
@@ -4118,24 +4260,22 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     if (streaming) rebuilds_left = direct ? 1 : 2;
     double deadline = now_seconds() + (streaming ? 0.0015 : 0.0030);
 
-    if (direct) async_section_mesh_install_ready(1);
+    if (async_mesh) async_section_mesh_install_ready(2);
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
         if (now_seconds() > deadline) break;
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         int needs = 0;
 
-        if (direct) {
-            /* In D3D direct-mesh mode there are no OpenGL display-list IDs.
-               Native mesh CPU builds are now produced by a worker thread; the
-               render thread only snapshots 18^3 bytes and later uploads one
-               completed result. */
+        if (async_mesh) {
             if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
                 needs = 1;
-            } else if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) {
-                needs = 1;
-            } else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) {
-                needs = 1;
+            } else if (direct) {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) needs = 1;
+                else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) needs = 1;
+            } else {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) needs = 1;
+                else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) needs = 1;
             }
         } else {
             if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
@@ -4146,9 +4286,9 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         }
 
         if (needs) {
-            if (direct) {
+            if (async_mesh) {
                 int submit_result = async_section_mesh_submit(sy, cx, cz);
-                if (submit_result == 0) {
+                if (submit_result == 0 && direct) {
                     rebuild_flat_world_section_list(sy, cx, cz);
                 }
             } else {
@@ -4164,10 +4304,15 @@ static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx) {
     if (g_flat_section_skip_pass[sy][cz][cx][0] &&
         (!g_opts.fancy_graphics || g_flat_section_skip_pass[sy][cz][cx][1]) &&
         !g_flat_section_dirty[sy][cz][cx]) return 0;
-    if (flat_direct_backend()) {
+    if (flat_async_section_mesh_enabled()) {
         if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) return 1;
-        if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) return 1;
-        if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
+        if (flat_direct_backend()) {
+            if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) return 1;
+            if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
+        } else {
+            if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) return 1;
+            if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) return 1;
+        }
         return 0;
     }
     if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
@@ -4319,8 +4464,45 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
     }
 }
 
+static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glDisable(GL_BLEND);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    glDepthMask(GL_TRUE);
+    for (int i = 0; i < count; i++) {
+        int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
+            flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) {
+            flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
+        }
+    }
+
+    if (g_opts.fancy_graphics) {
+        glDisable(GL_ALPHA_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        for (int i = count - 1; i >= 0; i--) {
+            int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+            if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
+                flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) {
+                flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
+            }
+        }
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(1,1,1,1);
+}
+
 static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count) {
     if (flat_direct_backend()) { draw_flat_section_passes_direct(refs, count); return; }
+    if (flat_async_section_mesh_enabled()) { draw_flat_section_passes_gl_cpu(refs, count); return; }
     glEnable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
