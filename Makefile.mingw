@@ -4,7 +4,7 @@
 WIN_CC ?= i686-w64-mingw32-gcc
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra
 LDFLAGS ?= -mwindows
-LIBS = -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
+LIBS = -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -loleaut32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
 
 TARGET = pexcraft.exe
 
@@ -20,3 +20,10 @@ run: $(TARGET)
 
 clean:
 	rm -f $(TARGET)
+
+
+.PHONY: remote
+remote: pexcraft_remote.exe
+
+pexcraft_remote.exe: main.c $(wildcard src/*/*.c) src/common/common.h
+	$(WIN_CC) $(CFLAGS) -DPEX_REMOTE_HTTP=1 -DPEX_REMOTE_FPS=30 main.c -o $@ $(LDFLAGS) $(LIBS)

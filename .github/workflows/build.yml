@@ -28,13 +28,17 @@ jobs:
             gcc_package: mingw-w64-i686-gcc
             zlib_package: mingw-w64-i686-zlib
             out_exe: pexcraft-win-x86.exe
+            remote_out_exe: pexcraft-remote-win-x86.exe
             artifact_prefix: pexcraft-windows-x86
+            remote_artifact_prefix: pexcraft-rc-windows-x86
           - arch: x64
             msystem: MINGW64
             gcc_package: mingw-w64-x86_64-gcc
             zlib_package: mingw-w64-x86_64-zlib
             out_exe: pexcraft-win-x64.exe
+            remote_out_exe: pexcraft-remote-win-x64.exe
             artifact_prefix: pexcraft-windows-x64
+            remote_artifact_prefix: pexcraft-rc-windows-x64
 
     steps:
       - name: Checkout
@@ -61,7 +65,7 @@ jobs:
             ${{ matrix.zlib_package }}
             zip
 
-      - name: Build Windows client
+      - name: Build Windows clients
         shell: msys2 {0}
         run: |
           set +e
@@ -74,12 +78,22 @@ jobs:
             echo
             gcc --version
 
+            status=0
+
             gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
               -static -static-libgcc \
               -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
-              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
+              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm \
+              || status=$?
 
-            status=$?
+            if [ "$status" -eq 0 ]; then
+              gcc -std=c99 -O2 -Wall -Wextra -DPEX_REMOTE_HTTP=1 -DPEX_REMOTE_FPS=30 -mwindows main.c -o build/${{ matrix.remote_out_exe }} \
+                -static -static-libgcc \
+                -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
+                -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm \
+                || status=$?
+            fi
+
             echo "$status" > build/build-status.txt
 
             if [ "$status" -eq 0 ]; then
@@ -92,7 +106,7 @@ jobs:
             exit 0
           } 2>&1 | tee logs/build-windows-${{ matrix.arch }}.log
 
-      - name: Package Windows zip
+      - name: Package Windows normal zip
         if: env.BUILD_OK == '1'
         shell: pwsh
         run: |
@@ -121,25 +135,75 @@ jobs:
           Commit name: $commitName
           Commit SHA:  $env:GITHUB_SHA
           Builder:     Windows ${{ matrix.arch }} MinGW
+          Includes:    normal Windows client only
           "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
 
           $zipPath = Join-Path 'dist' "$artifactPrefix.zip"
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
-          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WIN_ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Windows artifact
+      - name: Package Opera 11 remote-client zip
+        if: env.BUILD_OK == '1'
+        shell: pwsh
+        run: |
+          $commitName = '${{ steps.commit.outputs.name }}'
+          $artifactPrefix = '${{ matrix.remote_artifact_prefix }}'
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $packageDir = Join-Path 'dist' $artifactPrefix
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item 'build/${{ matrix.remote_out_exe }}' $packageDir -Force
+
+          if (Test-Path 'README_REMOTE_OPERA11.md') {
+            Copy-Item 'README_REMOTE_OPERA11.md' $packageDir -Force
+          }
+
+          if (Test-Path 'assets') {
+            Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force
+          }
+
+          if (Test-Path 'build/imported-dlls.txt') {
+            Copy-Item 'build/imported-dlls.txt' $packageDir -Force
+          }
+
+          if (Test-Path 'logs') {
+            Copy-Item 'logs' (Join-Path $packageDir 'logs') -Recurse -Force
+          }
+
+          @"
+          Commit name: $commitName
+          Commit SHA:  $env:GITHUB_SHA
+          Builder:     Windows ${{ matrix.arch }} MinGW
+          Includes:    Opera 11 remote HTTP client only
+          Browser URL: http://WINDOWS_PC_IP:8425/
+          "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
+
+          $zipPath = Join-Path 'dist' "$artifactPrefix.zip"
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
+          "RC_ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload Windows normal artifact
         if: env.BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_prefix }}
-          path: ${{ env.ZIP_PATH }}
+          path: ${{ env.WIN_ZIP_PATH }}
+          if-no-files-found: warn
+
+      - name: Upload Opera 11 remote-client artifact
+        if: env.BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.remote_artifact_prefix }}
+          path: ${{ env.RC_ZIP_PATH }}
           if-no-files-found: warn
 
       - name: Mark failed build in summary
         if: env.BUILD_OK != '1'
         shell: bash
         run: |
-          echo "### Windows ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Windows ${{ matrix.arch }} normal/remote build failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
