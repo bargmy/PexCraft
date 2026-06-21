@@ -121,7 +121,10 @@ static void draw_item_icon_2d_gui(const ItemStack *st, int x, int y) {
     int tile = item_icon_tile(st->id);
     int sx = (tile & 15) * 16;
     int sy = (tile >> 4) * 16;
+    glColorMask(1,1,1,1);
+    glColor4f(1,1,1,1);
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -160,8 +163,10 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_TRUE);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    glDisable(GL_CULL_FACE);
+    /* Java RenderItem does not clear the whole depth buffer for every slot.
+       Clearing it made 3D blocks interact badly with the GUI and caused odd
+       facing/depth artifacts. */
+    glEnable(GL_CULL_FACE);
     glColorMask(1,1,1,1);
     glColor4f(1,1,1,1);
     int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);
@@ -188,6 +193,7 @@ static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_ALPHA_TEST);
+    glEnable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(1,1,1,1);
@@ -307,6 +313,7 @@ static void draw_block_item_icon_gui(int id, int x, int y) {
     float u0, v0, u1, v1;
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     glEnable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);

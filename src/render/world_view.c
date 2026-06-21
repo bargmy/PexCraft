@@ -542,12 +542,13 @@ static float java_world_brightness_at(int x, int y, int z) {
     int id_here = flat_get_block(x, y, z);
     if (id_here == BLOCK_LAVA || id_here == BLOCK_STILL_LAVA || id_here == BLOCK_FIRE ||
         id_here == BLOCK_TORCH || id_here == BLOCK_REDSTONE_TORCH_ON || id_here == BLOCK_FURNACE_LIT) return 1.0f;
-    int blocked = 0;
+    int blocked = 0, leaf_canopy = 0;
     for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
         int id = flat_get_block(x, yy, z);
+        if (id == BLOCK_LEAVES) { leaf_canopy = 1; continue; }
         if (java_light_blocks_sky(id)) { blocked = 1; break; }
     }
-    float b = blocked ? 0.55f : 1.0f;
+    float b = leaf_canopy ? 0.55f : (blocked ? 0.25f : 1.0f);
     if (y < 64) {
         float cave = 0.35f + ((float)y / 64.0f) * 0.25f;
         if (b > cave) b = cave;
@@ -1569,8 +1570,9 @@ static void draw_java_entity_shadow(float x, float y, float z, float shadow_size
             float dz = (cz - z) / radius;
             float dist = sqrtf(dx * dx + dz * dz);
             if (dist > 1.35f) continue;
-            float alpha = (shadow_alpha - dy / 2.0f) * (1.0f - dist / 1.35f) * br;
+            float alpha = (shadow_alpha - dy / 2.0f) * 0.5f * (1.0f - dist / 1.35f) * br;
             if (alpha <= 0.0f) continue;
+            if (alpha > 0.45f) alpha = 0.45f;
             glColor4f(1.0f, 1.0f, 1.0f, alpha);
             glTexCoord2f(0, 1); glVertex3f((float)bx,     sy, (float)bz + 1);
             glTexCoord2f(1, 1); glVertex3f((float)bx + 1, sy, (float)bz + 1);
@@ -1643,6 +1645,8 @@ static void draw_dropped_item_sprite(int tile) {
     float u0, v0, u1, v1;
     item_tile_uv(tile, &u0, &v0, &u1, &v1);
 
+    glColor4f(1,1,1,1);
+    glDisable(GL_CULL_FACE);
     glBindTexture(GL_TEXTURE_2D, tex_items.id);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
@@ -1660,6 +1664,8 @@ static void draw_dropped_terrain_sprite(int tile) {
     float u0, v0, u1, v1;
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
 
+    glColor4f(1,1,1,1);
+    glDisable(GL_CULL_FACE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
@@ -1715,6 +1721,8 @@ static void draw_dropped_items(void) {
 
         draw_java_entity_shadow(x, y, z, 0.15f, 1.0f);
 
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glColor4f(1,1,1,1);
         glPushMatrix();
         glTranslatef(x, y + bob, z);
         glRotatef((((float)e->age + g_frame_partial) / 20.0f + e->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
@@ -2368,31 +2376,37 @@ static void draw_cuboid_model_tile(float x, float y, float z,
 }
 
 static void draw_held_or_dropped_block_item_model(int id, float x, float y, float z) {
+    int pushed_fullbright = 0;
+    if (g_force_fullbright_item_model <= 0) { g_force_fullbright_item_model++; pushed_fullbright = 1; }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glColor4f(1,1,1,1);
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_CULL_FACE);
     /* RenderItem/ItemRenderer must not turn non-full block items into solid cubes.
        This path is used for dropped block entities and first-person held blocks. */
     if (id == BLOCK_SLAB) {
         draw_cuboid_model_for_block(id, x, y, z, 0, 0, 0, 1, 0.5f, 1);
-        return;
+        goto done;
     }
     if (id == BLOCK_SNOW_LAYER) {
         draw_cuboid_model_for_block(id, x, y, z, 0, 0, 0, 1, 2.0f / 16.0f, 1);
-        return;
+        goto done;
     }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) {
         draw_cuboid_model_for_block(id, x, y, z, 1.0f/16.0f, 0, 1.0f/16.0f, 15.0f/16.0f, 1.0f/16.0f, 15.0f/16.0f);
-        return;
+        goto done;
     }
     if (id == BLOCK_STONE_BUTTON) {
         draw_cuboid_model_for_block(id, x, y, z, 5.0f/16.0f, 5.0f/16.0f, 7.0f/16.0f, 11.0f/16.0f, 11.0f/16.0f, 9.0f/16.0f);
-        return;
+        goto done;
     }
     if (id == BLOCK_CACTUS) {
         draw_cuboid_model_for_block(id, x, y, z, 1.0f/16.0f, 0, 1.0f/16.0f, 15.0f/16.0f, 1, 15.0f/16.0f);
-        return;
+        goto done;
     }
     if (id == BLOCK_CHEST) {
         draw_chest_block(x, y, z);
-        return;
+        goto done;
     }
     if (id == BLOCK_FENCE) {
         glBegin(GL_QUADS);
@@ -2402,17 +2416,22 @@ static void draw_held_or_dropped_block_item_model(int id, float x, float y, floa
         emit_cuboid_model_faces_for_block(id, x, y, z, 0.4375f, 0.35f, 0.0f, 0.5625f, 0.55f, 1.0f);
         emit_cuboid_model_faces_for_block(id, x, y, z, 0.4375f, 0.70f, 0.0f, 0.5625f, 0.90f, 1.0f);
         glEnd();
-        return;
+        goto done;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
         glBegin(GL_QUADS);
         emit_cuboid_model_faces_for_block(id, x, y, z, 0.0f, 0.0f, 0.0f, 1.0f, 0.5f, 1.0f);
         emit_cuboid_model_faces_for_block(id, x, y, z, 0.5f, 0.5f, 0.0f, 1.0f, 1.0f, 1.0f);
         glEnd();
-        return;
+        goto done;
     }
     draw_world_block_id(id, x, y, z);
+    goto done;
+done:
+    if (pushed_fullbright) g_force_fullbright_item_model--;
+    glColor4f(1,1,1,1);
 }
+
 
 
 static void entity_texture_uv(Texture *tex, int px, int py, float *u, float *v) {
@@ -3156,6 +3175,8 @@ static void rebuild_flat_world_chunk_list(int cx, int cz) {
     }
 
     if (chunk_has_cutout) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.1f);
         glBegin(GL_QUADS);
@@ -3376,6 +3397,8 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
         }
     }
     if (has_cutout) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.1f);
         for (int y = y0; y <= y1; y++) {
@@ -3490,6 +3513,8 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
     }
 
     if (has_cutout) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.1f);
         glBegin(GL_QUADS);

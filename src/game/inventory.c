@@ -270,8 +270,31 @@ static int flat_combined_light_value(int x, int y, int z) {
     return (sky > block) ? sky : block;
 }
 
+static int flat_has_leaf_canopy_above(int x, int y, int z) {
+    int saw_leaf = 0;
+    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
+        int id = flat_get_block(x, yy, z);
+        if (id == 0 || block_is_liquid(id) || id == BLOCK_GLASS || id == BLOCK_SNOW_LAYER ||
+            id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+            id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
+            id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REDSTONE_TORCH_OFF ||
+            id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_REEDS || id == BLOCK_LADDER ||
+            id == BLOCK_RAILS || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
+            id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_WOOD_DOOR ||
+            id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL) continue;
+        if (id == BLOCK_LEAVES) { saw_leaf = 1; continue; }
+        break;
+    }
+    return saw_leaf;
+}
+
 static float flat_light_brightness(int x, int y, int z) {
     int l = flat_combined_light_value(x, y, z);
+    /* Beta leaves darken through skylight, but the previous propagated-light port
+       stacked every leaf layer down to light 0, creating pitch-black rectangles.
+       Clamp only the leaf-canopy case: real caves/solid overhangs can remain dark,
+       while flowers/items under trees get the same canopy shade as the ground. */
+    if (l < 8 && flat_has_leaf_canopy_above(x, y, z)) l = 8;
     if (l < 0) l = 0;
     if (l > 15) l = 15;
     return g_java_light_brightness_table[l];
@@ -357,11 +380,20 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             for (int y = y1; y >= y0; --y) {
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
                 sky[idx] = (unsigned char)light;
-                int opacity = flat_light_opacity_for_id(flat_get_block(x, y, z));
+                int bid = flat_get_block(x, y, z);
+                int opacity = flat_light_opacity_for_id(bid);
                 if (opacity > 0 && light > 0) {
-                    int dec = opacity < 1 ? 1 : opacity;
-                    light -= dec;
-                    if (light < 0) light = 0;
+                    if (bid == BLOCK_LEAVES) {
+                        /* Leaves are not additive black decals.  Source skylight dims
+                           under canopies, but thick generated trees should not stack
+                           to full black in this renderer. */
+                        if (light > 8) light -= 1;
+                    } else if (opacity >= 255) {
+                        light = 0;
+                    } else {
+                        light -= opacity;
+                        if (light < 0) light = 0;
+                    }
                 }
             }
         }
@@ -407,6 +439,44 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
         }
     }
     free(sky); free(block); free(q);
+}
+
+static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
+    int x0 = cx * 16, z0 = cz * 16;
+    int x1 = x0 + 15, z1 = z0 + 15;
+    if (x0 < g_flat_world_origin_x) x0 = g_flat_world_origin_x;
+    if (z0 < g_flat_world_origin_z) z0 = g_flat_world_origin_z;
+    if (x1 >= g_flat_world_origin_x + FLAT_WORLD_SIZE) x1 = g_flat_world_origin_x + FLAT_WORLD_SIZE - 1;
+    if (z1 >= g_flat_world_origin_z + FLAT_WORLD_SIZE) z1 = g_flat_world_origin_z + FLAT_WORLD_SIZE - 1;
+    for (int z = z0; z <= z1; ++z) {
+        int fz = flat_z_index(z);
+        for (int x = x0; x <= x1; ++x) {
+            int fx = flat_index(x);
+            int light = 15;
+            for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
+                int yi = flat_y_index(y);
+                int id = g_flat_blocks[yi][fz][fx];
+                g_flat_sky_light[yi][fz][fx] = (unsigned char)(light & 15);
+                g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
+                int opacity = flat_light_opacity_for_id(id);
+                if (opacity > 0 && light > 0) {
+                    if (id == BLOCK_LEAVES) {
+                        if (light > 8) light -= 1;
+                    } else if (opacity >= 255) {
+                        light = 0;
+                    } else {
+                        light -= opacity;
+                        if (light < 0) light = 0;
+                    }
+                }
+            }
+        }
+    }
+    int lcx = stream_world_chunk_local_x(cx);
+    int lcz = stream_world_chunk_local_z(cz);
+    if (flat_local_chunk_valid(lcx, lcz)) {
+        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+    }
 }
 
 static void flat_recalculate_lighting_chunk(int cx, int cz) {
@@ -686,7 +756,7 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-    flat_recalculate_lighting_chunk(cx, cz);
+    flat_recalculate_lighting_chunk_fast_surface(cx, cz);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_surface_mark_dirty_block(cx * 16 + 8, cz * 16 + 8);
 #endif
@@ -744,7 +814,7 @@ static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
             }
         }
     }
-    flat_recalculate_lighting_chunk(cx, cz);
+    flat_recalculate_lighting_chunk_fast_surface(cx, cz);
     free(buf);
     free(meta);
 }
@@ -830,7 +900,7 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-    flat_recalculate_lighting_chunk(cx, cz);
+    flat_recalculate_lighting_chunk_fast_surface(cx, cz);
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
