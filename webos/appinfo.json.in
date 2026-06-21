@@ -1,0 +1,9 @@
+{
+  "id": "ir.hienob.pexcraft",
+  "version": "@PROJECT_VERSION@",
+  "vendor": "Hienob",
+  "type": "native",
+  "main": "pexcraft_lgwebos",
+  "title": "PexCraft",
+  "icon": "icon.png"
+}

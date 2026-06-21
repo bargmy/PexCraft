@@ -371,6 +371,141 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+
+  lgwebos:
+    name: LG webOS ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: armv7
+            toolchain_url: https://github.com/openlgtv/buildroot-nc4/releases/latest/download/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Install LG webOS build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            python3 \
+            curl \
+            tar \
+            xz-utils \
+            nodejs \
+            npm
+          sudo npm install -g @webos-tools/cli
+
+      - name: Install LG webOS native toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build/lgwebos_toolchain
+          curl -L "${{ matrix.toolchain_url }}" -o build/lgwebos_toolchain/toolchain.tar.gz
+          tar -xzf build/lgwebos_toolchain/toolchain.tar.gz -C build/lgwebos_toolchain
+          sdk_dir="$(find build/lgwebos_toolchain -type d -name 'arm-webos-linux-gnueabi_sdk-buildroot' | head -n 1)"
+          test -n "$sdk_dir"
+          if [ -x "$sdk_dir/relocate-sdk.sh" ]; then
+            (cd "$sdk_dir" && ./relocate-sdk.sh)
+          fi
+          toolchain_file="$sdk_dir/share/buildroot/toolchainfile.cmake"
+          test -f "$toolchain_file"
+          echo "LGWEBOS_TOOLCHAIN_FILE=$toolchain_file" >> "$GITHUB_ENV"
+
+      - name: Extract LG webOS icon from client.jar
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 tools/extract_lgwebos_icon.py webos/generated/icon.png build/lgwebos_work/client.jar
+          test -s webos/generated/icon.png
+
+      - name: Build LG webOS native client
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     LG webOS ${{ matrix.arch }}"
+            echo
+            cmake -S webos -B build/lgwebos-${{ matrix.arch }} \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TOOLCHAIN_FILE="$LGWEBOS_TOOLCHAIN_FILE"
+            cmake --build build/lgwebos-${{ matrix.arch }}
+
+            status=$?
+            echo "$status" > build/lgwebos-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "LGWEBOS_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "LGWEBOS_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit 0
+          } 2>&1 | tee logs/build-lgwebos-${{ matrix.arch }}.log
+
+      - name: Package LG webOS IPK
+        if: env.LGWEBOS_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          package_dir="build/lgwebos-package-${{ matrix.arch }}"
+          rm -rf "$package_dir"
+          cmake --install build/lgwebos-${{ matrix.arch }} --prefix "$package_dir"
+          cp -R logs "$package_dir/logs" || true
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     LG webOS ${{ matrix.arch }}
+          EOF
+          ares-package "$package_dir"
+          ipk="$(find . -maxdepth 3 -type f \( -name 'ir.hienob.pexcraft_*.ipk' -o -name '*.ipk' \) | head -n 1)"
+          test -n "$ipk"
+          final="dist/pexcraft-lgwebos-${{ matrix.arch }}.ipk"
+          mv "$ipk" "$final"
+          echo "IPK_PATH=$final" >> "$GITHUB_ENV"
+
+      - name: Upload LG webOS artifact
+        if: env.LGWEBOS_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-lgwebos-${{ matrix.arch }}
+          path: ${{ env.IPK_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: env.LGWEBOS_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### LG webOS ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
   telegram:
     name: Upload successful builds to Telegram
     runs-on: ubuntu-latest
@@ -378,6 +513,7 @@ jobs:
       - windows
       - linux
       - psp
+      - lgwebos
     if: always() && github.event_name != 'pull_request'
 
     steps:
@@ -420,7 +556,7 @@ jobs:
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           sha = os.environ.get("GITHUB_SHA", "")
 
-          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True))
+          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True))
 
           caption = (
               "PEXCraft successful builds\n"
@@ -469,7 +605,7 @@ jobs:
 
               def filefield(name, path):
                   filename = os.path.basename(path)
-                  ctype = mimetypes.guess_type(filename)[0] or "application/zip"
+                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else "application/zip")
                   parts.append(
                       (
                           f"--{boundary}\r\n"
