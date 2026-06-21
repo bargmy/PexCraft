@@ -702,7 +702,7 @@ static void mark_flat_chunks_modified_all(void) {
 
 static TerrainProvider *beta_stream_provider(void);
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
 /* PSP-safe "normal" terrain: the exact Beta generator allocates and populates a
    3x3 chunk canvas for every streamed chunk.  That is too heavy for PSP and was
    closing PPSSPP during normal-world generation.  This keeps the normal-world
@@ -736,7 +736,7 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
 
     if (world_type == 1) {
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
         for (int lx = 0; lx < 16; lx++) {
             int wx = cx * 16 + lx;
             for (int lz = 0; lz < 16; lz++) {
@@ -760,23 +760,26 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
             }
         }
 #else
-        unsigned char beta_blocks[32768];
-        memset(beta_blocks, 0, sizeof(beta_blocks));
+        /* Real Beta-style generator path.  Keep the extracted 16x128x16 chunk
+           on the heap so PSP worker threads do not lose half their stack to a
+           32KB local array. */
+        unsigned char *beta_blocks = (unsigned char*)calloc(32768u, 1);
 
-        TerrainProvider local_tp;
+        TerrainProvider *local_tp = NULL;
         TerrainProvider *tp = reuse_tp;
-        int free_local_tp = 0;
         if (!tp) {
-            terrain_provider_init(&local_tp, (int64_t)seed);
-            tp = &local_tp;
-            free_local_tp = 1;
+            local_tp = (TerrainProvider*)calloc(1, sizeof(*local_tp));
+            if (local_tp) {
+                terrain_provider_init(local_tp, (int64_t)seed);
+                tp = local_tp;
+            }
         }
 
         GenCanvas cv;
         cv.minCx = cx - 1;
         cv.minCz = cz - 1;
         cv.chunks = 3;
-        cv.blocks = (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1);
+        cv.blocks = (beta_blocks && tp) ? (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1) : NULL;
         if (cv.blocks) {
             for (int dz = 0; dz < cv.chunks; dz++) {
                 for (int dx = 0; dx < cv.chunks; dx++) {
@@ -791,13 +794,13 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
             extract_canvas_chunk(&cv, cx, cz, beta_blocks);
             free(cv.blocks);
         }
-        if (free_local_tp) terrain_provider_free(&local_tp);
+        if (local_tp) { terrain_provider_free(local_tp); free(local_tp); }
 
         for (int lx = 0; lx < 16; lx++) {
             for (int lz = 0; lz < 16; lz++) {
                 for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                     int id = 0;
-                    if (y < 128) {
+                    if (beta_blocks && y < 128) {
                         id = get_block_local(beta_blocks, lx, y, lz);
                     }
                     out[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
@@ -807,6 +810,7 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
                 }
             }
         }
+        free(beta_blocks);
 #endif
     } else {
         for (int lx = 0; lx < 16; lx++) {
@@ -821,7 +825,11 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
 }
 
 static void generate_flat_chunk_base_to_buffer(int cx, int cz, unsigned char *out) {
+#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
+    TerrainProvider *reuse = NULL;
+#else
     TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
+#endif
     generate_flat_chunk_base_to_buffer_ex(cx, cz, out, g_world_type, g_world_seed, reuse);
 }
 
@@ -1374,7 +1382,7 @@ static void beta_preview_generate_flat_world(void) {
     int min_cz = floor_div16(g_flat_world_origin_z);
     int max_cz = floor_div16(g_flat_world_origin_z + FLAT_WORLD_SIZE - 1);
 
-#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
     /* PSP-1000 safety: never allocate the full active-window Beta canvas.
        Generate one chunk at a time using the PSP-safe chunk-local generator. */
     for (int cz = min_cz; cz <= max_cz; cz++) {
@@ -5337,10 +5345,9 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
 static void stream_async_init(void) {
     if (g_stream_async_initialized) return;
-#if defined(PEX_PLATFORM_PSP)
-    /* Real PSP/PPSSPP became unstable when the PC terrain worker generated
-       chunks on a second user thread.  Use cooperative async instead: one cheap
-       PSP-safe chunk is generated/installed over time from the main loop. */
+#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
+    /* Safe PSP terrain uses cooperative generation.  Real Beta mode keeps the
+       worker path so the 3x3 canvas generator does not run inside the frame. */
     g_stream_async_event = NULL;
     g_stream_async_thread = NULL;
     g_stream_async_initialized = 1;
@@ -5349,7 +5356,11 @@ static void stream_async_init(void) {
     InitializeCriticalSection(&g_stream_async_cs);
     g_stream_async_event = CreateEventA(NULL, FALSE, FALSE, NULL);
     if (g_stream_async_event) {
+#if defined(PEX_PLATFORM_PSP)
+        g_stream_async_thread = CreateThread(NULL, 0x40000, stream_async_worker_proc, NULL, 0, NULL);
+#else
         g_stream_async_thread = CreateThread(NULL, 0, stream_async_worker_proc, NULL, 0, NULL);
+#endif
         if (g_stream_async_thread) SetThreadPriority(g_stream_async_thread, THREAD_PRIORITY_BELOW_NORMAL);
     }
     g_stream_async_initialized = 1;
@@ -5357,7 +5368,7 @@ static void stream_async_init(void) {
 
 static int stream_async_pending(void) {
     if (!g_stream_async_initialized) return 0;
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
     if (!g_stream_async_event || !g_stream_async_thread) return 0;
 #endif
     int pending = 0;
@@ -5809,7 +5820,8 @@ static void process_stream_generation_queue(void) {
     /* If thread creation fails, keep the world functional with the old small
        synchronous budget rather than leaving missing terrain forever. */
     if (!g_stream_async_event || !g_stream_async_thread) {
-        if (g_stream_gen_queue_index < g_stream_gen_queue_count) {
+        int budget = STREAM_CHUNKS_PER_TICK;
+        while (budget-- > 0 && g_stream_gen_queue_index < g_stream_gen_queue_count) {
             int idx = g_stream_gen_queue_index++;
             int wcx = g_stream_gen_queue_cx[idx];
             int wcz = g_stream_gen_queue_cz[idx];

@@ -151,11 +151,11 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
-        /* Android/GLES reads the section mesh arrays on the render thread.  Keep
+        /* Android/GLES and PSP read terrain/render arrays on the render thread.  Keep
            streaming/remap/light commits on this game thread there; the generic
            background service can race the renderer and corrupt the visible world
            while the active window slides. */
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP)
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
 #else

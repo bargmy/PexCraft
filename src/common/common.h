@@ -415,10 +415,12 @@ static double g_system_info_last_time = -10.0;
    flat-world arrays alone are about 201 MB at 512*256*512.  Keep a separate
    low-memory PSP window so PPSSPP/real PSP can actually load the EBOOT. */
 #if defined(PEX_PLATFORM_PSP)
-#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
 /* Real PSP-1000 only has 32MB main RAM.  Keep the 128x128 horizontal window
    for streaming/render-distance behavior, but cap vertical storage to 96 blocks
-   so the three dense block/meta/liquid arrays save about 1.6MB. */
+   so the three dense block/meta/liquid arrays save about 1.6MB.  The real Beta
+   generator opt-in below needs the full 0..127 vertical range, so it bypasses
+   this legacy safety cap. */
 #define FLAT_WORLD_SIZE 128
 #define FLAT_WORLD_Y_MIN 0
 #define FLAT_WORLD_Y_MAX 95
