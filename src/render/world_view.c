@@ -5571,6 +5571,7 @@ static void draw_flat_test_world(void) {
     glGetIntegerv(GL_VIEWPORT, g_name_viewport);
     g_name_matrices_valid = 1;
     draw_falling_blocks(g_frame_partial);
+    draw_passive_mobs(g_frame_partial);
     draw_block_selection_border();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);

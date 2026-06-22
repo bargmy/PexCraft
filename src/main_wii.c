@@ -58,6 +58,7 @@ static void draw_ingame_world_view(int with_hand);
 static const char *item_display_name(int id);
 
 #include "game/inventory.c"
+#include "game/passive_mobs.c"
 #include "platform/psp_multiplayer_stub.c"
 #include "ui/screen_state_input.c"
 #include "ui/gui.c"

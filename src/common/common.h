@@ -321,6 +321,52 @@ typedef struct FlatFallingBlock {
     double path_start_time;
 } FlatFallingBlock;
 
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#define MAX_PASSIVE_MOBS 16
+#else
+#define MAX_PASSIVE_MOBS 40
+#endif
+
+typedef enum PassiveMobType {
+    PASSIVE_MOB_NONE = 0,
+    PASSIVE_MOB_PIG = 1,
+    PASSIVE_MOB_SHEEP = 2,
+    PASSIVE_MOB_COW = 3,
+    PASSIVE_MOB_CHICKEN = 4
+} PassiveMobType;
+
+typedef struct PassiveMob {
+    int active;
+    int type;
+    float x, y, z;
+    float prev_x, prev_y, prev_z;
+    float mx, my, mz;
+    float yaw, prev_yaw;
+    float render_yaw, prev_render_yaw;
+    float pitch, prev_pitch;
+    float width, height;
+    int health;
+    int hurt_time;
+    int death_time;
+    int on_ground;
+    int age;
+    int living_sound_delay;
+    float limb_swing;
+    float prev_limb_swing;
+    float limb_amount;
+    float prev_limb_amount;
+    int has_path_target;
+    float target_x, target_y, target_z;
+    int sheared;
+    int rideable;
+    float chicken_wing_rot;
+    float chicken_prev_wing_rot;
+    float chicken_dest_pos;
+    float chicken_prev_dest_pos;
+    float chicken_wing_speed;
+    int egg_timer;
+} PassiveMob;
+
 #ifdef PEX_PLATFORM_SDL2
 static HINSTANCE g_inst;
 static SDL_Window *g_hwnd;
@@ -402,6 +448,7 @@ static long long g_world_seed = 0;
 static WorldGenJob g_worldgen;
 static int g_load_state_skip_terrain_rebuild = 0;
 static int g_last_load_state_had_terrain = 0;
+static int g_passive_mobs_need_initial_spawn = 0;
 static char g_loaded_world_dir[MAX_PATHBUF] = "";
 static char g_loaded_world_name[64] = "";
 static int g_selected_hotbar_slot = 0;
@@ -915,6 +962,8 @@ static FlatDroppedItem g_drops[MAX_DROP_ENTITIES];
 #define MAX_PICKUP_FX 32
 static PickupFx g_pickup_fx[MAX_PICKUP_FX];
 static FlatFallingBlock g_falling_blocks[MAX_FALLING_BLOCK_ENTITIES];
+static PassiveMob g_passive_mobs[MAX_PASSIVE_MOBS];
+static int g_player_riding_passive_mob = -1;
 
 typedef struct PexSaveChunkSnapshot {
     int cx, cz;
@@ -942,6 +991,7 @@ typedef struct PexSaveSnapshot {
     ChestTile chest_tiles[MAX_CHEST_TILES];
     FurnaceTile furnace_tiles[MAX_FURNACE_TILES];
     FlatDroppedItem drops[MAX_DROP_ENTITIES];
+    PassiveMob passive_mobs[MAX_PASSIVE_MOBS];
     char loaded_world_dir[MAX_PATHBUF];
     int ingame_ticks;
     struct PexSaveSnapshot *next;
@@ -1127,6 +1177,7 @@ static double g_last_time = 0.0;
 
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
 static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
+static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;
 static int font_widths[256];
@@ -1269,6 +1320,15 @@ static int flat_player_head_in_lava(void);
 static int flat_block_is_underwater_target(int bx, int by, int bz);
 static void apply_player_fluid_velocity(int is_water);
 static void update_falling_blocks(void);
+static void passive_mobs_reset(void);
+static void passive_mobs_spawn_initial(void);
+static void update_passive_mobs(void);
+static void passive_mobs_apply_riding(void);
+static int passive_mobs_attack_from_player(void);
+static int passive_mobs_interact_from_player(void);
+static void draw_passive_mobs(float partial);
+static void passive_mobs_read_from_file(FILE *f, int version);
+static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs);
 static void update_liquids(void);
 static void update_infinite_world_streaming(void);
 static void world_stream_service_ensure(void);

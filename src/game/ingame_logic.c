@@ -145,6 +145,7 @@ static void ingame_tick(void) {
     prof_part = pex_profile_begin();
     update_dropped_items();
     pex_profile_add(PROF_DROPS, prof_part);
+    update_passive_mobs();
     prof_part = pex_profile_begin();
     update_dig_particles();
     pex_profile_add(PROF_PARTICLES, prof_part);
@@ -551,6 +552,7 @@ static void ingame_tick(void) {
     if (g_player_on_ground) target_pitch = 0.0f;
     g_camera_yaw += (target_yaw - g_camera_yaw) * 0.4f;
     g_camera_pitch += (target_pitch - g_camera_pitch) * 0.8f;
+    passive_mobs_apply_riding();
 
     if (g_loaded_world_dir[0] && g_save_dirty &&
         (g_ingame_ticks - g_last_autosave_tick) >= AUTOSAVE_INTERVAL_TICKS) {

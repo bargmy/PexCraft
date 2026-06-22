@@ -2750,6 +2750,8 @@ static void inventory_reset(void) {
     g_inventory[21] = make_stack(BLOCK_SAND, 64, 0);
     g_inventory[22] = make_stack(BLOCK_GRAVEL, 64, 0);
     g_inventory[23] = make_stack(BLOCK_CHEST, 1, 0);
+    g_inventory[24] = make_stack(ITEM_BUCKET_EMPTY, 1, 0); /* passive mob test: cow milking */
+    g_inventory[25] = make_stack(ITEM_SADDLE, 1, 0);       /* passive mob test: pig saddle */
     g_equipped_item = g_inventory[g_selected_hotbar_slot];
     g_equipped_slot = g_selected_hotbar_slot;
     g_equipped_progress = g_prev_equipped_progress = 1.0f;

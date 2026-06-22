@@ -449,7 +449,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     free_texture(&tex_icons);
     free_texture(&tex_inventory);
     free_texture(&tex_items);
-    free_texture(&tex_steve);
+    free_texture(&tex_steve); free_texture(&tex_mob_pig); free_texture(&tex_mob_sheep); free_texture(&tex_mob_sheep_fur); free_texture(&tex_mob_cow); free_texture(&tex_mob_chicken); free_texture(&tex_mob_saddle);
     free_texture(&tex_chest_entity);
     free_texture(&tex_large_chest_entity);
     free_texture_pack_icons();

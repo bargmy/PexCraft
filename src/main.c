@@ -74,6 +74,7 @@ static void steve_set_texture_dims(const Texture *tex);
 static void steve_set_tint(float r, float g, float b);
 
 #include "game/inventory.c"
+#include "game/passive_mobs.c"
 #include "platform/multiplayer_client.c"
 #include "ui/screen_state_input.c"
 #include "ui/title_menus.c"

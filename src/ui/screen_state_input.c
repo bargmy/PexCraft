@@ -390,7 +390,7 @@ static void mouse_right_down(int mx, int my) {
     if (g_screen == SCREEN_DEATH) return;
 
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 1); return; }
-    if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); ingame_right_click(); return; }
+    if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); if (passive_mobs_interact_from_player()) return; ingame_right_click(); return; }
     (void)mx; (void)my;
 }
 
@@ -400,6 +400,7 @@ static void mouse_down(int mx, int my) {
     if (g_screen == SCREEN_INGAME) {
         set_mouse_grabbed(1);
         if (pex_net_try_attack_player()) return;
+        if (passive_mobs_attack_from_player()) return;
         FlatRayHit hit = flat_raycast();
         if (hit.hit) restart_hand_swing();
         else start_air_swing_once();

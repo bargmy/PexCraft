@@ -358,6 +358,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     memcpy(ss->chest_tiles, g_chest_tiles, sizeof(g_chest_tiles));
     memcpy(ss->furnace_tiles, g_furnace_tiles, sizeof(g_furnace_tiles));
     memcpy(ss->drops, g_drops, sizeof(g_drops));
+    memcpy(ss->passive_mobs, g_passive_mobs, sizeof(g_passive_mobs));
     snprintf(ss->loaded_world_dir, sizeof(ss->loaded_world_dir), "%s", g_loaded_world_dir);
     ss->ingame_ticks = g_ingame_ticks;
 
@@ -468,7 +469,7 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 15;
+    int version = 16;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -567,6 +568,8 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
         fwrite(&e->age, sizeof(int), 1, f);
         fwrite(&e->pickup_delay, sizeof(int), 1, f);
     }
+
+    passive_mobs_write_to_file(f, ss->passive_mobs);
 
     fclose(f);
     write_session_lock(ss->loaded_world_dir);
@@ -675,7 +678,7 @@ static void save_current_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 15;
+    int version = 16;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -776,6 +779,8 @@ static void save_current_world_state_sync(void) {
         fwrite(&e->pickup_delay, sizeof(int), 1, f);
     }
 
+    passive_mobs_write_to_file(f, g_passive_mobs);
+
     fclose(f);
     write_session_lock(g_loaded_world_dir);
     cleanup_legacy_world_metadata(g_loaded_world_dir);
@@ -831,7 +836,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -852,6 +857,7 @@ static int load_current_world_state(void) {
 
     chest_clear_all_tiles();
     furnace_clear_all_tiles();
+    passive_mobs_reset();
     memset(g_chest_slots, 0, sizeof(g_chest_slots));
     g_legacy_global_chest_pending = 0;
 
@@ -1034,6 +1040,8 @@ static int load_current_world_state(void) {
             }
         }
     }
+    passive_mobs_read_from_file(f, version);
+    g_passive_mobs_need_initial_spawn = (version < 16) ? 1 : 0;
     fclose(f);
 
     if (version < 11) { g_flat_world_origin_x = -(FLAT_WORLD_SIZE / 2); g_flat_world_origin_z = -(FLAT_WORLD_SIZE / 2); }
@@ -1049,7 +1057,7 @@ static int load_current_world_state(void) {
     memset(&g_carried_stack, 0, sizeof(g_carried_stack));
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
-    g_save_dirty = (version < 15) ? 1 : 0;
+    g_save_dirty = (version < 16) ? 1 : 0;
     return 1;
 }
 
@@ -1058,9 +1066,17 @@ static void finish_prepared_world_entry(int loaded_state) {
     g_worldgen.active = 0;
     if (!loaded_state) {
         reset_flat_player_spawn();
+        passive_mobs_reset();
+        passive_mobs_spawn_initial();
+        g_passive_mobs_need_initial_spawn = 0;
     } else if (!g_player_dead &&
         (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z) || flat_player_suffocation_block())) {
         reset_flat_player_spawn();
+    }
+
+    if (loaded_state && g_passive_mobs_need_initial_spawn) {
+        passive_mobs_spawn_initial();
+        g_passive_mobs_need_initial_spawn = 0;
     }
 
     g_chat_input[0] = 0;

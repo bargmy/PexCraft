@@ -526,16 +526,25 @@ static int classic_pack_missing_required_textures(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #endif
-    char dir[MAX_PATHBUF], items[MAX_PATHBUF], terrain[MAX_PATHBUF];
+    char dir[MAX_PATHBUF], path[MAX_PATHBUF];
+    static const char *required[] = {
+        "terrain.png",
+        "gui\\items.png",
+        "mob\\pig.png",
+        "mob\\sheep.png",
+        "mob\\sheep_fur.png",
+        "mob\\cow.png",
+        "mob\\chicken.png",
+        "mob\\saddle.png"
+    };
     if (!classic_pack_installed()) return 0;
     classic_pack_path(dir, sizeof(dir));
-    snprintf(items, sizeof(items), "%s\\gui\\items.png", dir);
-    snprintf(terrain, sizeof(terrain), "%s\\terrain.png", dir);
-    /* The newly exposed block/item stubs need the downloaded terrain atlas plus
-       gui/items.png.  Old saved Classic downloads can have terrain/gui/font
-       only, which makes tools/items fall back or render as unrelated tiles. */
-    if (!file_exists(items)) return 1;
-    if (!file_exists(terrain)) return 1;
+    /* Old Classic downloads can have terrain/gui/font only.  Passive mobs need
+       their b1.0 mob textures too, so force a resource update when they are absent. */
+    for (int i = 0; i < (int)(sizeof(required) / sizeof(required[0])); ++i) {
+        snprintf(path, sizeof(path), "%s\\%s", dir, required[i]);
+        if (!file_exists(path)) return 1;
+    }
     return 0;
 }
 
@@ -616,7 +625,7 @@ static void add_builtin_classic_texture_pack(int *wanted) {
     snprintf(e->desc1, sizeof(e->desc1), "Minecraft Classic texture pack");
     int installed = classic_pack_installed();
     if (installed) {
-        if (classic_pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block textures");
+        if (classic_pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block/mob textures");
         else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing b1.0 sounds");
         else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Textures + sounds installed");
         else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from client.jar");
@@ -711,8 +720,20 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_chest_gui, "gui_chest.mcrw", 0, 256, 256);
     free_texture(&tex_chest_entity);
     free_texture(&tex_large_chest_entity);
+    free_texture(&tex_mob_pig);
+    free_texture(&tex_mob_sheep);
+    free_texture(&tex_mob_sheep_fur);
+    free_texture(&tex_mob_cow);
+    free_texture(&tex_mob_chicken);
+    free_texture(&tex_mob_saddle);
     PEX_PSP_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_OPT(&tex_mob_pig, "mob_pig.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_OPT(&tex_mob_sheep, "mob_sheep.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_OPT(&tex_mob_sheep_fur, "mob_sheep_fur.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_OPT(&tex_mob_cow, "mob_cow.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_OPT(&tex_mob_chicken, "mob_chicken.mcrw", 0, 64, 32);
+    PEX_PSP_LOAD_OPT(&tex_mob_saddle, "mob_saddle.mcrw", 0, 64, 32);
     PEX_PSP_LOAD_REQ(&tex_clouds, "environment_clouds.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
@@ -745,8 +766,20 @@ static int load_default_textures(void) {
     load_mcrw(&tex_chest_gui, "gui_chest.mcrw", 0);
     free_texture(&tex_chest_entity);
     free_texture(&tex_large_chest_entity);
+    free_texture(&tex_mob_pig);
+    free_texture(&tex_mob_sheep);
+    free_texture(&tex_mob_sheep_fur);
+    free_texture(&tex_mob_cow);
+    free_texture(&tex_mob_chicken);
+    free_texture(&tex_mob_saddle);
     load_mcrw(&tex_items, "gui_items.mcrw", 0);
     ok = load_mcrw(&tex_steve, "mob_char.mcrw", 0) && ok;
+    load_mcrw(&tex_mob_pig, "mob_pig.mcrw", 0);
+    load_mcrw(&tex_mob_sheep, "mob_sheep.mcrw", 0);
+    load_mcrw(&tex_mob_sheep_fur, "mob_sheep_fur.mcrw", 0);
+    load_mcrw(&tex_mob_cow, "mob_cow.mcrw", 0);
+    load_mcrw(&tex_mob_chicken, "mob_chicken.mcrw", 0);
+    load_mcrw(&tex_mob_saddle, "mob_saddle.mcrw", 0);
     load_mcrw(&tex_clouds, "environment_clouds.mcrw", 1);
     load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
     load_mcrw(&tex_shadow, "misc_shadow.mcrw", 0);
@@ -798,6 +831,12 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_items, "gui\\items.png", 0);
         try_pack_texture(e, &tex_steve, "mob\\char.png", 0);
         try_pack_texture(e, &tex_steve, "char.png", 0);
+        try_pack_texture(e, &tex_mob_pig, "mob\\pig.png", 0);
+        try_pack_texture(e, &tex_mob_sheep, "mob\\sheep.png", 0);
+        try_pack_texture(e, &tex_mob_sheep_fur, "mob\\sheep_fur.png", 0);
+        try_pack_texture(e, &tex_mob_cow, "mob\\cow.png", 0);
+        try_pack_texture(e, &tex_mob_chicken, "mob\\chicken.png", 0);
+        try_pack_texture(e, &tex_mob_saddle, "mob\\saddle.png", 0);
         try_pack_texture(e, &tex_clouds, "environment\\clouds.png", 1);
         try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
         try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
