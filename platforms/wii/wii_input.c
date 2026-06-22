@@ -16,7 +16,8 @@ static float lerp_angle(float a, float b, float partial) {
 static void player_turn_from_mouse(int dx, int dy_java) {
     if (g_screen != SCREEN_INGAME) return;
     float sens = g_opts.sensitivity;
-    if (sens < 0.0f) sens = 0.0f; if (sens > 1.0f) sens = 1.0f;
+    if (sens < 0.0f) sens = 0.0f;
+    if (sens > 1.0f) sens = 1.0f;
     float f = sens * 0.6f + 0.2f;
     float mul = f * f * f * 8.0f;
     float yaw_delta = (float)dx * mul * 0.15f;

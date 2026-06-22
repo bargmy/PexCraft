@@ -483,6 +483,8 @@ static PexRendererBackend *flat_direct_backend(void) {
        completed mesh on the render thread instead of rebuilding GL display
        lists inside the frame. */
     return psp_gu_get_backend();
+#elif defined(PEX_PLATFORM_WII)
+    return wii_gx_get_backend();
 #else
     if (pex_using_d3d9()) return renderer_d3d9_get_backend();
     if (pex_using_d3d11()) return renderer_d3d11_get_backend();
@@ -715,7 +717,7 @@ static void flat_direct_free_builder(FlatDirectMeshBuilder *b) {
 }
 
 static int flat_async_section_mesh_enabled(void) {
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return flat_direct_backend() != NULL;
 #else
     return tex_terrain.rgba != NULL;

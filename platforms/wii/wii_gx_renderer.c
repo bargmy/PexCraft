@@ -52,6 +52,13 @@ static int g_wii_cull_enabled = 0;
 static float g_wii_clear_r = 0, g_wii_clear_g = 0, g_wii_clear_b = 0, g_wii_clear_a = 1;
 static uint32_t g_wii_cur_color = 0xffffffffu;
 static float g_wii_cur_u = 0.0f, g_wii_cur_v = 0.0f;
+static int g_wii_vertex_array_enabled = 0;
+static int g_wii_texcoord_array_enabled = 0;
+static int g_wii_color_array_enabled = 0;
+static GLint g_wii_vertex_size = 0, g_wii_texcoord_size = 0, g_wii_color_size = 0;
+static GLenum g_wii_vertex_type = 0, g_wii_texcoord_type = 0, g_wii_color_type = 0;
+static GLsizei g_wii_vertex_stride = 0, g_wii_texcoord_stride = 0, g_wii_color_stride = 0;
+static const GLvoid *g_wii_vertex_ptr = NULL, *g_wii_texcoord_ptr = NULL, *g_wii_color_ptr = NULL;
 static GLenum g_wii_begin_mode = 0;
 static int g_wii_begin_active = 0;
 static WiiImmVertex g_wii_imm[PEX_WII_MAX_IMM_VERTS];
@@ -126,7 +133,14 @@ static void wii_load_gx_matrices(void) { wii_load_gx_matrices_from(g_wii_modelvi
 
 static uint32_t wii_color4f_pack(float r,float g,float b,float a) {
     int ri=(int)(r*255.0f+0.5f), gi=(int)(g*255.0f+0.5f), bi=(int)(b*255.0f+0.5f), ai=(int)(a*255.0f+0.5f);
-    if(ri<0)ri=0; if(ri>255)ri=255; if(gi<0)gi=0; if(gi>255)gi=255; if(bi<0)bi=0; if(bi>255)bi=255; if(ai<0)ai=0; if(ai>255)ai=255;
+    if (ri < 0) ri = 0;
+    if (ri > 255) ri = 255;
+    if (gi < 0) gi = 0;
+    if (gi > 255) gi = 255;
+    if (bi < 0) bi = 0;
+    if (bi > 255) bi = 255;
+    if (ai < 0) ai = 0;
+    if (ai > 255) ai = 255;
     return (uint32_t)(ri | (gi<<8) | (bi<<16) | (ai<<24));
 }
 static void wii_emit_color(uint32_t c) { GX_Color4u8((u8)(c & 255), (u8)((c >> 8) & 255), (u8)((c >> 16) & 255), (u8)((c >> 24) & 255)); }
@@ -137,7 +151,7 @@ static GLenum wii_draw_mode_for(GLenum mode, int count, int *out_count) {
     if (mode == GL_TRIANGLE_STRIP) return GX_TRIANGLESTRIP;
     if (mode == GL_TRIANGLE_FAN) return GX_TRIANGLEFAN;
     if (mode == GL_LINES) return GX_LINES;
-    if (mode == GL_LINE_STRIP) return GX_LINESTRIP;
+    if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP) return GX_LINESTRIP;
     if (mode == GL_POINTS) return GX_POINTS;
     if (mode == GL_QUADS) return GX_QUADS;
     return GX_TRIANGLES;
@@ -314,12 +328,66 @@ static void *wii_convert_rgba8_texture(const unsigned char *src, int w, int h, i
 static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){ (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type; if(!pixels||!g_wii_bound_tex||g_wii_bound_tex>=PEX_WII_MAX_TEXTURES)return; WiiTexture *t=&g_wii_textures[g_wii_bound_tex]; if(t->pixels)free(t->pixels); int tw=0,th=0; t->pixels=wii_convert_rgba8_texture((const unsigned char*)pixels,w,h,&tw,&th); if(!t->pixels){memset(t,0,sizeof(*t));return;} t->used=1;t->w=w;t->h=h;t->tw=tw;t->th=th; GX_InitTexObj(&t->obj,t->pixels,(u16)tw,(u16)th,GX_TF_RGBA8,t->repeat_s?GX_REPEAT:GX_CLAMP,t->repeat_t?GX_REPEAT:GX_CLAMP,GX_FALSE); GX_InitTexObjFilterMode(&t->obj,GX_NEAR,GX_NEAR); g_wii_stats.texture_uploads++; }
 static void glDeleteTextures(GLsizei n, const GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=tex[i]; if(id<PEX_WII_MAX_TEXTURES){ free(g_wii_textures[id].pixels); memset(&g_wii_textures[id],0,sizeof(g_wii_textures[id])); } } }
 static void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h){ (void)target;(void)level;(void)xoff;(void)yoff;(void)x;(void)y;(void)w;(void)h; }
-static void glEnableClientState(GLenum cap){ (void)cap; }
-static void glDisableClientState(GLenum cap){ (void)cap; }
-static void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ (void)size; (void)type; (void)stride; (void)ptr; }
-static void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ (void)size; (void)type; (void)stride; (void)ptr; }
-static void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ (void)size; (void)type; (void)stride; (void)ptr; }
-static void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices){ (void)mode; (void)count; (void)type; (void)indices; }
+static void glEnableClientState(GLenum cap){ if(cap==GL_VERTEX_ARRAY)g_wii_vertex_array_enabled=1; else if(cap==GL_TEXTURE_COORD_ARRAY)g_wii_texcoord_array_enabled=1; else if(cap==GL_COLOR_ARRAY)g_wii_color_array_enabled=1; }
+static void glDisableClientState(GLenum cap){ if(cap==GL_VERTEX_ARRAY)g_wii_vertex_array_enabled=0; else if(cap==GL_TEXTURE_COORD_ARRAY)g_wii_texcoord_array_enabled=0; else if(cap==GL_COLOR_ARRAY)g_wii_color_array_enabled=0; }
+static void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ g_wii_vertex_size=size; g_wii_vertex_type=type; g_wii_vertex_stride=stride; g_wii_vertex_ptr=ptr; }
+static void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ g_wii_texcoord_size=size; g_wii_texcoord_type=type; g_wii_texcoord_stride=stride; g_wii_texcoord_ptr=ptr; }
+static void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ g_wii_color_size=size; g_wii_color_type=type; g_wii_color_stride=stride; g_wii_color_ptr=ptr; }
+
+static unsigned int wii_read_index(const GLvoid *indices, GLenum type, int i) {
+    if (!indices) return 0;
+    if (type == GL_UNSIGNED_INT) return ((const uint32_t*)indices)[i];
+    if (type == GL_UNSIGNED_SHORT) return ((const uint16_t*)indices)[i];
+    if (type == GL_UNSIGNED_BYTE) return ((const uint8_t*)indices)[i];
+    return 0;
+}
+
+static int wii_arrays_are_pexvertex_interleaved(const unsigned char **base_out) {
+    if (!g_wii_vertex_array_enabled || !g_wii_texcoord_array_enabled || !g_wii_color_array_enabled) return 0;
+    if (!g_wii_vertex_ptr || !g_wii_texcoord_ptr || !g_wii_color_ptr) return 0;
+    if (g_wii_vertex_size != 3 || g_wii_vertex_type != GL_FLOAT) return 0;
+    if (g_wii_texcoord_size != 2 || g_wii_texcoord_type != GL_FLOAT) return 0;
+    if (g_wii_color_size != 4 || g_wii_color_type != GL_UNSIGNED_BYTE) return 0;
+    GLsizei vs = g_wii_vertex_stride ? g_wii_vertex_stride : (GLsizei)(3 * sizeof(GLfloat));
+    GLsizei ts = g_wii_texcoord_stride ? g_wii_texcoord_stride : (GLsizei)(2 * sizeof(GLfloat));
+    GLsizei cs = g_wii_color_stride ? g_wii_color_stride : (GLsizei)(4 * sizeof(GLubyte));
+    if (vs != (GLsizei)sizeof(PexVertex) || ts != (GLsizei)sizeof(PexVertex) || cs != (GLsizei)sizeof(PexVertex)) return 0;
+    const unsigned char *base = ((const unsigned char*)g_wii_vertex_ptr) - offsetof(PexVertex, x);
+    if ((const unsigned char*)g_wii_texcoord_ptr != base + offsetof(PexVertex, u)) return 0;
+    if ((const unsigned char*)g_wii_color_ptr != base + offsetof(PexVertex, color)) return 0;
+    if (base_out) *base_out = base;
+    return 1;
+}
+
+static void wii_emit_pex_vertex(const PexVertex *v) {
+    GX_Position3f32(v->x, v->y, v->z);
+    wii_emit_color(v->color);
+    GX_TexCoord2f32(v->u, v->v);
+}
+
+static void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices){
+    if (count <= 0 || !indices) return;
+    const unsigned char *base = NULL;
+    if (!wii_arrays_are_pexvertex_interleaved(&base)) return;
+    int draw_count = count;
+    GLenum gxmode = wii_draw_mode_for(mode, count, &draw_count);
+    if (mode == GL_QUADS) draw_count = (count / 4) * 4;
+    if (mode == GL_TRIANGLES) draw_count = (count / 3) * 3;
+    if (draw_count <= 0) return;
+    if (draw_count > 65535) draw_count = 65535;
+    wii_apply_state();
+    wii_load_gx_matrices();
+    GX_Begin((u8)gxmode, GX_VTXFMT0, (u16)draw_count);
+    for (int i = 0; i < draw_count; ++i) {
+        unsigned int vi = wii_read_index(indices, type, i);
+        const PexVertex *v = (const PexVertex*)(const void*)(base + ((size_t)vi * sizeof(PexVertex)));
+        wii_emit_pex_vertex(v);
+    }
+    GX_End();
+    g_wii_stats.draw_calls++;
+    if (mode == GL_QUADS) g_wii_stats.triangles += (uint32_t)((draw_count / 4) * 2);
+    else if (mode == GL_TRIANGLES) g_wii_stats.triangles += (uint32_t)(draw_count / 3);
+}
 static const GLubyte *glGetString(GLenum name){ if(name==GL_VENDOR)return (const GLubyte*)"Nintendo/devkitPro"; if(name==GL_RENDERER)return (const GLubyte*)"Wii Hollywood GX"; if(name==GL_VERSION)return (const GLubyte*)"GX fixed-function shim"; return (const GLubyte*)""; }
 
 static PexTextureHandle wii_backend_create_texture(const PexTextureDesc *desc){ if(!desc||!desc->rgba_pixels||desc->width<=0||desc->height<=0)return 0; GLuint id=0; glGenTextures(1,&id); glBindTexture(GL_TEXTURE_2D,id); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,desc->repeat?GL_REPEAT:GL_CLAMP); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,desc->repeat?GL_REPEAT:GL_CLAMP); glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,desc->width,desc->height,0,GL_RGBA,GL_UNSIGNED_BYTE,desc->rgba_pixels); return id; }

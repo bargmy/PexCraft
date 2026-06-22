@@ -796,7 +796,7 @@ jobs:
             else
               echo "WII_BUILD_OK=0" >> "$GITHUB_ENV"
             fi
-            exit 0
+            exit "$status"
           } 2>&1 | tee logs/build-wii.log
 
       - name: Package Wii app zip

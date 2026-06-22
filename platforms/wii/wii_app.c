@@ -53,6 +53,14 @@ static void save_world_state_for_exit(void) {
     save_current_world_state_sync();
 }
 
+static volatile int g_wii_power_requested = 0;
+
+#if defined(HW_RVL)
+static void wii_power_callback(void) {
+    g_wii_power_requested = 1;
+}
+#endif
+
 static void sleep_for_max_fps(double frame_start_time) {
     double sleep_start_time = now_seconds();
     int fps = g_opts.max_fps > 0 ? g_opts.max_fps : 60;
@@ -69,8 +77,8 @@ static void sleep_for_max_fps(double frame_start_time) {
 static void main_loop(void) {
     g_last_time = now_seconds();
     double tick_accum = 0.0;
-    while (g_running) {
-        if (SYS_ResetButtonDown() || SYS_PowerButtonDown()) g_running = 0;
+    while (g_running && SYS_MainLoop()) {
+        if (SYS_ResetButtonDown() || g_wii_power_requested) g_running = 0;
         pex_profile_frame_begin();
         double prof_start = pex_profile_begin();
         pex_gamepad_update();
@@ -112,6 +120,9 @@ static void main_loop(void) {
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     init_dirs();
+#if defined(HW_RVL)
+    SYS_SetPowerCallback(wii_power_callback);
+#endif
     load_options();
     g_opts.render_distance = 4;
     g_opts.fancy_graphics = 0;

@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,6 +99,7 @@ typedef void GLvoid;
 #define GL_RGBA 0x1908
 #define GL_RGB 0x1907
 #define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_SHORT 0x1403
 #define GL_UNSIGNED_INT 0x1405
 #define GL_FLOAT 0x1406
 #define GL_COLOR_BUFFER_BIT 0x00004000

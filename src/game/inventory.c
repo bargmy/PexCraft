@@ -5733,9 +5733,13 @@ static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int orig
 }
 
 static PexRendererBackend *stream_direct_mesh_backend(void) {
+#if defined(PEX_PLATFORM_WII)
+    return wii_gx_get_backend();
+#else
     if (g_runtime_renderer_backend == RENDERER_D3D9) return renderer_d3d9_get_backend();
     if (g_runtime_renderer_backend == RENDERER_D3D11) return renderer_d3d11_get_backend();
     return NULL;
+#endif
 }
 
 static void stream_destroy_direct_mesh_handle(unsigned int h) {
