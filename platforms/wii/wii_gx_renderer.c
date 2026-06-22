@@ -195,6 +195,27 @@ static void wii_apply_state_values(GLuint tex, int tex_enabled, int blend, int d
 }
 static void wii_apply_state(void) { wii_apply_state_values(g_wii_bound_tex, g_wii_texture_enabled, g_wii_blend_enabled, g_wii_depth_enabled, g_wii_depth_write, g_wii_alpha_enabled, g_wii_cull_enabled); }
 
+static unsigned int wii_xfb_phys_offset(const void *xfb) {
+    return (unsigned int)((uintptr_t)xfb & 0x0fffffffu);
+}
+
+static int wii_xfb_looks_valid(const void *xfb) {
+    if (!xfb) return 0;
+    unsigned int off = wii_xfb_phys_offset(xfb);
+    /* XFBs must sit in valid MEM1 for Dolphin/libogc video.  MEM1 is 24MiB.
+       When Arena1 is exhausted, SYS_AllocateFramebuffer can effectively hand
+       us an address such as 0x01931000, which Dolphin reports as an unknown
+       pointer / invalid XFB texture. */
+    return off < 0x01800000u;
+}
+
+static void *wii_alloc_valid_xfb(const char *name) {
+    void *xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_rmode));
+    wii_debug_logf("GX %s allocation: ptr=%p phys=%08x valid=%d", name ? name : "xfb", xfb, wii_xfb_phys_offset(xfb), wii_xfb_looks_valid(xfb));
+    if (!wii_xfb_looks_valid(xfb)) return NULL;
+    return xfb;
+}
+
 static void wii_emit_imm_vertex(const WiiImmVertex *v) { GX_Position3f32(v->x, v->y, v->z); wii_emit_color(v->color); GX_TexCoord2f32(v->u, v->v); }
 static void wii_draw_imm_vertices(const WiiImmVertex *v, int count, GLenum mode) {
     if (!v || count <= 0) return;
@@ -236,10 +257,25 @@ static int wii_gx_init(void) {
                    (int)g_wii_rmode->fbWidth, (int)g_wii_rmode->efbHeight,
                    (int)g_wii_rmode->xfbHeight, (int)g_wii_rmode->viHeight,
                    (int)g_wii_rmode->aa, (int)g_wii_rmode->field_rendering);
-    g_wii_xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_rmode));
-    g_wii_xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_rmode));
-    if (!g_wii_xfb[0] || !g_wii_xfb[1]) { wii_debug_logf("GX init failed: XFB allocation xfb0=%p xfb1=%p", g_wii_xfb[0], g_wii_xfb[1]); return 0; }
-    wii_debug_logf("GX XFBs: %p %p", g_wii_xfb[0], g_wii_xfb[1]);
+    /* Reuse the early debug console XFB instead of allocating three framebuffers.
+       The earlier build allocated a console XFB plus two GX XFBs after the
+       game BSS; on Dolphin that pushed the second/third framebuffer past
+       MEM1 and produced invalid address 0x01931000 warnings. */
+    if (g_wii_debug_xfb && wii_xfb_looks_valid(g_wii_debug_xfb)) {
+        g_wii_xfb[0] = g_wii_debug_xfb;
+        wii_debug_logf("GX using debug XFB0: ptr=%p phys=%08x", g_wii_xfb[0], wii_xfb_phys_offset(g_wii_xfb[0]));
+    } else {
+        g_wii_xfb[0] = wii_alloc_valid_xfb("xfb0");
+    }
+    g_wii_xfb[1] = wii_alloc_valid_xfb("xfb1");
+    if (!g_wii_xfb[0]) { wii_debug_logf("GX init failed: no valid XFB0"); return 0; }
+    if (!g_wii_xfb[1]) {
+        /* Single-buffer fallback is better than handing Dolphin an invalid
+           framebuffer pointer.  It may flicker slightly but avoids crashing. */
+        g_wii_xfb[1] = g_wii_xfb[0];
+        wii_debug_logf("GX warning: using single-buffer XFB fallback");
+    }
+    wii_debug_logf("GX XFBs: %p phys=%08x / %p phys=%08x", g_wii_xfb[0], wii_xfb_phys_offset(g_wii_xfb[0]), g_wii_xfb[1], wii_xfb_phys_offset(g_wii_xfb[1]));
     VIDEO_Configure(g_wii_rmode);
     VIDEO_SetNextFramebuffer(g_wii_xfb[0]);
     VIDEO_SetBlack(FALSE);

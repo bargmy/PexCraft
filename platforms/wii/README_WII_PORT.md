@@ -131,3 +131,13 @@ Important stages now logged:
 - periodic `heartbeat` lines every 60 frames
 
 The game should continue booting even if Dolphin cannot create/open `sd.raw`; in that case saves/options are disabled for the session but textures still come from the embedded DOL bundle.
+
+## Dolphin XFB / MEM1 safety note
+
+If Dolphin shows warnings such as `Unknown Pointer 0x01931000` or `Trying to load XFB texture from invalid address`, the framebuffer has been allocated past Wii MEM1.  The Wii build therefore uses a smaller 96x128x96 active terrain window and reuses the early debug-console framebuffer for GX where possible.  The Dolphin log prints XFB pointers and physical offsets as:
+
+```text
+[PexCraft/Wii] GX XFBs: ... phys=...
+```
+
+Valid XFB physical offsets should stay below `0x01800000`.
