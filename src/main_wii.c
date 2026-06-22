@@ -18,6 +18,7 @@ static void pex_gl_suppress_immediate(int on);
 static void save_world_state_for_exit(void);
 
 #include "render/renderer_backend.h"
+#include "../platforms/wii/wii_debug.c"
 
 typedef struct PexMat4 { float m[16]; } PexMat4;
 typedef struct PexD3DBackendStub { int active; float color[4]; int fog_enabled; float fog_start, fog_end; unsigned int fog_color; PexMat4 modelview; PexMat4 projection; } PexD3DBackendStub;

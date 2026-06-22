@@ -1,5 +1,7 @@
 /* Nintendo Wii filesystem/timing layer. Included only by src/main_wii.c. */
 
+static int g_wii_fat_ready = 0;
+
 static double now_seconds(void) {
     return (double)ticks_to_millisecs(gettime()) / 1000.0;
 }
@@ -45,11 +47,12 @@ static double pex_profile_pct(double ms) {
 }
 
 static void log_msg(const char *fmt, ...) {
+    char msg[512];
     va_list ap;
     va_start(ap, fmt);
-    vprintf(fmt, ap);
-    printf("\n");
+    vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    wii_debug_logf("%s", msg);
 }
 
 static void path_join(char *out, size_t cap, const char *a, const char *b) {
@@ -62,17 +65,24 @@ static int dir_exists(const char *path) {
 }
 
 static void ensure_dir(const char *path) {
-    if (!dir_exists(path)) CreateDirectoryA(path, NULL);
+    if (!g_wii_fat_ready) return;
+    if (!dir_exists(path)) {
+        BOOL ok = CreateDirectoryA(path, NULL);
+        wii_debug_logf("ensure_dir %s -> %s", path ? path : "?", ok ? "ok" : "failed/already");
+    }
 }
 
 static void init_dirs(void) {
-    fatInitDefault();
+    wii_debug_stagef("init_dirs / fatInitDefault");
+    g_wii_fat_ready = fatInitDefault() ? 1 : 0;
+    wii_debug_logf("fatInitDefault -> %s", g_wii_fat_ready ? "ok" : "FAILED; continuing without SD saves/options");
     snprintf(g_mc_dir, sizeof(g_mc_dir), "sd:/apps/pexcraft");
-    ensure_dir("sd:/apps");
-    ensure_dir(g_mc_dir);
     path_join(g_save_dir, sizeof(g_save_dir), g_mc_dir, "saves");
     path_join(g_texpack_dir, sizeof(g_texpack_dir), g_mc_dir, "texturepacks");
     path_join(g_skin_dir, sizeof(g_skin_dir), g_mc_dir, "skins");
+    if (!g_wii_fat_ready) return;
+    ensure_dir("sd:/apps");
+    ensure_dir(g_mc_dir);
     ensure_dir(g_save_dir);
     ensure_dir(g_texpack_dir);
     ensure_dir(g_skin_dir);

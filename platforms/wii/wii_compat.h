@@ -31,6 +31,18 @@
 #include <limits.h>
 #include <malloc.h>
 
+
+#if defined(PEX_PLATFORM_WII)
+/* Dolphin/libogc debug logging hooks.  Implemented in platforms/wii/wii_debug.c
+   and included by src/main_wii.c before the platform/game sources. */
+static void wii_debug_init_console(void);
+static void wii_debug_logf(const char *fmt, ...);
+static void wii_debug_wait_frames(int frames);
+#ifndef PEX_PSP_LOGF
+#define PEX_PSP_LOGF(...) wii_debug_logf(__VA_ARGS__)
+#endif
+#endif
+
 /* The shared code is still OpenGL-shaped.  The Wii build provides the GL
    symbols itself and translates them to GX in wii_gx_renderer.c. */
 typedef unsigned int GLenum;

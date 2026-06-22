@@ -100,3 +100,34 @@ sd:/apps/pexcraft/skins/       optional/custom only
 The Wii build links the generated client.jar/MCRW texture pak into the normal DOL read-only data area. Do not force this blob to a high address such as `0x90010000`: that introduces a 256MB address hole and can produce a massive DOL in Dolphin/elf2dol. The runtime texture bundle is still inside `boot.dol`; it is not loaded from SD.
 
 The GX renderer also splits indexed terrain draws into chunks of at most 65,535 vertices, because `GX_Begin()` takes a 16-bit vertex count.  Writing more vertices than the count passed to GX corrupts the FIFO and can show up in Dolphin as invalid MEM1/MEM2 pointer warnings.
+
+## DOL size sanity check
+
+Do not trust the `.zip` size. A broken DOL can compress to under 1 MB while
+still being hundreds of MB when extracted, because address holes/zero padding
+compress extremely well. The Wii Makefile and GitHub Actions workflow now check
+the **uncompressed** `boot.dol` and fail if it exceeds 16 MB.
+
+A normal embedded-texture Wii build should be a few MB, not hundreds of MB.
+
+## Dolphin diagnostics
+
+The Wii build prints boot stages through `OSReport()` and also brings up an early libogc text console before GX starts. In Dolphin, enable OSReport logging or check the log window for lines beginning with:
+
+```text
+[PexCraft/Wii]
+```
+
+Important stages now logged:
+
+- `main entered`
+- `init_dirs / fatInitDefault`
+- `fatInitDefault -> ok` or `FAILED; continuing without SD saves/options`
+- `renderer init / GX`
+- GX video mode, XFB and FIFO allocation
+- embedded texture pack lookups and uploads
+- `set title screen`
+- `present #1/#2/#3`
+- periodic `heartbeat` lines every 60 frames
+
+The game should continue booting even if Dolphin cannot create/open `sd.raw`; in that case saves/options are disabled for the session but textures still come from the embedded DOL bundle.

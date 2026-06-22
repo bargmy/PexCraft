@@ -2,17 +2,29 @@
 
 static int init_gl(HWND unused) {
     (void)unused;
-    if (!wii_gx_init()) return 0;
+    wii_debug_stagef("renderer init / GX");
+    if (!wii_gx_init()) { wii_debug_logf("wii_gx_init FAILED"); return 0; }
+    wii_debug_memoryf("after wii_gx_init");
+    wii_debug_stagef("input init");
     wii_input_init();
     glClearColor(0,0,0,1);
     glDisable(GL_DITHER);
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    wii_debug_stagef("scan texture packs");
     scan_texture_packs();
-    if (!load_default_textures()) return 0;
-    if (g_selected_texpack > 0) apply_texture_pack_index(g_selected_texpack);
-    else { if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0); init_font_widths(); }
+    wii_debug_stagef("load default textures");
+    if (!load_default_textures()) { wii_debug_logf("load_default_textures FAILED"); return 0; }
+    wii_debug_memoryf("after texture load");
+    if (g_selected_texpack > 0) {
+        wii_debug_logf("applying selected texture pack index=%d", g_selected_texpack);
+        apply_texture_pack_index(g_selected_texpack);
+    } else {
+        if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0);
+        init_font_widths();
+    }
+    wii_debug_stagef("renderer init done");
     return 1;
 }
 
@@ -50,6 +62,7 @@ static void pex_join_save_thread_for_exit(void) {
 
 static void save_world_state_for_exit(void) {
     pex_join_save_thread_for_exit();
+    if (!g_wii_fat_ready) { wii_debug_logf("save skipped: SD/FAT unavailable"); return; }
     save_current_world_state_sync();
 }
 
@@ -81,8 +94,10 @@ static void sleep_for_max_fps(double frame_start_time) {
 }
 
 static void main_loop(void) {
+    wii_debug_stagef("enter main loop");
     g_last_time = now_seconds();
     double tick_accum = 0.0;
+    unsigned int wii_frame_counter = 0;
     while (g_running && SYS_MainLoop()) {
         if (SYS_ResetButtonDown() || g_wii_power_requested) g_running = 0;
         pex_profile_frame_begin();
@@ -118,18 +133,29 @@ static void main_loop(void) {
         }
         if (ticks_this_frame >= 2 && tick_accum > 1.0) tick_accum = 1.0;
         render((float)tick_accum);
+        if ((++wii_frame_counter % 60u) == 0u) {
+            wii_debug_logf("heartbeat frame=%u screen=%d tex=%u gui=%ux%u tris=%u draws=%u",
+                           wii_frame_counter, g_screen, (unsigned)tex_terrain.id,
+                           (unsigned)g_gui_w, (unsigned)g_gui_h,
+                           (unsigned)g_wii_stats.triangles, (unsigned)g_wii_stats.draw_calls);
+        }
         sleep_for_max_fps(frame_start_time);
         pex_profile_frame_end();
     }
+    wii_debug_logf("main loop exit running=%d sys=%d", g_running, SYS_MainLoop());
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    wii_debug_init_console();
+    wii_debug_stagef("main entered");
+    wii_debug_memoryf("main entry");
     wii_reserve_embedded_asset_mem2();
     init_dirs();
 #if defined(HW_RVL)
     SYS_SetPowerCallback(wii_power_callback);
 #endif
+    wii_debug_stagef("load options");
     load_options();
     g_opts.render_distance = 4;
     g_opts.fancy_graphics = 0;
@@ -137,6 +163,7 @@ int main(int argc, char **argv) {
     g_opts.anaglyph = 0;
     g_opts.show_fps = 1;
     g_opts.ignore_classic_resources_warning = 1;
+    wii_debug_stagef("embedded classic pack setup");
     wii_install_embedded_classic_pack_if_needed();
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_runtime_renderer_backend = RENDERER_OPENGL;
@@ -146,15 +173,19 @@ int main(int argc, char **argv) {
     g_win_w = 640; g_win_h = 480; g_render_w = 640; g_render_h = 480; g_gui_w = 640; g_gui_h = 480; g_gui_scale = 1;
     setup_scale();
     InitializeCriticalSection(&g_save_cs);
+    wii_debug_stagef("pex_renderer_backend_init");
     if (!pex_renderer_backend_init(g_hwnd)) {
-        printf("PEXCRAFT Wii: failed to initialize GX or assets.\n");
+        wii_debug_logf("FATAL: failed to initialize GX or assets; last_stage=%s", g_wii_debug_last_stage);
+        wii_debug_wait_frames(240);
         return 1;
     }
     if (g_wii_render_w > 0 && g_wii_render_h > 0) {
         g_win_w = g_wii_render_w; g_win_h = g_wii_render_h; g_render_w = g_wii_render_w; g_render_h = g_wii_render_h;
         g_gui_w = g_wii_render_w; g_gui_h = g_wii_render_h; setup_scale();
     }
+    wii_debug_stagef("set title screen");
     set_screen(SCREEN_TITLE);
+    wii_debug_stagef("starting frames");
     main_loop();
     set_mouse_grabbed(0);
     save_world_state_for_exit();

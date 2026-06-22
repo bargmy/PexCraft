@@ -807,8 +807,8 @@ jobs:
               echo "boot.dol size: ${dol_size} bytes"
               # A normal embedded-texture Wii DOL should be single-digit MB.
               # Anything near hundreds of MB means a bad linker section address/hole.
-              if [ "$dol_size" -gt 33554432 ]; then
-                echo "ERROR: boot.dol is too large (${dol_size} bytes). Refusing artifact."
+              if [ "$dol_size" -gt 16777216 ]; then
+                echo "ERROR: boot.dol is too large (${dol_size} bytes). Refusing artifact. Check uncompressed size, not zip size."
                 status=1
               fi
             fi
@@ -834,6 +834,12 @@ jobs:
           mkdir -p "$app_dir"
 
           cp -f build/wii/boot.dol "$app_dir/boot.dol"
+          dol_size=$(wc -c < "$app_dir/boot.dol")
+          printf "boot.dol uncompressed size: %s bytes\n" "$dol_size" > "$app_dir/DOL_SIZE.txt"
+          if [ "$dol_size" -gt 16777216 ]; then
+            echo "ERROR: packaged boot.dol is too large (${dol_size} bytes). Refusing zip." >&2
+            exit 1
+          fi
           # Wii textures are embedded in boot.dol from client.jar-derived MCRW assets.
           # Do not ship a required external assets/ texture folder for Wii.
           cp -R platforms/wii "$app_dir/wii-port-source" || true
@@ -862,6 +868,13 @@ jobs:
 
           zip_path="dist/$artifact_prefix.zip"
           (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "Wii zip listing with uncompressed sizes:"
+          unzip -lv "$zip_path"
+          zip_dol_size=$(unzip -l "$zip_path" "apps/pexcraft/boot.dol" | awk '/boot[.]dol$/ {print $1}')
+          if [ -z "$zip_dol_size" ] || [ "$zip_dol_size" -gt 16777216 ]; then
+            echo "ERROR: boot.dol inside zip is too large (${zip_dol_size:-missing} bytes)." >&2
+            exit 1
+          fi
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
       - name: Upload Wii artifact

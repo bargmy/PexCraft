@@ -43,6 +43,8 @@ WII_ASSET_ASM := $(GEN)/wii_mcrw_assets.S
 WII_ASSET_OBJ := $(BUILD)/wii_mcrw_assets.o
 ELF := $(BUILD)/$(TARGET).elf
 DOL := $(BUILD)/boot.dol
+MAX_DOL_BYTES ?= 16777216
+MAX_ASSET_PAK_BYTES ?= 6291456
 
 .PHONY: all clean install-sd assets
 all: $(DOL)
@@ -53,6 +55,7 @@ $(BUILD) $(GEN):
 
 $(WII_ASSET_PAK): $(ROOT)/tools/prepare_wii_assets.py | $(GEN)
 	$(PYTHON) $(ROOT)/tools/prepare_wii_assets.py $(GEN)/assets $(WII_ASSET_PAK) $(WII_ASSET_ASM)
+	@bytes=$$(wc -c < $(WII_ASSET_PAK)); echo "Wii embedded texture pak size: $$bytes bytes"; if [ $$bytes -gt $(MAX_ASSET_PAK_BYTES) ]; then echo "ERROR: Wii embedded texture pak too large ($$bytes bytes)" >&2; exit 1; fi
 
 $(WII_ASSET_ASM): $(WII_ASSET_PAK)
 	@test -f $@ || $(PYTHON) $(ROOT)/tools/prepare_wii_assets.py $(GEN)/assets $(WII_ASSET_PAK) $(WII_ASSET_ASM)
@@ -68,6 +71,7 @@ $(ELF): $(MAIN_OBJ) $(WII_ASSET_OBJ) | $(BUILD)
 
 $(DOL): $(ELF)
 	$(ELF2DOL) $< $@
+	@bytes=$$(wc -c < $@); echo "Wii boot.dol size: $$bytes bytes"; if [ $$bytes -gt $(MAX_DOL_BYTES) ]; then echo "ERROR: Wii boot.dol too large ($$bytes bytes). This usually means a linker/DOL section gap or accidental data embed." >&2; exit 1; fi
 
 install-sd: $(DOL)
 	@echo "Copy $(DOL) to sd:/apps/pexcraft/boot.dol. Textures are embedded in the DOL."

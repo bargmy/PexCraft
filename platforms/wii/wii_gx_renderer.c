@@ -228,12 +228,18 @@ static WiiBatch *wii_batch_create(const WiiImmVertex *src, int count, GLenum mod
 static void wii_draw_batch(WiiBatch *b) { if (!b) return; wii_apply_state_values(b->tex, b->texture_enabled, b->blend_enabled, b->depth_enabled, b->depth_write, b->alpha_enabled, b->cull_enabled); wii_draw_imm_vertices(b->v, b->count, b->mode); }
 
 static int wii_gx_init(void) {
+    wii_debug_logf("GX init: VIDEO_Init");
     VIDEO_Init();
     g_wii_rmode = VIDEO_GetPreferredMode(NULL);
-    if (!g_wii_rmode) return 0;
+    if (!g_wii_rmode) { wii_debug_logf("GX init failed: VIDEO_GetPreferredMode returned NULL"); return 0; }
+    wii_debug_logf("GX mode: fb=%d efb=%d xfb=%d vi=%d aa=%d field=%d",
+                   (int)g_wii_rmode->fbWidth, (int)g_wii_rmode->efbHeight,
+                   (int)g_wii_rmode->xfbHeight, (int)g_wii_rmode->viHeight,
+                   (int)g_wii_rmode->aa, (int)g_wii_rmode->field_rendering);
     g_wii_xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_rmode));
     g_wii_xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_rmode));
-    if (!g_wii_xfb[0] || !g_wii_xfb[1]) return 0;
+    if (!g_wii_xfb[0] || !g_wii_xfb[1]) { wii_debug_logf("GX init failed: XFB allocation xfb0=%p xfb1=%p", g_wii_xfb[0], g_wii_xfb[1]); return 0; }
+    wii_debug_logf("GX XFBs: %p %p", g_wii_xfb[0], g_wii_xfb[1]);
     VIDEO_Configure(g_wii_rmode);
     VIDEO_SetNextFramebuffer(g_wii_xfb[0]);
     VIDEO_SetBlack(FALSE);
@@ -242,8 +248,9 @@ static int wii_gx_init(void) {
     if (g_wii_rmode->viTVMode & VI_NON_INTERLACE) VIDEO_WaitVSync();
 
     g_wii_fifo = memalign(32, PEX_WII_FIFO_SIZE);
-    if (!g_wii_fifo) return 0;
+    if (!g_wii_fifo) { wii_debug_logf("GX init failed: FIFO allocation %u bytes", (unsigned)PEX_WII_FIFO_SIZE); return 0; }
     memset(g_wii_fifo, 0, PEX_WII_FIFO_SIZE);
+    wii_debug_logf("GX FIFO: %p size=%u", g_wii_fifo, (unsigned)PEX_WII_FIFO_SIZE);
     GX_Init(g_wii_fifo, PEX_WII_FIFO_SIZE);
     g_wii_screen_w = (int)g_wii_rmode->fbWidth;
     g_wii_screen_h = (int)g_wii_rmode->efbHeight;
@@ -269,6 +276,7 @@ static int wii_gx_init(void) {
     GX_SetNumTevStages(1);
     GX_InvalidateTexAll();
     wii_mat_identity(g_wii_modelview); wii_mat_identity(g_wii_projection);
+    wii_debug_logf("GX init OK render=%dx%d", g_wii_render_w, g_wii_render_h);
     return 1;
 }
 static void wii_gx_shutdown(void) { for (int i=1;i<PEX_WII_MAX_TEXTURES;i++) if(g_wii_textures[i].used){ free(g_wii_textures[i].pixels); memset(&g_wii_textures[i],0,sizeof(g_wii_textures[i])); } for (int i=1;i<PEX_WII_MAX_MESHES;i++){ free(g_wii_meshes[i].vertices); free(g_wii_meshes[i].indices); } for (int i=1;i<PEX_WII_LIST_COUNT;i++) wii_list_free((GLuint)i); free(g_wii_fifo); g_wii_fifo = NULL; }
@@ -280,6 +288,7 @@ static void wii_gx_begin_frame(void) {
     GX_SetScissor(0, 0, (u32)g_wii_render_w, (u32)g_wii_render_h);
 }
 static void wii_gx_end_frame(void) {
+    static int s_present_count = 0;
     GX_DrawDone();
     g_wii_fb ^= 1;
     GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
@@ -288,6 +297,7 @@ static void wii_gx_end_frame(void) {
     VIDEO_SetNextFramebuffer(g_wii_xfb[g_wii_fb]);
     VIDEO_Flush();
     VIDEO_WaitVSync();
+    if (++s_present_count <= 3) wii_debug_logf("present #%d fb=%d draws=%u tris=%u", s_present_count, g_wii_fb, (unsigned)g_wii_stats.draw_calls, (unsigned)g_wii_stats.triangles);
 }
 
 static void glClearColor(float r,float g,float b,float a){ g_wii_clear_r=r; g_wii_clear_g=g; g_wii_clear_b=b; g_wii_clear_a=a; }
@@ -341,7 +351,27 @@ static void *wii_convert_rgba8_texture(const unsigned char *src, int w, int h, i
     }
     DCFlushRange(dst, (u32)bytes); if(out_tw)*out_tw=tw; if(out_th)*out_th=th; return dst;
 }
-static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){ (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type; if(!pixels||!g_wii_bound_tex||g_wii_bound_tex>=PEX_WII_MAX_TEXTURES)return; WiiTexture *t=&g_wii_textures[g_wii_bound_tex]; if(t->pixels)free(t->pixels); int tw=0,th=0; t->pixels=wii_convert_rgba8_texture((const unsigned char*)pixels,w,h,&tw,&th); if(!t->pixels){memset(t,0,sizeof(*t));return;} t->used=1;t->w=w;t->h=h;t->tw=tw;t->th=th; GX_InitTexObj(&t->obj,t->pixels,(u16)tw,(u16)th,GX_TF_RGBA8,t->repeat_s?GX_REPEAT:GX_CLAMP,t->repeat_t?GX_REPEAT:GX_CLAMP,GX_FALSE); GX_InitTexObjFilterMode(&t->obj,GX_NEAR,GX_NEAR); g_wii_stats.texture_uploads++; }
+static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum fmt, GLenum type, const void *pixels){
+    (void)target;(void)level;(void)internal;(void)border;(void)fmt;(void)type;
+    if(!pixels||!g_wii_bound_tex||g_wii_bound_tex>=PEX_WII_MAX_TEXTURES){
+        wii_debug_logf("glTexImage2D skipped pixels=%p tex=%u size=%dx%d", pixels, (unsigned)g_wii_bound_tex, (int)w, (int)h);
+        return;
+    }
+    if(w<=0||h<=0||w>4096||h>4096){
+        wii_debug_logf("glTexImage2D bad size tex=%u size=%dx%d", (unsigned)g_wii_bound_tex, (int)w, (int)h);
+        return;
+    }
+    WiiTexture *t=&g_wii_textures[g_wii_bound_tex];
+    if(t->pixels)free(t->pixels);
+    int tw=0,th=0;
+    t->pixels=wii_convert_rgba8_texture((const unsigned char*)pixels,w,h,&tw,&th);
+    if(!t->pixels){ wii_debug_logf("glTexImage2D convert FAILED tex=%u size=%dx%d", (unsigned)g_wii_bound_tex, (int)w, (int)h); memset(t,0,sizeof(*t));return;}
+    t->used=1;t->w=w;t->h=h;t->tw=tw;t->th=th;
+    GX_InitTexObj(&t->obj,t->pixels,(u16)tw,(u16)th,GX_TF_RGBA8,t->repeat_s?GX_REPEAT:GX_CLAMP,t->repeat_t?GX_REPEAT:GX_CLAMP,GX_FALSE);
+    GX_InitTexObjFilterMode(&t->obj,GX_NEAR,GX_NEAR);
+    g_wii_stats.texture_uploads++;
+    if(g_wii_stats.texture_uploads<=24) wii_debug_logf("texture upload #%u tex=%u src=%dx%d gx=%dx%d ptr=%p", (unsigned)g_wii_stats.texture_uploads, (unsigned)g_wii_bound_tex, (int)w, (int)h, tw, th, t->pixels);
+}
 static void glDeleteTextures(GLsizei n, const GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=tex[i]; if(id<PEX_WII_MAX_TEXTURES){ free(g_wii_textures[id].pixels); memset(&g_wii_textures[id],0,sizeof(g_wii_textures[id])); } } }
 static void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h){ (void)target;(void)level;(void)xoff;(void)yoff;(void)x;(void)y;(void)w;(void)h; }
 static void glEnableClientState(GLenum cap){ if(cap==GL_VERTEX_ARRAY)g_wii_vertex_array_enabled=1; else if(cap==GL_TEXTURE_COORD_ARRAY)g_wii_texcoord_array_enabled=1; else if(cap==GL_COLOR_ARRAY)g_wii_color_array_enabled=1; }
