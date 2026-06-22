@@ -10,4 +10,4 @@ a rewritten version of Minecraft b1.0 in "C", still in pure prototype
 - OpenGL = Working.
 - SDL2-OpenGL = Working.
 # Android TV
-See `android_tv/README.md` for the APK build, signing, TV remote mapping, and Google TV channel integration.
+See `android_tv/README.md` for the APK build, signing, TV remote mapping, and Google TV channel integration
