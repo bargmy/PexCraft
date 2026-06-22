@@ -36,14 +36,20 @@ jobs:
         include:
           - arch: x86
             msystem: MINGW32
+            msys_path: mingw32
             gcc_package: mingw-w64-i686-gcc
             zlib_package: mingw-w64-i686-zlib
+            ogg_package: mingw-w64-i686-libogg
+            vorbis_package: mingw-w64-i686-libvorbis
             out_exe: pexcraft-win-x86.exe
             artifact_prefix: pexcraft-windows-x86
           - arch: x64
             msystem: MINGW64
+            msys_path: mingw64
             gcc_package: mingw-w64-x86_64-gcc
             zlib_package: mingw-w64-x86_64-zlib
+            ogg_package: mingw-w64-x86_64-libogg
+            vorbis_package: mingw-w64-x86_64-libvorbis
             out_exe: pexcraft-win-x64.exe
             artifact_prefix: pexcraft-windows-x64
 
@@ -74,6 +80,8 @@ jobs:
             base-devel
             ${{ matrix.gcc_package }}
             ${{ matrix.zlib_package }}
+            ${{ matrix.ogg_package }}
+            ${{ matrix.vorbis_package }}
             zip
 
       - name: Build Windows client
@@ -92,7 +100,7 @@ jobs:
             gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
               -static -static-libgcc \
               -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
-              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
+              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
 
             status=$?
             echo "$status" > build/build-status.txt
@@ -126,6 +134,14 @@ jobs:
 
           if (Test-Path 'build/imported-dlls.txt') {
             Copy-Item 'build/imported-dlls.txt' $packageDir -Force
+          }
+
+          # Copy native audio DLLs if libvorbis is dynamically linked. Static builds will not need these,
+          # but copying them when present makes the artifact safe either way.
+          $mingwBin = 'C:\msys64\${{ matrix.msys_path }}\bin'
+          foreach ($dll in @('libogg-0.dll', 'libvorbis-0.dll', 'libvorbisfile-3.dll')) {
+            $dllPath = Join-Path $mingwBin $dll
+            if (Test-Path $dllPath) { Copy-Item $dllPath $packageDir -Force }
           }
 
           if (Test-Path 'logs') {

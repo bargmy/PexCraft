@@ -259,50 +259,57 @@ static void pex_sound_shutdown(void) {
     g_mix_ready = 0;
 }
 #elif defined(_WIN32)
-#ifndef COBJMACROS
-#define COBJMACROS 1
-#endif
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
+/* Windows uses libvorbisfile directly.  Do not use MCI or Media Foundation for
+   .ogg: they are codec-dependent on many Windows installs and silently fail.
+   The CI workflow installs mingw-w64 libogg/libvorbis and packages/link them. */
+#include <vorbis/vorbisfile.h>
 #include <mmreg.h>
 
-typedef struct PexMfPlayJob { char path[MAX_PATHBUF]; float volume; } PexMfPlayJob;
-
-typedef struct PexPcmBuffer {
+typedef struct PexWinDecodedSound {
+    char path[MAX_PATHBUF];
     BYTE *data;
     DWORD bytes;
-    DWORD cap;
     WAVEFORMATEX fmt;
-} PexPcmBuffer;
+} PexWinDecodedSound;
 
-static int pex_pcm_append(PexPcmBuffer *pcm, const BYTE *data, DWORD bytes) {
+#define PEX_WIN_SOUND_CACHE_MAX 160
+static PexWinDecodedSound g_win_sound_cache[PEX_WIN_SOUND_CACHE_MAX];
+static int g_win_sound_cache_count = 0;
+
+typedef struct PexWinPlayJob {
+    BYTE *data;
+    DWORD bytes;
+    WAVEFORMATEX fmt;
+    float volume;
+} PexWinPlayJob;
+
+static int pex_win_pcm_append(BYTE **data, DWORD *bytes, DWORD *cap, const char *src, long src_bytes) {
     DWORD need;
     BYTE *next;
-    if (!pcm || !data || bytes == 0) return 1;
-    if (pcm->bytes > 0x7fffffffU - bytes) return 0;
-    need = pcm->bytes + bytes;
-    if (need > pcm->cap) {
-        DWORD new_cap = pcm->cap ? pcm->cap * 2U : 65536U;
+    if (!data || !bytes || !cap || !src || src_bytes <= 0) return 1;
+    if (*bytes > 0x7fffffffU - (DWORD)src_bytes) return 0;
+    need = *bytes + (DWORD)src_bytes;
+    if (need > *cap) {
+        DWORD new_cap = *cap ? (*cap * 2U) : 65536U;
         while (new_cap < need) {
             if (new_cap > 0x40000000U) { new_cap = need; break; }
             new_cap *= 2U;
         }
-        next = (BYTE *)realloc(pcm->data, new_cap);
+        next = (BYTE *)realloc(*data, new_cap);
         if (!next) return 0;
-        pcm->data = next;
-        pcm->cap = new_cap;
+        *data = next;
+        *cap = new_cap;
     }
-    memcpy(pcm->data + pcm->bytes, data, bytes);
-    pcm->bytes = need;
+    memcpy(*data + *bytes, src, (size_t)src_bytes);
+    *bytes = need;
     return 1;
 }
 
-static void pex_pcm_apply_volume_16(PexPcmBuffer *pcm, float volume) {
-    if (!pcm || !pcm->data || pcm->fmt.wBitsPerSample != 16) return;
+static void pex_win_pcm_apply_volume_16(BYTE *data, DWORD bytes, float volume) {
+    if (!data || bytes == 0) return;
     if (volume > 0.999f && volume < 1.001f) return;
-    short *s = (short *)pcm->data;
-    DWORD count = pcm->bytes / 2U;
+    short *s = (short *)data;
+    DWORD count = bytes / 2U;
     for (DWORD i = 0; i < count; ++i) {
         int v = (int)((float)s[i] * volume);
         if (v < -32768) v = -32768;
@@ -311,81 +318,48 @@ static void pex_pcm_apply_volume_16(PexPcmBuffer *pcm, float volume) {
     }
 }
 
-static int pex_wide_from_utf8_or_ansi(const char *path, WCHAR *out, int cap) {
-    int n;
-    if (!path || !out || cap <= 0) return 0;
-    n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, out, cap);
-    if (n <= 0) n = MultiByteToWideChar(CP_ACP, 0, path, -1, out, cap);
-    return n > 0;
-}
-
-static int pex_mf_decode_file_to_pcm(const char *path, PexPcmBuffer *out) {
-    HRESULT hr;
-    WCHAR wpath[MAX_PATHBUF];
-    IMFSourceReader *reader = NULL;
-    IMFMediaType *type = NULL;
+static int pex_win_decode_ogg_to_pcm(const char *path, PexWinDecodedSound *out) {
+    OggVorbis_File vf;
+    vorbis_info *vi;
+    char tmp[32768];
+    int section = 0;
+    DWORD cap = 0;
     int ok = 0;
-    int coinit_ok = 0;
+
+    if (!path || !*path || !out) return 0;
     memset(out, 0, sizeof(*out));
+
+    if (ov_fopen((char *)path, &vf) != 0) {
+        log_msg("Sound backend: libvorbis could not open OGG: %s", path);
+        return 0;
+    }
+
+    vi = ov_info(&vf, -1);
+    if (!vi || vi->channels <= 0 || vi->rate <= 0) {
+        log_msg("Sound backend: invalid Vorbis stream: %s", path);
+        goto done;
+    }
+
     out->fmt.wFormatTag = WAVE_FORMAT_PCM;
-    out->fmt.nChannels = 2;
-    out->fmt.nSamplesPerSec = 44100;
+    out->fmt.nChannels = (WORD)vi->channels;
+    out->fmt.nSamplesPerSec = (DWORD)vi->rate;
     out->fmt.wBitsPerSample = 16;
     out->fmt.nBlockAlign = (WORD)(out->fmt.nChannels * out->fmt.wBitsPerSample / 8);
     out->fmt.nAvgBytesPerSec = out->fmt.nSamplesPerSec * out->fmt.nBlockAlign;
-
-    if (!pex_wide_from_utf8_or_ansi(path, wpath, (int)ARRAY_COUNT(wpath))) return 0;
-    hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    if (SUCCEEDED(hr)) coinit_ok = 1;
-    hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
-    if (FAILED(hr)) goto done;
-
-    hr = MFCreateSourceReaderFromURL(wpath, NULL, &reader);
-    if (FAILED(hr)) goto done;
-
-    IMFSourceReader_SetStreamSelection(reader, MF_SOURCE_READER_ALL_STREAMS, FALSE);
-    IMFSourceReader_SetStreamSelection(reader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
-
-    hr = MFCreateMediaType(&type);
-    if (FAILED(hr)) goto done;
-    IMFMediaType_SetGUID(type, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
-    IMFMediaType_SetGUID(type, &MF_MT_SUBTYPE, &MFAudioFormat_PCM);
-    IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, 2);
-    IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100);
-    IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-    hr = IMFSourceReader_SetCurrentMediaType(reader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, NULL, type);
-    if (FAILED(hr)) goto done;
+    out->fmt.cbSize = 0;
 
     for (;;) {
-        DWORD stream = 0, flags = 0;
-        LONGLONG ts = 0;
-        IMFSample *sample = NULL;
-        hr = IMFSourceReader_ReadSample(reader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &stream, &flags, &ts, &sample);
-        if (FAILED(hr)) { if (sample) IMFSample_Release(sample); goto done; }
-        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { if (sample) IMFSample_Release(sample); break; }
-        if (sample) {
-            IMFMediaBuffer *buf = NULL;
-            hr = IMFSample_ConvertToContiguousBuffer(sample, &buf);
-            if (SUCCEEDED(hr) && buf) {
-                BYTE *data = NULL;
-                DWORD max_len = 0, cur_len = 0;
-                hr = IMFMediaBuffer_Lock(buf, &data, &max_len, &cur_len);
-                if (SUCCEEDED(hr)) {
-                    if (!pex_pcm_append(out, data, cur_len)) { IMFMediaBuffer_Unlock(buf); IMFMediaBuffer_Release(buf); IMFSample_Release(sample); goto done; }
-                    IMFMediaBuffer_Unlock(buf);
-                }
-                IMFMediaBuffer_Release(buf);
-            }
-            IMFSample_Release(sample);
-        }
+        long got = ov_read(&vf, tmp, (int)sizeof(tmp), 0, 2, 1, &section);
+        if (got == 0) break;
+        if (got < 0) continue; /* tolerate small decode holes */
+        if (!pex_win_pcm_append(&out->data, &out->bytes, &cap, tmp, got)) goto done;
     }
-    ok = out->bytes > 0;
+
+    ok = out->data && out->bytes > 0;
+    if (ok) snprintf(out->path, sizeof(out->path), "%s", path);
 
 done:
-    if (type) IMFMediaType_Release(type);
-    if (reader) IMFSourceReader_Release(reader);
-    MFShutdown();
-    if (coinit_ok) CoUninitialize();
+    ov_clear(&vf);
     if (!ok) {
         free(out->data);
         memset(out, 0, sizeof(*out));
@@ -393,16 +367,38 @@ done:
     return ok;
 }
 
-static int pex_waveout_play_pcm(PexPcmBuffer *pcm, float volume) {
+static PexWinDecodedSound *pex_win_get_decoded_sound(const char *path) {
+    if (!path || !*path) return NULL;
+    for (int i = 0; i < g_win_sound_cache_count; ++i) {
+        if (!strcmp(g_win_sound_cache[i].path, path)) return &g_win_sound_cache[i];
+    }
+
+    int slot = g_win_sound_cache_count;
+    if (slot >= PEX_WIN_SOUND_CACHE_MAX) {
+        slot = rand() % PEX_WIN_SOUND_CACHE_MAX;
+        free(g_win_sound_cache[slot].data);
+        memset(&g_win_sound_cache[slot], 0, sizeof(g_win_sound_cache[slot]));
+    } else {
+        g_win_sound_cache_count++;
+    }
+
+    if (!pex_win_decode_ogg_to_pcm(path, &g_win_sound_cache[slot])) {
+        if (slot == g_win_sound_cache_count - 1) g_win_sound_cache_count--;
+        return NULL;
+    }
+    return &g_win_sound_cache[slot];
+}
+
+static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMATEX *fmt, float volume) {
     HWAVEOUT hwo = NULL;
     WAVEHDR hdr;
     MMRESULT mm;
-    if (!pcm || !pcm->data || pcm->bytes == 0) return 0;
-    pex_pcm_apply_volume_16(pcm, volume);
+    if (!data || bytes == 0 || !fmt) return 0;
+    pex_win_pcm_apply_volume_16(data, bytes, volume);
     memset(&hdr, 0, sizeof(hdr));
-    hdr.lpData = (LPSTR)pcm->data;
-    hdr.dwBufferLength = pcm->bytes;
-    mm = waveOutOpen(&hwo, WAVE_MAPPER, &pcm->fmt, 0, 0, CALLBACK_NULL);
+    hdr.lpData = (LPSTR)data;
+    hdr.dwBufferLength = bytes;
+    mm = waveOutOpen(&hwo, WAVE_MAPPER, fmt, 0, 0, CALLBACK_NULL);
     if (mm != MMSYSERR_NOERROR) return 0;
     if (waveOutPrepareHeader(hwo, &hdr, sizeof(hdr)) != MMSYSERR_NOERROR) { waveOutClose(hwo); return 0; }
     if (waveOutWrite(hwo, &hdr, sizeof(hdr)) != MMSYSERR_NOERROR) {
@@ -410,22 +406,19 @@ static int pex_waveout_play_pcm(PexPcmBuffer *pcm, float volume) {
         waveOutClose(hwo);
         return 0;
     }
-    while (!(hdr.dwFlags & WHDR_DONE)) Sleep(2);
+    while (!(hdr.dwFlags & WHDR_DONE)) Sleep(1);
     waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
     waveOutClose(hwo);
     return 1;
 }
 
-static DWORD WINAPI pex_mf_play_thread(LPVOID arg) {
-    PexMfPlayJob *job = (PexMfPlayJob *)arg;
-    PexPcmBuffer pcm;
+static DWORD WINAPI pex_win_play_thread(LPVOID arg) {
+    PexWinPlayJob *job = (PexWinPlayJob *)arg;
     if (!job) return 0;
-    if (pex_mf_decode_file_to_pcm(job->path, &pcm)) {
-        if (!pex_waveout_play_pcm(&pcm, job->volume)) log_msg("Sound backend: waveOut could not play decoded audio");
-        free(pcm.data);
-    } else {
-        log_msg("Sound backend: Media Foundation could not decode OGG: %s", job->path);
+    if (!pex_win_waveout_play_buffer(job->data, job->bytes, &job->fmt, job->volume)) {
+        log_msg("Sound backend: waveOut failed to play PCM sound");
     }
+    free(job->data);
     free(job);
     return 0;
 }
@@ -433,16 +426,31 @@ static DWORD WINAPI pex_mf_play_thread(LPVOID arg) {
 static int pex_sound_backend_play_file(const char *path, float volume, float pitch) {
     (void)pitch;
     if (!path || !*path) return 0;
-    PexMfPlayJob *job = (PexMfPlayJob *)calloc(1, sizeof(*job));
+    PexWinDecodedSound *cached = pex_win_get_decoded_sound(path);
+    if (!cached || !cached->data || cached->bytes == 0) return 0;
+
+    PexWinPlayJob *job = (PexWinPlayJob *)calloc(1, sizeof(*job));
     if (!job) return 0;
-    snprintf(job->path, sizeof(job->path), "%s", path);
+    job->data = (BYTE *)malloc(cached->bytes);
+    if (!job->data) { free(job); return 0; }
+    memcpy(job->data, cached->data, cached->bytes);
+    job->bytes = cached->bytes;
+    job->fmt = cached->fmt;
     job->volume = volume;
-    HANDLE th = CreateThread(NULL, 0, pex_mf_play_thread, job, 0, NULL);
-    if (!th) { free(job); return 0; }
+
+    HANDLE th = CreateThread(NULL, 0, pex_win_play_thread, job, 0, NULL);
+    if (!th) { free(job->data); free(job); return 0; }
     CloseHandle(th);
     return 1;
 }
-static void pex_sound_shutdown(void) { }
+
+static void pex_sound_shutdown(void) {
+    for (int i = 0; i < g_win_sound_cache_count; ++i) {
+        free(g_win_sound_cache[i].data);
+        g_win_sound_cache[i].data = NULL;
+    }
+    g_win_sound_cache_count = 0;
+}
 #else
 static int pex_sound_backend_play_file(const char *path, float volume, float pitch) {
     (void)path; (void)volume; (void)pitch;
