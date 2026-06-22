@@ -94,3 +94,9 @@ sd:/apps/pexcraft/skins/       optional/custom only
 - Networking/multiplayer is disabled for the Wii build.
 - Runtime Classic pack downloading/extraction is disabled; the Classic textures are embedded at build time.
 - The Wii build uses the PSP-sized 128x128x128 active world window, not the PC-sized 512x256x512 window.
+
+## Embedded texture memory
+
+The Wii build links the generated client.jar/MCRW texture pak into a dedicated `.wii_assets` DOL section at `0x90010000` so the texture blob lives in MEM2, not in the 24MB MEM1 region used by the main executable/data/BSS.  `wii_reserve_embedded_asset_mem2()` bumps the MEM2 arena past the embedded pak before normal runtime allocations can use MEM2.
+
+The GX renderer also splits indexed terrain draws into chunks of at most 65,535 vertices, because `GX_Begin()` takes a 16-bit vertex count.  Writing more vertices than the count passed to GX corrupts the FIFO and can show up in Dolphin as invalid MEM1/MEM2 pointer warnings.

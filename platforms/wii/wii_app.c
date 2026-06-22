@@ -61,6 +61,17 @@ static void wii_power_callback(void) {
 }
 #endif
 
+static void wii_reserve_embedded_asset_mem2(void) {
+#if defined(HW_RVL)
+    uintptr_t end = (uintptr_t)pexcraft_wii_mcrw_assets_pak_end;
+    if (end >= 0x90000000u && end < 0x94000000u) {
+        end = (end + 31u) & ~31u;
+        void *lo = SYS_GetArena2Lo();
+        if ((uintptr_t)lo < end) SYS_SetArena2Lo((void*)end);
+    }
+#endif
+}
+
 static void sleep_for_max_fps(double frame_start_time) {
     double sleep_start_time = now_seconds();
     int fps = g_opts.max_fps > 0 ? g_opts.max_fps : 60;
@@ -119,6 +130,7 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    wii_reserve_embedded_asset_mem2();
     init_dirs();
 #if defined(HW_RVL)
     SYS_SetPowerCallback(wii_power_callback);

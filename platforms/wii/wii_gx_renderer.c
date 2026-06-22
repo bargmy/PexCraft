@@ -3,9 +3,9 @@
    alive but emits immediate/dynamic geometry through GX. */
 
 #define PEX_WII_MAX_TEXTURES 1024
-#define PEX_WII_MAX_MESHES 32768
-#define PEX_WII_MAX_IMM_VERTS 65536
-#define PEX_WII_LIST_COUNT 4096
+#define PEX_WII_MAX_MESHES 4096
+#define PEX_WII_MAX_IMM_VERTS 32768
+#define PEX_WII_LIST_COUNT 1024
 #define PEX_WII_FIFO_SIZE (256 * 1024)
 
 #ifndef GX_FALSE
@@ -157,6 +157,22 @@ static GLenum wii_draw_mode_for(GLenum mode, int count, int *out_count) {
     return GX_TRIANGLES;
 }
 
+/* GX_Begin takes a 16-bit vertex count.  Passing more vertices and then
+   writing them anyway corrupts the GX FIFO and Dolphin reports invalid MEM1
+   pointers before crashing.  Always clamp/split before GX_Begin. */
+static int wii_clamp_gx_count(GLenum mode, int count) {
+    if (count <= 0) return 0;
+    int max = 65535;
+    if (mode == GL_QUADS) max = 65532;          /* multiple of 4 */
+    else if (mode == GL_TRIANGLES) max = 65535; /* multiple of 3 */
+    else if (mode == GL_LINES) max = 65534;     /* multiple of 2 */
+    if (count > max) count = max;
+    if (mode == GL_QUADS) count = (count / 4) * 4;
+    else if (mode == GL_TRIANGLES) count = (count / 3) * 3;
+    else if (mode == GL_LINES) count = (count / 2) * 2;
+    return count;
+}
+
 static void wii_apply_state_values(GLuint tex, int tex_enabled, int blend, int depth, int depth_write, int alpha, int cull) {
     int valid_tex = tex_enabled && tex > 0 && tex < PEX_WII_MAX_TEXTURES && g_wii_textures[tex].used;
     if (depth) GX_SetZMode(GX_TRUE, GX_LEQUAL, depth_write ? GX_TRUE : GX_FALSE);
@@ -183,7 +199,7 @@ static void wii_emit_imm_vertex(const WiiImmVertex *v) { GX_Position3f32(v->x, v
 static void wii_draw_imm_vertices(const WiiImmVertex *v, int count, GLenum mode) {
     if (!v || count <= 0) return;
     int draw_count = 0; GLenum gxmode = wii_draw_mode_for(mode, count, &draw_count);
-    if (mode == GL_QUADS) draw_count = (count / 4) * 4;
+    draw_count = wii_clamp_gx_count(mode, draw_count);
     if (draw_count <= 0) return;
     wii_load_gx_matrices();
     GX_Begin((u8)gxmode, GX_VTXFMT0, (u16)draw_count);
@@ -371,10 +387,8 @@ static void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid
     if (!wii_arrays_are_pexvertex_interleaved(&base)) return;
     int draw_count = count;
     GLenum gxmode = wii_draw_mode_for(mode, count, &draw_count);
-    if (mode == GL_QUADS) draw_count = (count / 4) * 4;
-    if (mode == GL_TRIANGLES) draw_count = (count / 3) * 3;
+    draw_count = wii_clamp_gx_count(mode, draw_count);
     if (draw_count <= 0) return;
-    if (draw_count > 65535) draw_count = 65535;
     wii_apply_state();
     wii_load_gx_matrices();
     GX_Begin((u8)gxmode, GX_VTXFMT0, (u16)draw_count);
@@ -396,7 +410,30 @@ static PexMeshHandle wii_backend_upload_mesh(const PexMesh *mesh){ if(!mesh||!me
 static int wii_backend_update_mesh(PexMeshHandle h,const PexMesh *mesh){ if(!h||h>=PEX_WII_MAX_MESHES)return 0; WiiMeshSlot *s=&g_wii_meshes[h]; free(s->vertices); free(s->indices); memset(s,0,sizeof(*s)); PexMeshHandle nh=wii_backend_upload_mesh(mesh); if(nh&&nh!=h){ g_wii_meshes[h]=g_wii_meshes[nh]; memset(&g_wii_meshes[nh],0,sizeof(g_wii_meshes[nh])); } return nh?1:0; }
 static void wii_backend_destroy_mesh(PexMeshHandle h){ if(h&&h<PEX_WII_MAX_MESHES){ free(g_wii_meshes[h].vertices); free(g_wii_meshes[h].indices); memset(&g_wii_meshes[h],0,sizeof(g_wii_meshes[h])); } }
 static void wii_apply_render_state(const PexRenderState *st){ if(!st)return; wii_apply_state_values(st->texture,st->texture_enabled,st->blend_enabled,st->depth_enabled,st->depth_write,st->alpha_test_enabled,0); wii_load_gx_matrices_from(st->modelview,st->projection,0); }
-static void wii_backend_draw_vertices_indexed(const PexVertex *v,const uint32_t *idx,uint32_t vc,uint32_t ic,const PexRenderState *st){ if(!v||!idx||vc==0||ic==0)return; wii_apply_render_state(st); uint32_t draw_ic=(ic/3)*3; GX_Begin(GX_TRIANGLES,GX_VTXFMT0,(u16)draw_ic); for(uint32_t i=0;i<draw_ic;i++){ uint32_t vi=idx[i]; if(vi>=vc)vi=0; GX_Position3f32(v[vi].x,v[vi].y,v[vi].z); wii_emit_color(v[vi].color); GX_TexCoord2f32(v[vi].u,v[vi].v); } GX_End(); g_wii_stats.draw_calls++; g_wii_stats.triangles += draw_ic/3; }
+static void wii_backend_draw_vertices_indexed(const PexVertex *v,const uint32_t *idx,uint32_t vc,uint32_t ic,const PexRenderState *st){
+    if(!v||!idx||vc==0||ic==0)return;
+    wii_apply_render_state(st);
+    uint32_t total=(ic/3)*3;
+    uint32_t off=0;
+    while(off<total){
+        uint32_t chunk=total-off;
+        if(chunk>65535u) chunk=65535u;
+        chunk=(chunk/3u)*3u;
+        if(chunk==0) break;
+        GX_Begin(GX_TRIANGLES,GX_VTXFMT0,(u16)chunk);
+        for(uint32_t i=0;i<chunk;i++){
+            uint32_t vi=idx[off+i];
+            if(vi>=vc)vi=0;
+            GX_Position3f32(v[vi].x,v[vi].y,v[vi].z);
+            wii_emit_color(v[vi].color);
+            GX_TexCoord2f32(v[vi].u,v[vi].v);
+        }
+        GX_End();
+        g_wii_stats.draw_calls++;
+        g_wii_stats.triangles += chunk/3u;
+        off += chunk;
+    }
+}
 static void wii_backend_draw_mesh(PexMeshHandle h,const PexRenderState *st){ if(!h||h>=PEX_WII_MAX_MESHES)return; WiiMeshSlot *s=&g_wii_meshes[h]; wii_backend_draw_vertices_indexed(s->vertices,s->indices,s->vertex_count,s->index_count,st); }
 static void wii_backend_draw_dynamic(const PexMesh *mesh,const PexRenderState *st){ if(!mesh)return; wii_backend_draw_vertices_indexed(mesh->vertices,mesh->indices,mesh->vertex_count,mesh->index_count,st); }
 static PexRendererStats wii_backend_get_stats(void){ return g_wii_stats; }
