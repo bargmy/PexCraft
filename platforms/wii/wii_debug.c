@@ -21,7 +21,12 @@ static int wii_debug_xfb_looks_valid(const void *xfb) {
     return xfb && wii_debug_xfb_phys_offset(xfb) < 0x01800000u;
 }
 
+#ifndef PEX_WII_ONSCREEN_DEBUG
+#define PEX_WII_ONSCREEN_DEBUG 0
+#endif
+
 static void wii_debug_init_console(void) {
+#if PEX_WII_ONSCREEN_DEBUG
     if (g_wii_debug_console_ready) return;
     VIDEO_Init();
     g_wii_debug_rmode = VIDEO_GetPreferredMode(NULL);
@@ -55,6 +60,11 @@ static void wii_debug_init_console(void) {
              (int)g_wii_debug_rmode->fbWidth,
              (int)g_wii_debug_rmode->efbHeight,
              (int)g_wii_debug_rmode->xfbHeight);
+#else
+    g_wii_debug_console_ready = 0;
+    g_wii_debug_xfb = NULL;
+    SYS_Report("[PexCraft/Wii] SYS_Report diagnostics enabled; on-screen debug console disabled\n");
+#endif
 }
 
 static void wii_debug_logf(const char *fmt, ...) {

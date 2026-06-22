@@ -430,18 +430,21 @@ static double g_system_info_last_time = -10.0;
 #define MAX_FALLING_BLOCK_ENTITIES 16
 #else
 #if defined(PEX_PLATFORM_WII)
-/* Wii has 24MB MEM1 and Dolphin/libogc XFBs must remain in valid low MEM1.
-   The PSP-sized 128x128x128 active window plus five dense arrays, embedded
-   textures, renderer state, and three framebuffers pushed Arena1 past MEM1
-   and produced Dolphin "Unknown Pointer 0x01931000" / invalid XFB warnings.
-   Keep Wii on a 96x128x96 active window: still six 16x16 chunks wide, but
-   saves ~4.6MB of MEM1/BSS versus 128. */
-#define FLAT_WORLD_SIZE 96
+/* Wii safety profile: keep the active terrain window very small until the
+   GX/video path is proven stable.  This cuts the five dense block/light arrays
+   from ~5.9MB at 96x128x96 to ~1.25MB at 64x64x64, leaving much more MEM1
+   for libogc framebuffers and avoiding Dolphin DSI/XFB pointer failures during
+   world generation. */
+#define FLAT_WORLD_SIZE 64
 #else
 #define FLAT_WORLD_SIZE 128
 #endif
 #define FLAT_WORLD_Y_MIN 0
+#if defined(PEX_PLATFORM_WII)
+#define FLAT_WORLD_Y_MAX 63
+#else
 #define FLAT_WORLD_Y_MAX 127
+#endif
 #define MAX_DROP_ENTITIES 64
 #define MAX_FALLING_BLOCK_ENTITIES 64
 #endif

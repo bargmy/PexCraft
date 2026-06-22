@@ -730,8 +730,8 @@ static void mark_flat_chunks_modified_all(void) {
 
 static TerrainProvider *beta_stream_provider(void);
 
-#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
-/* PSP-safe "normal" terrain: the exact Beta generator allocates and populates a
+#if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
+/* PSP/Wii-safe "normal" terrain: the exact Beta generator allocates and populates a
    3x3 chunk canvas for every streamed chunk.  That is too heavy for PSP and was
    closing PPSSPP during normal-world generation.  This keeps the normal-world
    look but is deterministic, chunk-local, and cheap enough for cooperative
@@ -754,7 +754,9 @@ static int psp_safe_height_at(int x, int z, long long seed) {
     float n3 = psp_safe_noise(x, z, 37, 3, seed) * 14.0f;
     int h = 32 + (int)(n1 + n2 + n3);
     if (h < 8) h = 8;
-    if (h > 58) h = 58;
+    int max_h = FLAT_WORLD_Y_MAX - 5;
+    if (max_h < 12) max_h = 12;
+    if (h > max_h) h = max_h;
     return h;
 }
 #endif
@@ -764,7 +766,7 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
 
     if (world_type == 1) {
-#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
+#if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
         for (int lx = 0; lx < 16; lx++) {
             int wx = cx * 16 + lx;
             for (int lz = 0; lz < 16; lz++) {
@@ -853,7 +855,7 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
 }
 
 static void generate_flat_chunk_base_to_buffer(int cx, int cz, unsigned char *out) {
-#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
+#if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
     TerrainProvider *reuse = NULL;
 #else
     TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
@@ -1390,7 +1392,85 @@ static TerrainProvider *beta_stream_provider(void) {
     return &g_beta_stream_tp;
 }
 
+#if defined(PEX_PLATFORM_WII)
+static int wii_safe_copy_chunk_to_flat_direct(int cx, int cz) {
+    if (!stream_world_chunk_in_window(cx, cz, g_flat_world_origin_x, g_flat_world_origin_z)) return 0;
+    int lcx = stream_world_chunk_local_x(cx);
+    int lcz = stream_world_chunk_local_z(cz);
+    if (!flat_local_chunk_valid(lcx, lcz)) return 0;
+    wii_debug_logf("wii direct terrain begin wc=%d,%d local=%d,%d type=%d", cx, cz, lcx, lcz, g_world_type);
+
+    for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
+        int wx = cx * FLAT_RENDER_CHUNK + lx;
+        if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
+        int fx = flat_index(wx);
+        for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
+            int wz = cz * FLAT_RENDER_CHUNK + lz;
+            if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
+            int fz = flat_z_index(wz);
+            int h = 3;
+            if (g_world_type == 1) h = psp_safe_height_at(wx, wz, g_world_seed);
+            if (h < 3) h = 3;
+            if (h > FLAT_WORLD_Y_MAX - 2) h = FLAT_WORLD_Y_MAX - 2;
+
+            for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
+                int id = 0;
+                if (y == FLAT_WORLD_Y_MIN) id = BLOCK_BEDROCK;
+                else if (g_world_type == 1) {
+                    if (y < h - 4) {
+                        unsigned int oh = psp_safe_terrain_hash(wx, wz, y * 31 + 7, g_world_seed);
+                        if (y < 18 && (oh % 900u) < 4u) id = BLOCK_DIAMOND_ORE;
+                        else if (y < 32 && (oh % 360u) < 4u) id = BLOCK_GOLD_ORE;
+                        else if (y < 45 && (oh % 180u) < 5u) id = BLOCK_IRON_ORE;
+                        else if (y < 58 && (oh % 115u) < 6u) id = BLOCK_COAL_ORE;
+                        else id = BLOCK_STONE;
+                    } else if (y < h) id = BLOCK_DIRT;
+                    else if (y == h) id = BLOCK_GRASS;
+                    else if (y <= 30 && h < 30) id = (y == 30) ? BLOCK_STILL_WATER : BLOCK_WATER;
+                } else {
+                    if (y == 1 || y == 2) id = BLOCK_DIRT;
+                    else if (y == 3) id = BLOCK_GRASS;
+                }
+                int yi = flat_y_index(y);
+                g_flat_blocks[yi][fz][fx] = (unsigned char)id;
+                g_flat_meta[yi][fz][fx] = 0;
+                g_flat_levels[yi][fz][fx] = block_is_liquid(id) ? 0 : 0;
+            }
+
+            int light = 15;
+            for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
+                int yi = flat_y_index(y);
+                int id = g_flat_blocks[yi][fz][fx];
+                g_flat_sky_light[yi][fz][fx] = (unsigned char)(light & 15);
+                g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
+                int opacity = flat_light_opacity_for_id(id);
+                if (opacity > 0 && light > 0) {
+                    if (id == BLOCK_LEAVES) {
+                        if (light > 8) light -= 1;
+                    } else if (opacity >= 255) {
+                        light = 0;
+                    } else {
+                        light -= opacity;
+                        if (light < 0) light = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+    g_flat_world_chunk_dirty[lcz][lcx] = 1;
+    g_flat_world_chunk_valid[lcz][lcx] = 1;
+    wii_debug_logf("wii direct terrain end wc=%d,%d", cx, cz);
+    return 1;
+}
+#endif
+
 static int beta_preview_copy_chunk_to_flat(int cx, int cz) {
+#if defined(PEX_PLATFORM_WII)
+    return wii_safe_copy_chunk_to_flat_direct(cx, cz);
+#endif
     unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
     if (!buf) return 0;
     generate_flat_chunk_base_to_buffer(cx, cz, buf);
@@ -1413,8 +1493,8 @@ static void beta_preview_generate_flat_world(void) {
     int min_cz = floor_div16(g_flat_world_origin_z);
     int max_cz = floor_div16(g_flat_world_origin_z + FLAT_WORLD_SIZE - 1);
 
-#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
-    /* PSP-1000 safety: never allocate the full active-window Beta canvas.
+#if defined(PEX_PLATFORM_WII) || (defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN))
+    /* Wii/PSP safety: never allocate the full active-window Beta canvas.
        Generate one chunk at a time using the PSP-safe chunk-local generator. */
     for (int cz = min_cz; cz <= max_cz; cz++) {
         for (int cx = min_cx; cx <= max_cx; cx++) {

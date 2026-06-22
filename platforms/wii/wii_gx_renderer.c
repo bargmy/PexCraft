@@ -31,6 +31,7 @@ typedef struct WiiList { WiiBatch *first, *last; int batch_count; } WiiList;
 static void *g_wii_fifo = NULL;
 static void *g_wii_xfb[2] = { NULL, NULL };
 static int g_wii_fb = 0;
+static int g_wii_single_xfb = 0;
 static GXRModeObj *g_wii_rmode = NULL;
 static int g_wii_screen_w = 640;
 static int g_wii_screen_h = 480;
@@ -257,23 +258,18 @@ static int wii_gx_init(void) {
                    (int)g_wii_rmode->fbWidth, (int)g_wii_rmode->efbHeight,
                    (int)g_wii_rmode->xfbHeight, (int)g_wii_rmode->viHeight,
                    (int)g_wii_rmode->aa, (int)g_wii_rmode->field_rendering);
-    /* Reuse the early debug console XFB instead of allocating three framebuffers.
-       The earlier build allocated a console XFB plus two GX XFBs after the
-       game BSS; on Dolphin that pushed the second/third framebuffer past
-       MEM1 and produced invalid address 0x01931000 warnings. */
-    if (g_wii_debug_xfb && wii_xfb_looks_valid(g_wii_debug_xfb)) {
-        g_wii_xfb[0] = g_wii_debug_xfb;
-        wii_debug_logf("GX using debug XFB0: ptr=%p phys=%08x", g_wii_xfb[0], wii_xfb_phys_offset(g_wii_xfb[0]));
-    } else {
-        g_wii_xfb[0] = wii_alloc_valid_xfb("xfb0");
-    }
+    /* Allocate the GX framebuffers after the Wii safety memory profile is in
+       effect.  Do not reuse the optional text-console XFB: mixing console and GX
+       presentation caused purple flicker in Dolphin. */
+    g_wii_xfb[0] = wii_alloc_valid_xfb("xfb0");
     g_wii_xfb[1] = wii_alloc_valid_xfb("xfb1");
     if (!g_wii_xfb[0]) { wii_debug_logf("GX init failed: no valid XFB0"); return 0; }
     if (!g_wii_xfb[1]) {
-        /* Single-buffer fallback is better than handing Dolphin an invalid
-           framebuffer pointer.  It may flicker slightly but avoids crashing. */
         g_wii_xfb[1] = g_wii_xfb[0];
-        wii_debug_logf("GX warning: using single-buffer XFB fallback");
+        g_wii_single_xfb = 1;
+        wii_debug_logf("GX warning: only one valid XFB; single-buffer mode enabled");
+    } else {
+        g_wii_single_xfb = 0;
     }
     wii_debug_logf("GX XFBs: %p phys=%08x / %p phys=%08x", g_wii_xfb[0], wii_xfb_phys_offset(g_wii_xfb[0]), g_wii_xfb[1], wii_xfb_phys_offset(g_wii_xfb[1]));
     VIDEO_Configure(g_wii_rmode);
@@ -326,7 +322,7 @@ static void wii_gx_begin_frame(void) {
 static void wii_gx_end_frame(void) {
     static int s_present_count = 0;
     GX_DrawDone();
-    g_wii_fb ^= 1;
+    if (!g_wii_single_xfb) g_wii_fb ^= 1;
     GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
     GX_SetColorUpdate(GX_TRUE);
     GX_CopyDisp(g_wii_xfb[g_wii_fb], GX_TRUE);

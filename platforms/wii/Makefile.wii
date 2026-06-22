@@ -43,6 +43,7 @@ WII_ASSET_ASM := $(GEN)/wii_mcrw_assets.S
 WII_ASSET_OBJ := $(BUILD)/wii_mcrw_assets.o
 ELF := $(BUILD)/$(TARGET).elf
 DOL := $(BUILD)/boot.dol
+NM := $(PREFIX)nm
 MAX_DOL_BYTES ?= 16777216
 MAX_ASSET_PAK_BYTES ?= 6291456
 
@@ -68,6 +69,7 @@ $(WII_ASSET_OBJ): $(WII_ASSET_ASM) $(WII_ASSET_PAK) | $(BUILD)
 
 $(ELF): $(MAIN_OBJ) $(WII_ASSET_OBJ) | $(BUILD)
 	$(CC) $(MAIN_OBJ) $(WII_ASSET_OBJ) -o $@ $(LDFLAGS) $(LIBS)
+	@$(NM) -n $@ > $(BUILD)/$(TARGET).symbols.txt || true
 
 $(DOL): $(ELF)
 	$(ELF2DOL) $< $@

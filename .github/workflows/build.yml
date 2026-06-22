@@ -834,6 +834,8 @@ jobs:
           mkdir -p "$app_dir"
 
           cp -f build/wii/boot.dol "$app_dir/boot.dol"
+          cp -f build/wii/pexcraft-wii.map "$app_dir/pexcraft-wii.map" || true
+          cp -f build/wii/pexcraft-wii.symbols.txt "$app_dir/pexcraft-wii.symbols.txt" || true
           dol_size=$(wc -c < "$app_dir/boot.dol")
           printf "boot.dol uncompressed size: %s bytes\n" "$dol_size" > "$app_dir/DOL_SIZE.txt"
           if [ "$dol_size" -gt 16777216 ]; then
