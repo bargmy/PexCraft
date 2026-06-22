@@ -63,6 +63,7 @@ static void pex_join_save_thread_for_exit(void) {
 static void save_world_state_for_exit(void) {
     pex_join_save_thread_for_exit();
     if (!g_wii_fat_ready) { wii_debug_logf("save skipped: SD/FAT unavailable"); return; }
+    if (strncmp(g_loaded_world_dir, "memory:", 7) == 0) { wii_debug_logf("save skipped: memory world"); return; }
     save_current_world_state_sync();
 }
 

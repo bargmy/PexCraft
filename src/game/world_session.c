@@ -1133,6 +1133,12 @@ static void start_world_generation(int slot) {
     snprintf(g_worldgen.world_name, sizeof(g_worldgen.world_name), "World%d", slot);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/World%d", slot);
+#elif defined(PEX_PLATFORM_WII)
+    /* Dolphin/homebrew can run without an SD image.  In that case do not touch
+       FAT at all while creating/loading worlds; generate an in-RAM world like
+       the PSP memory build. */
+    if (!g_wii_fat_ready) snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/World%d", slot);
+    else snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s\\World%d", g_save_dir, slot);
 #else
     snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s\\World%d", g_save_dir, slot);
 #endif
@@ -1150,31 +1156,54 @@ static void start_world_generation(int slot) {
     snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating RAM world");
     snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
 #else
-    char level_path[MAX_PATHBUF];
-    snprintf(level_path, sizeof(level_path), "%s\\level.dat", g_worldgen.world_dir);
-    if (file_exists(level_path)) {
-        g_worldgen.existing_world = 1;
-        snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
-        snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Loading chunks");
-    } else {
-        /* Create the world slot.  Terrain is generated from level.dat metadata
-           at load/stream time; only chunks edited by gameplay are saved. */
-        if (dir_exists(g_worldgen.world_dir)) delete_recursive(g_worldgen.world_dir);
-        make_dir_recursive(g_worldgen.world_dir);
-        write_session_lock(g_worldgen.world_dir);
-        /* level.dat contains the seed and generator kind.  Terrain itself is
-           generated from that metadata, and only gameplay-edited chunks are saved. */
-        write_level_dat(g_worldgen.world_dir, g_worldgen.world_name, g_worldgen.seed, 50, 5, 50, 0);
-        g_worldgen.existing_world = 1;
-        snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
+#if defined(PEX_PLATFORM_WII)
+    if (!g_wii_fat_ready) {
+        g_worldgen.existing_world = 0;
+        snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating RAM world");
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
+        wii_debug_logf("worldgen: FAT unavailable, using memory world slot=%d type=%d", slot, g_pending_world_type);
+    } else
+#endif
+    {
+        char level_path[MAX_PATHBUF];
+        snprintf(level_path, sizeof(level_path), "%s\\level.dat", g_worldgen.world_dir);
+        if (file_exists(level_path)) {
+            g_worldgen.existing_world = 1;
+            snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
+            snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Loading chunks");
+        } else {
+            /* Create the world slot.  Terrain is generated from level.dat metadata
+               at load/stream time; only chunks edited by gameplay are saved. */
+            if (dir_exists(g_worldgen.world_dir)) delete_recursive(g_worldgen.world_dir);
+            make_dir_recursive(g_worldgen.world_dir);
+            write_session_lock(g_worldgen.world_dir);
+            /* level.dat contains the seed and generator kind.  Terrain itself is
+               generated from that metadata, and only gameplay-edited chunks are saved. */
+            write_level_dat(g_worldgen.world_dir, g_worldgen.world_name, g_worldgen.seed, 50, 5, 50, 0);
+            g_worldgen.existing_world = 1;
+            snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
+            snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
+        }
     }
+#endif
+#if defined(PEX_PLATFORM_WII)
+    wii_debug_logf("worldgen start: slot=%d type=%d dir=%s title=%s", slot, g_world_type, g_worldgen.world_dir, g_worldgen.title);
 #endif
     set_screen(SCREEN_GENERATING);
 }
 
 static void worldgen_tick(void) {
     if (!g_worldgen.active) return;
+#if defined(PEX_PLATFORM_WII)
+    static int s_wii_last_worldgen_phase = -999;
+    if (s_wii_last_worldgen_phase != g_worldgen.phase) {
+        s_wii_last_worldgen_phase = g_worldgen.phase;
+        wii_debug_logf("worldgen tick phase=%d progress=%d type=%d queue=%d/%d screen=%d",
+                       g_worldgen.phase, g_worldgen.progress, g_world_type,
+                       g_stream_gen_queue_index, g_stream_gen_queue_count, g_screen);
+        wii_debug_memoryf("worldgen phase change");
+    }
+#endif
 
     if (g_worldgen.phase == 0) {
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Reading level");
@@ -1188,17 +1217,27 @@ static void worldgen_tick(void) {
         g_world_seed = g_worldgen.seed;
         g_worldgen.loaded_state = 0;
 #else
-        g_world_type = read_world_type_for_dir(g_loaded_world_dir);
+#if defined(PEX_PLATFORM_WII)
+        if (!g_wii_fat_ready || strncmp(g_loaded_world_dir, "memory:", 7) == 0) {
+            g_world_type = g_pending_world_type;
+            g_world_seed = g_worldgen.seed;
+            g_worldgen.loaded_state = 0;
+            wii_debug_logf("worldgen phase0: memory world type=%d seed=%lld", g_world_type, (long long)g_world_seed);
+        } else
+#endif
         {
-            long long seed = 0;
-            if (read_world_seed_for_dir(g_loaded_world_dir, &seed)) g_world_seed = seed;
-            else g_world_seed = g_worldgen.seed;
-        }
-        migrate_legacy_chunk_folder(g_loaded_world_dir);
+            g_world_type = read_world_type_for_dir(g_loaded_world_dir);
+            {
+                long long seed = 0;
+                if (read_world_seed_for_dir(g_loaded_world_dir, &seed)) g_world_seed = seed;
+                else g_world_seed = g_worldgen.seed;
+            }
+            migrate_legacy_chunk_folder(g_loaded_world_dir);
 
-        g_load_state_skip_terrain_rebuild = 1;
-        g_worldgen.loaded_state = load_current_world_state();
-        g_load_state_skip_terrain_rebuild = 0;
+            g_load_state_skip_terrain_rebuild = 1;
+            g_worldgen.loaded_state = load_current_world_state();
+            g_load_state_skip_terrain_rebuild = 0;
+        }
 #endif
 
         if (!g_worldgen.loaded_state) {

@@ -257,8 +257,10 @@ static void wii_poll_wiimote_buttons(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
     for (int ch = 0; ch < PEX_WII_MAX_WPAD && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
         int exp_type = -1;
         int probe = WPAD_Probe(ch, &exp_type);
+        /* Even when Dolphin reports an extension, WPAD extension data can be
+           unavailable while raw Wiimote buttons still work.  Keep this fallback
+           alive so D-pad/A/+ can always drive menus. */
         if (probe != WPAD_ERR_NONE) continue;
-        if (wii_exp_is_classic(exp_type) || exp_type == EXP_NUNCHUK) continue;
         u32 b = WPAD_ButtonsHeld(ch);
         if (!b) continue;
         PexGamepadState *p = wii_begin_pad(oldpads, "Wii Remote", "Wiimote");

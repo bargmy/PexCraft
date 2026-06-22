@@ -673,6 +673,9 @@ static void flat_chunk_delta_path_current(int cx, int cz, char *out, size_t cap,
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)cx; (void)cz; (void)create_dir; if (cap) out[0] = 0; return;
 #endif
+#if defined(PEX_PLATFORM_WII)
+    if (!g_wii_fat_ready || strncmp(g_loaded_world_dir, "memory:", 7) == 0) { (void)cx; (void)cz; (void)create_dir; if (cap) out[0] = 0; return; }
+#endif
     if (!g_loaded_world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -689,6 +692,9 @@ static void flat_chunk_delta_path_current(int cx, int cz, char *out, size_t cap,
 static void flat_chunk_delta_path_legacy(int cx, int cz, char *out, size_t cap) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)cx; (void)cz; if (cap) out[0] = 0; return;
+#endif
+#if defined(PEX_PLATFORM_WII)
+    if (!g_wii_fat_ready || strncmp(g_loaded_world_dir, "memory:", 7) == 0) { (void)cx; (void)cz; if (cap) out[0] = 0; return; }
 #endif
     if (!g_loaded_world_dir[0]) {
         if (cap) out[0] = 0;
@@ -884,6 +890,9 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
 static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)cx; (void)cz; return;
+#endif
+#if defined(PEX_PLATFORM_WII)
+    if (!g_wii_fat_ready || strncmp(g_loaded_world_dir, "memory:", 7) == 0) { (void)cx; (void)cz; return; }
 #endif
     if (!g_loaded_world_dir[0]) return;
     char path[MAX_PATHBUF];
@@ -1604,15 +1613,21 @@ static void flat_world_prepare_initial_generation(void) {
 static int stream_initial_spawn_chunk_radius(void) {
     /* Keep first-load fast.  Render distance 12+ used to force the loader to
        generate the entire 512x512 active window before entering the world.
-       A 7x7 chunk spawn island is enough to stand/walk safely; the normal
-       streaming worker fills the rest after gameplay starts. */
+       A small spawn island is enough to stand/walk safely; the normal
+       streaming worker/fallback fills the rest after gameplay starts. */
     int r = stream_effective_render_chunk_radius();
-#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+#if defined(PEX_PLATFORM_WII)
+    /* Wii is currently cooperative/single-threaded here, so use a 3x3 spawn
+       island.  This lowers first-load risk and keeps Dolphin responsive. */
+    if (r > 1) r = 1;
+    if (r < 1) r = 1;
+#elif defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
     if (r > 2) r = 2;
+    if (r < 2) r = 2;
 #else
     if (r > 3) r = 3;
-#endif
     if (r < 2) r = 2;
+#endif
     return r;
 }
 
@@ -5619,6 +5634,17 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
 static void stream_async_init(void) {
     if (g_stream_async_initialized) return;
+#if defined(PEX_PLATFORM_WII)
+    /* Keep the first Wii port single-threaded.  The Win32-shaped pthread shim
+       and libogc/Dolphin thread scheduling made world generation crash with
+       unknown-pointer exceptions.  The cooperative fallback still generates one
+       chunk per tick, just without a worker thread touching worldgen/heap data. */
+    g_stream_async_event = NULL;
+    g_stream_async_thread = NULL;
+    g_stream_async_initialized = 1;
+    wii_debug_logf("stream async disabled on Wii; using cooperative generation");
+    return;
+#endif
 #if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
     /* Safe PSP terrain uses cooperative generation.  Real Beta mode keeps the
        worker path so the 3x3 canvas generator does not run inside the frame. */
@@ -5641,6 +5667,9 @@ static void stream_async_init(void) {
 }
 
 static int stream_async_pending(void) {
+#if defined(PEX_PLATFORM_WII)
+    return 0;
+#endif
     if (!g_stream_async_initialized) return 0;
 #if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
     if (!g_stream_async_event || !g_stream_async_thread) return 0;
@@ -6095,14 +6124,17 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
 static void process_stream_generation_queue(void) {
     stream_async_init();
 
-    /* If thread creation fails, keep the world functional with the old small
-       synchronous budget rather than leaving missing terrain forever. */
+    /* If thread creation fails/is disabled, keep the world functional with a
+       small synchronous budget rather than leaving missing terrain forever. */
     if (!g_stream_async_event || !g_stream_async_thread) {
         int budget = STREAM_CHUNKS_PER_TICK;
         while (budget-- > 0 && g_stream_gen_queue_index < g_stream_gen_queue_count) {
             int idx = g_stream_gen_queue_index++;
             int wcx = g_stream_gen_queue_cx[idx];
             int wcz = g_stream_gen_queue_cz[idx];
+#if defined(PEX_PLATFORM_WII)
+            wii_debug_logf("stream coop chunk %d/%d wc=%d,%d type=%d", idx + 1, g_stream_gen_queue_count, wcx, wcz, g_world_type);
+#endif
             beta_preview_copy_chunk_to_flat(wcx, wcz);
             stream_mark_local_chunk_generated(stream_world_chunk_local_x(wcx), stream_world_chunk_local_z(wcz));
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
