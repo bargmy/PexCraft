@@ -33,8 +33,11 @@ static int key_down_vk(int vk) { if (vk >= 0 && vk < 512 && g_gamepad_vk_state[v
 
 static void wii_input_init(void) {
     WPAD_Init();
-    WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
+    for (int ch = 0; ch < WPAD_MAX_WIIMOTES; ++ch) {
+        WPAD_SetDataFormat(ch, WPAD_FMT_BTNS_ACC_IR);
+    }
     PAD_Init();
+    wii_debug_logf("input init: WPAD/PAD initialized, Classic Controller preferred");
 }
 
 static float wii_axis_deadzone(float v) {
@@ -90,14 +93,69 @@ static PexGamepadState *wii_begin_pad(PexGamepadState oldpads[PEX_GAMEPAD_MAX], 
     return p;
 }
 
+static void wii_log_pad_edges(const char *label, int ch, const PexGamepadState *p) {
+    static unsigned int last_mask[4] = {0,0,0,0};
+    if (!p || ch < 0 || ch >= 4) return;
+    unsigned int mask = 0;
+    if (p->a) mask |= 1u << 0;
+    if (p->b) mask |= 1u << 1;
+    if (p->x) mask |= 1u << 2;
+    if (p->y) mask |= 1u << 3;
+    if (p->lb) mask |= 1u << 4;
+    if (p->rb) mask |= 1u << 5;
+    if (p->lt > 0.35f) mask |= 1u << 6;
+    if (p->rt > 0.35f) mask |= 1u << 7;
+    if (p->back) mask |= 1u << 8;
+    if (p->start) mask |= 1u << 9;
+    if (p->guide) mask |= 1u << 10;
+    if (p->dpad_up) mask |= 1u << 11;
+    if (p->dpad_down) mask |= 1u << 12;
+    if (p->dpad_left) mask |= 1u << 13;
+    if (p->dpad_right) mask |= 1u << 14;
+    if (mask != last_mask[ch]) {
+        wii_debug_logf("input %s ch%d mask=%08x ls=%.2f %.2f rs=%.2f %.2f dpad=%d%d%d%d abxy=%d%d%d%d",
+                       label ? label : "pad", ch, mask, p->lx, p->ly, p->rx, p->ry,
+                       p->dpad_up, p->dpad_down, p->dpad_left, p->dpad_right,
+                       p->a, p->b, p->x, p->y);
+        last_mask[ch] = mask;
+    }
+}
+
+static int wii_exp_is_classic(int exp_type) {
+    if (exp_type == EXP_CLASSIC) return 1;
+#ifdef EXP_CLASSIC_PRO
+    if (exp_type == EXP_CLASSIC_PRO) return 1;
+#endif
+    return 0;
+}
+
 static void wii_poll_classic(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    static int last_probe_type[4] = {-999,-999,-999,-999};
+    static int last_exp_type[4] = {-999,-999,-999,-999};
+    static int last_err[4] = {-999,-999,-999,-999};
+
     for (int ch = 0; ch < WPAD_MAX_WIIMOTES && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
+        int probe_type = -1;
+        int probe = WPAD_Probe(ch, &probe_type);
         WPADData *wd = WPAD_Data(ch);
-        if (!wd || wd->err != WPAD_ERR_NONE || wd->exp.type != EXP_CLASSIC) continue;
+        int exp_type = wd ? wd->exp.type : -1;
+        int err = wd ? wd->err : -999;
+        if (probe_type != last_probe_type[ch] || exp_type != last_exp_type[ch] || err != last_err[ch]) {
+            wii_debug_logf("WPAD ch%d probe=%d probe_type=%d data_err=%d exp_type=%d", ch, probe, probe_type, err, exp_type);
+            last_probe_type[ch] = probe_type;
+            last_exp_type[ch] = exp_type;
+            last_err[ch] = err;
+        }
+        if (!wd || err != WPAD_ERR_NONE) continue;
+        if (!wii_exp_is_classic(exp_type) && !wii_exp_is_classic(probe_type)) continue;
+
         const classic_ctrl_t *cc = &wd->exp.classic;
         PexGamepadState *p = wii_begin_pad(oldpads, "Wii Classic Controller", "Classic Controller");
         if (!p) return;
-        u32 b = cc->btns;
+
+        /* Dolphin/libogc may expose Classic buttons in either exp.classic.btns or
+           WPAD_ButtonsHeld(), depending on controller path. OR both together. */
+        u32 b = cc->btns | WPAD_ButtonsHeld(ch);
         p->lx = wii_joy_x(&cc->ljs);
         p->ly = wii_joy_y(&cc->ljs);
         p->rx = wii_joy_x(&cc->rjs);
@@ -117,6 +175,7 @@ static void wii_poll_classic(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
         p->dpad_down = (b & CLASSIC_CTRL_BUTTON_DOWN) != 0;
         p->dpad_left = (b & CLASSIC_CTRL_BUTTON_LEFT) != 0;
         p->dpad_right = (b & CLASSIC_CTRL_BUTTON_RIGHT) != 0;
+        wii_log_pad_edges("classic", ch, p);
     }
 }
 
@@ -147,6 +206,7 @@ static void wii_poll_gamecube(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
         p->dpad_down = (b & PAD_BUTTON_DOWN) != 0;
         p->dpad_left = (b & PAD_BUTTON_LEFT) != 0;
         p->dpad_right = (b & PAD_BUTTON_RIGHT) != 0;
+        wii_log_pad_edges("gamecube", ch, p);
     }
 }
 
@@ -172,6 +232,36 @@ static void wii_poll_nunchuk(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
         p->back = (wb & WPAD_BUTTON_MINUS) != 0;
         p->start = (wb & WPAD_BUTTON_PLUS) != 0;
         p->guide = (wb & WPAD_BUTTON_HOME) != 0;
+        p->dpad_up = (wb & WPAD_BUTTON_UP) != 0;
+        p->dpad_down = (wb & WPAD_BUTTON_DOWN) != 0;
+        p->dpad_left = (wb & WPAD_BUTTON_LEFT) != 0;
+        p->dpad_right = (wb & WPAD_BUTTON_RIGHT) != 0;
+        wii_log_pad_edges("nunchuk", ch, p);
+    }
+}
+
+static void wii_poll_wiimote_buttons(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    for (int ch = 0; ch < WPAD_MAX_WIIMOTES && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
+        int exp_type = -1;
+        int probe = WPAD_Probe(ch, &exp_type);
+        if (probe != WPAD_ERR_NONE) continue;
+        if (wii_exp_is_classic(exp_type) || exp_type == EXP_NUNCHUK) continue;
+        u32 b = WPAD_ButtonsHeld(ch);
+        if (!b) continue;
+        PexGamepadState *p = wii_begin_pad(oldpads, "Wii Remote", "Wiimote");
+        if (!p) return;
+        p->a = (b & WPAD_BUTTON_A) != 0;
+        p->b = (b & WPAD_BUTTON_B) != 0;
+        p->x = (b & WPAD_BUTTON_2) != 0;
+        p->y = (b & WPAD_BUTTON_1) != 0;
+        p->back = (b & WPAD_BUTTON_MINUS) != 0;
+        p->start = (b & WPAD_BUTTON_PLUS) != 0;
+        p->guide = (b & WPAD_BUTTON_HOME) != 0;
+        p->dpad_up = (b & WPAD_BUTTON_UP) != 0;
+        p->dpad_down = (b & WPAD_BUTTON_DOWN) != 0;
+        p->dpad_left = (b & WPAD_BUTTON_LEFT) != 0;
+        p->dpad_right = (b & WPAD_BUTTON_RIGHT) != 0;
+        wii_log_pad_edges("wiimote", ch, p);
     }
 }
 
@@ -184,6 +274,7 @@ static void wii_poll_gamepads(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
     wii_poll_classic(oldpads);
     wii_poll_gamecube(oldpads);
     wii_poll_nunchuk(oldpads);
+    wii_poll_wiimote_buttons(oldpads);
     if (g_gamepad_primary >= 0 && g_gamepad_primary < g_gamepad_count) {
         PexGamepadState *p = &g_gamepads[g_gamepad_primary];
         if (p->guide) g_running = 0;
