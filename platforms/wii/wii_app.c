@@ -135,10 +135,24 @@ static void main_loop(void) {
         if (ticks_this_frame >= 2 && tick_accum > 1.0) tick_accum = 1.0;
         render((float)tick_accum);
         if ((++wii_frame_counter % 60u) == 0u) {
-            wii_debug_logf("heartbeat frame=%u screen=%d tex=%u gui=%ux%u tris=%u draws=%u",
+            int generated_chunks = 0;
+            int valid_sections = 0;
+            for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+                for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+                    if (g_flat_world_chunk_generated[cz][cx]) generated_chunks++;
+                    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+                        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0]) valid_sections++;
+                    }
+                }
+            }
+            wii_debug_logf("heartbeat frame=%u screen=%d tex=%u gui=%ux%u tris=%u draws=%u p=%d,%d,%d origin=%d,%d gen=%d/%d sec=%d q=%d/%d",
                            wii_frame_counter, g_screen, (unsigned)tex_terrain.id,
                            (unsigned)g_gui_w, (unsigned)g_gui_h,
-                           (unsigned)g_wii_stats.triangles, (unsigned)g_wii_stats.draw_calls);
+                           (unsigned)g_wii_stats.triangles, (unsigned)g_wii_stats.draw_calls,
+                           (int)floorf(g_player_x), (int)floorf(g_player_y), (int)floorf(g_player_z),
+                           g_flat_world_origin_x, g_flat_world_origin_z,
+                           generated_chunks, FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS,
+                           valid_sections, g_stream_gen_queue_index, g_stream_gen_queue_count);
         }
         sleep_for_max_fps(frame_start_time);
         pex_profile_frame_end();

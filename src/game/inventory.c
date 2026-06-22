@@ -6315,6 +6315,18 @@ static void update_infinite_world_streaming(void) {
         return;
     }
 
+#if defined(PEX_PLATFORM_WII)
+    /* The Wii safety profile currently uses a 64x64 active world window
+       (4x4 chunks).  The desktop streaming-margin logic assumes a much wider
+       window and forced a 48-block margin; with a 64-block window that made the
+       origin slide every single tick even while the player stood at spawn.  The
+       result was an endless "Generating terrain chunks" loop and all generated
+       terrain moving away from the player, so only sky/HUD/inventory rendered.
+       Keep the Wii active window fixed for now.  The visible 4x4 chunk window is
+       filled above by stream_queue_missing_visible_chunks_near_player(). */
+    return;
+#endif
+
     int pcx = floor_div16((int)floorf(g_player_x));
     int pcz = floor_div16((int)floorf(g_player_z));
 

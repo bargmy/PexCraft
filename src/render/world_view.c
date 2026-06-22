@@ -5695,6 +5695,13 @@ static void draw_first_person_hand(void) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
+#if defined(PEX_PLATFORM_WII)
+    /* The Wii GX shim does not implement a safe mid-frame depth-only clear yet.
+       Desktop GL clears depth before the hand/item pass; on Wii that clear was
+       a no-op, so the first-person hand could be hidden by stale terrain depth.
+       Draw this pass as an overlay until GX depth-clear support is added. */
+    glDisable(GL_DEPTH_TEST);
+#endif
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
