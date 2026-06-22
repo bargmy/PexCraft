@@ -62,6 +62,8 @@ typedef BOOL (WINAPI *PxcHttpQueryInfoA)(PxcHInternet, DWORD, LPVOID, LPDWORD, L
 #define CLASSIC_SIZE_READY 2
 #define CLASSIC_SIZE_ERROR 3
 
+#define CLASSIC_SOUND_DOWNLOAD_THREADS 16
+
 static volatile LONG g_classic_download_size_state = CLASSIC_SIZE_UNKNOWN;
 static volatile LONG g_classic_texture_download_size_bytes = 0;
 static volatile LONG g_classic_sound_download_size_bytes = 0;
@@ -135,6 +137,23 @@ typedef struct ClassicSoundAsset {
     char hash[48];
     unsigned int size;
 } ClassicSoundAsset;
+
+typedef struct ClassicSoundDownloadCtx {
+    ClassicSoundAsset *assets;
+    int count;
+    char root[MAX_PATHBUF];
+    volatile LONG next_index;
+    volatile LONG completed;
+    volatile LONG failed;
+} ClassicSoundDownloadCtx;
+
+static LONG classic_atomic_inc(volatile LONG *target) {
+#ifdef _WIN32
+    return InterlockedIncrement(target);
+#else
+    return __sync_add_and_fetch(target, 1);
+#endif
+}
 
 static unsigned long long classic_file_size_bytes(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -346,15 +365,54 @@ static int classic_query_sound_index_size(unsigned long long *out_bytes, int *ou
     return 1;
 }
 
+static DWORD WINAPI classic_sound_download_worker(LPVOID arg) {
+    ClassicSoundDownloadCtx *ctx = (ClassicSoundDownloadCtx *)arg;
+    if (!ctx) return 0;
+    for (;;) {
+        LONG idx = classic_atomic_inc(&ctx->next_index) - 1;
+        ClassicSoundAsset *asset;
+        char out_path[MAX_PATHBUF];
+        char url[256];
+        char st[MAX_LABEL];
+        int done;
+        int pct;
+        if (idx < 0 || idx >= ctx->count) break;
+        if (InterlockedCompareExchange(&ctx->failed, 0, 0)) break;
+        asset = &ctx->assets[idx];
+        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, asset->path);
+        if (classic_file_size_bytes(out_path) != asset->size) {
+            snprintf(url, sizeof(url), "%s/%.2s/%s", CLASSIC_SOUND_OBJECT_URL_PREFIX, asset->hash, asset->hash);
+            if (!classic_download_url_to_file_simple(url, out_path, asset->size)) {
+                InterlockedExchange(&ctx->failed, 1);
+                break;
+            }
+        }
+        done = (int)classic_atomic_inc(&ctx->completed);
+        pct = 5 + (int)(((unsigned long long)done * 90ULL) / (unsigned long long)(ctx->count > 0 ? ctx->count : 1));
+        if (pct > 95) pct = 95;
+        snprintf(st, sizeof(st), "Downloading sounds %d/%d", done, ctx->count);
+        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
+    }
+    return 0;
+}
+
 static int classic_download_legacy_sounds(void) {
     char *json = NULL;
     size_t len = 0;
     ClassicSoundAsset *assets = NULL;
-    int count = 0, downloaded = 0;
+    int count = 0;
+    int downloaded = 0;
+    int worker_count = 0;
+    int started = 0;
     unsigned long long total = 0;
     char root[MAX_PATHBUF];
     char marker[MAX_PATHBUF];
     int ok = 0;
+    HANDLE threads[CLASSIC_SOUND_DOWNLOAD_THREADS];
+    ClassicSoundDownloadCtx ctx;
+
+    memset(threads, 0, sizeof(threads));
+    memset(&ctx, 0, sizeof(ctx));
 
     classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading sound index...");
     if (!classic_download_url_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
@@ -371,26 +429,40 @@ static int classic_download_legacy_sounds(void) {
     classic_resources_path(root, sizeof(root));
     ensure_dir(root);
 
-    for (int i = 0; i < count; ++i) {
-        char out_path[MAX_PATHBUF];
-        char url[256];
-        int pct;
+    ctx.assets = assets;
+    ctx.count = count;
+    snprintf(ctx.root, sizeof(ctx.root), "%s", root);
+    InterlockedExchange(&ctx.next_index, 0);
+    InterlockedExchange(&ctx.completed, 0);
+    InterlockedExchange(&ctx.failed, 0);
+
+    worker_count = count < CLASSIC_SOUND_DOWNLOAD_THREADS ? count : CLASSIC_SOUND_DOWNLOAD_THREADS;
+    if (worker_count < 1) worker_count = 1;
+    {
         char st[MAX_LABEL];
-        pxc_zip_make_output_path(out_path, sizeof(out_path), root, assets[i].path);
-        if (classic_file_size_bytes(out_path) == assets[i].size) {
-            downloaded++;
-        } else {
-            snprintf(url, sizeof(url), "%s/%.2s/%s", CLASSIC_SOUND_OBJECT_URL_PREFIX, assets[i].hash, assets[i].hash);
-            pct = 5 + (int)(((unsigned long long)i * 90ULL) / (unsigned long long)(count > 0 ? count : 1));
-            snprintf(st, sizeof(st), "Downloading sounds %d/%d", i + 1, count);
-            classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
-            if (!classic_download_url_to_file_simple(url, out_path, assets[i].size)) {
-                free(assets);
-                classic_install_fail("Could not download a b1.0 sound");
-                return 0;
-            }
-            downloaded++;
+        snprintf(st, sizeof(st), "Downloading sounds 0/%d", count);
+        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 5, st);
+    }
+
+    for (int i = 0; i < worker_count; ++i) {
+        threads[i] = CreateThread(NULL, 0, classic_sound_download_worker, &ctx, 0, NULL);
+        if (!threads[i]) {
+            InterlockedExchange(&ctx.failed, 1);
+            break;
         }
+        started++;
+    }
+
+    for (int i = 0; i < started; ++i) {
+        WaitForSingleObject(threads[i], INFINITE);
+        CloseHandle(threads[i]);
+    }
+
+    downloaded = (int)InterlockedCompareExchange(&ctx.completed, 0, 0);
+    if (InterlockedCompareExchange(&ctx.failed, 0, 0) || downloaded < count) {
+        free(assets);
+        classic_install_fail("Could not download a b1.0 sound");
+        return 0;
     }
 
     classic_sound_marker_path(marker, sizeof(marker));
@@ -401,9 +473,10 @@ static int classic_download_legacy_sounds(void) {
     }
     free(assets);
     if (!ok) { classic_install_fail("Could not write sound install marker"); return 0; }
-    log_msg("Installed Minecraft b1.0 legacy sounds: %d files, %llu bytes", downloaded, total);
+    log_msg("Installed Minecraft b1.0 legacy sounds with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
     return 1;
 }
+
 
 static int classic_query_download_size_bytes(const char *url, unsigned long long *out_bytes) {
     if (out_bytes) *out_bytes = 0;
