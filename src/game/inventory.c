@@ -6089,7 +6089,9 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
             }
         }
     }
-    flat_gl_cpu_mesh_remap_after_shift(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    /* Render-owned CPU mesh caches are not touched from the streaming thread.
+       The next render call sees the origin mismatch and clears/rebuilds them on
+       the GL/render thread, avoiding the old ghost-chunk/crash race. */
     g_flat_renderer_sort_dirty = 1;
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
@@ -6335,20 +6337,27 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
         int stop = 0;
         EnterCriticalSection(&g_world_stream_service_cs);
         stop = g_world_stream_service_stop;
-        g_world_stream_service_busy = 1;
+        if (!stop) g_world_stream_service_busy = 1;
         LeaveCriticalSection(&g_world_stream_service_cs);
         if (stop) break;
 
-        if (g_screen == SCREEN_INGAME && !g_mp_connected) {
+        if ((g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
+             g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+             g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
+             g_screen == SCREEN_DEATH) && !g_mp_connected) {
+            double t0 = pex_profile_begin();
             update_infinite_world_streaming();
             flat_flush_pending_lighting();
+            pex_profile_add(PROF_WORLD_STREAM, t0);
         }
 
         EnterCriticalSection(&g_world_stream_service_cs);
         g_world_stream_service_busy = 0;
         LeaveCriticalSection(&g_world_stream_service_cs);
 
-        Sleep(stream_generation_active() ? 1 : 8);
+        /* Active streaming gets frequent service, idle mode backs off hard so
+           uncapped rendering is not fighting a polling thread. */
+        Sleep(stream_generation_active() ? 1 : 20);
     }
     EnterCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_busy = 0;
@@ -6357,10 +6366,43 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 }
 
 static void world_stream_service_ensure(void) {
-    /* Disabled: committing/remapping world arrays from a service thread races
-       rendering.  The expensive chunk generation worker remains active; only the
-       small install/remap step is serialized on the game thread. */
+#if defined(PEX_PLATFORM_WII)
     return;
+#else
+    if (g_world_stream_service_initialized) return;
+    g_world_stream_service_initialized = 1;
+    g_world_stream_service_stop = 0;
+    g_world_stream_service_busy = 0;
+    InitializeCriticalSection(&g_world_stream_service_cs);
+    g_world_stream_service_thread = CreateThread(NULL, 0x400000, world_stream_service_proc, NULL, 0, NULL);
+    if (g_world_stream_service_thread) {
+        SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
+        pex_logf("world stream service started off main thread");
+    } else {
+        pex_logf("world stream service failed to start; streaming will be serviced by fallbacks only");
+    }
+#endif
+}
+
+static void world_stream_service_shutdown(void) {
+#if defined(PEX_PLATFORM_WII)
+    return;
+#else
+    if (!g_world_stream_service_initialized) return;
+    EnterCriticalSection(&g_world_stream_service_cs);
+    g_world_stream_service_stop = 1;
+    LeaveCriticalSection(&g_world_stream_service_cs);
+    if (g_world_stream_service_thread) {
+        WaitForSingleObject(g_world_stream_service_thread, INFINITE);
+        CloseHandle(g_world_stream_service_thread);
+        g_world_stream_service_thread = NULL;
+    }
+    DeleteCriticalSection(&g_world_stream_service_cs);
+    g_world_stream_service_initialized = 0;
+    g_world_stream_service_stop = 0;
+    g_world_stream_service_busy = 0;
+    pex_logf("world stream service stopped");
+#endif
 }
 
 static int world_stream_service_active(void) {
@@ -6466,11 +6508,9 @@ static void update_infinite_world_streaming(void) {
         s_wii_stream_chat_active = 0;
     }
 #else
-    if (g_stream_gen_queue_count > 0) {
-        hud_add_chat("Generating terrain chunks...");
-    } else {
-        hud_add_chat("Generated new terrain chunks.");
-    }
+    /* Streaming now runs on a service thread; do not mutate the chat HUD from
+       that thread.  Detailed progress is available in log.txt when verbose
+       chunk logging is enabled. */
 #endif
 }
 

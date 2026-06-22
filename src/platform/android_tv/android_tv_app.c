@@ -319,6 +319,7 @@ int main(int argc, char **argv) {
     InitializeCriticalSection(&g_save_cs);
     main_loop();
     set_mouse_grabbed(0);
+    world_stream_service_shutdown();
     ingame_tick_async_shutdown();
     async_section_mesh_shutdown();
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);

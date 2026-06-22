@@ -164,15 +164,14 @@ static void ingame_tick(void) {
            Running those while the renderer walks g_flat_* was the source of the
            ghost chunks and stack-overflow crash.  The worker sets a pump flag and
            the frame loop performs these commits outside ingame_tick(). */
-        if (!g_ingame_tick_async_worker_context) {
-            update_infinite_world_streaming();
-            flat_flush_pending_lighting();
-            prof_part = pex_profile_begin();
-            update_liquids();
-            pex_profile_add(PROF_LIQUIDS, prof_part);
-        } else {
-            g_ingame_tick_async_needs_main_pump = 1;
-        }
+        /* Keep world streaming off the render/game tick path.  The streaming
+           service thread owns terrain queueing/remap/install now; the tick
+           thread only starts it.  Liquids are left on the tick worker so water
+           simulation no longer creates a render-frame hitch. */
+        world_stream_service_ensure();
+        prof_part = pex_profile_begin();
+        update_liquids();
+        pex_profile_add(PROF_LIQUIDS, prof_part);
     }
     prof_part = pex_profile_begin();
     update_buttons_and_pressure_plates();
@@ -491,8 +490,11 @@ static void ingame_tick(void) {
 
     /* Deobf EntityLiving.fall: damage is ceil(fallDistance - 3). */
     if (g_player_on_ground) {
-        if (!was_on_ground && g_player_fall_distance > 0.5f) {
-            pex_sound_play(g_player_fall_distance > 3.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
+        /* b1.0 should not play the heavy landing sound on a normal jump.
+           Only play landing audio once the fall distance is near the damage
+           threshold; actual damage remains ceil(fallDistance - 3). */
+        if (!was_on_ground && g_player_fall_distance > 2.5f) {
+            pex_sound_play(g_player_fall_distance > 4.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
         }
         if (!was_on_ground && g_player_fall_distance > 3.0f) {
             int dmg = (int)ceilf(g_player_fall_distance - 3.0f);
@@ -659,7 +661,10 @@ static void ingame_tick_async_queue(void) {
     EnterCriticalSection(&g_ingame_tick_async_cs);
     /* Never allow a backlog to build.  If the sim cannot keep up, drop old
        requests instead of making the render thread hitch while catching up. */
-    if (g_ingame_tick_async_pending < 1) {
+    /* Allow a small backlog so walking never becomes a visible one-tick-at-a-time
+       crawl when the worker is busy for a few milliseconds.  The cap prevents
+       runaway catch-up hitches. */
+    if (g_ingame_tick_async_pending < 3) {
         g_ingame_tick_async_pending++;
     } else {
         g_ingame_tick_async_dropped++;
@@ -681,13 +686,10 @@ static void ingame_tick_async_pump_main_thread(void) {
           g_screen == SCREEN_DEATH)) return;
 
     g_ingame_tick_async_needs_main_pump = 0;
-    double t0 = pex_profile_begin();
-    update_infinite_world_streaming();
-    flat_flush_pending_lighting();
-    /* Liquids are time-gated internally; this keeps water/lava progressing
-       without letting the async tick mutate block arrays during draw. */
-    update_liquids();
-    pex_profile_add(PROF_WORLD_STREAM, t0);
+    /* The main/render thread no longer performs world streaming commits.
+       Starting/keeping the service alive here is cheap and avoids the old
+       frame-time spikes from chunk remap/install and lighting flushes. */
+    world_stream_service_ensure();
 #endif
 }
 

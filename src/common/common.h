@@ -1520,6 +1520,7 @@ static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs);
 static void update_liquids(void);
 static void update_infinite_world_streaming(void);
 static void world_stream_service_ensure(void);
+static void world_stream_service_shutdown(void);
 static int world_stream_service_active(void);
 static void stream_generation_queue_clear(void);
 static int item_icon_tile(int id);

@@ -5624,7 +5624,12 @@ static void draw_flat_test_world(void) {
         mark_flat_render_chunks_dirty_all();
     }
 
+#if defined(PEX_PLATFORM_WII)
     flat_flush_pending_lighting();
+#else
+    /* Desktop streaming/lighting commits are serviced off the render thread. */
+    if (g_mp_connected) flat_flush_pending_lighting();
+#endif
 
     double prof_part = pex_profile_begin();
     FlatFrustum fr;
