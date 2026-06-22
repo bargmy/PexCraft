@@ -1,22 +1,36 @@
-# First-pass Nintendo Wii build file for PexCraft.
+# Nintendo Wii build file for PexCraft.
 # Requires devkitPro/devkitPPC + libogc.
 # Usage from repository root:
 #   make -f platforms/wii/Makefile.wii
+
+.SUFFIXES:
 
 TARGET      := pexcraft-wii
 BUILD       := build/wii
 ROOT        ?= .
 DEVKITPRO  ?= /opt/devkitpro
 DEVKITPPC  ?= $(DEVKITPRO)/devkitPPC
+
+ifeq ($(strip $(DEVKITPPC)),)
+$(error "Please set DEVKITPPC in your environment. export DEVKITPPC=<path to>devkitPPC")
+endif
+
+# This is important: wii_rules supplies the Wii/libogc machine and linker
+# setup. Without the Wii MACHDEP (-mrvl) the link step misses libogc's
+# startup/linker-script symbols such as __bss_end, __Arena1Lo, and
+# __ppc_excpt_buf.
+include $(DEVKITPPC)/wii_rules
+
 PREFIX      := $(DEVKITPPC)/bin/powerpc-eabi-
 CC          := $(PREFIX)gcc
-OBJCOPY     := $(PREFIX)objcopy
 ELF2DOL    ?= $(DEVKITPRO)/tools/bin/elf2dol
 
-CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1 \
-          -mcpu=750 -meabi -mhard-float \
-          -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
-LDFLAGS := -L$(DEVKITPRO)/libogc/lib/wii -lfat -lwiiuse -lbte -logc -lm
+# Fallback for unusual installs where wii_rules did not define MACHDEP.
+MACHDEP    ?= -mrvl -mcpu=750 -meabi -mhard-float
+
+CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1           $(MACHDEP)           -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
+LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/$(TARGET).map -L$(DEVKITPRO)/libogc/lib/wii
+LIBS := -lfat -lwiiuse -lbte -logc -lm
 
 SRC := $(ROOT)/main_wii.c
 ELF := $(BUILD)/$(TARGET).elf
@@ -29,7 +43,7 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(ELF): $(SRC) | $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS) $(LIBS)
 
 $(DOL): $(ELF)
 	$(ELF2DOL) $< $@
