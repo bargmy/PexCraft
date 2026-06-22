@@ -112,7 +112,7 @@ A normal embedded-texture Wii build should be a few MB, not hundreds of MB.
 
 ## Dolphin diagnostics
 
-The Wii build prints boot stages through `OSReport()` and also brings up an early libogc text console before GX starts. In Dolphin, enable OSReport logging or check the log window for lines beginning with:
+The Wii build prints boot stages through `SYS_Report()` and also brings up an early libogc text console before GX starts. In Dolphin, enable OSReport/SYS_Report logging or check the log window for lines beginning with:
 
 ```text
 [PexCraft/Wii]

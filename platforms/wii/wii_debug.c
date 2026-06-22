@@ -1,5 +1,5 @@
 /* Wii/Dolphin diagnostics.
-   OSReport goes to Dolphin's log when OSReport logging is enabled. printf goes
+   SYS_Report goes to Dolphin's log when OSReport logging is enabled. printf goes
    to libogc's text console when the early video console is active. */
 
 static int g_wii_debug_console_ready = 0;
@@ -18,12 +18,12 @@ static void wii_debug_init_console(void) {
     VIDEO_Init();
     g_wii_debug_rmode = VIDEO_GetPreferredMode(NULL);
     if (!g_wii_debug_rmode) {
-        OSReport("[PexCraft/Wii] debug console: VIDEO_GetPreferredMode failed\n");
+        SYS_Report("[PexCraft/Wii] debug console: VIDEO_GetPreferredMode failed\n");
         return;
     }
     g_wii_debug_xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_debug_rmode));
     if (!g_wii_debug_xfb) {
-        OSReport("[PexCraft/Wii] debug console: framebuffer allocation failed\n");
+        SYS_Report("[PexCraft/Wii] debug console: framebuffer allocation failed\n");
         return;
     }
     console_init(g_wii_debug_xfb, 20, 20,
@@ -39,8 +39,8 @@ static void wii_debug_init_console(void) {
     g_wii_debug_console_ready = 1;
     printf("\x1b[2;0H");
     printf("PexCraft Wii debug console\n");
-    printf("Dolphin log: enable OSReport for full logs\n\n");
-    OSReport("[PexCraft/Wii] debug console initialized fb=%dx%d xfb=%d\n",
+    printf("Dolphin log: enable SYS_Report logging for full logs\n\n");
+    SYS_Report("[PexCraft/Wii] debug console initialized fb=%dx%d xfb=%d\n",
              (int)g_wii_debug_rmode->fbWidth,
              (int)g_wii_debug_rmode->efbHeight,
              (int)g_wii_debug_rmode->xfbHeight);
@@ -52,7 +52,7 @@ static void wii_debug_logf(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    OSReport("[PexCraft/Wii] %s\n", msg);
+    SYS_Report("[PexCraft/Wii] %s\n", msg);
     if (g_wii_debug_console_ready) {
         if (g_wii_debug_lines > 22) {
             printf("\x1b[2;0H\x1b[J");
