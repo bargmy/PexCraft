@@ -1778,11 +1778,19 @@ static void flat_world_begin_initial_generation(void) {
             }
         }
     }
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     process_stream_generation_queue();
+#else
+    world_stream_service_ensure();
+#endif
 }
 
 static void flat_world_continue_initial_generation(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     process_stream_generation_queue();
+#else
+    world_stream_service_ensure();
+#endif
 }
 
 static int flat_world_initial_generation_active(void) {
@@ -6341,14 +6349,14 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
         LeaveCriticalSection(&g_world_stream_service_cs);
         if (stop) break;
 
-        if ((g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
-             g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
-             g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
-             g_screen == SCREEN_DEATH) && !g_mp_connected) {
-            double t0 = pex_profile_begin();
+        if (g_screen == SCREEN_GENERATING && !g_mp_connected) {
+            /* Loading-screen terrain generation may run here, but in-game
+               streaming is deliberately NOT run on this service thread anymore.
+               The async ingame worker owns gameplay streaming so world-origin
+               remaps and player physics cannot fight each other.  Do not write
+               into the main-frame profiler from this worker. */
             update_infinite_world_streaming();
             flat_flush_pending_lighting();
-            pex_profile_add(PROF_WORLD_STREAM, t0);
         }
 
         EnterCriticalSection(&g_world_stream_service_cs);
@@ -6377,7 +6385,7 @@ static void world_stream_service_ensure(void) {
     g_world_stream_service_thread = CreateThread(NULL, 0x400000, world_stream_service_proc, NULL, 0, NULL);
     if (g_world_stream_service_thread) {
         SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
-        pex_logf("world stream service started off main thread");
+        pex_logf("world stream service started for loading screen only; gameplay streaming runs on async sim worker");
     } else {
         pex_logf("world stream service failed to start; streaming will be serviced by fallbacks only");
     }

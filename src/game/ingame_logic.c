@@ -158,17 +158,22 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
-        /* The desktop async tick worker is allowed to run gameplay off the render
-           thread, but active-world chunk remaps, lighting installs, and liquid
-           block writes still have to be committed from the main/render thread.
-           Running those while the renderer walks g_flat_* was the source of the
-           ghost chunks and stack-overflow crash.  The worker sets a pump flag and
-           the frame loop performs these commits outside ingame_tick(). */
-        /* Keep world streaming off the render/game tick path.  The streaming
-           service thread owns terrain queueing/remap/install now; the tick
-           thread only starts it.  Liquids are left on the tick worker so water
-           simulation no longer creates a render-frame hitch. */
-        world_stream_service_ensure();
+        /* In-game streaming must not run from the render frame.  Desktop does it
+           from the async simulation worker; PSP/Wii keep their old cooperative
+           path because their platform profiles are intentionally single-threaded. */
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+        prof_part = pex_profile_begin();
+        update_infinite_world_streaming();
+        flat_flush_pending_lighting();
+        pex_profile_add(PROF_WORLD_STREAM, prof_part);
+#else
+        if (g_ingame_tick_async_worker_context) {
+            prof_part = pex_profile_begin();
+            update_infinite_world_streaming();
+            flat_flush_pending_lighting();
+            pex_profile_add(PROF_WORLD_STREAM, prof_part);
+        }
+#endif
         prof_part = pex_profile_begin();
         update_liquids();
         pex_profile_add(PROF_LIQUIDS, prof_part);
@@ -493,8 +498,8 @@ static void ingame_tick(void) {
         /* b1.0 should not play the heavy landing sound on a normal jump.
            Only play landing audio once the fall distance is near the damage
            threshold; actual damage remains ceil(fallDistance - 3). */
-        if (!was_on_ground && g_player_fall_distance > 2.5f) {
-            pex_sound_play(g_player_fall_distance > 4.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
+        if (!was_on_ground && g_player_fall_distance > 3.0f) {
+            pex_sound_play(g_player_fall_distance > 6.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
         }
         if (!was_on_ground && g_player_fall_distance > 3.0f) {
             int dmg = (int)ceilf(g_player_fall_distance - 3.0f);
@@ -659,12 +664,11 @@ static void ingame_tick_async_queue(void) {
         return;
     }
     EnterCriticalSection(&g_ingame_tick_async_cs);
-    /* Never allow a backlog to build.  If the sim cannot keep up, drop old
-       requests instead of making the render thread hitch while catching up. */
-    /* Allow a small backlog so walking never becomes a visible one-tick-at-a-time
-       crawl when the worker is busy for a few milliseconds.  The cap prevents
-       runaway catch-up hitches. */
-    if (g_ingame_tick_async_pending < 3) {
+    /* Keep exactly one queued simulation step.  A backlog of 2-3 ticks made the
+       camera move in bursts after terrain work.  If the worker is late, drop
+       the old request and keep rendering smoothly instead of catching up in a
+       visible stutter burst. */
+    if (g_ingame_tick_async_pending < 1) {
         g_ingame_tick_async_pending++;
     } else {
         g_ingame_tick_async_dropped++;
@@ -686,10 +690,8 @@ static void ingame_tick_async_pump_main_thread(void) {
           g_screen == SCREEN_DEATH)) return;
 
     g_ingame_tick_async_needs_main_pump = 0;
-    /* The main/render thread no longer performs world streaming commits.
-       Starting/keeping the service alive here is cheap and avoids the old
-       frame-time spikes from chunk remap/install and lighting flushes. */
-    world_stream_service_ensure();
+    /* No main-thread streaming pump here.  Gameplay streaming is serviced by
+       the async ingame/simulation worker only. */
 #endif
 }
 
