@@ -48,7 +48,15 @@
 #define MAX_PATHBUF 1024
 #define ARRAY_COUNT(a) ((int)(sizeof(a)/sizeof((a)[0])))
 #ifndef PEX_THREAD_LOCAL
-#if defined(_MSC_VER)
+#if defined(PEX_PLATFORM_WII)
+/* devkitPPC/libogc Wii DOLs do not have the desktop TLS runtime that GCC
+   __thread assumes.  Leaving these as __thread makes small TLS offsets such
+   as 0x00000004 show up in the map and can turn globals into bogus pointers
+   at runtime, which caused Dolphin DSI crashes while preparing world meshes.
+   Wii currently runs mesh/world generation on the main thread, so plain static
+   storage is the safe choice. */
+#define PEX_THREAD_LOCAL
+#elif defined(_MSC_VER)
 #define PEX_THREAD_LOCAL __declspec(thread)
 #elif defined(__GNUC__)
 #define PEX_THREAD_LOCAL __thread
