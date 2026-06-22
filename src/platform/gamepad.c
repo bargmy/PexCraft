@@ -211,6 +211,11 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
 }
 
 
+#elif defined(PEX_PLATFORM_WII)
+static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    wii_poll_gamepads(oldpads);
+}
+
 #elif defined(PEX_PLATFORM_PSP)
 static unsigned int g_psp_buttons_prev_raw = 0;
 
@@ -616,7 +621,7 @@ static void pex_gamepad_shutdown(void) {
 #ifdef PEX_PLATFORM_SDL2
     pex_gamepad_sdl2_close_all();
 #endif
-#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP)
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
     if (g_xinput_dll) { FreeLibrary(g_xinput_dll); g_xinput_dll = NULL; g_xinput_get_state = NULL; }
 #endif
 }
@@ -634,7 +639,7 @@ static void draw_gamepad_virtual_cursor(void) {
 }
 
 static int pex_network_available(void) {
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #elif defined(PEX_PLATFORM_SDL2)
     SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
@@ -668,6 +673,14 @@ static void pex_query_system_info(void) {
     /* Real PSP free memory is what matters for PSP-1000 testing; PPSSPP model
        selection does not enforce a true 32MB heap. */
     g_system_info.ram_available_mb = (unsigned long long)(sceKernelTotalFreeMemSize() / (1024 * 1024));
+#elif defined(PEX_PLATFORM_WII)
+    snprintf(g_system_info.platform, sizeof(g_system_info.platform), "Nintendo Wii / devkitPPC + libogc");
+    snprintf(g_system_info.display_name, sizeof(g_system_info.display_name), "Wii video output");
+    g_system_info.display_refresh_hz = 60;
+    g_system_info.screen_w = g_render_w;
+    g_system_info.screen_h = g_render_h;
+    g_system_info.ram_total_mb = 88;
+    g_system_info.ram_available_mb = 0;
 #elif defined(PEX_PLATFORM_ANDROID)
     snprintf(g_system_info.platform, sizeof(g_system_info.platform), "Android / SDL2 Touch");
     g_system_info.display_name[0] = 0;

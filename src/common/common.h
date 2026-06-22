@@ -5,6 +5,8 @@
 // Build with MinGW32: gcc -std=c99 -O2 -mwindows main.c -o pexcraft.exe -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lwinmm
 #if defined(PEX_PLATFORM_PSP)
 #include "../platform/psp_compat.h"
+#elif defined(PEX_PLATFORM_WII)
+#include "../../platforms/wii/wii_compat.h"
 #elif defined(PEX_PLATFORM_ANDROID_TV)
 #include "../platform/android_tv/android_tv_compat.h"
 #elif defined(PEX_PLATFORM_SDL2)
@@ -343,7 +345,7 @@ static int g_renderer_prompt_target_screen = SCREEN_TITLE;
 static int g_renderer_backend_unavailable_notice = 0;
 static int g_texpack_drag_anchor = -1;
 static char g_current_texpack[MAX_LABEL] = "Default";
-#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static void *g_wic_factory = NULL;
 #else
 static IWICImagingFactory *g_wic_factory = NULL;
@@ -411,11 +413,11 @@ static double g_system_info_last_time = -10.0;
 
 /* Active in-memory terrain window.
    PC builds keep the larger 512x256x512 world window.
-   PSP cannot load an ELF with the PC-sized static terrain arrays: the three
+   PSP and Wii cannot use the PC-sized static terrain arrays: the three
    flat-world arrays alone are about 201 MB at 512*256*512.  Keep a separate
-   low-memory PSP window so PPSSPP/real PSP can actually load the EBOOT. */
-#if defined(PEX_PLATFORM_PSP)
-#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
+   low-memory console window so PPSSPP/real PSP and Wii homebrew can load. */
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
 /* Real PSP-1000 only has 32MB main RAM.  Keep the 128x128 horizontal window
    for streaming/render-distance behavior, but cap vertical storage to 96 blocks
    so the three dense block/meta/liquid arrays save about 1.6MB.  The real Beta
@@ -698,7 +700,7 @@ typedef struct PickupFx {
     float rot;
 } PickupFx;
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_CHEST_TILES 64
 #else
 #define MAX_CHEST_TILES 1024
@@ -709,7 +711,7 @@ typedef struct ChestTile {
     ItemStack slots[27];
 } ChestTile;
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_BUTTON_TIMERS 32
 #else
 #define MAX_BUTTON_TIMERS 128
@@ -720,7 +722,7 @@ typedef struct ButtonTimer {
     int ticks_left;
 } ButtonTimer;
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_PRESSURE_PLATE_TIMERS 32
 #else
 #define MAX_PRESSURE_PLATE_TIMERS 128
@@ -731,7 +733,7 @@ typedef struct PressurePlateTimer {
     int ticks_left;
 } PressurePlateTimer;
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_FURNACE_TILES 64
 #else
 #define MAX_FURNACE_TILES 1024
@@ -821,7 +823,7 @@ static int g_flat_world_origin_z = FLAT_WORLD_MIN;
 static int g_stream_last_center_chunk_x = 999999;
 static int g_stream_last_center_chunk_z = 999999;
 #define STREAM_GEN_QUEUE_MAX (FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS)
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define STREAM_CHUNKS_PER_TICK 1
 #else
 #define STREAM_CHUNKS_PER_TICK 2
@@ -923,7 +925,7 @@ static PexSaveSnapshot *g_save_queue_head = NULL;
 static PexSaveSnapshot *g_save_queue_tail = NULL;
 static CRITICAL_SECTION g_save_cs;
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_DIG_PARTICLES 96
 #else
 #define MAX_DIG_PARTICLES 384

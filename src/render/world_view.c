@@ -910,8 +910,13 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
     st->fog_start = g_d3d9.fog_start;
     st->fog_end = g_d3d9.fog_end;
     st->fog_color = g_d3d9.fog_color;
+#if defined(PEX_PLATFORM_WII)
+    glGetFloatv(GL_MODELVIEW_MATRIX, st->modelview);
+    glGetFloatv(GL_PROJECTION_MATRIX, st->projection);
+#else
     memcpy(st->modelview, g_d3d9.modelview.m, sizeof(st->modelview));
     memcpy(st->projection, g_d3d9.projection.m, sizeof(st->projection));
+#endif
 }
 
 static void world_set_shade(float shade) {

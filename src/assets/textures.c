@@ -233,6 +233,12 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
     snprintf(path, sizeof(path), "assets/%s", filename);
     if (load_mcrw_path(t, path, repeat)) return 1;
     snprintf(path, sizeof(path), "./assets/%s", filename);
+#elif defined(PEX_PLATFORM_WII)
+    snprintf(path, sizeof(path), "sd:/apps/pexcraft/assets/%s", filename);
+    if (load_mcrw_path(t, path, repeat)) return 1;
+    snprintf(path, sizeof(path), "assets/%s", filename);
+    if (load_mcrw_path(t, path, repeat)) return 1;
+    snprintf(path, sizeof(path), "./assets/%s", filename);
 #else
     snprintf(path, sizeof(path), "assets\\%s", filename);
     if (load_mcrw_path(t, path, repeat)) return 1;
@@ -241,7 +247,7 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
     return load_mcrw_path(t, path, repeat);
 }
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static int ensure_wic(void) { return 1; }
 static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
 #elif defined(PEX_PLATFORM_ANDROID)

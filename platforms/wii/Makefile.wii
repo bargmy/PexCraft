@@ -1,0 +1,41 @@
+# First-pass Nintendo Wii build file for PexCraft.
+# Requires devkitPro/devkitPPC + libogc.
+# Usage from repository root:
+#   make -f platforms/wii/Makefile.wii
+
+TARGET      := pexcraft-wii
+BUILD       := build/wii
+ROOT        ?= .
+DEVKITPRO  ?= /opt/devkitpro
+DEVKITPPC  ?= $(DEVKITPRO)/devkitPPC
+PREFIX      := $(DEVKITPPC)/bin/powerpc-eabi-
+CC          := $(PREFIX)gcc
+OBJCOPY     := $(PREFIX)objcopy
+ELF2DOL    ?= $(DEVKITPRO)/tools/bin/elf2dol
+
+CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1 \
+          -mcpu=750 -meabi -mhard-float \
+          -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
+LDFLAGS := -L$(DEVKITPRO)/libogc/lib/wii -lfat -lwiiuse -lbte -logc -lm
+
+SRC := $(ROOT)/main_wii.c
+ELF := $(BUILD)/$(TARGET).elf
+DOL := $(BUILD)/boot.dol
+
+.PHONY: all clean install-sd
+all: $(DOL)
+
+$(BUILD):
+	@mkdir -p $(BUILD)
+
+$(ELF): $(SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)
+
+$(DOL): $(ELF)
+	$(ELF2DOL) $< $@
+
+install-sd: $(DOL)
+	@echo "Copy $(DOL) to sd:/apps/pexcraft/boot.dol and copy assets/ to sd:/apps/pexcraft/assets/"
+
+clean:
+	rm -rf $(BUILD)
