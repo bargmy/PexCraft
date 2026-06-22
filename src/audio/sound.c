@@ -151,7 +151,12 @@ static const char *pex_sound_find_file(const char *key) {
 
 
 #if defined(PEX_PLATFORM_SDL2)
-typedef struct Mix_Chunk Mix_Chunk;
+typedef struct Mix_Chunk {
+    int allocated;
+    unsigned char *abuf;
+    unsigned int alen;
+    unsigned char volume;
+} Mix_Chunk;
 typedef int (*PFN_Mix_OpenAudio)(int, unsigned short, int, int);
 typedef int (*PFN_Mix_Init)(int);
 typedef void (*PFN_Mix_Quit)(void);
@@ -160,6 +165,7 @@ typedef int (*PFN_Mix_AllocateChannels)(int);
 typedef Mix_Chunk *(*PFN_Mix_LoadWAV_RW)(SDL_RWops *, int);
 typedef int (*PFN_Mix_PlayChannel)(int, Mix_Chunk *, int);
 typedef int (*PFN_Mix_VolumeChunk)(Mix_Chunk *, int);
+typedef int (*PFN_Mix_Volume)(int, int);
 typedef void (*PFN_Mix_FreeChunk)(Mix_Chunk *);
 static void *g_mix_lib = NULL;
 static PFN_Mix_OpenAudio pMix_OpenAudio = NULL;
@@ -170,6 +176,7 @@ static PFN_Mix_AllocateChannels pMix_AllocateChannels = NULL;
 static PFN_Mix_LoadWAV_RW pMix_LoadWAV_RW = NULL;
 static PFN_Mix_PlayChannel pMix_PlayChannel = NULL;
 static PFN_Mix_VolumeChunk pMix_VolumeChunk = NULL;
+static PFN_Mix_Volume pMix_Volume = NULL;
 static PFN_Mix_FreeChunk pMix_FreeChunk = NULL;
 static int g_mix_ready = 0;
 
@@ -177,6 +184,21 @@ typedef struct PexSoundChunkCache { char path[MAX_PATHBUF]; Mix_Chunk *chunk; } 
 #define PEX_SOUND_CHUNK_CACHE_MAX 128
 static PexSoundChunkCache g_sound_chunk_cache[PEX_SOUND_CHUNK_CACHE_MAX];
 static int g_sound_chunk_cache_count = 0;
+
+typedef struct PexSoundPitchChunkCache {
+    char path[MAX_PATHBUF];
+    int pitch_q;
+    Mix_Chunk chunk;
+} PexSoundPitchChunkCache;
+#define PEX_SOUND_PITCH_CACHE_MAX 96
+static PexSoundPitchChunkCache g_sound_pitch_cache[PEX_SOUND_PITCH_CACHE_MAX];
+static int g_sound_pitch_cache_count = 0;
+
+static float pex_sound_clamp_pitch(float pitch) {
+    if (pitch < 0.50f) pitch = 0.50f;
+    if (pitch > 2.00f) pitch = 2.00f;
+    return pitch;
+}
 
 static void *pex_sdl_load_mixer_symbol(const char *name) {
     return g_mix_lib ? SDL_LoadFunction(g_mix_lib, name) : NULL;
@@ -205,6 +227,7 @@ static int pex_sound_backend_init(void) {
         pMix_LoadWAV_RW = (PFN_Mix_LoadWAV_RW)pex_sdl_load_mixer_symbol("Mix_LoadWAV_RW");
         pMix_PlayChannel = (PFN_Mix_PlayChannel)pex_sdl_load_mixer_symbol("Mix_PlayChannel");
         pMix_VolumeChunk = (PFN_Mix_VolumeChunk)pex_sdl_load_mixer_symbol("Mix_VolumeChunk");
+        pMix_Volume = (PFN_Mix_Volume)pex_sdl_load_mixer_symbol("Mix_Volume");
         pMix_FreeChunk = (PFN_Mix_FreeChunk)pex_sdl_load_mixer_symbol("Mix_FreeChunk");
         if (!pMix_OpenAudio || !pMix_LoadWAV_RW || !pMix_PlayChannel) { log_msg("Sound backend: SDL2_mixer missing required symbols"); return 0; }
     }
@@ -236,17 +259,63 @@ static Mix_Chunk *pex_sound_load_chunk_cached(const char *path) {
     return c;
 }
 
+static Mix_Chunk *pex_sound_get_pitched_chunk(const char *path, Mix_Chunk *base, float pitch) {
+    pitch = pex_sound_clamp_pitch(pitch);
+    if (!base || !base->abuf || base->alen < 4 || fabsf(pitch - 1.0f) < 0.015f) return base;
+    int q = (int)floorf(pitch * 100.0f + 0.5f);
+    for (int i = 0; i < g_sound_pitch_cache_count; ++i) {
+        if (g_sound_pitch_cache[i].pitch_q == q && !strcmp(g_sound_pitch_cache[i].path, path)) return &g_sound_pitch_cache[i].chunk;
+    }
+
+    const unsigned int frame_bytes = 4; /* Mix_OpenAudio uses signed 16-bit stereo. */
+    unsigned int src_frames = base->alen / frame_bytes;
+    if (src_frames < 2) return base;
+    unsigned int dst_frames = (unsigned int)((float)src_frames / pitch);
+    if (dst_frames < 2) dst_frames = 2;
+    unsigned int dst_bytes = dst_frames * frame_bytes;
+    unsigned char *buf = (unsigned char *)malloc(dst_bytes);
+    if (!buf) return base;
+    for (unsigned int i = 0; i < dst_frames; ++i) {
+        unsigned int si = (unsigned int)((float)i * pitch);
+        if (si >= src_frames) si = src_frames - 1;
+        memcpy(buf + i * frame_bytes, base->abuf + si * frame_bytes, frame_bytes);
+    }
+
+    int slot = g_sound_pitch_cache_count;
+    if (slot >= PEX_SOUND_PITCH_CACHE_MAX) {
+        slot = rand() % PEX_SOUND_PITCH_CACHE_MAX;
+        free(g_sound_pitch_cache[slot].chunk.abuf);
+    } else {
+        g_sound_pitch_cache_count++;
+    }
+    memset(&g_sound_pitch_cache[slot], 0, sizeof(g_sound_pitch_cache[slot]));
+    snprintf(g_sound_pitch_cache[slot].path, sizeof(g_sound_pitch_cache[slot].path), "%s", path);
+    g_sound_pitch_cache[slot].pitch_q = q;
+    g_sound_pitch_cache[slot].chunk.allocated = 1;
+    g_sound_pitch_cache[slot].chunk.abuf = buf;
+    g_sound_pitch_cache[slot].chunk.alen = dst_bytes;
+    g_sound_pitch_cache[slot].chunk.volume = 128;
+    return &g_sound_pitch_cache[slot].chunk;
+}
+
 static int pex_sound_backend_play_file(const char *path, float volume, float pitch) {
-    (void)pitch;
-    Mix_Chunk *c = pex_sound_load_chunk_cached(path);
+    Mix_Chunk *base = pex_sound_load_chunk_cached(path);
+    Mix_Chunk *c = pex_sound_get_pitched_chunk(path, base, pitch);
     if (!c) return 0;
     int v = (int)(volume * 128.0f);
     if (v < 0) v = 0; if (v > 128) v = 128;
-    if (pMix_VolumeChunk) pMix_VolumeChunk(c, v);
-    return pMix_PlayChannel(-1, c, 0) >= 0;
+    if (pMix_VolumeChunk) pMix_VolumeChunk(c, pMix_Volume ? 128 : v);
+    int ch = pMix_PlayChannel(-1, c, 0);
+    if (ch >= 0 && pMix_Volume) pMix_Volume(ch, v);
+    return ch >= 0;
 }
 
 static void pex_sound_shutdown(void) {
+    for (int i = 0; i < g_sound_pitch_cache_count; ++i) {
+        free(g_sound_pitch_cache[i].chunk.abuf);
+        g_sound_pitch_cache[i].chunk.abuf = NULL;
+    }
+    g_sound_pitch_cache_count = 0;
     for (int i = 0; i < g_sound_chunk_cache_count; ++i) {
         if (pMix_FreeChunk && g_sound_chunk_cache[i].chunk) pMix_FreeChunk(g_sound_chunk_cache[i].chunk);
         g_sound_chunk_cache[i].chunk = NULL;
@@ -424,7 +493,6 @@ static DWORD WINAPI pex_win_play_thread(LPVOID arg) {
 }
 
 static int pex_sound_backend_play_file(const char *path, float volume, float pitch) {
-    (void)pitch;
     if (!path || !*path) return 0;
     PexWinDecodedSound *cached = pex_win_get_decoded_sound(path);
     if (!cached || !cached->data || cached->bytes == 0) return 0;
@@ -436,6 +504,15 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     memcpy(job->data, cached->data, cached->bytes);
     job->bytes = cached->bytes;
     job->fmt = cached->fmt;
+    if (pitch < 0.50f) pitch = 0.50f;
+    if (pitch > 2.00f) pitch = 2.00f;
+    if (fabsf(pitch - 1.0f) > 0.015f) {
+        DWORD sr = (DWORD)((float)job->fmt.nSamplesPerSec * pitch);
+        if (sr < 4000) sr = 4000;
+        if (sr > 192000) sr = 192000;
+        job->fmt.nSamplesPerSec = sr;
+        job->fmt.nAvgBytesPerSec = job->fmt.nSamplesPerSec * job->fmt.nBlockAlign;
+    }
     job->volume = volume;
 
     HANDLE th = CreateThread(NULL, 0, pex_win_play_thread, job, 0, NULL);

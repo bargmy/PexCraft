@@ -4720,13 +4720,17 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
         PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][0];
         if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] && h) rb->draw_mesh(h, &st);
     }
-    if (g_opts.fancy_graphics) {
-        flat_direct_make_state(&st, 1);
-        for (int i = count - 1; i >= 0; i--) {
-            int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-            PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][1];
-            if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] && h) rb->draw_mesh(h, &st);
-        }
+}
+
+static void draw_flat_section_translucent_passes_direct(const FlatRenderSectionRef *refs, int count) {
+    PexRendererBackend *rb = flat_direct_backend();
+    if (!rb || !g_opts.fancy_graphics) return;
+    PexRenderState st;
+    flat_direct_make_state(&st, 1);
+    for (int i = count - 1; i >= 0; i--) {
+        int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][1];
+        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] && h) rb->draw_mesh(h, &st);
     }
 }
 
@@ -4750,23 +4754,28 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
         }
     }
-
-    if (g_opts.fancy_graphics) {
-        glDisable(GL_ALPHA_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
-        for (int i = count - 1; i >= 0; i--) {
-            int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-            if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
-                flat_gl_cpu_mesh_drawable(sy, cz, cx, 1)) {
-                flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
-            }
-        }
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
-    }
     glDisable(GL_ALPHA_TEST);
+    glColor4f(1,1,1,1);
+}
+
+static void draw_flat_section_translucent_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
+    if (!g_opts.fancy_graphics) return;
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (int i = count - 1; i >= 0; i--) {
+        int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
+            flat_gl_cpu_mesh_drawable(sy, cz, cx, 1)) {
+            flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
+        }
+    }
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
 }
 
@@ -4784,22 +4793,27 @@ static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count
             glCallList(g_flat_section_lists[sy][cz][cx][0]);
         }
     }
+    glColor4f(1,1,1,1);
+}
 
+static void draw_flat_section_translucent_passes(const FlatRenderSectionRef *refs, int count) {
+    if (!g_opts.fancy_graphics) return;
+    if (flat_direct_backend()) { draw_flat_section_translucent_passes_direct(refs, count); return; }
+    if (flat_async_section_mesh_enabled()) { draw_flat_section_translucent_passes_gl_cpu(refs, count); return; }
+    glDisable(GL_CULL_FACE);
     glDisable(GL_ALPHA_TEST);
-    if (g_opts.fancy_graphics) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
-        for (int i = count - 1; i >= 0; i--) {
-            int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-            if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
-                g_flat_section_lists[sy][cz][cx][1] != 0) {
-                glCallList(g_flat_section_lists[sy][cz][cx][1]);
-            }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (int i = count - 1; i >= 0; i--) {
+        int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
+            g_flat_section_lists[sy][cz][cx][1] != 0) {
+            glCallList(g_flat_section_lists[sy][cz][cx][1]);
         }
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
     }
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
 }
 
@@ -5572,12 +5586,13 @@ static void draw_flat_test_world(void) {
     g_name_matrices_valid = 1;
     draw_falling_blocks(g_frame_partial);
     draw_passive_mobs(g_frame_partial);
-    draw_block_selection_border();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     draw_dropped_items();
     draw_pickup_fx_items();
     draw_dig_particles(g_frame_partial);
+    draw_flat_section_translucent_passes(g_flat_visible_sections, visible_count);
+    draw_block_selection_border();
     draw_remote_break_overlays();
     if (g_breaking_block && flat_get_block(g_break_x, g_break_y, g_break_z) != 0) {
         float dmg = g_prev_break_damage + (g_break_damage - g_prev_break_damage) * g_frame_partial;

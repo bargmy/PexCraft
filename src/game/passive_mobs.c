@@ -17,6 +17,57 @@ static float passive_lerp_angle(float a, float b, float partial) {
     return a + pex_wrap_degrees(b - a) * partial;
 }
 
+static int passive_block_is_liquid(int id) {
+    return block_is_liquid(id);
+}
+
+static int passive_block_is_water(int id) {
+    return block_is_water(id);
+}
+
+static int passive_mob_aabb_has_liquid_box(float minx, float miny, float minz, float maxx, float maxy, float maxz, int water_only) {
+    int x0 = (int)floorf(minx);
+    int x1 = (int)floorf(maxx - 0.001f);
+    int y0 = (int)floorf(miny);
+    int y1 = (int)floorf(maxy - 0.001f);
+    int z0 = (int)floorf(minz);
+    int z1 = (int)floorf(maxz - 0.001f);
+    for (int y = y0; y <= y1; ++y) {
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                int id = flat_get_block(x, y, z);
+                if (water_only ? passive_block_is_water(id) : passive_block_is_liquid(id)) return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int passive_mob_in_water(const PassiveMob *m) {
+    float hw = m->width * 0.5f;
+    return passive_mob_aabb_has_liquid_box(m->x - hw, m->y - 0.40f, m->z - hw,
+                                           m->x + hw, m->y + m->height, m->z + hw, 1);
+}
+
+static int passive_mob_in_liquid(const PassiveMob *m) {
+    float hw = m->width * 0.5f;
+    return passive_mob_aabb_has_liquid_box(m->x - hw, m->y - 0.40f, m->z - hw,
+                                           m->x + hw, m->y + m->height, m->z + hw, 0);
+}
+
+static int passive_mob_spawn_near_liquid(int x, int y, int z) {
+    for (int oz = -1; oz <= 1; ++oz) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            if (passive_block_is_liquid(flat_get_block(x + ox, y - 1, z + oz)) ||
+                passive_block_is_liquid(flat_get_block(x + ox, y, z + oz)) ||
+                passive_block_is_liquid(flat_get_block(x + ox, y + 1, z + oz))) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static const char *passive_mob_name(int type) {
     switch (type) {
         case PASSIVE_MOB_PIG: return "Pig";
@@ -145,6 +196,8 @@ static void passive_mob_move_entity(PassiveMob *m, float dx, float dy, float dz)
     m->y = box.miny;
     m->z = (box.minz + box.maxz) * 0.5f;
     m->on_ground = (ody != dy && ody < 0.0f) ? 1 : 0;
+    m->collided_horizontal = (odx != dx || odz != dz) ? 1 : 0;
+    m->collided_vertical = (ody != dy) ? 1 : 0;
     if (odx != dx) m->mx = 0.0f;
     if (ody != dy) m->my = 0.0f;
     if (odz != dz) m->mz = 0.0f;
@@ -155,6 +208,7 @@ static int passive_mob_spawn_ok(int x, int y, int z) {
     if (flat_get_block(x, y - 1, z) != BLOCK_GRASS) return 0;
     if (flat_get_block(x, y, z) != 0) return 0;
     if (flat_get_block(x, y + 1, z) != 0) return 0;
+    if (passive_mob_spawn_near_liquid(x, y, z)) return 0;
     if (flat_combined_light_value(x, y, z) <= 8) return 0;
     float dx = ((float)x + 0.5f) - g_player_x;
     float dy = (float)y - g_player_y;
@@ -241,7 +295,11 @@ static void passive_mob_choose_target(PassiveMob *m) {
         int z = (int)floorf(m->z + (float)(rand() % 13) - 6.0f);
         if (y <= FLAT_WORLD_Y_MIN || y + 1 > FLAT_WORLD_Y_MAX) continue;
         if (flat_get_block(x, y, z) != 0 || flat_get_block(x, y + 1, z) != 0) continue;
-        float w = flat_get_block(x, y - 1, z) == BLOCK_GRASS ? 10.0f : (float)flat_combined_light_value(x, y, z) / 15.0f - 0.5f;
+        int below = flat_get_block(x, y - 1, z);
+        if (passive_block_is_liquid(below)) continue;
+        if (below != BLOCK_GRASS && !flat_block_is_solid_for_collision(below)) continue;
+        if (passive_mob_spawn_near_liquid(x, y, z)) continue;
+        float w = below == BLOCK_GRASS ? 10.0f : (float)flat_combined_light_value(x, y, z) / 15.0f - 0.5f;
         if (w > best_weight) { best_weight = w; best_x = x; best_y = y; best_z = z; }
     }
     if (best_weight > -9999.0f) {
@@ -434,7 +492,15 @@ static void passive_mob_update_living(PassiveMob *m) {
         if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type), (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
     }
 
-    if (!m->has_path_target || (rand() % 80) == 0) passive_mob_choose_target(m);
+    m->was_in_water = m->in_water;
+    m->in_water = passive_mob_in_water(m);
+    int in_liquid = m->in_water || passive_mob_in_liquid(m);
+    if (m->in_water && !m->was_in_water) {
+        spawn_water_entry_particles(m->x, m->y + 0.15f, m->z, m->mx, m->mz);
+        pex_sound_play_at("random.splash", m->x, m->y, m->z, 1.0f, 1.0f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
+    }
+
+    if (!m->has_path_target || (rand() % 120) == 0 || (in_liquid && (rand() % 20) == 0)) passive_mob_choose_target(m);
 
     float forward = 0.0f;
     if (m->has_path_target) {
@@ -448,11 +514,17 @@ static void passive_mob_update_living(PassiveMob *m) {
             float turn = pex_wrap_degrees(desired - m->yaw);
             turn = pex_clamp_float(turn, -30.0f, 30.0f);
             m->yaw += turn;
-            forward = 0.055f;
-            if (m->target_y > m->y + 0.20f || fabsf(turn) > 25.0f) {
-                if (m->on_ground) m->my = 0.32f;
-            }
+            forward = in_liquid ? 0.014f : 0.035f;
+            if (m->target_y > m->y + 0.20f && m->on_ground) m->my = 0.42f;
         }
+    }
+
+    if (in_liquid && (m->collided_horizontal || (rand() % 10) < 8)) {
+        m->my += 0.04f;
+        if (m->my > 0.30f) m->my = 0.30f;
+    }
+    if (!in_liquid && m->collided_horizontal && m->on_ground) {
+        m->my = 0.42f;
     }
 
     if (m->type == PASSIVE_MOB_CHICKEN) {
@@ -476,20 +548,29 @@ static void passive_mob_update_living(PassiveMob *m) {
         m->mx += -sinf(yaw_rad) * forward;
         m->mz += cosf(yaw_rad) * forward;
     }
-    m->my -= 0.08f;
-    if (m->my < -1.0f) m->my = -1.0f;
+    if (in_liquid) {
+        passive_mob_move_entity(m, m->mx, m->my, m->mz);
+        m->mx *= m->in_water ? 0.80f : 0.50f;
+        m->my *= m->in_water ? 0.80f : 0.50f;
+        m->mz *= m->in_water ? 0.80f : 0.50f;
+        m->my -= 0.02f;
+        if (m->collided_horizontal && m->my < 0.30f) m->my = 0.30f;
+    } else {
+        m->my -= 0.08f;
+        if (m->my < -1.0f) m->my = -1.0f;
 
-    passive_mob_move_entity(m, m->mx, m->my, m->mz);
-    float friction = m->on_ground ? 0.546f : 0.91f;
-    m->mx *= friction;
-    m->mz *= friction;
-    m->my *= 0.98f;
-    if (m->on_ground && m->my < 0.0f) m->my = 0.0f;
+        passive_mob_move_entity(m, m->mx, m->my, m->mz);
+        float friction = m->on_ground ? 0.546f : 0.91f;
+        m->mx *= friction;
+        m->mz *= friction;
+        m->my *= 0.98f;
+        if (m->on_ground && m->my < 0.0f) m->my = 0.0f;
+    }
 
     float dx = m->x - m->prev_x;
     float dz = m->z - m->prev_z;
     float speed = sqrtf(dx*dx + dz*dz);
-    float target_amount = (speed > 0.01f && m->on_ground) ? pex_clamp_float(speed * 12.0f, 0.0f, 1.0f) : 0.0f;
+    float target_amount = (speed > 0.01f && (m->on_ground || in_liquid)) ? pex_clamp_float(speed * 7.0f, 0.0f, 1.0f) : 0.0f;
     m->limb_amount += (target_amount - m->limb_amount) * 0.4f;
     m->limb_swing += m->limb_amount;
     if (speed > 0.05f) {
@@ -515,13 +596,13 @@ static void passive_mobs_apply_riding(void) {
         g_player_riding_passive_mob = -1;
         return;
     }
-    float old_x = g_player_x, old_y = g_player_y, old_z = g_player_z;
+    float mount_eye_offset = m->height * 0.75f + 1.62f;
     g_player_x = m->x;
-    g_player_y = m->y + 1.72f;
+    g_player_y = m->y + mount_eye_offset;
     g_player_z = m->z;
-    g_player_prev_x = old_x;
-    g_player_prev_y = old_y;
-    g_player_prev_z = old_z;
+    g_player_prev_x = m->prev_x;
+    g_player_prev_y = m->prev_y + mount_eye_offset;
+    g_player_prev_z = m->prev_z;
     g_player_motion_x = m->mx;
     g_player_motion_y = m->my;
     g_player_motion_z = m->mz;

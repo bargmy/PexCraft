@@ -349,6 +349,10 @@ typedef struct PassiveMob {
     int hurt_time;
     int death_time;
     int on_ground;
+    int collided_horizontal;
+    int collided_vertical;
+    int in_water;
+    int was_in_water;
     int age;
     int living_sound_delay;
     float limb_swing;

@@ -4484,7 +4484,7 @@ static void update_breaking(void) {
     }
     g_break_sound_counter += 1.0f;
     if (((int)g_break_sound_counter % 4) == 0) {
-        pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.35f, 0.5f);
+        pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.50f, 0.8f);
     }
     if (g_break_damage >= 1.0f) {
         break_target_block();
@@ -4533,6 +4533,23 @@ static void consume_held_stack_one(ItemStack *held, int replacement_id) {
     }
 }
 
+static int try_eat_held_food(ItemStack *held) {
+    if (!held || stack_empty(held) || g_player_dead || g_player_health <= 0) return 0;
+    int heal = item_food_heal_amount(held->id);
+    if (heal <= 0) return 0;
+
+    /* Beta 1.0 ItemFood.onItemRightClick consumes immediately and EntityLiving.heal
+       simply caps at 20; it does not require aiming at a block and it does not
+       refuse the item when already at full health. */
+    g_player_health += heal;
+    if (g_player_health > 20) g_player_health = 20;
+    g_hearts_life = 20;
+    consume_held_stack_one(held, held->id == ITEM_BOWL_SOUP ? ITEM_BOWL_EMPTY : 0);
+    g_save_dirty = 1;
+    restart_hand_swing();
+    return 1;
+}
+
 static void hit_adjacent_cell(const FlatRayHit *hit, int *px, int *py, int *pz) {
     *px = hit->bx; *py = hit->by; *pz = hit->bz;
     if (hit->face == 0) (*py)--;
@@ -4550,16 +4567,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
     int px, py, pz;
     hit_adjacent_cell(hit, &px, &py, &pz);
 
-    int heal = item_food_heal_amount(id);
-    if (heal > 0) {
-        if (g_player_health >= 20) return 0;
-        g_player_health += heal;
-        if (g_player_health > 20) g_player_health = 20;
-        consume_held_stack_one(held, id == ITEM_BOWL_SOUP ? ITEM_BOWL_EMPTY : 0);
-        g_save_dirty = 1;
-        restart_hand_swing();
-        return 1;
-    }
+    if (item_food_heal_amount(id) > 0) return try_eat_held_food(held);
 
     if (held_is_hoe_item(id)) {
         if (hit->face != 1) return 0;
@@ -4640,7 +4648,8 @@ static void ingame_right_click(void) {
     if (g_screen != SCREEN_INGAME) return;
 
     FlatRayHit hit = flat_raycast();
-    if (!hit.hit) return;
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    if (!hit.hit) { try_eat_held_food(held); return; }
 
     int target_id = flat_get_block(hit.bx, hit.by, hit.bz);
     int sneaking = key_down_vk(g_opts.keys[5]);
@@ -4672,7 +4681,6 @@ static void ingame_right_click(void) {
         }
     }
 
-    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (stack_empty(held)) return;
     if (try_use_nonblock_item(held, &hit, target_id)) return;
     if (!item_is_placeable_block_id(held->id)) return;

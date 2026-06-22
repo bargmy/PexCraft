@@ -533,9 +533,9 @@ static void ingame_tick(void) {
         int bz = (int)floorf(g_player_z);
         int step_block = flat_get_block(bx, by, bz);
         if (step_block > 0 && !block_is_liquid(step_block)) {
-            pex_sound_play_at(pex_block_step_sound_key(step_block), g_player_x, g_player_y - 1.0f, g_player_z, 0.25f, 1.0f);
+            pex_sound_play_at(pex_block_step_sound_key(step_block), g_player_x, g_player_y - 1.0f, g_player_z, 0.15f, 1.0f);
         }
-        g_next_footstep_distance = g_distance_walked + 0.60f;
+        g_next_footstep_distance = floorf(g_distance_walked) + 1.0f;
     }
     if (!g_player_on_ground) g_next_footstep_distance = g_distance_walked + 0.30f;
 
