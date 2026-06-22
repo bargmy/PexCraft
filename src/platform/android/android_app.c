@@ -282,7 +282,7 @@ static void main_loop(void) {
             ticks_this_frame++;
         }
         if (ticks_this_frame >= 3 && tick_accum > 1.0) tick_accum = 1.0;
-        float partial = (float)tick_accum;
+        float partial = ingame_tick_async_render_partial((float)tick_accum);
         if (g_mp_connected) pex_net_update_smoothing();
         ingame_tick_async_pump_main_thread();
         render(partial);

@@ -580,13 +580,15 @@ static void ingame_tick(void) {
 
 
 /* -------------------------------------------------------------------------
-   Desktop async ingame tick pump
+   Desktop async ingame/simulation worker
 
-   The renderer must keep OpenGL/D3D calls on the main thread, but the heavy
-   gameplay tick does not need to run inside the frame.  This worker consumes
-   20 Hz tick requests and executes ingame_tick() off-thread.  To avoid the old
-   chunk-remap races, render-unsafe world commits are skipped in the worker and
-   performed by ingame_tick_async_pump_main_thread() with a tiny frame budget.
+   The render thread must keep all GL/D3D calls, window messages, and final mesh
+   uploads.  Gameplay simulation and in-game world streaming are paced by this
+   worker instead of by the frame loop.  The old async path still let the main
+   thread enqueue/drop tick requests; when terrain work made the worker late,
+   walking advanced in visible bursts.  The worker below owns the 20 Hz clock,
+   keeps at most one simulation step in flight, and lets render interpolate from
+   the time of the last completed worker tick.
    ------------------------------------------------------------------------- */
 
 #if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
@@ -595,100 +597,129 @@ static void ingame_tick(void) {
 #define PEX_ASYNC_INGAME_TICK 0
 #endif
 
+static int ingame_tick_screen_allows_simulation(void) {
+    return g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
+           g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+           g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
+           g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE);
+}
+
 #if PEX_ASYNC_INGAME_TICK
 static CRITICAL_SECTION g_ingame_tick_async_cs;
-static HANDLE g_ingame_tick_async_event = NULL;
 static HANDLE g_ingame_tick_async_thread = NULL;
 static int g_ingame_tick_async_initialized = 0;
 static int g_ingame_tick_async_stop = 0;
-static int g_ingame_tick_async_pending = 0;
 static int g_ingame_tick_async_busy_flag = 0;
-static int g_ingame_tick_async_dropped = 0;
 static int g_ingame_tick_async_failed = 0;
+static int g_ingame_tick_async_completed = 0;
+static double g_ingame_tick_async_last_completed_time = 0.0;
 
 static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
     (void)unused;
+    const double tick_dt = 1.0 / 20.0;
+    double next_tick_time = now_seconds() + tick_dt;
+
     for (;;) {
-        WaitForSingleObject(g_ingame_tick_async_event, INFINITE);
-        for (;;) {
-            int run_tick = 0;
-            EnterCriticalSection(&g_ingame_tick_async_cs);
-            if (g_ingame_tick_async_stop) {
-                LeaveCriticalSection(&g_ingame_tick_async_cs);
-                return 0;
-            }
-            if (g_ingame_tick_async_pending > 0) {
-                g_ingame_tick_async_pending--;
-                g_ingame_tick_async_busy_flag = 1;
-                run_tick = 1;
-            } else {
-                g_ingame_tick_async_busy_flag = 0;
-            }
-            LeaveCriticalSection(&g_ingame_tick_async_cs);
-            if (!run_tick) break;
+        int stop = 0;
+        EnterCriticalSection(&g_ingame_tick_async_cs);
+        stop = g_ingame_tick_async_stop;
+        LeaveCriticalSection(&g_ingame_tick_async_cs);
+        if (stop) break;
 
-            g_ingame_tick_async_worker_context = 1;
-            ingame_tick();
-            g_ingame_tick_async_worker_context = 0;
-
-            EnterCriticalSection(&g_ingame_tick_async_cs);
-            g_ingame_tick_async_busy_flag = 0;
-            LeaveCriticalSection(&g_ingame_tick_async_cs);
+        double now = now_seconds();
+        double wait = next_tick_time - now;
+        if (wait > 0.0) {
+            DWORD ms = (DWORD)(wait * 1000.0);
+            if (ms > 4) ms = 4;
+            Sleep(ms > 0 ? ms : 1);
+            continue;
         }
+
+        /* Do not spiral after a breakpoint, alt-tab, shader compile, or very
+           slow chunk install.  Dropping old wall-clock time is less visible than
+           running several player-physics ticks back-to-back. */
+        if (now - next_tick_time > 0.25) next_tick_time = now;
+        next_tick_time += tick_dt;
+
+        if (!ingame_tick_screen_allows_simulation() || g_mp_connected || pex_net_is_connecting()) {
+            Sleep(1);
+            continue;
+        }
+
+        EnterCriticalSection(&g_ingame_tick_async_cs);
+        g_ingame_tick_async_busy_flag = 1;
+        LeaveCriticalSection(&g_ingame_tick_async_cs);
+
+        g_ingame_tick_async_worker_context = 1;
+        ingame_tick();
+        g_ingame_tick_async_worker_context = 0;
+
+        EnterCriticalSection(&g_ingame_tick_async_cs);
+        g_ingame_tick_async_busy_flag = 0;
+        g_ingame_tick_async_completed++;
+        g_ingame_tick_async_last_completed_time = now_seconds();
+        LeaveCriticalSection(&g_ingame_tick_async_cs);
     }
+    return 0;
 }
 
 static void ingame_tick_async_init(void) {
     if (g_ingame_tick_async_initialized || g_ingame_tick_async_failed) return;
     g_ingame_tick_async_initialized = 1;
+    g_ingame_tick_async_stop = 0;
+    g_ingame_tick_async_busy_flag = 0;
+    g_ingame_tick_async_completed = 0;
+    g_ingame_tick_async_last_completed_time = now_seconds();
     InitializeCriticalSection(&g_ingame_tick_async_cs);
-    g_ingame_tick_async_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (!g_ingame_tick_async_event) { g_ingame_tick_async_failed = 1; return; }
     /* Give the worker enough stack for the legacy C tick path and collision
        helpers.  A tiny stack caused 0xC00000FD in previous worker attempts. */
     g_ingame_tick_async_thread = CreateThread(NULL, 0x400000, ingame_tick_async_worker_proc, NULL, 0, NULL);
     if (!g_ingame_tick_async_thread) { g_ingame_tick_async_failed = 1; return; }
     SetThreadPriority(g_ingame_tick_async_thread, THREAD_PRIORITY_ABOVE_NORMAL);
-    pex_logf("async ingame tick worker started");
+    pex_logf("async ingame simulation worker started");
 }
 #endif
 
 static void ingame_tick_async_queue(void) {
 #if PEX_ASYNC_INGAME_TICK
-    /* Multiplayer client tick applies network state and sends packets; keep it
-       synchronous until that path is explicitly double-buffered. */
+    /* Multiplayer still applies network state and sends packets from the main
+       frame path until that path is explicitly double-buffered.  Single-player
+       desktop simulation is owned by the worker and this call only ensures the
+       worker exists; it does not enqueue or execute gameplay on the main thread. */
     if (g_mp_connected || pex_net_is_connecting()) { ingame_tick(); return; }
     ingame_tick_async_init();
-    if (g_ingame_tick_async_failed || !g_ingame_tick_async_thread || !g_ingame_tick_async_event) {
+    if (g_ingame_tick_async_failed || !g_ingame_tick_async_thread) {
         ingame_tick();
         return;
     }
-    EnterCriticalSection(&g_ingame_tick_async_cs);
-    /* Keep exactly one queued simulation step.  A backlog of 2-3 ticks made the
-       camera move in bursts after terrain work.  If the worker is late, drop
-       the old request and keep rendering smoothly instead of catching up in a
-       visible stutter burst. */
-    if (g_ingame_tick_async_pending < 1) {
-        g_ingame_tick_async_pending++;
-    } else {
-        g_ingame_tick_async_dropped++;
-    }
-    LeaveCriticalSection(&g_ingame_tick_async_cs);
-    SetEvent(g_ingame_tick_async_event);
 #else
     ingame_tick();
+#endif
+}
+
+static float ingame_tick_async_render_partial(float fallback_partial) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized || g_ingame_tick_async_failed ||
+        !g_ingame_tick_async_thread || g_mp_connected || pex_net_is_connecting()) {
+        return fallback_partial;
+    }
+    double last = 0.0;
+    EnterCriticalSection(&g_ingame_tick_async_cs);
+    last = g_ingame_tick_async_last_completed_time;
+    LeaveCriticalSection(&g_ingame_tick_async_cs);
+    if (last <= 0.0) return fallback_partial;
+    float p = (float)((now_seconds() - last) * 20.0);
+    if (p < 0.0f) p = 0.0f;
+    if (p > 1.0f) p = 1.0f;
+    return p;
+#else
+    return fallback_partial;
 #endif
 }
 
 static void ingame_tick_async_pump_main_thread(void) {
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_needs_main_pump) return;
-    if (g_mp_connected) { g_ingame_tick_async_needs_main_pump = 0; return; }
-    if (!(g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
-          g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
-          g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
-          g_screen == SCREEN_DEATH)) return;
-
     g_ingame_tick_async_needs_main_pump = 0;
     /* No main-thread streaming pump here.  Gameplay streaming is serviced by
        the async ingame/simulation worker only. */
@@ -698,38 +729,27 @@ static void ingame_tick_async_pump_main_thread(void) {
 static void ingame_tick_async_shutdown(void) {
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_initialized) return;
-    if (g_ingame_tick_async_event) {
+    if (g_ingame_tick_async_thread) {
         EnterCriticalSection(&g_ingame_tick_async_cs);
         g_ingame_tick_async_stop = 1;
         LeaveCriticalSection(&g_ingame_tick_async_cs);
-        SetEvent(g_ingame_tick_async_event);
-    }
-    if (g_ingame_tick_async_thread) {
         WaitForSingleObject(g_ingame_tick_async_thread, INFINITE);
         CloseHandle(g_ingame_tick_async_thread);
         g_ingame_tick_async_thread = NULL;
     }
-    if (g_ingame_tick_async_event) {
-        CloseHandle(g_ingame_tick_async_event);
-        g_ingame_tick_async_event = NULL;
-    }
     DeleteCriticalSection(&g_ingame_tick_async_cs);
     g_ingame_tick_async_initialized = 0;
     g_ingame_tick_async_stop = 0;
-    g_ingame_tick_async_pending = 0;
     g_ingame_tick_async_busy_flag = 0;
-    pex_logf("async ingame tick worker stopped; dropped=%d", g_ingame_tick_async_dropped);
+    pex_logf("async ingame simulation worker stopped; completed=%d", g_ingame_tick_async_completed);
 #endif
 }
 
 static int ingame_tick_async_pending_count(void) {
 #if PEX_ASYNC_INGAME_TICK
-    if (!g_ingame_tick_async_initialized) return 0;
-    int v;
-    EnterCriticalSection(&g_ingame_tick_async_cs);
-    v = g_ingame_tick_async_pending;
-    LeaveCriticalSection(&g_ingame_tick_async_cs);
-    return v;
+    /* The worker owns its 20 Hz clock now, so there is no main-thread tick
+       request queue to backlog. */
+    return 0;
 #else
     return 0;
 #endif
@@ -750,7 +770,7 @@ static int ingame_tick_async_busy(void) {
 
 static int ingame_tick_async_dropped_count(void) {
 #if PEX_ASYNC_INGAME_TICK
-    return g_ingame_tick_async_dropped;
+    return 0;
 #else
     return 0;
 #endif
