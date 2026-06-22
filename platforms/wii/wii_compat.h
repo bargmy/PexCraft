@@ -9,6 +9,7 @@
 #include <wiiuse/wpad.h>
 #include <fat.h>
 #include <ogc/lwp.h>
+#include <ogc/lwp_watchdog.h>
 #include <ogc/system.h>
 #include <ogc/cache.h>
 #include <sys/types.h>
@@ -120,7 +121,7 @@ typedef uint8_t BYTE;
 typedef uint16_t WORD;
 typedef uint32_t DWORD;
 typedef int32_t LONG;
-typedef int BOOL;
+/* BOOL is provided by libogc/gcbool.h as unsigned int. */
 typedef unsigned int UINT;
 typedef uintptr_t WPARAM;
 typedef intptr_t LPARAM;
