@@ -498,7 +498,7 @@ typedef struct FlatFallingBlock {
 #else
 /* Keep the b1.0 passive cap small.  The original port draws mobs with
    immediate-mode cube parts, so 40 animals can murder the frame rate. */
-#define MAX_PASSIVE_MOBS 12
+#define MAX_PASSIVE_MOBS 8
 #endif
 
 typedef enum PassiveMobType {
@@ -1425,6 +1425,12 @@ static void start_classic_pack_install(void);
 static void classic_pack_install_tick(void);
 static void enter_world_from_job(void);
 static void ingame_tick(void);
+static void ingame_tick_async_queue(void);
+static void ingame_tick_async_pump_main_thread(void);
+static void ingame_tick_async_shutdown(void);
+static int ingame_tick_async_pending_count(void);
+static int ingame_tick_async_busy(void);
+static int ingame_tick_async_dropped_count(void);
 static void hud_add_chat(const char *msg);
 static void reset_flat_player_spawn(void);
 static void start_air_swing_once(void);

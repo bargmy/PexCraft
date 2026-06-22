@@ -3955,6 +3955,7 @@ typedef struct AsyncSectionMeshJob {
     int cx, cz, sy;
     int origin_x, origin_z;
     unsigned int version;
+    int snapshot_ready;
     unsigned char blocks[ASYNC_SECTION_MESH_BYTES];
     unsigned char meta[ASYNC_SECTION_MESH_BYTES];
     unsigned char levels[ASYNC_SECTION_MESH_BYTES];
@@ -4147,6 +4148,30 @@ static DWORD WINAPI async_section_mesh_upload_worker_proc(LPVOID unused) {
     }
 }
 
+
+static void async_section_mesh_capture_snapshot(AsyncSectionMeshJob *job) {
+    if (!job || job->snapshot_ready) return;
+    int sx0 = job->origin_x + job->cx * FLAT_RENDER_CHUNK - 1;
+    int sy0 = FLAT_WORLD_Y_MIN + job->sy * FLAT_RENDER_SECTION - 1;
+    int sz0 = job->origin_z + job->cz * FLAT_RENDER_CHUNK - 1;
+    for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
+        int wy = sy0 + iy;
+        for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
+            int wz = sz0 + iz;
+            for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
+                int wx = sx0 + ix;
+                int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
+                job->blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
+                job->meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
+                job->levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
+                job->sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
+                job->block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
+            }
+        }
+    }
+    job->snapshot_ready = 1;
+}
+
 static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
     (void)unused;
     for (;;) {
@@ -4169,6 +4194,12 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             }
             LeaveCriticalSection(&g_async_section_mesh_cs);
             if (!have_job) break;
+
+            /* Snapshot capture is intentionally on this worker, not in
+               rebuild_visible_flat_sections().  That removes the 18x18x18
+               block/light scan from the render frame.  Origin/version checks
+               below discard the result if the world shifted meanwhile. */
+            async_section_mesh_capture_snapshot(&job);
 
             FlatDirectMeshBuilder mb0, mb1;
             int skip0 = 1, skip1 = 1;
@@ -4268,57 +4299,35 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
     if (!g_async_section_mesh_event || !g_async_section_mesh_thread) return 0;
     if (pex_using_d3d11() && (!g_async_section_mesh_upload_event || !g_async_section_mesh_upload_thread)) return 0;
 
-    int can_submit = 0;
     EnterCriticalSection(&g_async_section_mesh_cs);
-    if (!g_async_section_mesh_stop && g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX) can_submit = 1;
-    LeaveCriticalSection(&g_async_section_mesh_cs);
-    if (!can_submit) return 2;
-
-    AsyncSectionMeshJob job;
-    memset(&job, 0, sizeof(job));
-    job.cx = cx;
-    job.cz = cz;
-    job.sy = sy;
-    job.origin_x = g_flat_world_origin_x;
-    job.origin_z = g_flat_world_origin_z;
-    job.version = g_flat_section_mesh_version[sy][cz][cx];
-    int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
-    int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
-    int sz0 = job.origin_z + cz * FLAT_RENDER_CHUNK - 1;
-    for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
-        int wy = sy0 + iy;
-        for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
-            int wz = sz0 + iz;
-            for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
-                int wx = sx0 + ix;
-                int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
-                job.blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
-                job.meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
-                job.levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
-                job.sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
-                job.block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
-            }
-        }
+    if (g_async_section_mesh_stop || g_async_section_mesh_job_count >= ASYNC_SECTION_MESH_JOB_QUEUE_MAX ||
+        g_flat_section_mesh_building[sy][cz][cx]) {
+        LeaveCriticalSection(&g_async_section_mesh_cs);
+        return 2;
     }
 
-    EnterCriticalSection(&g_async_section_mesh_cs);
-    if (!g_async_section_mesh_stop && g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX &&
-        !g_flat_section_mesh_building[sy][cz][cx]) {
-        g_async_section_mesh_jobs[g_async_section_mesh_job_tail] = job;
-        g_async_section_mesh_job_tail = (g_async_section_mesh_job_tail + 1) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
-        g_async_section_mesh_job_count++;
-        g_flat_section_mesh_building[sy][cz][cx] = 1;
-        can_submit = 1;
-    } else {
-        can_submit = 0;
-    }
+    /* Do not copy the section here.  This function runs from Mesh main during
+       the frame, so it only enqueues a tiny request; the worker captures the
+       block/light snapshot and builds the mesh. */
+    int origin_x = g_flat_world_origin_x;
+    int origin_z = g_flat_world_origin_z;
+    unsigned int version = g_flat_section_mesh_version[sy][cz][cx];
+    AsyncSectionMeshJob *job = &g_async_section_mesh_jobs[g_async_section_mesh_job_tail];
+    job->cx = cx;
+    job->cz = cz;
+    job->sy = sy;
+    job->origin_x = origin_x;
+    job->origin_z = origin_z;
+    job->version = version;
+    job->snapshot_ready = 0;
+    g_async_section_mesh_job_tail = (g_async_section_mesh_job_tail + 1) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
+    g_async_section_mesh_job_count++;
+    g_flat_section_mesh_building[sy][cz][cx] = 1;
     LeaveCriticalSection(&g_async_section_mesh_cs);
-    if (can_submit) {
-        pex_logf_trace("chunk mesh submit sy=%d local=%d,%d version=%u origin=%d,%d", sy, cx, cz, job.version, job.origin_x, job.origin_z);
-        SetEvent(g_async_section_mesh_event);
-        return 1;
-    }
-    return 2;
+
+    pex_logf_trace("chunk mesh request sy=%d local=%d,%d version=%u origin=%d,%d", sy, cx, cz, version, origin_x, origin_z);
+    SetEvent(g_async_section_mesh_event);
+    return 1;
 }
 
 static void async_section_mesh_install_ready(int max_uploads) {
@@ -4690,7 +4699,7 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
     if (!g_worldgen_mesh_prep_active) worldgen_mesh_prep_build_list();
     if (max_rebuilds < 1) max_rebuilds = 1;
 
-    if (flat_direct_backend()) {
+    if (flat_async_section_mesh_enabled()) {
 #if defined(PEX_PLATFORM_WII)
         /* Wii: do not enter the async section-mesh worker while loading a world.
            The previous build crashed at flat_get_block() from the worker snapshot

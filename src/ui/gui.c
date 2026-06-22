@@ -147,6 +147,9 @@ static void draw_hud(void) {
         snprintf(line, sizeof(line), "Falling active %d  wakeups %d  spawned %d", g_prof_falling_active_last, g_prof_falling_cells_last, g_prof_falling_spawns_last);
         draw_text(line, right_x, ry, 14737632); ry += 10;
         snprintf(line, sizeof(line), "Stream pending %d", g_prof_stream_pending_last);
+        draw_text(line, right_x, ry, 14737632); ry += 10;
+        snprintf(line, sizeof(line), "Async tick pending %d  busy %d  dropped %d",
+                 ingame_tick_async_pending_count(), ingame_tick_async_busy(), ingame_tick_async_dropped_count());
         draw_text(line, right_x, ry, 14737632);
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);

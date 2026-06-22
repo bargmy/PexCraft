@@ -265,7 +265,7 @@ static void main_loop(void) {
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
-                g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) ingame_tick();
+                g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) ingame_tick_async_queue();
             pex_profile_add(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
@@ -273,6 +273,7 @@ static void main_loop(void) {
         if (ticks_this_frame >= 3 && tick_accum > 1.0) tick_accum = 1.0;
         float partial = (float)tick_accum;
         if (g_mp_connected) pex_net_update_smoothing();
+        ingame_tick_async_pump_main_thread();
         render(partial);
         sleep_for_max_fps(frame_start_time);
         pex_profile_frame_end();
@@ -318,6 +319,7 @@ int main(int argc, char **argv) {
     InitializeCriticalSection(&g_save_cs);
     main_loop();
     set_mouse_grabbed(0);
+    ingame_tick_async_shutdown();
     async_section_mesh_shutdown();
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);
     free_texture(&tex_black); free_texture(&tex_pack); free_texture(&tex_default_pack_icon); free_texture(&tex_unknown_pack);

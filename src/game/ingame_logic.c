@@ -125,6 +125,12 @@ static int flat_player_try_step_move(float nx, float base_y, float nz) {
 }
 
 
+/* Async tick context flags are defined before ingame_tick() because the
+   synchronous function checks whether it is currently running on the tick
+   worker. */
+static PEX_THREAD_LOCAL int g_ingame_tick_async_worker_context = 0;
+static volatile int g_ingame_tick_async_needs_main_pump = 0;
+
 static void ingame_tick(void) {
     double prof_ingame_start = pex_profile_begin();
     double prof_part = 0.0;
@@ -152,16 +158,21 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
-        /* Keep active-world commits/remaps and light installs on the game thread.
-           Chunk generation and section meshing still run on workers, but the old
-           background stream service could remap g_flat_* arrays while the render
-           thread was walking them, causing ghost chunks, false dark sections, and
-           stack-overflow crashes during chunk shifts. */
-        update_infinite_world_streaming();
-        flat_flush_pending_lighting();
-        prof_part = pex_profile_begin();
-        update_liquids();
-        pex_profile_add(PROF_LIQUIDS, prof_part);
+        /* The desktop async tick worker is allowed to run gameplay off the render
+           thread, but active-world chunk remaps, lighting installs, and liquid
+           block writes still have to be committed from the main/render thread.
+           Running those while the renderer walks g_flat_* was the source of the
+           ghost chunks and stack-overflow crash.  The worker sets a pump flag and
+           the frame loop performs these commits outside ingame_tick(). */
+        if (!g_ingame_tick_async_worker_context) {
+            update_infinite_world_streaming();
+            flat_flush_pending_lighting();
+            prof_part = pex_profile_begin();
+            update_liquids();
+            pex_profile_add(PROF_LIQUIDS, prof_part);
+        } else {
+            g_ingame_tick_async_needs_main_pump = 1;
+        }
     }
     prof_part = pex_profile_begin();
     update_buttons_and_pressure_plates();
@@ -559,3 +570,184 @@ static void ingame_tick(void) {
     pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
 }
 
+
+
+/* -------------------------------------------------------------------------
+   Desktop async ingame tick pump
+
+   The renderer must keep OpenGL/D3D calls on the main thread, but the heavy
+   gameplay tick does not need to run inside the frame.  This worker consumes
+   20 Hz tick requests and executes ingame_tick() off-thread.  To avoid the old
+   chunk-remap races, render-unsafe world commits are skipped in the worker and
+   performed by ingame_tick_async_pump_main_thread() with a tiny frame budget.
+   ------------------------------------------------------------------------- */
+
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+#define PEX_ASYNC_INGAME_TICK 1
+#else
+#define PEX_ASYNC_INGAME_TICK 0
+#endif
+
+#if PEX_ASYNC_INGAME_TICK
+static CRITICAL_SECTION g_ingame_tick_async_cs;
+static HANDLE g_ingame_tick_async_event = NULL;
+static HANDLE g_ingame_tick_async_thread = NULL;
+static int g_ingame_tick_async_initialized = 0;
+static int g_ingame_tick_async_stop = 0;
+static int g_ingame_tick_async_pending = 0;
+static int g_ingame_tick_async_busy_flag = 0;
+static int g_ingame_tick_async_dropped = 0;
+static int g_ingame_tick_async_failed = 0;
+
+static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
+    (void)unused;
+    for (;;) {
+        WaitForSingleObject(g_ingame_tick_async_event, INFINITE);
+        for (;;) {
+            int run_tick = 0;
+            EnterCriticalSection(&g_ingame_tick_async_cs);
+            if (g_ingame_tick_async_stop) {
+                LeaveCriticalSection(&g_ingame_tick_async_cs);
+                return 0;
+            }
+            if (g_ingame_tick_async_pending > 0) {
+                g_ingame_tick_async_pending--;
+                g_ingame_tick_async_busy_flag = 1;
+                run_tick = 1;
+            } else {
+                g_ingame_tick_async_busy_flag = 0;
+            }
+            LeaveCriticalSection(&g_ingame_tick_async_cs);
+            if (!run_tick) break;
+
+            g_ingame_tick_async_worker_context = 1;
+            ingame_tick();
+            g_ingame_tick_async_worker_context = 0;
+
+            EnterCriticalSection(&g_ingame_tick_async_cs);
+            g_ingame_tick_async_busy_flag = 0;
+            LeaveCriticalSection(&g_ingame_tick_async_cs);
+        }
+    }
+}
+
+static void ingame_tick_async_init(void) {
+    if (g_ingame_tick_async_initialized || g_ingame_tick_async_failed) return;
+    g_ingame_tick_async_initialized = 1;
+    InitializeCriticalSection(&g_ingame_tick_async_cs);
+    g_ingame_tick_async_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_ingame_tick_async_event) { g_ingame_tick_async_failed = 1; return; }
+    /* Give the worker enough stack for the legacy C tick path and collision
+       helpers.  A tiny stack caused 0xC00000FD in previous worker attempts. */
+    g_ingame_tick_async_thread = CreateThread(NULL, 0x400000, ingame_tick_async_worker_proc, NULL, 0, NULL);
+    if (!g_ingame_tick_async_thread) { g_ingame_tick_async_failed = 1; return; }
+    SetThreadPriority(g_ingame_tick_async_thread, THREAD_PRIORITY_ABOVE_NORMAL);
+    pex_logf("async ingame tick worker started");
+}
+#endif
+
+static void ingame_tick_async_queue(void) {
+#if PEX_ASYNC_INGAME_TICK
+    /* Multiplayer client tick applies network state and sends packets; keep it
+       synchronous until that path is explicitly double-buffered. */
+    if (g_mp_connected || pex_net_is_connecting()) { ingame_tick(); return; }
+    ingame_tick_async_init();
+    if (g_ingame_tick_async_failed || !g_ingame_tick_async_thread || !g_ingame_tick_async_event) {
+        ingame_tick();
+        return;
+    }
+    EnterCriticalSection(&g_ingame_tick_async_cs);
+    /* Never allow a backlog to build.  If the sim cannot keep up, drop old
+       requests instead of making the render thread hitch while catching up. */
+    if (g_ingame_tick_async_pending < 1) {
+        g_ingame_tick_async_pending++;
+    } else {
+        g_ingame_tick_async_dropped++;
+    }
+    LeaveCriticalSection(&g_ingame_tick_async_cs);
+    SetEvent(g_ingame_tick_async_event);
+#else
+    ingame_tick();
+#endif
+}
+
+static void ingame_tick_async_pump_main_thread(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_needs_main_pump) return;
+    if (g_mp_connected) { g_ingame_tick_async_needs_main_pump = 0; return; }
+    if (!(g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
+          g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+          g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
+          g_screen == SCREEN_DEATH)) return;
+
+    g_ingame_tick_async_needs_main_pump = 0;
+    double t0 = pex_profile_begin();
+    update_infinite_world_streaming();
+    flat_flush_pending_lighting();
+    /* Liquids are time-gated internally; this keeps water/lava progressing
+       without letting the async tick mutate block arrays during draw. */
+    update_liquids();
+    pex_profile_add(PROF_WORLD_STREAM, t0);
+#endif
+}
+
+static void ingame_tick_async_shutdown(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized) return;
+    if (g_ingame_tick_async_event) {
+        EnterCriticalSection(&g_ingame_tick_async_cs);
+        g_ingame_tick_async_stop = 1;
+        LeaveCriticalSection(&g_ingame_tick_async_cs);
+        SetEvent(g_ingame_tick_async_event);
+    }
+    if (g_ingame_tick_async_thread) {
+        WaitForSingleObject(g_ingame_tick_async_thread, INFINITE);
+        CloseHandle(g_ingame_tick_async_thread);
+        g_ingame_tick_async_thread = NULL;
+    }
+    if (g_ingame_tick_async_event) {
+        CloseHandle(g_ingame_tick_async_event);
+        g_ingame_tick_async_event = NULL;
+    }
+    DeleteCriticalSection(&g_ingame_tick_async_cs);
+    g_ingame_tick_async_initialized = 0;
+    g_ingame_tick_async_stop = 0;
+    g_ingame_tick_async_pending = 0;
+    g_ingame_tick_async_busy_flag = 0;
+    pex_logf("async ingame tick worker stopped; dropped=%d", g_ingame_tick_async_dropped);
+#endif
+}
+
+static int ingame_tick_async_pending_count(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized) return 0;
+    int v;
+    EnterCriticalSection(&g_ingame_tick_async_cs);
+    v = g_ingame_tick_async_pending;
+    LeaveCriticalSection(&g_ingame_tick_async_cs);
+    return v;
+#else
+    return 0;
+#endif
+}
+
+static int ingame_tick_async_busy(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized) return 0;
+    int v;
+    EnterCriticalSection(&g_ingame_tick_async_cs);
+    v = g_ingame_tick_async_busy_flag;
+    LeaveCriticalSection(&g_ingame_tick_async_cs);
+    return v;
+#else
+    return 0;
+#endif
+}
+
+static int ingame_tick_async_dropped_count(void) {
+#if PEX_ASYNC_INGAME_TICK
+    return g_ingame_tick_async_dropped;
+#else
+    return 0;
+#endif
+}
