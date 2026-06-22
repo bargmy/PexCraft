@@ -15,12 +15,20 @@ static int file_exists(const char *path) {
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+/* Generated in GitHub Actions as build/<platform>_generated/*_mcrw_assets.pak
+   and embedded into the console executable through an .incbin assembly wrapper.
+   This avoids requiring texture files on external storage. */
 #if defined(PEX_PLATFORM_PSP)
-/* Generated in GitHub Actions as build/psp_generated/psp_mcrw_assets.pak
-   and embedded into EBOOT.PBP through build/psp_generated/psp_mcrw_assets.S.
-   This avoids committing a giant generated 0xNN C-array file. */
 extern const unsigned char pexcraft_psp_mcrw_assets_pak_start[];
 extern const unsigned char pexcraft_psp_mcrw_assets_pak_end[];
+#elif defined(PEX_PLATFORM_WII)
+extern const unsigned char pexcraft_wii_mcrw_assets_pak_start[];
+extern const unsigned char pexcraft_wii_mcrw_assets_pak_end[];
+#ifndef PEX_PSP_LOGF
+#define PEX_PSP_LOGF(...) do { } while (0)
+#endif
+#endif
 #endif
 
 static void free_texture(Texture *t) {
@@ -49,7 +57,7 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     return t->id != 0;
 }
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static const char *pex_basename_asset(const char *path) {
     const char *base = path;
     for (const char *p = path; p && *p; ++p) {
@@ -101,7 +109,7 @@ static int psp_make_fallback_texture(Texture *t, const char *name, int w, int h,
 }
 
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static void psp_drop_texture_cpu_copy(Texture *t) {
     if (!t || !t->rgba) return;
     free(t->rgba);
@@ -131,8 +139,16 @@ static void psp_drop_gui_texture_cpu_copies(void) {
 #endif
 
 static const unsigned char *psp_mcrw_pak_data(size_t *out_len) {
+#if defined(PEX_PLATFORM_PSP)
     const unsigned char *start = pexcraft_psp_mcrw_assets_pak_start;
     const unsigned char *end = pexcraft_psp_mcrw_assets_pak_end;
+#elif defined(PEX_PLATFORM_WII)
+    const unsigned char *start = pexcraft_wii_mcrw_assets_pak_start;
+    const unsigned char *end = pexcraft_wii_mcrw_assets_pak_end;
+#else
+    const unsigned char *start = NULL;
+    const unsigned char *end = NULL;
+#endif
     size_t len = 0;
     if (end >= start) len = (size_t)(end - start);
     if (out_len) *out_len = len;
@@ -225,7 +241,7 @@ static int load_mcrw_path(Texture *t, const char *path, int repeat) {
 }
 
 static int load_mcrw(Texture *t, const char *filename, int repeat) {
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     if (load_embedded_mcrw(t, filename, repeat)) return 1;
 #endif
     char path[MAX_PATHBUF];
@@ -234,11 +250,9 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
     if (load_mcrw_path(t, path, repeat)) return 1;
     snprintf(path, sizeof(path), "./assets/%s", filename);
 #elif defined(PEX_PLATFORM_WII)
-    snprintf(path, sizeof(path), "sd:/apps/pexcraft/assets/%s", filename);
-    if (load_mcrw_path(t, path, repeat)) return 1;
-    snprintf(path, sizeof(path), "assets/%s", filename);
-    if (load_mcrw_path(t, path, repeat)) return 1;
-    snprintf(path, sizeof(path), "./assets/%s", filename);
+    /* Wii textures are linked into boot.dol.  Do not require sd:/assets. */
+    (void)path;
+    return 0;
 #else
     snprintf(path, sizeof(path), "assets\\%s", filename);
     if (load_mcrw_path(t, path, repeat)) return 1;
@@ -497,7 +511,7 @@ static void classic_pack_path(char *out, size_t cap) {
 }
 
 static int classic_pack_installed(void) {
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 1;
 #endif
     char dir[MAX_PATHBUF], terrain[MAX_PATHBUF], gui[MAX_PATHBUF], font[MAX_PATHBUF];
@@ -509,7 +523,7 @@ static int classic_pack_installed(void) {
 }
 
 static int classic_pack_missing_required_textures(void) {
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #endif
     char dir[MAX_PATHBUF], items[MAX_PATHBUF], terrain[MAX_PATHBUF];
@@ -575,8 +589,8 @@ static void scan_texture_packs(void) {
 
     add_builtin_classic_texture_pack(&wanted);
 
-#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
-    /* PSP assets are linked into EBOOT.PBP; do not scan or create texturepack folders. */
+#if (defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY) || defined(PEX_PLATFORM_WII)
+    /* Console assets are linked into the executable; do not scan or create texturepack folders. */
     g_selected_texpack = wanted;
     snprintf(g_current_texpack, sizeof(g_current_texpack), "%s", g_texpacks[g_selected_texpack].name);
     clamp_texpack_scroll();
@@ -611,8 +625,8 @@ static void scan_texture_packs(void) {
 }
 
 static int load_default_textures(void) {
-#if defined(PEX_PLATFORM_PSP)
-    /* PSP must never stop booting just because an embedded texture is missing.
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    /* Console builds must never stop booting just because an embedded texture is missing.
        Log every asset, then create a tiny fallback texture so we can reach the
        menu and debug the renderer/input on real hardware/PPSSPP. */
     int missing = 0;
@@ -642,7 +656,11 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
     psp_drop_gui_texture_cpu_copies();
+    #if defined(PEX_PLATFORM_PSP)
     PEX_PSP_LOGF("load_default_textures PSP done: missing_required=%d embedded_count=%u free=%u", missing, psp_embedded_mcrw_count(), (unsigned)sceKernelTotalFreeMemSize());
+#else
+    PEX_PSP_LOGF("load_default_textures Wii done: missing_required=%d embedded_count=%u", missing, psp_embedded_mcrw_count());
+#endif
 #undef PEX_PSP_LOAD_REQ
 #undef PEX_PSP_LOAD_OPT
     return 1;
@@ -692,11 +710,11 @@ static void apply_texture_pack_index(int index) {
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", g_texpacks[index].name);
     save_options();
     if (!g_texpacks[index].is_default) {
-#if defined(PEX_PLATFORM_PSP)
-        /* The PSP build already uses CI-converted Classic .mcrw assets as its
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+        /* Console builds already use CI-converted Classic .mcrw assets as their
            default embedded textures.  No PNG texturepack files are needed. */
         init_font_widths();
-        log_msg("Applied embedded PSP texture pack: %s", g_current_texpack);
+        log_msg("Applied embedded console texture pack: %s", g_current_texpack);
         return;
 #else
         TexturePackEntry *e = &g_texpacks[index];

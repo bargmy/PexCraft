@@ -130,6 +130,7 @@ int main(int argc, char **argv) {
     g_opts.anaglyph = 0;
     g_opts.show_fps = 1;
     g_opts.ignore_classic_resources_warning = 1;
+    wii_install_embedded_classic_pack_if_needed();
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;

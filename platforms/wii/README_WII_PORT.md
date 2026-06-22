@@ -1,6 +1,6 @@
-# PexCraft Wii port scaffold
+# PexCraft Wii port
 
-This is a first-pass native Wii port scaffold.  It keeps the existing PC/PSP/Android paths intact and adds a Wii-specific path under `platforms/wii/`.
+This is the native Wii build path.  Wii-specific code lives under `platforms/wii/`, while the source entrypoint is `src/main_wii.c` with a root `main_wii.c` wrapper for the Makefile/CI job.
 
 ## Build target
 
@@ -14,8 +14,31 @@ Expected toolchain:
 - libogc
 - fatfs/libfat
 - wiiuse/WPAD
+- Python 3 + Pillow for generating the embedded texture bundle
 
-The build output is intended to become `sd:/apps/pexcraft/boot.dol`.
+The build output is:
+
+```text
+build/wii/boot.dol
+```
+
+## Embedded texture bundle
+
+The Wii build must not depend on external texture files for gameplay.  It follows the PSP-style flow:
+
+1. `tools/prepare_wii_assets.py` downloads `client.jar` during CI.
+2. The needed PNGs are converted to `.mcrw`.
+3. The `.mcrw` files are packed into `build/wii_generated/wii_mcrw_assets.pak`.
+4. `build/wii_generated/wii_mcrw_assets.S` embeds that pak with `.incbin`.
+5. `platforms/wii/Makefile.wii` links the generated object into `boot.dol`.
+
+So the Wii artifact only needs:
+
+```text
+sd:/apps/pexcraft/boot.dol
+```
+
+The app may still create saves/options on SD, but textures are loaded from the DOL, not from `sd:/apps/pexcraft/assets/` or `sd:/apps/pexcraft/texturepacks/`.
 
 ## Files added
 
@@ -26,8 +49,9 @@ The build output is intended to become `sd:/apps/pexcraft/boot.dol`.
 - `platforms/wii/wii_filesystem.c` - SD-card filesystem/timing/profile layer
 - `platforms/wii/wii_input.c` - Classic Controller, GameCube Controller, Wiimote+Nunchuk input
 - `platforms/wii/wii_app.c` - Wii app bootstrap and main loop
-- `platforms/wii/wii_classic_pack_stub.c` - disables runtime Classic pack download on Wii
-- `platforms/wii/Makefile.wii` - first-pass devkitPPC build file
+- `platforms/wii/wii_classic_pack_embedded.c` - embedded-DOL Classic pack handler
+- `platforms/wii/Makefile.wii` - devkitPPC build file
+- `tools/prepare_wii_assets.py` - client.jar -> MCRW -> embedded pak generator
 
 ## Controller priority
 
@@ -51,20 +75,22 @@ Classic Controller mapping:
 
 ## Runtime layout
 
-Place the app at:
+Minimum app layout:
 
 ```text
 sd:/apps/pexcraft/boot.dol
-sd:/apps/pexcraft/assets/
-sd:/apps/pexcraft/saves/
-sd:/apps/pexcraft/texturepacks/
-sd:/apps/pexcraft/skins/
+sd:/apps/pexcraft/meta.xml
 ```
 
-## Current limitations
+Writable runtime data:
 
-- This was prepared without a local devkitPPC/libogc environment, so it is a scaffold, not a confirmed booting DOL.
-- Networking/multiplayer is disabled for the first Wii pass.
-- Runtime Classic pack downloading is disabled; copy texture packs to SD manually.
-- The renderer is a GX fixed-function shim and will probably need real-hardware iteration for texture formats, EFB clearing, and matrix orientation.
+```text
+sd:/apps/pexcraft/saves/
+sd:/apps/pexcraft/skins/       optional/custom only
+```
+
+## Notes
+
+- Networking/multiplayer is disabled for the Wii build.
+- Runtime Classic pack downloading/extraction is disabled; the Classic textures are embedded at build time.
 - The Wii build uses the PSP-sized 128x128x128 active world window, not the PC-sized 512x256x512 window.

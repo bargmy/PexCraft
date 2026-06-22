@@ -7,9 +7,11 @@
 
 TARGET      := pexcraft-wii
 BUILD       := build/wii
+GEN         := build/wii_generated
 ROOT        ?= .
 DEVKITPRO  ?= /opt/devkitpro
 DEVKITPPC  ?= $(DEVKITPRO)/devkitPPC
+PYTHON      ?= python3
 
 ifeq ($(strip $(DEVKITPPC)),)
 $(error "Please set DEVKITPPC in your environment. export DEVKITPPC=<path to>devkitPPC")
@@ -28,28 +30,48 @@ ELF2DOL    ?= $(DEVKITPRO)/tools/bin/elf2dol
 # Fallback for unusual installs where wii_rules did not define MACHDEP.
 MACHDEP    ?= -mrvl -mcpu=750 -meabi -mhard-float
 
-CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1           $(MACHDEP)           -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
+CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1 \
+          $(MACHDEP) \
+          -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
 LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/$(TARGET).map -L$(DEVKITPRO)/libogc/lib/wii
 LIBS := -lfat -lwiiuse -lbte -logc -lm
 
 SRC := $(ROOT)/main_wii.c
+MAIN_OBJ := $(BUILD)/main_wii.o
+WII_ASSET_PAK := $(GEN)/wii_mcrw_assets.pak
+WII_ASSET_ASM := $(GEN)/wii_mcrw_assets.S
+WII_ASSET_OBJ := $(BUILD)/wii_mcrw_assets.o
 ELF := $(BUILD)/$(TARGET).elf
 DOL := $(BUILD)/boot.dol
 
-.PHONY: all clean install-sd
+.PHONY: all clean install-sd assets
 all: $(DOL)
+assets: $(WII_ASSET_PAK) $(WII_ASSET_ASM)
 
-$(BUILD):
-	@mkdir -p $(BUILD)
+$(BUILD) $(GEN):
+	@mkdir -p $@
 
-$(ELF): $(SRC) | $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS) $(LIBS)
+$(WII_ASSET_PAK): $(ROOT)/tools/prepare_wii_assets.py | $(GEN)
+	$(PYTHON) $(ROOT)/tools/prepare_wii_assets.py $(GEN)/assets $(WII_ASSET_PAK) $(WII_ASSET_ASM)
+
+$(WII_ASSET_ASM): $(WII_ASSET_PAK)
+	@test -f $@ || $(PYTHON) $(ROOT)/tools/prepare_wii_assets.py $(GEN)/assets $(WII_ASSET_PAK) $(WII_ASSET_ASM)
+
+$(MAIN_OBJ): $(SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(WII_ASSET_OBJ): $(WII_ASSET_ASM) $(WII_ASSET_PAK) | $(BUILD)
+	$(CC) $(CFLAGS) -c $(WII_ASSET_ASM) -o $@
+
+$(ELF): $(MAIN_OBJ) $(WII_ASSET_OBJ) | $(BUILD)
+	$(CC) $(MAIN_OBJ) $(WII_ASSET_OBJ) -o $@ $(LDFLAGS) $(LIBS)
 
 $(DOL): $(ELF)
 	$(ELF2DOL) $< $@
 
 install-sd: $(DOL)
-	@echo "Copy $(DOL) to sd:/apps/pexcraft/boot.dol and copy assets/ to sd:/apps/pexcraft/assets/"
+	@echo "Copy $(DOL) to sd:/apps/pexcraft/boot.dol. Textures are embedded in the DOL."
+	@echo "Only saves/options are written to sd:/apps/pexcraft/."
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) $(GEN)

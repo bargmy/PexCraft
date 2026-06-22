@@ -42,7 +42,7 @@ static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot
 /* Runtime ZIP/JAR extraction uses zlib, which is not part of the minimal
    devkitPPC/libogc image used by CI.  The first Wii port disables runtime
    Classic pack download/extraction and expects texture packs to be copied to SD. */
-#include "../platforms/wii/wii_classic_pack_stub.c"
+#include "../platforms/wii/wii_classic_pack_embedded.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"
 #include "render/gui_primitives.c"
