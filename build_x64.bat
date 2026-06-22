@@ -30,7 +30,7 @@ if errorlevel 1 (
 set "OUT=pexcraft_x64.exe"
 
 rem -static and -static-libgcc avoid accidental dependency on 32-bit MinGW runtime DLLs in PATH.
-"%CC_X64%" -m64 -std=c99 -O2 -Wall -Wextra -mwindows main.c -o "%OUT%" -static -static-libgcc -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
+"%CC_X64%" -m64 -std=c99 -O2 -Wall -Wextra -mwindows main.c -o "%OUT%" -static -static-libgcc -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
 if errorlevel 1 exit /b 1
 
 if exist "%OBJDUMP_X64%" (

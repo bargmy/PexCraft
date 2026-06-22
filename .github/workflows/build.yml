@@ -17,6 +17,17 @@ env:
 jobs:
   windows:
     name: Windows ${{ matrix.arch }} MinGW - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
     runs-on: windows-latest
 
     strategy:
@@ -81,7 +92,7 @@ jobs:
             gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
               -static -static-libgcc \
               -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
-              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lws2_32 -lz -lm
+              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
 
             status=$?
             echo "$status" > build/build-status.txt
@@ -149,6 +160,17 @@ jobs:
 
   linux:
     name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
     runs-on: ubuntu-latest
 
     steps:
@@ -254,6 +276,17 @@ jobs:
 
   lgwebos:
     name: LG webOS ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)')
+        )
+      }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -444,6 +477,17 @@ jobs:
 
   android:
     name: Android arm64 APK - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
     runs-on: ubuntu-latest
 
     steps:
@@ -597,6 +641,17 @@ jobs:
 
   android_tv:
     name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
     runs-on: ubuntu-latest
 
     steps:
@@ -752,6 +807,17 @@ jobs:
 
   wii:
     name: Nintendo Wii DOL - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
     runs-on: ubuntu-latest
 
     steps:
