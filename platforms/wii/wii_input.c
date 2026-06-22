@@ -31,13 +31,26 @@ static void player_turn_from_mouse(int dx, int dy_java) {
 static void handle_grabbed_mouse_move(int px, int py) { (void)px; (void)py; }
 static int key_down_vk(int vk) { if (vk >= 0 && vk < 512 && g_gamepad_vk_state[vk]) return 1; return 0; }
 
+#ifndef PEX_WII_MAX_WPAD
+#define PEX_WII_MAX_WPAD 4
+#endif
+
 static void wii_input_init(void) {
     WPAD_Init();
-    for (int ch = 0; ch < WPAD_MAX_WIIMOTES; ++ch) {
+    for (int ch = 0; ch < PEX_WII_MAX_WPAD; ++ch) {
+#if defined(WPAD_FMT_BTNS_ACC_IR_EXT)
+        /* Classic Controller data only appears when an EXT data format is enabled. */
+        WPAD_SetDataFormat(ch, WPAD_FMT_BTNS_ACC_IR_EXT);
+#elif defined(WPAD_FMT_BTNS_ACC_EXT)
+        WPAD_SetDataFormat(ch, WPAD_FMT_BTNS_ACC_EXT);
+#elif defined(WPAD_FMT_BTNS_EXT)
+        WPAD_SetDataFormat(ch, WPAD_FMT_BTNS_EXT);
+#else
         WPAD_SetDataFormat(ch, WPAD_FMT_BTNS_ACC_IR);
+#endif
     }
     PAD_Init();
-    wii_debug_logf("input init: WPAD/PAD initialized, Classic Controller preferred");
+    wii_debug_logf("input init: WPAD/PAD initialized, EXT format requested, Classic Controller preferred");
 }
 
 static float wii_axis_deadzone(float v) {
@@ -134,14 +147,14 @@ static void wii_poll_classic(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
     static int last_exp_type[4] = {-999,-999,-999,-999};
     static int last_err[4] = {-999,-999,-999,-999};
 
-    for (int ch = 0; ch < WPAD_MAX_WIIMOTES && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
+    for (int ch = 0; ch < PEX_WII_MAX_WPAD && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
         int probe_type = -1;
         int probe = WPAD_Probe(ch, &probe_type);
         WPADData *wd = WPAD_Data(ch);
         int exp_type = wd ? wd->exp.type : -1;
         int err = wd ? wd->err : -999;
         if (probe_type != last_probe_type[ch] || exp_type != last_exp_type[ch] || err != last_err[ch]) {
-            wii_debug_logf("WPAD ch%d probe=%d probe_type=%d data_err=%d exp_type=%d", ch, probe, probe_type, err, exp_type);
+            wii_debug_logf("WPAD ch=%d probe=%d probe_type=%d data_err=%d exp_type=%d held=%08x", ch, probe, probe_type, err, exp_type, (unsigned)WPAD_ButtonsHeld(ch));
             last_probe_type[ch] = probe_type;
             last_exp_type[ch] = exp_type;
             last_err[ch] = err;
@@ -211,7 +224,7 @@ static void wii_poll_gamecube(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
 }
 
 static void wii_poll_nunchuk(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
-    for (int ch = 0; ch < WPAD_MAX_WIIMOTES && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
+    for (int ch = 0; ch < PEX_WII_MAX_WPAD && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
         WPADData *wd = WPAD_Data(ch);
         if (!wd || wd->err != WPAD_ERR_NONE || wd->exp.type != EXP_NUNCHUK) continue;
         const nunchuk_t *nc = &wd->exp.nunchuk;
@@ -241,7 +254,7 @@ static void wii_poll_nunchuk(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
 }
 
 static void wii_poll_wiimote_buttons(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
-    for (int ch = 0; ch < WPAD_MAX_WIIMOTES && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
+    for (int ch = 0; ch < PEX_WII_MAX_WPAD && g_gamepad_count < PEX_GAMEPAD_MAX; ++ch) {
         int exp_type = -1;
         int probe = WPAD_Probe(ch, &exp_type);
         if (probe != WPAD_ERR_NONE) continue;
