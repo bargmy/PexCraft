@@ -62,14 +62,9 @@ static void wii_power_callback(void) {
 #endif
 
 static void wii_reserve_embedded_asset_mem2(void) {
-#if defined(HW_RVL)
-    uintptr_t end = (uintptr_t)pexcraft_wii_mcrw_assets_pak_end;
-    if (end >= 0x90000000u && end < 0x94000000u) {
-        end = (end + 31u) & ~31u;
-        void *lo = SYS_GetArena2Lo();
-        if ((uintptr_t)lo < end) SYS_SetArena2Lo((void*)end);
-    }
-#endif
+    /* The embedded texture pak is now linked in the normal DOL data/rodata
+       area. Do NOT force it to 0x90010000: that creates a huge address gap
+       and can make elf2dol emit a hundreds-of-megabytes DOL. */
 }
 
 static void sleep_for_max_fps(double frame_start_time) {

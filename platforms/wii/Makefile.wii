@@ -33,7 +33,7 @@ MACHDEP    ?= -mrvl -mcpu=750 -meabi -mhard-float
 CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1 \
           $(MACHDEP) \
           -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
-LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/$(TARGET).map -Wl,--section-start=.wii_assets=0x90010000 -L$(DEVKITPRO)/libogc/lib/wii
+LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/$(TARGET).map -L$(DEVKITPRO)/libogc/lib/wii
 LIBS := -lfat -lwiiuse -lbte -logc -lm
 
 SRC := $(ROOT)/main_wii.c

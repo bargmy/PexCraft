@@ -97,6 +97,6 @@ sd:/apps/pexcraft/skins/       optional/custom only
 
 ## Embedded texture memory
 
-The Wii build links the generated client.jar/MCRW texture pak into a dedicated `.wii_assets` DOL section at `0x90010000` so the texture blob lives in MEM2, not in the 24MB MEM1 region used by the main executable/data/BSS.  `wii_reserve_embedded_asset_mem2()` bumps the MEM2 arena past the embedded pak before normal runtime allocations can use MEM2.
+The Wii build links the generated client.jar/MCRW texture pak into the normal DOL read-only data area. Do not force this blob to a high address such as `0x90010000`: that introduces a 256MB address hole and can produce a massive DOL in Dolphin/elf2dol. The runtime texture bundle is still inside `boot.dol`; it is not loaded from SD.
 
 The GX renderer also splits indexed terrain draws into chunks of at most 65,535 vertices, because `GX_Begin()` takes a 16-bit vertex count.  Writing more vertices than the count passed to GX corrupts the FIFO and can show up in Dolphin as invalid MEM1/MEM2 pointer warnings.

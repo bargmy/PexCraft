@@ -802,6 +802,16 @@ jobs:
               devkitpro/devkitppc:20260503 \
               bash -lc 'make -f platforms/wii/Makefile.wii'
             status=$?
+            if [ "$status" -eq 0 ]; then
+              dol_size=$(wc -c < build/wii/boot.dol)
+              echo "boot.dol size: ${dol_size} bytes"
+              # A normal embedded-texture Wii DOL should be single-digit MB.
+              # Anything near hundreds of MB means a bad linker section address/hole.
+              if [ "$dol_size" -gt 33554432 ]; then
+                echo "ERROR: boot.dol is too large (${dol_size} bytes). Refusing artifact."
+                status=1
+              fi
+            fi
             echo "$status" > build/wii-build-status.txt
             if [ "$status" -eq 0 ]; then
               echo "WII_BUILD_OK=1" >> "$GITHUB_ENV"
