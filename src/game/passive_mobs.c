@@ -3,6 +3,23 @@
 
 #define PASSIVE_MOB_SAVE_VERSION 16
 
+/* Performance knobs: this port renders animal models with immediate-mode
+   cube parts.  Keep active/rendered passive mobs close to b1.0 density instead
+   of letting the spawn patch fill the entire active window. */
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#define PEX_PASSIVE_TARGET_CAP 8
+#define PEX_PASSIVE_INITIAL_TARGET 6
+#define PEX_PASSIVE_RENDER_LIMIT 6
+#define PEX_PASSIVE_RENDER_DIST 40.0f
+#else
+#define PEX_PASSIVE_TARGET_CAP 10
+#define PEX_PASSIVE_INITIAL_TARGET 8
+#define PEX_PASSIVE_RENDER_LIMIT 8
+#define PEX_PASSIVE_RENDER_DIST 48.0f
+#endif
+
+#define PEX_PASSIVE_RENDER_WORKER 0
+
 static float pex_rand_float01(void) { return (float)rand() / (float)RAND_MAX; }
 static float pex_wrap_degrees(float a) {
     while (a < -180.0f) a += 360.0f;
@@ -144,12 +161,31 @@ static int passive_mob_count(void) {
     return n;
 }
 
+static int passive_mob_target_cap(void);
+
+static void passive_mobs_enforce_cap(void) {
+    int cap = passive_mob_target_cap();
+    int count = passive_mob_count();
+    if (count <= cap) return;
+    /* Cull extras from old saves / older patches that filled all 40 slots.
+       Keep the ridden pig alive. Prefer removing far mobs first. */
+    for (int pass = 0; pass < 2 && count > cap; ++pass) {
+        for (int i = MAX_PASSIVE_MOBS - 1; i >= 0 && count > cap; --i) {
+            PassiveMob *m = &g_passive_mobs[i];
+            if (!m->active) continue;
+            if (i == g_player_riding_passive_mob) continue;
+            float dx = m->x - g_player_x;
+            float dz = m->z - g_player_z;
+            float d2 = dx * dx + dz * dz;
+            if (pass == 0 && d2 < 48.0f * 48.0f) continue;
+            memset(m, 0, sizeof(*m));
+            --count;
+        }
+    }
+}
+
 static int passive_mob_target_cap(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    return MAX_PASSIVE_MOBS < 20 ? MAX_PASSIVE_MOBS : 20;
-#else
-    return MAX_PASSIVE_MOBS < 32 ? MAX_PASSIVE_MOBS : 32;
-#endif
+    return MAX_PASSIVE_MOBS < PEX_PASSIVE_TARGET_CAP ? MAX_PASSIVE_MOBS : PEX_PASSIVE_TARGET_CAP;
 }
 
 static int passive_mob_ground_target_ok(int x, int y, int z) {
@@ -257,18 +293,18 @@ static void passive_mobs_try_natural_spawn(void) {
     if (g_mp_connected || g_player_dead) return;
     int cap = passive_mob_target_cap();
     if (passive_mob_count() >= cap) return;
-    if ((g_ingame_ticks % 5) != 0) return;
+    /* Vanilla b1.0 does not keep shoving passive groups into the active area
+       every few frames.  The previous 5-tick retry loop was the source of the
+       huge animal piles and CPU spike. */
+    if ((g_ingame_ticks % 80) != 0) return;
 
     int pcx = floor_div16((int)floorf(g_player_x));
     int pcz = floor_div16((int)floorf(g_player_z));
     int count_now = passive_mob_count();
-    int batches = count_now < 12 ? 10 : (count_now < 24 ? 6 : 3);
+    int batches = count_now < 4 ? 3 : (count_now < 8 ? 2 : 1);
     for (int batch = 0; batch < batches && passive_mob_count() < cap; ++batch) {
-        /* b1.0 checks many eligible chunks and each chunk has a 1/50 roll.
-           This small active-window port cannot scan all 289 chunks every tick, so
-           use several random chunk samples and a light throttle only after the
-           world already has animals. */
-        if (passive_mob_count() >= 24 && (rand() % 3) != 0) continue;
+        /* Sample a few nearby chunks instead of scanning the whole active world. */
+        if (passive_mob_count() >= cap - 2 && (rand() % 3) != 0) continue;
         int cx = pcx + (rand() % 17) - 8;
         int cz = pcz + (rand() % 17) - 8;
         int base_x = cx * 16 + (rand() & 15);
@@ -277,7 +313,7 @@ static void passive_mobs_try_natural_spawn(void) {
         int type = r == 0 ? PASSIVE_MOB_SHEEP : r == 1 ? PASSIVE_MOB_PIG : r == 2 ? PASSIVE_MOB_CHICKEN : PASSIVE_MOB_COW;
 
         int spawned = 0;
-        for (int tries = 0; tries < 18 && spawned < 4 && passive_mob_count() < cap; ++tries) {
+        for (int tries = 0; tries < 10 && spawned < 2 && passive_mob_count() < cap; ++tries) {
             int x = base_x + (rand() % 6) - (rand() % 6);
             int z = base_z + (rand() % 6) - (rand() % 6);
             int y = passive_mob_column_spawn_y(x, z);
@@ -316,11 +352,7 @@ static void passive_mobs_ensure_minimum_population(int wanted, int attempts) {
 
 static void passive_mobs_spawn_initial(void) {
     passive_mobs_reset();
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    passive_mobs_ensure_minimum_population(20, 3000);
-#else
-    passive_mobs_ensure_minimum_population(32, 4000);
-#endif
+    passive_mobs_ensure_minimum_population(PEX_PASSIVE_INITIAL_TARGET, 1800);
 }
 
 static void passive_mob_choose_target(PassiveMob *m) {
@@ -694,12 +726,32 @@ static void passive_mobs_apply_riding(void) {
     g_player_on_ground = m->on_ground;
 }
 
+static int passive_mob_tick_stride(const PassiveMob *m) {
+    float dx = m->x - g_player_x;
+    float dz = m->z - g_player_z;
+    float d2 = dx * dx + dz * dz;
+    if (d2 > 80.0f * 80.0f) return 8;
+    if (d2 > 48.0f * 48.0f) return 4;
+    return 1;
+}
+
 static void update_passive_mobs(void) {
     if (g_mp_connected) return;
+    passive_mobs_enforce_cap();
     passive_mobs_try_natural_spawn();
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
-        if (!g_passive_mobs[i].active) continue;
-        passive_mob_update_living(&g_passive_mobs[i]);
+        PassiveMob *m = &g_passive_mobs[i];
+        if (!m->active) continue;
+        int stride = passive_mob_tick_stride(m);
+        if (stride > 1 && ((g_ingame_ticks + i) % stride) != 0) {
+            /* Keep interpolation stable while far mobs are simulated at a lower
+               rate.  Near animals still tick every tick. */
+            m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
+            m->prev_yaw = m->yaw; m->prev_render_yaw = m->render_yaw;
+            m->prev_limb_swing = m->limb_swing; m->prev_limb_amount = m->limb_amount;
+            continue;
+        }
+        passive_mob_update_living(m);
     }
 }
 
@@ -733,7 +785,7 @@ static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *sr
                                                             float camx, float camy, float camz,
                                                             PassiveMobRenderEntry *out, int *out_count) {
     int count = 0;
-    const float max_dist2 = 96.0f * 96.0f;
+    const float max_dist2 = PEX_PASSIVE_RENDER_DIST * PEX_PASSIVE_RENDER_DIST;
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         const PassiveMob *m = &src[i];
         if (!m->active) continue;
@@ -744,6 +796,7 @@ static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *sr
         float dy = y - camy;
         float dz = z - camz;
         if (m->death_time <= 0 && dx*dx + dy*dy + dz*dz > max_dist2) continue;
+        if (count >= PEX_PASSIVE_RENDER_LIMIT) break;
         PassiveMobRenderEntry *e = &out[count++];
         memset(e, 0, sizeof(*e));
         e->active = 1;
@@ -765,12 +818,12 @@ static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *sr
             float wd = m->chicken_prev_dest_pos + (m->chicken_dest_pos - m->chicken_prev_dest_pos) * partial;
             e->wing = (sinf(wr) + 1.0f) * wd;
         }
-        if (count >= MAX_PASSIVE_MOBS) break;
+        if (count >= PEX_PASSIVE_RENDER_LIMIT) break;
     }
     if (out_count) *out_count = count;
 }
 
-#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+#if PEX_PASSIVE_RENDER_WORKER && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
 static CRITICAL_SECTION g_passive_render_cs;
 static int g_passive_render_initialized = 0;
 static int g_passive_render_stop = 0;
@@ -933,8 +986,8 @@ static void passive_render_chicken(float limb, float move, float head_yaw, float
 static void draw_passive_mobs(float partial) {
     if (g_mp_connected) return;
     passive_mobs_submit_render_job(partial);
-    PassiveMobRenderEntry entries[MAX_PASSIVE_MOBS];
-    int entry_count = passive_mobs_fetch_render_entries(entries, MAX_PASSIVE_MOBS);
+    PassiveMobRenderEntry entries[PEX_PASSIVE_RENDER_LIMIT];
+    int entry_count = passive_mobs_fetch_render_entries(entries, PEX_PASSIVE_RENDER_LIMIT);
     if (entry_count <= 0) return;
 
     glPushMatrix();
@@ -974,12 +1027,15 @@ static void draw_passive_mobs(float partial) {
             passive_render_chicken(e->limb, e->move, e->head_yaw, e->pitch, e->wing);
         } else {
             passive_render_quad_model(e->type, 0, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
-            if (e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
+            float e_dx = e->x - g_player_x;
+            float e_dz = e->z - g_player_z;
+            int near_detail = (e_dx * e_dx + e_dz * e_dz) < (28.0f * 28.0f);
+            if (near_detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_sheep_fur.id);
                 steve_set_texture_dims(&tex_mob_sheep_fur);
                 passive_render_quad_model(e->type, 1, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
             }
-            if (e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
+            if (near_detail && e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
                 steve_set_texture_dims(&tex_mob_saddle);
                 passive_render_quad_model(e->type, 1, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);

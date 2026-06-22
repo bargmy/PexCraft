@@ -494,9 +494,11 @@ typedef struct FlatFallingBlock {
 } FlatFallingBlock;
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-#define MAX_PASSIVE_MOBS 16
+#define MAX_PASSIVE_MOBS 8
 #else
-#define MAX_PASSIVE_MOBS 40
+/* Keep the b1.0 passive cap small.  The original port draws mobs with
+   immediate-mode cube parts, so 40 animals can murder the frame rate. */
+#define MAX_PASSIVE_MOBS 12
 #endif
 
 typedef enum PassiveMobType {
