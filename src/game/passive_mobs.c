@@ -771,6 +771,7 @@ typedef struct PassiveMobRenderEntry {
     int sheared;
     int rideable;
     int hurt;
+    int detail;
     float x, y, z;
     float yaw;
     float head_yaw;
@@ -781,8 +782,33 @@ typedef struct PassiveMobRenderEntry {
     float death_time;
 } PassiveMobRenderEntry;
 
+static int passive_mob_visible_to_camera(float x, float y, float z, float radius,
+                                         float camx, float camy, float camz,
+                                         float yaw, float pitch) {
+    float dx = x - camx;
+    float dy = (y + radius) - camy;
+    float dz = z - camz;
+    float dist2 = dx * dx + dy * dy + dz * dz;
+    if (dist2 < 1.0e-4f) return 1;
+
+    float yaw_rad = yaw * (float)M_PI / 180.0f;
+    float pitch_rad = pitch * (float)M_PI / 180.0f;
+    float fx = -sinf(yaw_rad) * cosf(pitch_rad);
+    float fy = -sinf(pitch_rad);
+    float fz =  cosf(yaw_rad) * cosf(pitch_rad);
+    float inv_dist = 1.0f / sqrtf(dist2);
+    float dot = (dx * fx + dy * fy + dz * fz) * inv_dist;
+    if (dot < -0.20f) return 0;
+    if (dot > 0.30f) return 1;
+
+    /* Keep very near mobs even at the edge of the view so attacks/interactions do
+       not pop visually.  Farther mobs are skipped until they enter the view cone. */
+    return dist2 < (8.0f + radius) * (8.0f + radius);
+}
+
 static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *src, float partial,
                                                             float camx, float camy, float camz,
+                                                            float cam_yaw, float cam_pitch,
                                                             PassiveMobRenderEntry *out, int *out_count) {
     int count = 0;
     const float max_dist2 = PEX_PASSIVE_RENDER_DIST * PEX_PASSIVE_RENDER_DIST;
@@ -796,6 +822,10 @@ static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *sr
         float dy = y - camy;
         float dz = z - camz;
         if (m->death_time <= 0 && dx*dx + dy*dy + dz*dz > max_dist2) continue;
+        if (m->death_time <= 0 &&
+            !passive_mob_visible_to_camera(x, y, z, m->height, camx, camy, camz, cam_yaw, cam_pitch)) {
+            continue;
+        }
         if (count >= PEX_PASSIVE_RENDER_LIMIT) break;
         PassiveMobRenderEntry *e = &out[count++];
         memset(e, 0, sizeof(*e));
@@ -804,6 +834,7 @@ static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *sr
         e->sheared = m->sheared;
         e->rideable = m->rideable;
         e->hurt = (m->hurt_time > 0 || m->death_time > 0);
+        e->detail = (dx*dx + dy*dy + dz*dz) < (18.0f * 18.0f) ? 1 : 0;
         e->x = x; e->y = y; e->z = z;
         e->yaw = passive_lerp_angle(m->prev_render_yaw, m->render_yaw, partial);
         e->head_yaw = passive_lerp_angle(m->prev_yaw, m->yaw, partial) - e->yaw;
@@ -834,6 +865,7 @@ static HANDLE g_passive_render_thread = NULL;
 static PassiveMob g_passive_render_job_mobs[MAX_PASSIVE_MOBS];
 static float g_passive_render_job_partial = 0.0f;
 static float g_passive_render_job_camx = 0.0f, g_passive_render_job_camy = 0.0f, g_passive_render_job_camz = 0.0f;
+static float g_passive_render_job_yaw = 0.0f, g_passive_render_job_pitch = 0.0f;
 static PassiveMobRenderEntry g_passive_render_ready[MAX_PASSIVE_MOBS];
 static int g_passive_render_ready_count = 0;
 
@@ -844,7 +876,7 @@ static DWORD WINAPI passive_render_worker_proc(LPVOID unused) {
     for (;;) {
         WaitForSingleObject(g_passive_render_event, INFINITE);
         int stop = 0, have = 0;
-        float partial = 0.0f, camx = 0.0f, camy = 0.0f, camz = 0.0f;
+        float partial = 0.0f, camx = 0.0f, camy = 0.0f, camz = 0.0f, yaw = 0.0f, pitch = 0.0f;
         EnterCriticalSection(&g_passive_render_cs);
         stop = g_passive_render_stop;
         if (!stop && g_passive_render_has_job) {
@@ -853,6 +885,8 @@ static DWORD WINAPI passive_render_worker_proc(LPVOID unused) {
             camx = g_passive_render_job_camx;
             camy = g_passive_render_job_camy;
             camz = g_passive_render_job_camz;
+            yaw = g_passive_render_job_yaw;
+            pitch = g_passive_render_job_pitch;
             g_passive_render_has_job = 0;
             g_passive_render_busy = 1;
             have = 1;
@@ -862,7 +896,8 @@ static DWORD WINAPI passive_render_worker_proc(LPVOID unused) {
         if (!have) continue;
 
         int count = 0;
-        passive_mobs_build_render_entries_from_snapshot(local_mobs, partial, camx, camy, camz, local_entries, &count);
+        passive_mobs_build_render_entries_from_snapshot(local_mobs, partial, camx, camy, camz,
+                                                        yaw, pitch, local_entries, &count);
 
         EnterCriticalSection(&g_passive_render_cs);
         memcpy(g_passive_render_ready, local_entries, (size_t)count * sizeof(local_entries[0]));
@@ -897,6 +932,8 @@ static void passive_mobs_submit_render_job(float partial) {
         g_passive_render_job_camx = g_player_x;
         g_passive_render_job_camy = g_player_y;
         g_passive_render_job_camz = g_player_z;
+        g_passive_render_job_yaw = g_player_yaw;
+        g_passive_render_job_pitch = g_player_pitch;
         g_passive_render_has_job = 1;
         SetEvent(g_passive_render_event);
     }
@@ -914,7 +951,8 @@ static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap
         LeaveCriticalSection(&g_passive_render_cs);
         return count;
     }
-    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z, out, &count);
+    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z,
+                                                    g_player_yaw, g_player_pitch, out, &count);
     if (count > cap) count = cap;
     return count;
 }
@@ -922,13 +960,14 @@ static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap
 static void passive_mobs_submit_render_job(float partial) { (void)partial; }
 static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap) {
     int count = 0;
-    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z, out, &count);
+    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z,
+                                                    g_player_yaw, g_player_pitch, out, &count);
     if (count > cap) count = cap;
     return count;
 }
 #endif
 
-static void passive_render_quad_model(int type, int fur_layer, float limb, float move, float head_yaw, float head_pitch, float chicken_wing) {
+static void passive_render_quad_model(int type, int fur_layer, int detail, float limb, float move, float head_yaw, float head_pitch, float chicken_wing) {
     float leg1 = cosf(limb * 0.6662f) * 1.4f * move * 57.29578f;
     float leg2 = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move * 57.29578f;
     float body_pitch = 90.0f;
@@ -937,6 +976,7 @@ static void passive_render_quad_model(int type, int fur_layer, float limb, float
     if (type == PASSIVE_MOB_PIG) {
         steve_part(0, 0, 0, 12, -6, -4, -4, -8, 8, 8, 8, fur_layer ? 0.5f : 0.0f, 0, -head_pitch, head_yaw, 0);
         steve_part(28, 8, 0, 11, 2, -5, -10, -7, 10, 16, 8, 0.0f, 0, body_pitch, 0, 0);
+        if (!detail) return;
         steve_part(0, 16, -3, 18, 7, -2, 0, -2, 4, 6, 4, 0.0f, 0, leg1, 0, 0);
         steve_part(0, 16,  3, 18, 7, -2, 0, -2, 4, 6, 4, 0.0f, 0, leg2, 0, 0);
         steve_part(0, 16, -3, 18, -5, -2, 0, -2, 4, 6, 4, 0.0f, 0, leg2, 0, 0);
@@ -945,6 +985,7 @@ static void passive_render_quad_model(int type, int fur_layer, float limb, float
         if (fur_layer) {
             steve_part(0, 0, 0, 6, -8, -3, -4, -4, 6, 6, 6, 0.6f, 0, -head_pitch, head_yaw, 0);
             steve_part(28, 8, 0, 5, 2, -4, -10, -7, 8, 16, 6, 1.75f, 0, body_pitch, 0, 0);
+            if (!detail) return;
             steve_part(0, 16, -3, 12, 7, -2, 0, -2, 4, 6, 4, 0.5f, 0, leg1, 0, 0);
             steve_part(0, 16,  3, 12, 7, -2, 0, -2, 4, 6, 4, 0.5f, 0, leg2, 0, 0);
             steve_part(0, 16, -3, 12, -5, -2, 0, -2, 4, 6, 4, 0.5f, 0, leg2, 0, 0);
@@ -952,6 +993,7 @@ static void passive_render_quad_model(int type, int fur_layer, float limb, float
         } else {
             steve_part(0, 0, 0, 6, -8, -3, -4, -6, 6, 6, 8, 0.0f, 0, -head_pitch, head_yaw, 0);
             steve_part(28, 8, 0, 5, 2, -4, -10, -7, 8, 16, 6, 0.0f, 0, body_pitch, 0, 0);
+            if (!detail) return;
             steve_part(0, 16, -3, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg1, 0, 0);
             steve_part(0, 16,  3, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg2, 0, 0);
             steve_part(0, 16, -3, 12, -5, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg2, 0, 0);
@@ -959,9 +1001,10 @@ static void passive_render_quad_model(int type, int fur_layer, float limb, float
         }
     } else if (type == PASSIVE_MOB_COW) {
         steve_part(0, 0, 0, 4, -8, -4, -4, -6, 8, 8, 6, 0.0f, 0, -head_pitch, head_yaw, 0);
+        steve_part(18, 4, 0, 5, 2, -6, -10, -7, 12, 18, 10, 0.0f, 0, body_pitch, 0, 0);
+        if (!detail) return;
         steve_part(22, 0, 0, 3, -7, -4, -5, -4, 1, 3, 1, 0.0f, 0, -head_pitch, head_yaw, 0);
         steve_part(22, 0, 0, 3, -7,  4, -5, -4, 1, 3, 1, 0.0f, 0, -head_pitch, head_yaw, 0);
-        steve_part(18, 4, 0, 5, 2, -6, -10, -7, 12, 18, 10, 0.0f, 0, body_pitch, 0, 0);
         steve_part(52, 0, 0, 14, 6, -2, -3, 0, 4, 6, 2, 0.0f, 0, 90.0f, 0, 0);
         steve_part(0, 16, -4, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg1, 0, 0);
         steve_part(0, 16,  4, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg2, 0, 0);
@@ -970,13 +1013,14 @@ static void passive_render_quad_model(int type, int fur_layer, float limb, float
     }
 }
 
-static void passive_render_chicken(float limb, float move, float head_yaw, float head_pitch, float wing) {
+static void passive_render_chicken(int detail, float limb, float move, float head_yaw, float head_pitch, float wing) {
     float leg1 = cosf(limb * 0.6662f) * 1.4f * move * 57.29578f;
     float leg2 = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move * 57.29578f;
     steve_part(0, 0, 0, 15, -4, -2, -6, -2, 4, 6, 3, 0.0f, 0, -head_pitch, head_yaw, 0);
+    steve_part(0, 9, 0, 16, 0, -3, -4, -3, 6, 8, 6, 0.0f, 0, 90.0f, 0, 0);
+    if (!detail) return;
     steve_part(14, 0, 0, 15, -4, -2, -4, -4, 4, 2, 2, 0.0f, 0, -head_pitch, head_yaw, 0);
     steve_part(14, 4, 0, 15, -4, -1, -2, -3, 2, 2, 2, 0.0f, 0, -head_pitch, head_yaw, 0);
-    steve_part(0, 9, 0, 16, 0, -3, -4, -3, 6, 8, 6, 0.0f, 0, 90.0f, 0, 0);
     steve_part(26, 0, -2, 19, 1, -1, 0, -3, 3, 5, 3, 0.0f, 0, leg1, 0, 0);
     steve_part(26, 0,  1, 19, 1, -1, 0, -3, 3, 5, 3, 0.0f, 0, leg2, 0, 0);
     steve_part(24, 13, -4, 13, 0, 0, 0, -3, 1, 4, 6, 0.0f, 0, 0, 0, wing * 57.29578f);
@@ -1024,21 +1068,18 @@ static void draw_passive_mobs(float partial) {
         glTranslatef(0.0f, -24.0f * 0.0625f - 0.0078125f, 0.0f);
 
         if (e->type == PASSIVE_MOB_CHICKEN) {
-            passive_render_chicken(e->limb, e->move, e->head_yaw, e->pitch, e->wing);
+            passive_render_chicken(e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->wing);
         } else {
-            passive_render_quad_model(e->type, 0, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
-            float e_dx = e->x - g_player_x;
-            float e_dz = e->z - g_player_z;
-            int near_detail = (e_dx * e_dx + e_dz * e_dz) < (28.0f * 28.0f);
-            if (near_detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
+            passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+            if (e->detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_sheep_fur.id);
                 steve_set_texture_dims(&tex_mob_sheep_fur);
-                passive_render_quad_model(e->type, 1, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
             }
-            if (near_detail && e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
+            if (e->detail && e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
                 steve_set_texture_dims(&tex_mob_saddle);
-                passive_render_quad_model(e->type, 1, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
             }
         }
         glPopMatrix();

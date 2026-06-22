@@ -20,12 +20,14 @@ static void get_app_memory_mb(unsigned long long *used_mb, unsigned long long *p
     *used_mb = 0;
     *peak_mb = 0;
 
-    HMODULE psapi = LoadLibraryA("psapi.dll");
-    if (!psapi) psapi = LoadLibraryA("kernel32.dll");
-    if (!psapi) return;
-
-    PexGetProcessMemoryInfoFn fn =
-        (PexGetProcessMemoryInfoFn)GetProcAddress(psapi, "GetProcessMemoryInfo");
+    static int resolved = 0;
+    static PexGetProcessMemoryInfoFn fn = NULL;
+    if (!resolved) {
+        HMODULE psapi = LoadLibraryA("psapi.dll");
+        if (!psapi) psapi = LoadLibraryA("kernel32.dll");
+        if (psapi) fn = (PexGetProcessMemoryInfoFn)GetProcAddress(psapi, "GetProcessMemoryInfo");
+        resolved = 1;
+    }
     if (!fn) return;
 
     PexProcessMemoryCounters pmc;
@@ -106,8 +108,13 @@ static void draw_hud(void) {
         snprintf(line, sizeof(line), "Position %.2f %.2f %.2f", g_player_x, g_player_y, g_player_z);
         draw_text(line, 2, y, 14737632); y += 10;
 
-        unsigned long long used_mb = 0, peak_mb = 0;
-        get_app_memory_mb(&used_mb, &peak_mb);
+        static unsigned long long used_mb = 0, peak_mb = 0;
+        static double last_memory_update = 0.0;
+        double memory_now = now_seconds();
+        if (memory_now - last_memory_update >= 0.25 || last_memory_update <= 0.0) {
+            get_app_memory_mb(&used_mb, &peak_mb);
+            last_memory_update = memory_now;
+        }
         snprintf(line, sizeof(line), "Memory usage %lluMB/%lluMB", used_mb, peak_mb);
         draw_text(line, 2, y, 14737632); y += 10;
 
@@ -643,4 +650,3 @@ static void draw_classic_pack_warning(void) {
     draw_text("No keeps the current files unchanged.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 92, 10526880);
     draw_all_buttons();
 }
-

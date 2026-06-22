@@ -131,11 +131,7 @@ static int flat_player_try_step_move(float nx, float base_y, float nz) {
 static PEX_THREAD_LOCAL int g_ingame_tick_async_worker_context = 0;
 static volatile int g_ingame_tick_async_needs_main_pump = 0;
 
-#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
-#define PEX_ASYNC_INGAME_TICK 1
-#else
 #define PEX_ASYNC_INGAME_TICK 0
-#endif
 
 #if PEX_ASYNC_INGAME_TICK
 static CRITICAL_SECTION g_ingame_tick_async_cs;
@@ -258,22 +254,10 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
-        /* In-game streaming must not run from the render frame.  Desktop does it
-           from the async simulation worker; PSP/Wii keep their old cooperative
-           path because their platform profiles are intentionally single-threaded. */
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
         prof_part = pex_profile_begin();
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
         pex_profile_add(PROF_WORLD_STREAM, prof_part);
-#else
-        if (g_ingame_tick_async_worker_context) {
-            prof_part = pex_profile_begin();
-            update_infinite_world_streaming();
-            flat_flush_pending_lighting();
-            pex_profile_add(PROF_WORLD_STREAM, prof_part);
-        }
-#endif
         prof_part = pex_profile_begin();
         update_liquids();
         pex_profile_add(PROF_LIQUIDS, prof_part);
