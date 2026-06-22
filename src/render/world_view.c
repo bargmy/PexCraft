@@ -107,8 +107,9 @@ static void draw_source_fast_clouds(float partial) {
     float cr, cg, cb;
     cloud_color(&cr, &cg, &cb);
 
-    float px = g_player_prev_x + (g_player_x - g_player_prev_x) * partial;
-    float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float px = pr->prev_x + (pr->x - pr->prev_x) * partial;
+    float pz = pr->prev_z + (pr->z - pr->prev_z) * partial;
 
     /* RenderGlobal.func_4141_b: fast clouds are one huge tiled plane.  The
        coordinates are placed in world space here, which becomes the same
@@ -116,7 +117,7 @@ static void draw_source_fast_clouds(float partial) {
     const int step = 32;
     const int loops = 256 / step;
     const float uv_scale = 0.5f / 1024.0f;
-    double scroll_x = (double)px + (double)(((float)g_ingame_ticks + partial) * 0.03f);
+    double scroll_x = (double)px + (double)(((float)pr->ingame_ticks + partial) * 0.03f);
     double scroll_z = (double)pz;
     int wrap_x = (int)floor(scroll_x / 2048.0);
     int wrap_z = (int)floor(scroll_z / 2048.0);
@@ -162,9 +163,10 @@ static void draw_source_fancy_clouds(float partial) {
     float cr, cg, cb;
     cloud_color(&cr, &cg, &cb);
 
-    float px = g_player_prev_x + (g_player_x - g_player_prev_x) * partial;
-    float py = g_player_prev_y + (g_player_y - g_player_prev_y) * partial;
-    float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float px = pr->prev_x + (pr->x - pr->prev_x) * partial;
+    float py = pr->prev_y + (pr->y - pr->prev_y) * partial;
+    float pz = pr->prev_z + (pr->z - pr->prev_z) * partial;
 
     /* RenderGlobal.func_6510_c: 12x scaled 3D cloud slabs, 8x8 cloud cells,
        4 block thickness.  Kept source-shaped, but still emitted through the C
@@ -175,7 +177,7 @@ static void draw_source_fancy_clouds(float partial) {
     const int radius_cells = 3;
     const float eps = 1.0f / 1024.0f;
     const float uv_scale = 1.0f / 256.0f;
-    double sx = ((double)px + (double)(((float)g_ingame_ticks + partial) * 0.03f)) / (double)scale;
+    double sx = ((double)px + (double)(((float)pr->ingame_ticks + partial) * 0.03f)) / (double)scale;
     double sz = ((double)pz) / (double)scale + 0.33;
     int wrap_x = (int)floor(sx / 2048.0);
     int wrap_z = (int)floor(sz / 2048.0);
@@ -301,10 +303,11 @@ static void setup_world_projection(void) {
 
 static void apply_view_bobbing(float partial) {
     if (!g_opts.view_bobbing) return;
-    float walk_delta = g_distance_walked - g_prev_distance_walked;
-    float walk = g_distance_walked + walk_delta * partial;
-    float cam_yaw = g_prev_camera_yaw + (g_camera_yaw - g_prev_camera_yaw) * partial;
-    float cam_pitch = g_prev_camera_pitch + (g_camera_pitch - g_prev_camera_pitch) * partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float walk_delta = pr->distance_walked - pr->prev_distance_walked;
+    float walk = pr->distance_walked + walk_delta * partial;
+    float cam_yaw = pr->prev_camera_yaw + (pr->camera_yaw - pr->prev_camera_yaw) * partial;
+    float cam_pitch = pr->prev_camera_pitch + (pr->camera_pitch - pr->prev_camera_pitch) * partial;
 
     /* kq.java::f(float): exact Beta view-bobbing transform. */
     glTranslatef(sinf(walk * (float)M_PI) * cam_yaw * 0.5f,
@@ -317,27 +320,29 @@ static void apply_view_bobbing(float partial) {
 
 
 static void apply_hurt_camera_effect(float partial) {
-    if (g_player_dead) {
-        float f = (float)g_player_death_time + partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    if (pr->dead) {
+        float f = (float)pr->death_time + partial;
         glRotatef(40.0f - 8000.0f / (f + 200.0f), 0.0f, 0.0f, 1.0f);
         return;
     }
-    if (g_player_hurt_time <= 0 || g_player_max_hurt_time <= 0) return;
-    float f = (float)g_player_hurt_time - partial;
+    if (pr->hurt_time <= 0 || pr->max_hurt_time <= 0) return;
+    float f = (float)pr->hurt_time - partial;
     if (f <= 0.0f) return;
-    f /= (float)g_player_max_hurt_time;
+    f /= (float)pr->max_hurt_time;
     f = sinf(f * f * f * f * (float)M_PI);
-    glRotatef(-g_player_attacked_at_yaw, 0.0f, 1.0f, 0.0f);
+    glRotatef(-pr->attacked_at_yaw, 0.0f, 1.0f, 0.0f);
     glRotatef(-f * 14.0f, 0.0f, 0.0f, 1.0f);
-    glRotatef(g_player_attacked_at_yaw, 0.0f, 1.0f, 0.0f);
+    glRotatef(pr->attacked_at_yaw, 0.0f, 1.0f, 0.0f);
 }
 
 static void apply_player_camera(float partial) {
-    float x = g_player_prev_x + (g_player_x - g_player_prev_x) * partial;
-    float y = g_player_prev_y + (g_player_y - g_player_prev_y) * partial;
-    float z = g_player_prev_z + (g_player_z - g_player_prev_z) * partial;
-    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, partial);
-    float pitch = g_player_prev_pitch + (g_player_pitch - g_player_prev_pitch) * partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float x = pr->prev_x + (pr->x - pr->prev_x) * partial;
+    float y = pr->prev_y + (pr->y - pr->prev_y) * partial;
+    float z = pr->prev_z + (pr->z - pr->prev_z) * partial;
+    float yaw = lerp_angle(pr->prev_yaw, pr->yaw, partial);
+    float pitch = pr->prev_pitch + (pr->pitch - pr->prev_pitch) * partial;
 
     /* Sneaking lowers the player camera/eye a bit, like the earlier patch. */
     if (g_screen == SCREEN_INGAME && key_down_vk(g_opts.keys[5])) y -= 0.18f;
@@ -1266,8 +1271,9 @@ static void update_dig_particles(void) {
 static void draw_dig_particles(float partial) {
     if (!tex_terrain.id) return;
 
-    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, partial) * (float)M_PI / 180.0f;
-    float pitch = (g_player_prev_pitch + (g_player_pitch - g_player_prev_pitch) * partial) * (float)M_PI / 180.0f;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float yaw = lerp_angle(pr->prev_yaw, pr->yaw, partial) * (float)M_PI / 180.0f;
+    float pitch = (pr->prev_pitch + (pr->pitch - pr->prev_pitch) * partial) * (float)M_PI / 180.0f;
     float cos_yaw = cosf(yaw);
     float sin_yaw = sinf(yaw);
     float x_rot = -sin_yaw * sinf(pitch);
@@ -1972,7 +1978,8 @@ static void dropped_item_copy_offset(int copy, float block_scale, float *x, floa
 }
 
 static void draw_dropped_items(void) {
-    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, g_frame_partial);
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float yaw = lerp_angle(pr->prev_yaw, pr->yaw, g_frame_partial);
     float item_partial = g_frame_partial;
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &g_drops[i];
@@ -2049,16 +2056,17 @@ static void draw_dropped_items(void) {
 
 
 static void draw_pickup_fx_items(void) {
-    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, g_frame_partial);
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float yaw = lerp_angle(pr->prev_yaw, pr->yaw, g_frame_partial);
     for (int i = 0; i < MAX_PICKUP_FX; ++i) {
         PickupFx *fx = &g_pickup_fx[i];
         if (!fx->active) continue;
         float t = ((float)fx->age + g_frame_partial) / (float)(fx->max_age > 0 ? fx->max_age : 3);
         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
         t = t * t;
-        float px = g_player_prev_x + (g_player_x - g_player_prev_x) * g_frame_partial;
-        float py = g_player_prev_y + (g_player_y - g_player_prev_y) * g_frame_partial - 0.5f;
-        float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * g_frame_partial;
+        float px = pr->prev_x + (pr->x - pr->prev_x) * g_frame_partial;
+        float py = pr->prev_y + (pr->y - pr->prev_y) * g_frame_partial - 0.5f;
+        float pz = pr->prev_z + (pr->z - pr->prev_z) * g_frame_partial;
         float x = fx->start_x + (px - fx->start_x) * t;
         float y = fx->start_y + (py - fx->start_y) * t;
         float z = fx->start_z + (pz - fx->start_z) * t;
@@ -3699,8 +3707,8 @@ static int flat_renderer_sort_needed(float px, float py, float pz, int count) {
        after the camera has moved several blocks.  Also refresh occasionally on
        large view-angle changes so translucent water remains acceptable. */
     if (dx * dx + dy * dy + dz * dz > 16.0f) return 1;
-    if (flat_angle_delta_abs(g_player_yaw, g_flat_section_sort_yaw) > 12.0f) return 1;
-    if (fabsf(g_player_pitch - g_flat_section_sort_pitch) > 12.0f) return 1;
+    if (flat_angle_delta_abs(g_player_render_frame.yaw, g_flat_section_sort_yaw) > 12.0f) return 1;
+    if (fabsf(g_player_render_frame.pitch - g_flat_section_sort_pitch) > 12.0f) return 1;
     return 0;
 }
 
@@ -3710,8 +3718,8 @@ static void flat_note_renderer_sorted(float px, float py, float pz, int count) {
     g_flat_section_sort_x = px;
     g_flat_section_sort_y = py;
     g_flat_section_sort_z = pz;
-    g_flat_section_sort_yaw = g_player_yaw;
-    g_flat_section_sort_pitch = g_player_pitch;
+    g_flat_section_sort_yaw = g_player_render_frame.yaw;
+    g_flat_section_sort_pitch = g_player_render_frame.pitch;
     g_flat_renderer_sort_dirty = 0;
 }
 
@@ -4583,9 +4591,10 @@ static void async_section_mesh_shutdown(void) {
 
 static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionRef *out, int cap) {
     int count = 0;
-    float px = g_player_prev_x + (g_player_x - g_player_prev_x) * g_frame_partial;
-    float py = g_player_prev_y + (g_player_y - g_player_prev_y) * g_frame_partial;
-    float pz = g_player_prev_z + (g_player_z - g_player_prev_z) * g_frame_partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float px = pr->prev_x + (pr->x - pr->prev_x) * g_frame_partial;
+    float py = pr->prev_y + (pr->y - pr->prev_y) * g_frame_partial;
+    float pz = pr->prev_z + (pr->z - pr->prev_z) * g_frame_partial;
 
     int pcx = flat_index((int)floorf(px)) / FLAT_RENDER_CHUNK;
     int pcz = flat_z_index((int)floorf(pz)) / FLAT_RENDER_CHUNK;
@@ -5050,21 +5059,22 @@ static void rebuild_flat_world_geometry_list(void) {
 static void draw_third_person_player(void) {
     if (!g_third_person_view || !tex_steve.id) return;
 
-    float x = g_player_prev_x + (g_player_x - g_player_prev_x) * g_frame_partial;
-    float eye_y = g_player_prev_y + (g_player_y - g_player_prev_y) * g_frame_partial;
-    float z = g_player_prev_z + (g_player_z - g_player_prev_z) * g_frame_partial;
-    float yaw = lerp_angle(g_player_prev_yaw, g_player_yaw, g_frame_partial);
-    float pitch = g_player_prev_pitch + (g_player_pitch - g_player_prev_pitch) * g_frame_partial;
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float x = pr->prev_x + (pr->x - pr->prev_x) * g_frame_partial;
+    float eye_y = pr->prev_y + (pr->y - pr->prev_y) * g_frame_partial;
+    float z = pr->prev_z + (pr->z - pr->prev_z) * g_frame_partial;
+    float yaw = lerp_angle(pr->prev_yaw, pr->yaw, g_frame_partial);
+    float pitch = pr->prev_pitch + (pr->pitch - pr->prev_pitch) * g_frame_partial;
     float feet_y = eye_y - 1.62f;
     int sneaking = (g_screen == SCREEN_INGAME && key_down_vk(g_opts.keys[5]));
 
     /* Source reference: dh.java model animation:
        arms/legs use cos(limbSwing*0.6662) with opposite phase. */
-    float move = g_prev_limb_swing_amount + (g_limb_swing_amount - g_prev_limb_swing_amount) * g_frame_partial;
+    float move = pr->prev_limb_swing_amount + (pr->limb_swing_amount - pr->prev_limb_swing_amount) * g_frame_partial;
     if (move < 0.0f) move = 0.0f;
     if (move > 1.0f) move = 1.0f;
-    float limb = g_prev_limb_swing + (g_limb_swing - g_prev_limb_swing) * g_frame_partial;
-    float idle = (float)g_ingame_ticks + g_frame_partial;
+    float limb = pr->prev_limb_swing + (pr->limb_swing - pr->prev_limb_swing) * g_frame_partial;
+    float idle = (float)pr->ingame_ticks + g_frame_partial;
 
     float right_arm_pitch = cosf(limb * 0.6662f + (float)M_PI) * 2.0f * move * 0.5f * 57.29578f;
     float left_arm_pitch  = cosf(limb * 0.6662f) * 2.0f * move * 0.5f * 57.29578f;
@@ -5116,7 +5126,7 @@ static void draw_third_person_player(void) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_steve.id);
     steve_set_texture_dims(&tex_steve);
-    if (g_player_hurt_time > 0 || g_player_dead) steve_set_tint(1.0f, 0.35f, 0.35f);
+    if (pr->hurt_time > 0 || pr->dead) steve_set_tint(1.0f, 0.35f, 0.35f);
     else steve_set_tint(1.0f, 1.0f, 1.0f);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -5272,9 +5282,9 @@ static void draw_multiplayer_name_tags(void) {
         PexNetRenderPlayerState *r = &g_mp_render_players[i];
         if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
         if (r->health <= 0) continue;
-        float dx = r->x - g_player_x;
-        float dy = r->y - g_player_y;
-        float dz = r->z - g_player_z;
+        float dx = r->x - g_player_render_frame.x;
+        float dy = r->y - g_player_render_frame.y;
+        float dz = r->z - g_player_render_frame.z;
         float dist = sqrtf(dx * dx + dy * dy + dz * dz);
         int sneaking = (r->flags & PEX_PLAYER_FLAG_SNEAKING) != 0;
         float max_dist = sneaking ? 32.0f : 64.0f;
@@ -5337,8 +5347,8 @@ static void draw_in_block_overlay(void) {
     float u0, v0, u1, v1;
     int water_overlay = (id == BLOCK_WATER || id == BLOCK_STILL_WATER) && tex_water_overlay.id;
     if (water_overlay) {
-        float yaw = g_player_yaw / 64.0f;
-        float pitch = g_player_pitch / 64.0f;
+        float yaw = g_player_render_frame.yaw / 64.0f;
+        float pitch = g_player_render_frame.pitch / 64.0f;
         u0 = 4.0f + yaw; v0 = 4.0f + pitch;
         u1 = 0.0f + yaw; v1 = 0.0f + pitch;
     } else {
@@ -5725,8 +5735,8 @@ static void psp_fast_draw_flat_surface_world(void) {
     glDisable(GL_ALPHA_TEST);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
 
-    int pcx = (int)floorf(g_player_x);
-    int pcz = (int)floorf(g_player_z);
+    int pcx = (int)floorf(g_player_render_frame.x);
+    int pcz = (int)floorf(g_player_render_frame.z);
     psp_fast_surface_update_tiles(pcx, pcz);
 
     apply_player_camera(g_frame_partial);

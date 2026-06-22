@@ -131,6 +131,106 @@ static int flat_player_try_step_move(float nx, float base_y, float nz) {
 static PEX_THREAD_LOCAL int g_ingame_tick_async_worker_context = 0;
 static volatile int g_ingame_tick_async_needs_main_pump = 0;
 
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+#define PEX_ASYNC_INGAME_TICK 1
+#else
+#define PEX_ASYNC_INGAME_TICK 0
+#endif
+
+#if PEX_ASYNC_INGAME_TICK
+static CRITICAL_SECTION g_ingame_tick_async_cs;
+static HANDLE g_ingame_tick_async_thread = NULL;
+static int g_ingame_tick_async_initialized = 0;
+static int g_ingame_tick_async_stop = 0;
+static int g_ingame_tick_async_busy_flag = 0;
+static int g_ingame_tick_async_failed = 0;
+static int g_ingame_tick_async_completed = 0;
+/* Time of the simulated tick boundary represented by the newest published
+   prev/current player pair.  This is intentionally NOT tick-completion time:
+   completion time varies with chunk/lighting/entity work, and using it as the
+   render clock makes walking hold, then burst, on every platform where ticks
+   take a non-zero or variable amount of time. */
+static double g_ingame_tick_async_last_completed_time = 0.0;
+#endif
+
+static void player_render_capture_current(PexPlayerRenderState *s) {
+    if (!s) return;
+    s->x = g_player_x;
+    s->y = g_player_y;
+    s->z = g_player_z;
+    s->prev_x = g_player_prev_x;
+    s->prev_y = g_player_prev_y;
+    s->prev_z = g_player_prev_z;
+    s->yaw = g_player_yaw;
+    s->pitch = g_player_pitch;
+    s->prev_yaw = g_player_prev_yaw;
+    s->prev_pitch = g_player_prev_pitch;
+    s->distance_walked = g_distance_walked;
+    s->prev_distance_walked = g_prev_distance_walked;
+    s->limb_swing = g_limb_swing;
+    s->prev_limb_swing = g_prev_limb_swing;
+    s->limb_swing_amount = g_limb_swing_amount;
+    s->prev_limb_swing_amount = g_prev_limb_swing_amount;
+    s->camera_yaw = g_camera_yaw;
+    s->prev_camera_yaw = g_prev_camera_yaw;
+    s->camera_pitch = g_camera_pitch;
+    s->prev_camera_pitch = g_prev_camera_pitch;
+    s->dead = g_player_dead;
+    s->death_time = g_player_death_time;
+    s->hurt_time = g_player_hurt_time;
+    s->max_hurt_time = g_player_max_hurt_time;
+    s->attacked_at_yaw = g_player_attacked_at_yaw;
+    s->ingame_ticks = g_ingame_ticks;
+}
+
+static void player_render_publish_after_tick(void) {
+#if PEX_ASYNC_INGAME_TICK
+    /* The async worker publishes player snapshot and tick-boundary timestamp
+       together after ingame_tick() returns.  Publishing the snapshot here first
+       would allow one render frame to see new position with the old partial
+       clock, which looks exactly like a walking micro-stutter. */
+    if (g_ingame_tick_async_worker_context) return;
+#endif
+    PexPlayerRenderState s;
+    player_render_capture_current(&s);
+    g_player_render_published = s;
+    g_player_render_frame = s;
+    g_player_render_published_valid = 1;
+}
+
+static void player_render_overlay_live_look(PexPlayerRenderState *s) {
+    if (!s) return;
+    /* Mouse/touch/gamepad look is render-rate input.  Keep it live so fixing the
+       worker position snapshot does not make camera rotation fall back to 20 Hz. */
+    s->yaw = g_player_yaw;
+    s->pitch = g_player_pitch;
+    s->prev_yaw = g_player_prev_yaw;
+    s->prev_pitch = g_player_prev_pitch;
+}
+
+static void player_render_begin_frame(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (g_player_render_frame_from_async_partial) {
+        g_player_render_frame_from_async_partial = 0;
+        player_render_overlay_live_look(&g_player_render_frame);
+        return;
+    }
+    if (g_ingame_tick_async_initialized && g_ingame_tick_async_thread &&
+        !g_ingame_tick_async_failed && !g_mp_connected && !pex_net_is_connecting()) {
+        int valid = 0;
+        EnterCriticalSection(&g_ingame_tick_async_cs);
+        valid = g_player_render_published_valid;
+        if (valid) g_player_render_frame = g_player_render_published;
+        LeaveCriticalSection(&g_ingame_tick_async_cs);
+        if (valid) {
+            player_render_overlay_live_look(&g_player_render_frame);
+            return;
+        }
+    }
+#endif
+    player_render_capture_current(&g_player_render_frame);
+}
+
 static void ingame_tick(void) {
     double prof_ingame_start = pex_profile_begin();
     double prof_part = 0.0;
@@ -190,6 +290,7 @@ static void ingame_tick(void) {
             if (!g_mp_connected) save_current_world_state();
         }
         if (g_mp_connected) pex_net_send_player_state();
+        player_render_publish_after_tick();
         pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
         pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
         return;
@@ -197,6 +298,7 @@ static void ingame_tick(void) {
 
 #if defined(PEX_PLATFORM_PSP)
     if (!psp_player_terrain_ready_or_hold()) {
+        player_render_publish_after_tick();
         pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
         pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
         return;
@@ -573,6 +675,7 @@ static void ingame_tick(void) {
         if (!g_mp_connected) save_current_world_state();
     }
     if (g_mp_connected) pex_net_send_player_state();
+    player_render_publish_after_tick();
     pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
     pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
 }
@@ -587,15 +690,9 @@ static void ingame_tick(void) {
    worker instead of by the frame loop.  The old async path still let the main
    thread enqueue/drop tick requests; when terrain work made the worker late,
    walking advanced in visible bursts.  The worker below owns the 20 Hz clock,
-   keeps at most one simulation step in flight, and lets render interpolate from
-   the time of the last completed worker tick.
+   keeps at most one simulation step in flight, and publishes a stable player render snapshot plus the simulated tick boundary
+   time for interpolation.
    ------------------------------------------------------------------------- */
-
-#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
-#define PEX_ASYNC_INGAME_TICK 1
-#else
-#define PEX_ASYNC_INGAME_TICK 0
-#endif
 
 static int ingame_tick_screen_allows_simulation(void) {
     return g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
@@ -605,14 +702,28 @@ static int ingame_tick_screen_allows_simulation(void) {
 }
 
 #if PEX_ASYNC_INGAME_TICK
-static CRITICAL_SECTION g_ingame_tick_async_cs;
-static HANDLE g_ingame_tick_async_thread = NULL;
-static int g_ingame_tick_async_initialized = 0;
-static int g_ingame_tick_async_stop = 0;
-static int g_ingame_tick_async_busy_flag = 0;
-static int g_ingame_tick_async_failed = 0;
-static int g_ingame_tick_async_completed = 0;
-static double g_ingame_tick_async_last_completed_time = 0.0;
+static void ingame_tick_async_wait_until(double target_time) {
+    /* SDL_Delay(1)/Sleep(1) can oversleep by an entire scheduler quantum on
+       Linux/Android, which makes the worker's 20 Hz movement clock uneven even
+       when rendering is perfectly smooth.  Sleep only while far away, yield in
+       the guard band, and spin for the final tiny slice so completed tick
+       boundaries are regular. */
+    for (;;) {
+        double now = now_seconds();
+        double wait = target_time - now;
+        if (wait <= 0.0) break;
+        if (wait > 0.006) {
+            Sleep(1);
+        } else if (wait > 0.0015) {
+            Sleep(0);
+        } else {
+            do {
+                now = now_seconds();
+            } while (now < target_time);
+            break;
+        }
+    }
+}
 
 static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
     (void)unused;
@@ -628,19 +739,17 @@ static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
         if (stop) break;
 
         double now = now_seconds();
-        double wait = next_tick_time - now;
-        if (wait > 0.0) {
-            DWORD ms = (DWORD)(wait * 1000.0);
-            if (ms > 4) ms = 4;
-            Sleep(ms > 0 ? ms : 1);
+        if (next_tick_time > now) {
+            ingame_tick_async_wait_until(next_tick_time);
             continue;
         }
 
         /* Do not spiral after a breakpoint, alt-tab, shader compile, or very
-           slow chunk install.  Dropping old wall-clock time is less visible than
-           running several player-physics ticks back-to-back. */
-        if (now - next_tick_time > 0.25) next_tick_time = now;
-        next_tick_time += tick_dt;
+           slow chunk install.  The timestamp published for interpolation must
+           remain the tick boundary, not the later completion time. */
+        double tick_boundary_time = next_tick_time;
+        if (now - tick_boundary_time > 0.25) tick_boundary_time = now;
+        next_tick_time = tick_boundary_time + tick_dt;
 
         if (!ingame_tick_screen_allows_simulation() || g_mp_connected || pex_net_is_connecting()) {
             Sleep(1);
@@ -655,13 +764,17 @@ static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
         g_ingame_tick_async_worker_context = 1;
         ingame_tick();
         g_ingame_tick_async_worker_context = 0;
+        PexPlayerRenderState render_state;
+        player_render_capture_current(&render_state);
         double tick_ms = (now_seconds() - tick_start) * 1000.0;
         if (tick_ms < 0.0) tick_ms = 0.0;
 
         EnterCriticalSection(&g_ingame_tick_async_cs);
+        g_player_render_published = render_state;
+        g_player_render_published_valid = 1;
         g_ingame_tick_async_busy_flag = 0;
         g_ingame_tick_async_completed++;
-        g_ingame_tick_async_last_completed_time = now_seconds();
+        g_ingame_tick_async_last_completed_time = tick_boundary_time;
         g_prof_async_tick_last_ms = tick_ms;
         if (g_prof_async_tick_samples <= 0) g_prof_async_tick_avg_ms = tick_ms;
         else g_prof_async_tick_avg_ms = g_prof_async_tick_avg_ms * 0.90 + tick_ms * 0.10;
@@ -678,6 +791,8 @@ static void ingame_tick_async_init(void) {
     g_ingame_tick_async_busy_flag = 0;
     g_ingame_tick_async_completed = 0;
     g_ingame_tick_async_last_completed_time = now_seconds();
+    g_player_render_published_valid = 0;
+    g_player_render_frame_from_async_partial = 0;
     InitializeCriticalSection(&g_ingame_tick_async_cs);
     /* Give the worker enough stack for the legacy C tick path and collision
        helpers.  A tiny stack caused 0xC00000FD in previous worker attempts. */
@@ -709,13 +824,22 @@ static float ingame_tick_async_render_partial(float fallback_partial) {
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_initialized || g_ingame_tick_async_failed ||
         !g_ingame_tick_async_thread || g_mp_connected || pex_net_is_connecting()) {
+        g_player_render_frame_from_async_partial = 0;
         return fallback_partial;
     }
     double last = 0.0;
+    int valid = 0;
     EnterCriticalSection(&g_ingame_tick_async_cs);
     last = g_ingame_tick_async_last_completed_time;
+    valid = g_player_render_published_valid;
+    if (valid) {
+        g_player_render_frame = g_player_render_published;
+        g_player_render_frame_from_async_partial = 1;
+    } else {
+        g_player_render_frame_from_async_partial = 0;
+    }
     LeaveCriticalSection(&g_ingame_tick_async_cs);
-    if (last <= 0.0) return fallback_partial;
+    if (last <= 0.0 || !valid) return fallback_partial;
     float p = (float)((now_seconds() - last) * 20.0);
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
@@ -749,6 +873,8 @@ static void ingame_tick_async_shutdown(void) {
     g_ingame_tick_async_initialized = 0;
     g_ingame_tick_async_stop = 0;
     g_ingame_tick_async_busy_flag = 0;
+    g_player_render_published_valid = 0;
+    g_player_render_frame_from_async_partial = 0;
     pex_logf("async ingame simulation worker stopped; completed=%d", g_ingame_tick_async_completed);
 #endif
 }

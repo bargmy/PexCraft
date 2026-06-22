@@ -115,6 +115,7 @@ static void render(float partial) {
 
     update_debug_fps_counter();
     g_frame_partial = partial;
+    player_render_begin_frame();
 
     if (!pex_renderer_begin_frame()) {
         g_render_ms_last = 0.0;

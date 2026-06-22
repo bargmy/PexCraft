@@ -1260,6 +1260,29 @@ static float g_camera_yaw = 0.0f, g_prev_camera_yaw = 0.0f;
 static float g_camera_pitch = 0.0f, g_prev_camera_pitch = 0.0f;
 static float g_frame_partial = 0.0f;
 
+typedef struct PexPlayerRenderState {
+    float x, y, z;
+    float prev_x, prev_y, prev_z;
+    float yaw, pitch;
+    float prev_yaw, prev_pitch;
+    float distance_walked, prev_distance_walked;
+    float limb_swing, prev_limb_swing;
+    float limb_swing_amount, prev_limb_swing_amount;
+    float camera_yaw, prev_camera_yaw;
+    float camera_pitch, prev_camera_pitch;
+    int dead;
+    int death_time;
+    int hurt_time;
+    int max_hurt_time;
+    float attacked_at_yaw;
+    int ingame_ticks;
+} PexPlayerRenderState;
+
+static PexPlayerRenderState g_player_render_published;
+static PexPlayerRenderState g_player_render_frame;
+static int g_player_render_published_valid = 0;
+static int g_player_render_frame_from_async_partial = 0;
+
 /* F3 debug stats and F5 third-person toggle. */
 static int g_debug_fps = 0;
 static int g_debug_min_fps = 0;
@@ -1446,6 +1469,7 @@ static void ingame_tick(void);
 static void ingame_tick_async_queue(void);
 static void ingame_tick_async_pump_main_thread(void);
 static float ingame_tick_async_render_partial(float fallback_partial);
+static void player_render_begin_frame(void);
 static void ingame_tick_async_shutdown(void);
 static int ingame_tick_async_pending_count(void);
 static int ingame_tick_async_busy(void);
