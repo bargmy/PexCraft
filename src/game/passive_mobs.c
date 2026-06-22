@@ -531,7 +531,7 @@ static void passive_mob_request_jump(PassiveMob *m, const char *why) {
     float yaw_rad = m->yaw * (float)M_PI / 180.0f;
     m->mx += -sinf(yaw_rad) * 0.11f;
     m->mz +=  cosf(yaw_rad) * 0.11f;
-    pex_logf("passive mob jump type=%s reason=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), why ? why : "", m->x, m->y, m->z);
+    pex_logf_trace("passive mob jump type=%s reason=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), why ? why : "", m->x, m->y, m->z);
 }
 
 static void passive_mob_update_living(PassiveMob *m) {
@@ -653,7 +653,7 @@ static void passive_mob_update_living(PassiveMob *m) {
         m->has_path_target = 0;
         m->wander_cooldown = 20 + (rand() % 40);
         m->stuck_ticks = 0;
-        pex_logf("passive mob dropped stuck target type=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), m->x, m->y, m->z);
+        pex_logf_trace("passive mob dropped stuck target type=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), m->x, m->y, m->z);
     }
     float target_amount = (speed > 0.01f && (m->on_ground || in_liquid)) ? pex_clamp_float(speed * 7.0f, 0.0f, 1.0f) : 0.0f;
     m->limb_amount += (target_amount - m->limb_amount) * 0.4f;
@@ -713,6 +713,168 @@ static Texture *passive_mob_texture_for_type(int type) {
     }
 }
 
+typedef struct PassiveMobRenderEntry {
+    int active;
+    int type;
+    int sheared;
+    int rideable;
+    int hurt;
+    float x, y, z;
+    float yaw;
+    float head_yaw;
+    float pitch;
+    float move;
+    float limb;
+    float wing;
+    float death_time;
+} PassiveMobRenderEntry;
+
+static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *src, float partial,
+                                                            float camx, float camy, float camz,
+                                                            PassiveMobRenderEntry *out, int *out_count) {
+    int count = 0;
+    const float max_dist2 = 96.0f * 96.0f;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        const PassiveMob *m = &src[i];
+        if (!m->active) continue;
+        float x = m->prev_x + (m->x - m->prev_x) * partial;
+        float y = m->prev_y + (m->y - m->prev_y) * partial;
+        float z = m->prev_z + (m->z - m->prev_z) * partial;
+        float dx = x - camx;
+        float dy = y - camy;
+        float dz = z - camz;
+        if (m->death_time <= 0 && dx*dx + dy*dy + dz*dz > max_dist2) continue;
+        PassiveMobRenderEntry *e = &out[count++];
+        memset(e, 0, sizeof(*e));
+        e->active = 1;
+        e->type = m->type;
+        e->sheared = m->sheared;
+        e->rideable = m->rideable;
+        e->hurt = (m->hurt_time > 0 || m->death_time > 0);
+        e->x = x; e->y = y; e->z = z;
+        e->yaw = passive_lerp_angle(m->prev_render_yaw, m->render_yaw, partial);
+        e->head_yaw = passive_lerp_angle(m->prev_yaw, m->yaw, partial) - e->yaw;
+        e->head_yaw = pex_clamp_float(pex_wrap_degrees(e->head_yaw), -45.0f, 45.0f);
+        e->pitch = m->prev_pitch + (m->pitch - m->prev_pitch) * partial;
+        e->move = m->prev_limb_amount + (m->limb_amount - m->prev_limb_amount) * partial;
+        if (e->move > 1.0f) e->move = 1.0f;
+        e->limb = m->prev_limb_swing + (m->limb_swing - m->prev_limb_swing) * partial;
+        e->death_time = m->death_time > 0 ? (float)m->death_time + partial : 0.0f;
+        if (m->type == PASSIVE_MOB_CHICKEN) {
+            float wr = m->chicken_prev_wing_rot + (m->chicken_wing_rot - m->chicken_prev_wing_rot) * partial;
+            float wd = m->chicken_prev_dest_pos + (m->chicken_dest_pos - m->chicken_prev_dest_pos) * partial;
+            e->wing = (sinf(wr) + 1.0f) * wd;
+        }
+        if (count >= MAX_PASSIVE_MOBS) break;
+    }
+    if (out_count) *out_count = count;
+}
+
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+static CRITICAL_SECTION g_passive_render_cs;
+static int g_passive_render_initialized = 0;
+static int g_passive_render_stop = 0;
+static int g_passive_render_has_job = 0;
+static int g_passive_render_busy = 0;
+static HANDLE g_passive_render_event = NULL;
+static HANDLE g_passive_render_thread = NULL;
+static PassiveMob g_passive_render_job_mobs[MAX_PASSIVE_MOBS];
+static float g_passive_render_job_partial = 0.0f;
+static float g_passive_render_job_camx = 0.0f, g_passive_render_job_camy = 0.0f, g_passive_render_job_camz = 0.0f;
+static PassiveMobRenderEntry g_passive_render_ready[MAX_PASSIVE_MOBS];
+static int g_passive_render_ready_count = 0;
+
+static DWORD WINAPI passive_render_worker_proc(LPVOID unused) {
+    (void)unused;
+    PassiveMob local_mobs[MAX_PASSIVE_MOBS];
+    PassiveMobRenderEntry local_entries[MAX_PASSIVE_MOBS];
+    for (;;) {
+        WaitForSingleObject(g_passive_render_event, INFINITE);
+        int stop = 0, have = 0;
+        float partial = 0.0f, camx = 0.0f, camy = 0.0f, camz = 0.0f;
+        EnterCriticalSection(&g_passive_render_cs);
+        stop = g_passive_render_stop;
+        if (!stop && g_passive_render_has_job) {
+            memcpy(local_mobs, g_passive_render_job_mobs, sizeof(local_mobs));
+            partial = g_passive_render_job_partial;
+            camx = g_passive_render_job_camx;
+            camy = g_passive_render_job_camy;
+            camz = g_passive_render_job_camz;
+            g_passive_render_has_job = 0;
+            g_passive_render_busy = 1;
+            have = 1;
+        }
+        LeaveCriticalSection(&g_passive_render_cs);
+        if (stop) break;
+        if (!have) continue;
+
+        int count = 0;
+        passive_mobs_build_render_entries_from_snapshot(local_mobs, partial, camx, camy, camz, local_entries, &count);
+
+        EnterCriticalSection(&g_passive_render_cs);
+        memcpy(g_passive_render_ready, local_entries, (size_t)count * sizeof(local_entries[0]));
+        g_passive_render_ready_count = count;
+        g_passive_render_busy = 0;
+        LeaveCriticalSection(&g_passive_render_cs);
+    }
+    EnterCriticalSection(&g_passive_render_cs);
+    g_passive_render_busy = 0;
+    LeaveCriticalSection(&g_passive_render_cs);
+    return 0;
+}
+
+static void passive_render_worker_init(void) {
+    if (g_passive_render_initialized) return;
+    g_passive_render_initialized = 1;
+    InitializeCriticalSection(&g_passive_render_cs);
+    g_passive_render_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (g_passive_render_event) {
+        g_passive_render_thread = CreateThread(NULL, 0x100000, passive_render_worker_proc, NULL, 0, NULL);
+        if (g_passive_render_thread) SetThreadPriority(g_passive_render_thread, THREAD_PRIORITY_BELOW_NORMAL);
+    }
+}
+
+static void passive_mobs_submit_render_job(float partial) {
+    passive_render_worker_init();
+    if (!g_passive_render_event || !g_passive_render_thread) return;
+    EnterCriticalSection(&g_passive_render_cs);
+    if (!g_passive_render_busy && !g_passive_render_has_job) {
+        memcpy(g_passive_render_job_mobs, g_passive_mobs, sizeof(g_passive_render_job_mobs));
+        g_passive_render_job_partial = partial;
+        g_passive_render_job_camx = g_player_x;
+        g_passive_render_job_camy = g_player_y;
+        g_passive_render_job_camz = g_player_z;
+        g_passive_render_has_job = 1;
+        SetEvent(g_passive_render_event);
+    }
+    LeaveCriticalSection(&g_passive_render_cs);
+}
+
+static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap) {
+    int count = 0;
+    passive_render_worker_init();
+    if (g_passive_render_event && g_passive_render_thread) {
+        EnterCriticalSection(&g_passive_render_cs);
+        count = g_passive_render_ready_count;
+        if (count > cap) count = cap;
+        if (count > 0) memcpy(out, g_passive_render_ready, (size_t)count * sizeof(out[0]));
+        LeaveCriticalSection(&g_passive_render_cs);
+        return count;
+    }
+    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z, out, &count);
+    if (count > cap) count = cap;
+    return count;
+}
+#else
+static void passive_mobs_submit_render_job(float partial) { (void)partial; }
+static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap) {
+    int count = 0;
+    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z, out, &count);
+    if (count > cap) count = cap;
+    return count;
+}
+#endif
+
 static void passive_render_quad_model(int type, int fur_layer, float limb, float move, float head_yaw, float head_pitch, float chicken_wing) {
     float leg1 = cosf(limb * 0.6662f) * 1.4f * move * 57.29578f;
     float leg2 = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move * 57.29578f;
@@ -770,6 +932,11 @@ static void passive_render_chicken(float limb, float move, float head_yaw, float
 
 static void draw_passive_mobs(float partial) {
     if (g_mp_connected) return;
+    passive_mobs_submit_render_job(partial);
+    PassiveMobRenderEntry entries[MAX_PASSIVE_MOBS];
+    int entry_count = passive_mobs_fetch_render_entries(entries, MAX_PASSIVE_MOBS);
+    if (entry_count <= 0) return;
+
     glPushMatrix();
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_DEPTH_TEST);
@@ -780,32 +947,21 @@ static void draw_passive_mobs(float partial) {
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
 
-    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
-        PassiveMob *m = &g_passive_mobs[i];
-        if (!m->active) continue;
-        Texture *t = passive_mob_texture_for_type(m->type);
+    for (int i = 0; i < entry_count; ++i) {
+        PassiveMobRenderEntry *e = &entries[i];
+        if (!e->active) continue;
+        Texture *t = passive_mob_texture_for_type(e->type);
         if (!t || !t->id) continue;
-        float x = m->prev_x + (m->x - m->prev_x) * partial;
-        float y = m->prev_y + (m->y - m->prev_y) * partial;
-        float z = m->prev_z + (m->z - m->prev_z) * partial;
-        float yaw = passive_lerp_angle(m->prev_render_yaw, m->render_yaw, partial);
-        float head_yaw = passive_lerp_angle(m->prev_yaw, m->yaw, partial) - yaw;
-        head_yaw = pex_clamp_float(pex_wrap_degrees(head_yaw), -45.0f, 45.0f);
-        float pitch = m->prev_pitch + (m->pitch - m->prev_pitch) * partial;
-        float move = m->prev_limb_amount + (m->limb_amount - m->prev_limb_amount) * partial;
-        if (move > 1.0f) move = 1.0f;
-        float limb = m->prev_limb_swing + (m->limb_swing - m->prev_limb_swing) * partial;
-        float death_time = m->death_time > 0 ? (float)m->death_time + partial : 0.0f;
 
         glPushMatrix();
         glBindTexture(GL_TEXTURE_2D, t->id);
         steve_set_texture_dims(t);
-        if (m->hurt_time > 0 || m->death_time > 0) steve_set_tint(1.0f, 0.35f, 0.35f);
+        if (e->hurt) steve_set_tint(1.0f, 0.35f, 0.35f);
         else steve_set_tint(1.0f, 1.0f, 1.0f);
-        glTranslatef(x, y, z);
-        glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
-        if (death_time > 0.0f) {
-            float d = ((death_time - 1.0f) / 20.0f) * 1.6f;
+        glTranslatef(e->x, e->y, e->z);
+        glRotatef(180.0f - e->yaw, 0.0f, 1.0f, 0.0f);
+        if (e->death_time > 0.0f) {
+            float d = ((e->death_time - 1.0f) / 20.0f) * 1.6f;
             if (d < 0.0f) d = 0.0f;
             d = sqrtf(d);
             if (d > 1.0f) d = 1.0f;
@@ -814,22 +970,19 @@ static void draw_passive_mobs(float partial) {
         glScalef(-1.0f, -1.0f, 1.0f);
         glTranslatef(0.0f, -24.0f * 0.0625f - 0.0078125f, 0.0f);
 
-        if (m->type == PASSIVE_MOB_CHICKEN) {
-            float wr = m->chicken_prev_wing_rot + (m->chicken_wing_rot - m->chicken_prev_wing_rot) * partial;
-            float wd = m->chicken_prev_dest_pos + (m->chicken_dest_pos - m->chicken_prev_dest_pos) * partial;
-            float wing = (sinf(wr) + 1.0f) * wd;
-            passive_render_chicken(limb, move, head_yaw, pitch, wing);
+        if (e->type == PASSIVE_MOB_CHICKEN) {
+            passive_render_chicken(e->limb, e->move, e->head_yaw, e->pitch, e->wing);
         } else {
-            passive_render_quad_model(m->type, 0, limb, move, head_yaw, pitch, 0.0f);
-            if (m->type == PASSIVE_MOB_SHEEP && !m->sheared && tex_mob_sheep_fur.id) {
+            passive_render_quad_model(e->type, 0, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+            if (e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_sheep_fur.id);
                 steve_set_texture_dims(&tex_mob_sheep_fur);
-                passive_render_quad_model(m->type, 1, limb, move, head_yaw, pitch, 0.0f);
+                passive_render_quad_model(e->type, 1, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
             }
-            if (m->type == PASSIVE_MOB_PIG && m->rideable && tex_mob_saddle.id) {
+            if (e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
                 steve_set_texture_dims(&tex_mob_saddle);
-                passive_render_quad_model(m->type, 1, limb, move, head_yaw, pitch, 0.0f);
+                passive_render_quad_model(e->type, 1, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
             }
         }
         glPopMatrix();

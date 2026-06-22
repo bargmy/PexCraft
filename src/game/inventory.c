@@ -1264,7 +1264,7 @@ static void stream_mark_neighbor_boundary_dirty(int cx, int cz, int sy) {
 
 static void stream_mark_local_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
-    pex_logf("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
+    pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
 
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
@@ -5815,7 +5815,7 @@ static void stream_async_init(void) {
 #if defined(PEX_PLATFORM_PSP)
         g_stream_async_thread = CreateThread(NULL, 0x40000, stream_async_worker_proc, NULL, 0, NULL);
 #else
-        g_stream_async_thread = CreateThread(NULL, 0, stream_async_worker_proc, NULL, 0, NULL);
+        g_stream_async_thread = CreateThread(NULL, 0x400000, stream_async_worker_proc, NULL, 0, NULL);
 #endif
         if (g_stream_async_thread) SetThreadPriority(g_stream_async_thread, THREAD_PRIORITY_BELOW_NORMAL);
     }
@@ -5937,7 +5937,7 @@ static void stream_destroy_direct_mesh_handle(unsigned int h) {
 
 static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_origin_z,
                                                     int new_origin_x, int new_origin_z) {
-    pex_logf("chunk render remap origin old=%d,%d new=%d,%d", old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    pex_logf_trace("chunk render remap origin old=%d,%d new=%d,%d", old_origin_x, old_origin_z, new_origin_x, new_origin_z);
     GLuint old_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     GLuint old_liquid_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_dirty[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -6292,7 +6292,7 @@ static void process_stream_generation_queue(void) {
 #if defined(PEX_PLATFORM_WII)
             wii_debug_logf("stream coop chunk %d/%d wc=%d,%d type=%d", idx + 1, g_stream_gen_queue_count, wcx, wcz, g_world_type);
 #endif
-            pex_logf("chunk stream sync install index=%d/%d world=%d,%d", idx + 1, g_stream_gen_queue_count, wcx, wcz);
+            pex_logf_trace("chunk stream sync install index=%d/%d world=%d,%d", idx + 1, g_stream_gen_queue_count, wcx, wcz);
             beta_preview_copy_chunk_to_flat(wcx, wcz);
             stream_mark_local_chunk_generated(stream_world_chunk_local_x(wcx), stream_world_chunk_local_z(wcz));
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
@@ -6311,7 +6311,7 @@ static void process_stream_generation_queue(void) {
        walking cannot create a 4-8 ms hitch every tick. */
     int allow_install = ((s_stream_install_tick++ & 3) == 0);
     if (allow_install) {
-        pex_logf("chunk stream async install tick queue=%d/%d", g_stream_gen_queue_index, g_stream_gen_queue_count);
+        pex_logf_trace("chunk stream async install tick queue=%d/%d", g_stream_gen_queue_index, g_stream_gen_queue_count);
         stream_async_install_ready(1);
     }
     stream_async_submit_next();
@@ -6357,16 +6357,10 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 }
 
 static void world_stream_service_ensure(void) {
-#if defined(PEX_PLATFORM_WII)
+    /* Disabled: committing/remapping world arrays from a service thread races
+       rendering.  The expensive chunk generation worker remains active; only the
+       small install/remap step is serialized on the game thread. */
     return;
-#endif
-    if (g_world_stream_service_initialized) return;
-    InitializeCriticalSection(&g_world_stream_service_cs);
-    g_world_stream_service_stop = 0;
-    g_world_stream_service_busy = 0;
-    g_world_stream_service_thread = CreateThread(NULL, 0, world_stream_service_proc, NULL, 0, NULL);
-    if (g_world_stream_service_thread) SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
-    g_world_stream_service_initialized = 1;
 }
 
 static int world_stream_service_active(void) {

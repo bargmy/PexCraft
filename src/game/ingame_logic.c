@@ -152,16 +152,13 @@ static void ingame_tick(void) {
         prof_part = pex_profile_begin();
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
-        /* Android/GLES and PSP read terrain/render arrays on the render thread.  Keep
-           streaming/remap/light commits on this game thread there; the generic
-           background service can race the renderer and corrupt the visible world
-           while the active window slides. */
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+        /* Keep active-world commits/remaps and light installs on the game thread.
+           Chunk generation and section meshing still run on workers, but the old
+           background stream service could remap g_flat_* arrays while the render
+           thread was walking them, causing ghost chunks, false dark sections, and
+           stack-overflow crashes during chunk shifts. */
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
-#else
-        world_stream_service_ensure();
-#endif
         prof_part = pex_profile_begin();
         update_liquids();
         pex_profile_add(PROF_LIQUIDS, prof_part);

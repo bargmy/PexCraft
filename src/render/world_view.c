@@ -4242,9 +4242,9 @@ static void async_section_mesh_init(void) {
 #if defined(PEX_PLATFORM_PSP)
     g_async_section_mesh_thread = CreateThread(NULL, 0x20000, async_section_mesh_worker_proc, NULL, 0, NULL);
 #else
-    g_async_section_mesh_thread = CreateThread(NULL, 0, async_section_mesh_worker_proc, NULL, 0, NULL);
+    g_async_section_mesh_thread = CreateThread(NULL, 0x400000, async_section_mesh_worker_proc, NULL, 0, NULL);
 #endif
-    if (pex_using_d3d11()) g_async_section_mesh_upload_thread = CreateThread(NULL, 0, async_section_mesh_upload_worker_proc, NULL, 0, NULL);
+    if (pex_using_d3d11()) g_async_section_mesh_upload_thread = CreateThread(NULL, 0x200000, async_section_mesh_upload_worker_proc, NULL, 0, NULL);
     if (g_async_section_mesh_thread) SetThreadPriority(g_async_section_mesh_thread, THREAD_PRIORITY_BELOW_NORMAL);
     if (g_async_section_mesh_upload_thread) SetThreadPriority(g_async_section_mesh_upload_thread, THREAD_PRIORITY_BELOW_NORMAL);
 }
@@ -4314,7 +4314,7 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
     }
     LeaveCriticalSection(&g_async_section_mesh_cs);
     if (can_submit) {
-        pex_logf("chunk mesh submit sy=%d local=%d,%d version=%u origin=%d,%d", sy, cx, cz, job.version, job.origin_x, job.origin_z);
+        pex_logf_trace("chunk mesh submit sy=%d local=%d,%d version=%u origin=%d,%d", sy, cx, cz, job.version, job.origin_x, job.origin_z);
         SetEvent(g_async_section_mesh_event);
         return 1;
     }
@@ -4364,13 +4364,13 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 g_flat_section_valid[r.sy][r.cz][r.cx] = 1;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][0] = r.skip0;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][1] = r.skip1;
-                pex_logf("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
+                pex_logf_trace("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
             } else {
                 g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
             }
         } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS) {
             g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
-            pex_logf("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
+            pex_logf_trace("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
         }
         async_section_mesh_free_result(&r);
     }
@@ -4485,7 +4485,7 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
         if (!flat_section_has_any_block_local(cx, cz, sy)) {
             if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
                 flat_mark_section_after_generation(cx, cz, sy);
-                pex_logf("chunk render self-heal empty section local=%d,%d sy=%d", cx, cz, sy);
+                pex_logf_trace("chunk render self-heal empty section local=%d,%d sy=%d", cx, cz, sy);
             }
             continue;
         }
@@ -4507,11 +4507,11 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
             g_flat_section_dirty[sy][cz][cx] = 1;
             g_flat_world_chunk_dirty[cz][cx] = 1;
             g_flat_renderer_sort_dirty = 1;
-            pex_logf("chunk render self-heal missing mesh local=%d,%d sy=%d valid=%d direct=%d async=%d", cx, cz, sy, g_flat_section_valid[sy][cz][cx], direct, async_mesh);
+            pex_logf_trace("chunk render self-heal missing mesh local=%d,%d sy=%d valid=%d direct=%d async=%d", cx, cz, sy, g_flat_section_valid[sy][cz][cx], direct, async_mesh);
         }
         if (missing && g_flat_section_mesh_building[sy][cz][cx] && (g_ingame_ticks % 100) == 0) {
             g_flat_section_mesh_building[sy][cz][cx] = 0;
-            pex_logf("chunk render self-heal cleared stuck build flag local=%d,%d sy=%d", cx, cz, sy);
+            pex_logf_trace("chunk render self-heal cleared stuck build flag local=%d,%d sy=%d", cx, cz, sy);
         }
     }
 }
@@ -4533,14 +4533,14 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         g_prof_mesh_uploads_last = 0;
         g_prof_mesh_results_last = 0;
     }
-    int rebuilds_left = direct ? 6 : 6;
-    if (streaming) rebuilds_left = direct ? 2 : 3;
-    double deadline = now_seconds() + (streaming ? 0.0025 : 0.0050);
+    int rebuilds_left = direct ? 3 : 3;
+    if (streaming) rebuilds_left = 1;
+    double deadline = now_seconds() + (streaming ? 0.0015 : 0.0030);
 
 #if defined(PEX_PLATFORM_PSP)
     if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
 #else
-    if (async_mesh) async_section_mesh_install_ready(streaming ? 3 : 6);
+    if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 3);
 #endif
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
@@ -4583,7 +4583,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                    streaming. */
                 (void)async_section_mesh_submit(sy, cx, cz);
             } else {
-                pex_logf("chunk mesh sync rebuild sy=%d local=%d,%d", sy, cx, cz);
+                pex_logf_trace("chunk mesh sync rebuild sy=%d local=%d,%d", sy, cx, cz);
                 rebuild_flat_world_section_list(sy, cx, cz);
             }
             rebuilds_left--;

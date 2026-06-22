@@ -84,10 +84,16 @@
 #ifndef PEX_LOG_EVERYTHING
 #define PEX_LOG_EVERYTHING 1
 #endif
+#ifndef PEX_VERBOSE_CHUNK_LOG
+#define PEX_VERBOSE_CHUNK_LOG 0
+#endif
 
 static FILE *g_pex_log_file = NULL;
 static int g_pex_log_ready = 0;
 static int g_pex_crash_handlers_ready = 0;
+static CRITICAL_SECTION g_pex_log_cs;
+static int g_pex_log_cs_ready = 0;
+static unsigned int g_pex_log_lines_since_flush = 0;
 
 static void pex_log_timestamp(char *out, size_t cap) {
     time_t t = time(NULL);
@@ -106,6 +112,10 @@ static void pex_log_timestamp(char *out, size_t cap) {
 
 static void pex_log_init(void) {
     if (g_pex_log_ready) return;
+    if (!g_pex_log_cs_ready) {
+        InitializeCriticalSection(&g_pex_log_cs);
+        g_pex_log_cs_ready = 1;
+    }
     g_pex_log_file = fopen("log.txt", "a");
     g_pex_log_ready = 1;
     if (g_pex_log_file) {
@@ -117,14 +127,17 @@ static void pex_log_init(void) {
 }
 
 static void pex_log_shutdown(void) {
+    if (g_pex_log_cs_ready) EnterCriticalSection(&g_pex_log_cs);
     if (g_pex_log_file) {
         char ts[64];
         pex_log_timestamp(ts, sizeof(ts));
         fprintf(g_pex_log_file, "[%s] {log close}\n", ts);
+        fflush(g_pex_log_file);
         fclose(g_pex_log_file);
         g_pex_log_file = NULL;
     }
     g_pex_log_ready = 0;
+    if (g_pex_log_cs_ready) LeaveCriticalSection(&g_pex_log_cs);
 }
 
 static void pex_logf(const char *fmt, ...) {
@@ -138,14 +151,26 @@ static void pex_logf(const char *fmt, ...) {
     va_end(ap);
     char ts[64];
     pex_log_timestamp(ts, sizeof(ts));
+    if (g_pex_log_cs_ready) EnterCriticalSection(&g_pex_log_cs);
     if (g_pex_log_file) {
         fprintf(g_pex_log_file, "[%s] {%s}\n", ts, msg);
-        fflush(g_pex_log_file);
+        g_pex_log_lines_since_flush++;
+        if ((g_pex_log_lines_since_flush & 63u) == 0u ||
+            strstr(msg, "CRASH") || strstr(msg, "ERROR") || strstr(msg, "log close")) {
+            fflush(g_pex_log_file);
+        }
     }
+    if (g_pex_log_cs_ready) LeaveCriticalSection(&g_pex_log_cs);
 #else
     (void)fmt;
 #endif
 }
+
+#if PEX_VERBOSE_CHUNK_LOG
+#define pex_logf_trace(...) pex_logf(__VA_ARGS__)
+#else
+#define pex_logf_trace(...) do { } while (0)
+#endif
 
 #if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
 static void pex_signal_crash_handler(int sig) {
@@ -160,14 +185,53 @@ static void pex_signal_crash_handler(int sig) {
 static LONG WINAPI pex_windows_exception_filter(EXCEPTION_POINTERS *info) {
     void *addr = NULL;
     unsigned long code = 0;
-    uintptr_t offset = 0;
+    uintptr_t module_offset = 0;
+    uintptr_t exe_offset = 0;
+    int addr_in_exe = 0;
+    char module_name[MAX_PATH];
+    module_name[0] = 0;
     if (info && info->ExceptionRecord) {
         addr = info->ExceptionRecord->ExceptionAddress;
         code = (unsigned long)info->ExceptionRecord->ExceptionCode;
-        HMODULE mod = GetModuleHandleA(NULL);
-        if (mod && addr) offset = (uintptr_t)addr - (uintptr_t)mod;
+        if (addr) {
+            MEMORY_BASIC_INFORMATION mbi;
+            memset(&mbi, 0, sizeof(mbi));
+            if (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi) && mbi.AllocationBase) {
+                HMODULE fault_mod = (HMODULE)mbi.AllocationBase;
+                module_offset = (uintptr_t)addr - (uintptr_t)fault_mod;
+                GetModuleFileNameA(fault_mod, module_name, sizeof(module_name));
+                HMODULE exe = GetModuleHandleA(NULL);
+                if (exe && fault_mod == exe) {
+                    exe_offset = module_offset;
+                    addr_in_exe = 1;
+                }
+            }
+        }
     }
-    pex_logf("CRASH: unhandled exception code=0x%08lX address=%p exe_offset=0x%llX; rebuild with map/PDB for function name", code, addr, (unsigned long long)offset);
+    pex_logf("CRASH: unhandled exception code=0x%08lX address=%p module=%s module_offset=0x%llX exe_offset=%s0x%llX%s",
+             code, addr, module_name[0] ? module_name : "unknown",
+             (unsigned long long)module_offset,
+             addr_in_exe ? "" : "n/a(",
+             (unsigned long long)exe_offset,
+             addr_in_exe ? "" : ")");
+    if (code == 0xC00000FDul) {
+        pex_logf("CRASH DETAIL: stack overflow; likely worker stack exhaustion or recursive/racing world-stream work");
+    } else {
+        void *frames[16];
+        USHORT n = CaptureStackBackTrace(0, 16, frames, NULL);
+        for (USHORT i = 0; i < n; ++i) {
+            MEMORY_BASIC_INFORMATION mbi;
+            char modname[MAX_PATH];
+            modname[0] = 0;
+            uintptr_t off = 0;
+            if (VirtualQuery(frames[i], &mbi, sizeof(mbi)) == sizeof(mbi) && mbi.AllocationBase) {
+                HMODULE hm = (HMODULE)mbi.AllocationBase;
+                off = (uintptr_t)frames[i] - (uintptr_t)hm;
+                GetModuleFileNameA(hm, modname, sizeof(modname));
+            }
+            pex_logf("CRASH STACK[%u]: address=%p module=%s offset=0x%llX", (unsigned)i, frames[i], modname[0] ? modname : "unknown", (unsigned long long)off);
+        }
+    }
     pex_log_shutdown();
     return EXCEPTION_EXECUTE_HANDLER;
 }

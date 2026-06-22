@@ -296,11 +296,18 @@ static inline void *pex_thread_trampoline(void *p) {
     return (void*)(uintptr_t)fn(arg);
 }
 static inline HANDLE CreateThread(void *sa, size_t stack, LPTHREAD_START_ROUTINE fn, LPVOID arg, DWORD flags, DWORD *tid) {
-    (void)sa; (void)stack; (void)flags; if (tid) *tid = 0;
+    (void)sa; (void)flags; if (tid) *tid = 0;
     HANDLE h = (HANDLE)calloc(1, sizeof(*h)); if (!h) return NULL;
     PexThreadStart *ts = (PexThreadStart*)malloc(sizeof(*ts)); if (!ts) { free(h); return NULL; }
     ts->fn = fn; ts->arg = arg; h->kind = PEX_HANDLE_THREAD;
-    if (pthread_create(&h->thread, NULL, pex_thread_trampoline, ts) != 0) { free(ts); free(h); return NULL; }
+    pthread_attr_t attr; pthread_attr_t *attrp = NULL;
+    if (stack > 0 && pthread_attr_init(&attr) == 0) {
+        size_t min_stack = stack < 262144u ? 262144u : stack;
+        if (pthread_attr_setstacksize(&attr, min_stack) == 0) attrp = &attr;
+    }
+    int pr = pthread_create(&h->thread, attrp, pex_thread_trampoline, ts);
+    if (attrp) pthread_attr_destroy(attrp);
+    if (pr != 0) { free(ts); free(h); return NULL; }
     return h;
 }
 static inline HANDLE CreateEventA(void *sa, BOOL manual_reset, BOOL initial_state, const char *name) {
