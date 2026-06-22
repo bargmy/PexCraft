@@ -144,6 +144,24 @@ static int passive_mob_count(void) {
     return n;
 }
 
+static int passive_mob_target_cap(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return MAX_PASSIVE_MOBS < 20 ? MAX_PASSIVE_MOBS : 20;
+#else
+    return MAX_PASSIVE_MOBS < 32 ? MAX_PASSIVE_MOBS : 32;
+#endif
+}
+
+static int passive_mob_ground_target_ok(int x, int y, int z) {
+    if (y <= FLAT_WORLD_Y_MIN || y + 1 > FLAT_WORLD_Y_MAX) return 0;
+    int below = flat_get_block(x, y - 1, z);
+    if (passive_block_is_liquid(below)) return 0;
+    if (below != BLOCK_GRASS && !flat_block_is_solid_for_collision(below)) return 0;
+    if (flat_get_block(x, y, z) != 0 || flat_get_block(x, y + 1, z) != 0) return 0;
+    if (passive_mob_spawn_near_liquid(x, y, z)) return 0;
+    return 1;
+}
+
 static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z) {
     if (!m) return;
     memset(m, 0, sizeof(*m));
@@ -158,10 +176,14 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->height = passive_mob_height_for_type(type);
     m->health = passive_mob_health_for_type(type);
     m->living_sound_delay = -120;
+    m->jump_cooldown = 0;
+    m->stuck_ticks = 0;
+    m->wander_cooldown = 20 + (rand() % 80);
     if (type == PASSIVE_MOB_CHICKEN) {
         m->chicken_wing_speed = 1.0f;
         m->egg_timer = rand() % 6000 + 6000;
     }
+    pex_logf("passive mob spawn type=%s pos=%.2f,%.2f,%.2f", passive_mob_name(type), x, y, z);
 }
 
 static void passive_mob_aabb(const PassiveMob *m, FlatAABB *box) {
@@ -204,11 +226,8 @@ static void passive_mob_move_entity(PassiveMob *m, float dx, float dy, float dz)
 }
 
 static int passive_mob_spawn_ok(int x, int y, int z) {
-    if (y <= FLAT_WORLD_Y_MIN || y + 1 > FLAT_WORLD_Y_MAX) return 0;
+    if (!passive_mob_ground_target_ok(x, y, z)) return 0;
     if (flat_get_block(x, y - 1, z) != BLOCK_GRASS) return 0;
-    if (flat_get_block(x, y, z) != 0) return 0;
-    if (flat_get_block(x, y + 1, z) != 0) return 0;
-    if (passive_mob_spawn_near_liquid(x, y, z)) return 0;
     if (flat_combined_light_value(x, y, z) <= 8) return 0;
     float dx = ((float)x + 0.5f) - g_player_x;
     float dy = (float)y - g_player_y;
@@ -236,25 +255,29 @@ static int passive_mob_column_spawn_y(int x, int z) {
 
 static void passive_mobs_try_natural_spawn(void) {
     if (g_mp_connected || g_player_dead) return;
-    if (passive_mob_count() >= 20) return; /* EnumCreatureType.creature max in b1.0 */
-    if ((g_ingame_ticks % 20) != 0) return;
+    int cap = passive_mob_target_cap();
+    if (passive_mob_count() >= cap) return;
+    if ((g_ingame_ticks % 5) != 0) return;
 
-    int pcx = (int)floorf(g_player_x / 16.0f);
-    int pcz = (int)floorf(g_player_z / 16.0f);
-    for (int batch = 0; batch < 2 && passive_mob_count() < 20; ++batch) {
-        if ((rand() % 50) != 0 && passive_mob_count() > 4) continue;
+    int pcx = floor_div16((int)floorf(g_player_x));
+    int pcz = floor_div16((int)floorf(g_player_z));
+    int count_now = passive_mob_count();
+    int batches = count_now < 12 ? 10 : (count_now < 24 ? 6 : 3);
+    for (int batch = 0; batch < batches && passive_mob_count() < cap; ++batch) {
+        /* b1.0 checks many eligible chunks and each chunk has a 1/50 roll.
+           This small active-window port cannot scan all 289 chunks every tick, so
+           use several random chunk samples and a light throttle only after the
+           world already has animals. */
+        if (passive_mob_count() >= 24 && (rand() % 3) != 0) continue;
         int cx = pcx + (rand() % 17) - 8;
         int cz = pcz + (rand() % 17) - 8;
         int base_x = cx * 16 + (rand() & 15);
         int base_z = cz * 16 + (rand() & 15);
-        int type = 1 + (rand() % 4); /* biomeCreatures: Sheep, Pig, Chicken, Cow; randomized equally here. */
-        if (type == 1) type = PASSIVE_MOB_SHEEP;
-        else if (type == 2) type = PASSIVE_MOB_PIG;
-        else if (type == 3) type = PASSIVE_MOB_CHICKEN;
-        else type = PASSIVE_MOB_COW;
+        int r = rand() % 4;
+        int type = r == 0 ? PASSIVE_MOB_SHEEP : r == 1 ? PASSIVE_MOB_PIG : r == 2 ? PASSIVE_MOB_CHICKEN : PASSIVE_MOB_COW;
 
         int spawned = 0;
-        for (int tries = 0; tries < 12 && spawned < 4 && passive_mob_count() < 20; ++tries) {
+        for (int tries = 0; tries < 18 && spawned < 4 && passive_mob_count() < cap; ++tries) {
             int x = base_x + (rand() % 6) - (rand() % 6);
             int z = base_z + (rand() % 6) - (rand() % 6);
             int y = passive_mob_column_spawn_y(x, z);
@@ -265,16 +288,18 @@ static void passive_mobs_try_natural_spawn(void) {
             ++spawned;
             g_save_dirty = 1;
         }
+        if (spawned > 0) pex_logf("passive natural spawn group type=%s count=%d total=%d", passive_mob_name(type), spawned, passive_mob_count());
     }
 }
 
-static void passive_mobs_spawn_initial(void) {
-    passive_mobs_reset();
+static void passive_mobs_ensure_minimum_population(int wanted, int attempts) {
     if (g_mp_connected) return;
-    int wanted = 12;
-    for (int attempt = 0; attempt < 800 && passive_mob_count() < wanted; ++attempt) {
-        int x = (int)floorf(g_player_x) + (rand() % 97) - 48;
-        int z = (int)floorf(g_player_z) + (rand() % 97) - 48;
+    int start = passive_mob_count();
+    int cap = passive_mob_target_cap();
+    if (wanted > cap) wanted = cap;
+    for (int attempt = 0; attempt < attempts && passive_mob_count() < wanted; ++attempt) {
+        int x = (int)floorf(g_player_x) + (rand() % 129) - 64;
+        int z = (int)floorf(g_player_z) + (rand() % 129) - 64;
         int y = passive_mob_column_spawn_y(x, z);
         if (y == -9999) continue;
         int r = rand() % 4;
@@ -282,31 +307,62 @@ static void passive_mobs_spawn_initial(void) {
         PassiveMob *m = passive_mob_alloc();
         if (!m) break;
         passive_mob_init(m, type, (float)x + 0.5f, (float)y, (float)z + 0.5f);
+        g_save_dirty = 1;
     }
+    if (passive_mob_count() != start) {
+        pex_logf("passive population ensure start=%d target=%d final=%d attempts=%d", start, wanted, passive_mob_count(), attempts);
+    }
+}
+
+static void passive_mobs_spawn_initial(void) {
+    passive_mobs_reset();
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    passive_mobs_ensure_minimum_population(20, 3000);
+#else
+    passive_mobs_ensure_minimum_population(32, 4000);
+#endif
 }
 
 static void passive_mob_choose_target(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
+    int base_y = (int)floorf(m->y + 0.01f);
     int best_x = 0, best_y = 0, best_z = 0;
     float best_weight = -99999.0f;
-    for (int i = 0; i < 10; ++i) {
-        int x = (int)floorf(m->x + (float)(rand() % 13) - 6.0f);
-        int y = (int)floorf(m->y + (float)(rand() % 7) - 3.0f);
-        int z = (int)floorf(m->z + (float)(rand() % 13) - 6.0f);
-        if (y <= FLAT_WORLD_Y_MIN || y + 1 > FLAT_WORLD_Y_MAX) continue;
-        if (flat_get_block(x, y, z) != 0 || flat_get_block(x, y + 1, z) != 0) continue;
-        int below = flat_get_block(x, y - 1, z);
-        if (passive_block_is_liquid(below)) continue;
-        if (below != BLOCK_GRASS && !flat_block_is_solid_for_collision(below)) continue;
-        if (passive_mob_spawn_near_liquid(x, y, z)) continue;
-        float w = below == BLOCK_GRASS ? 10.0f : (float)flat_combined_light_value(x, y, z) / 15.0f - 0.5f;
-        if (w > best_weight) { best_weight = w; best_x = x; best_y = y; best_z = z; }
+    for (int i = 0; i < 14; ++i) {
+        int x = (int)floorf(m->x + (float)(rand() % 15) - 7.0f);
+        int z = (int)floorf(m->z + (float)(rand() % 15) - 7.0f);
+        /* Passive animals in b1.0 wander; they do not pathfind up cliffs.
+           Prefer same-level ground and allow one block lower. Only use +1 when
+           the mob has been stuck for a while so it can escape a tiny ledge. */
+        int y_candidates[4];
+        int n = 0;
+        y_candidates[n++] = base_y;
+        y_candidates[n++] = base_y - 1;
+        if (m->stuck_ticks > 12) y_candidates[n++] = base_y + 1;
+        y_candidates[n++] = base_y - 2;
+        for (int yi = 0; yi < n; ++yi) {
+            int y = y_candidates[yi];
+            if (!passive_mob_ground_target_ok(x, y, z)) continue;
+            float dx = ((float)x + 0.5f) - m->x;
+            float dz = ((float)z + 0.5f) - m->z;
+            float dist2 = dx * dx + dz * dz;
+            if (dist2 < 1.0f) continue;
+            int below = flat_get_block(x, y - 1, z);
+            float w = below == BLOCK_GRASS ? 10.0f : (float)flat_combined_light_value(x, y, z) / 15.0f - 0.5f;
+            w -= fabsf((float)y - m->y) * 3.0f;
+            if (dist2 > 64.0f) w -= 3.0f;
+            if (w > best_weight) { best_weight = w; best_x = x; best_y = y; best_z = z; }
+        }
     }
     if (best_weight > -9999.0f) {
         m->target_x = (float)best_x + 0.5f;
         m->target_y = (float)best_y;
         m->target_z = (float)best_z + 0.5f;
         m->has_path_target = 1;
+        m->wander_cooldown = 60 + (rand() % 120);
+    } else {
+        m->has_path_target = 0;
+        m->wander_cooldown = 40 + (rand() % 80);
     }
 }
 
@@ -467,6 +523,17 @@ static int passive_mobs_interact_from_player(void) {
     return 0;
 }
 
+static void passive_mob_request_jump(PassiveMob *m, const char *why) {
+    if (!m || !m->on_ground || m->jump_cooldown > 0) return;
+    m->my = 0.43f;
+    m->on_ground = 0;
+    m->jump_cooldown = (m->type == PASSIVE_MOB_CHICKEN) ? 50 : 16;
+    float yaw_rad = m->yaw * (float)M_PI / 180.0f;
+    m->mx += -sinf(yaw_rad) * 0.11f;
+    m->mz +=  cosf(yaw_rad) * 0.11f;
+    pex_logf("passive mob jump type=%s reason=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), why ? why : "", m->x, m->y, m->z);
+}
+
 static void passive_mob_update_living(PassiveMob *m) {
     m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
     m->prev_yaw = m->yaw;
@@ -475,6 +542,8 @@ static void passive_mob_update_living(PassiveMob *m) {
     m->prev_limb_swing = m->limb_swing;
     m->prev_limb_amount = m->limb_amount;
     if (m->hurt_time > 0) --m->hurt_time;
+    if (m->jump_cooldown > 0) --m->jump_cooldown;
+    if (m->wander_cooldown > 0) --m->wander_cooldown;
     ++m->age;
 
     if (m->death_time > 0) {
@@ -500,7 +569,7 @@ static void passive_mob_update_living(PassiveMob *m) {
         pex_sound_play_at("random.splash", m->x, m->y, m->z, 1.0f, 1.0f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
     }
 
-    if (!m->has_path_target || (rand() % 120) == 0 || (in_liquid && (rand() % 20) == 0)) passive_mob_choose_target(m);
+    if (!m->has_path_target || m->wander_cooldown <= 0 || (in_liquid && (rand() % 25) == 0)) passive_mob_choose_target(m);
 
     float forward = 0.0f;
     if (m->has_path_target) {
@@ -514,17 +583,22 @@ static void passive_mob_update_living(PassiveMob *m) {
             float turn = pex_wrap_degrees(desired - m->yaw);
             turn = pex_clamp_float(turn, -30.0f, 30.0f);
             m->yaw += turn;
-            forward = in_liquid ? 0.014f : 0.035f;
-            if (m->target_y > m->y + 0.20f && m->on_ground) m->my = 0.42f;
+            forward = in_liquid ? 0.010f : 0.026f;
+            if (m->type != PASSIVE_MOB_CHICKEN && m->target_y > m->y + 0.35f && m->on_ground && m->stuck_ticks > 8) passive_mob_request_jump(m, "higher-target");
         }
     }
 
-    if (in_liquid && (m->collided_horizontal || (rand() % 10) < 8)) {
-        m->my += 0.04f;
-        if (m->my > 0.30f) m->my = 0.30f;
+    if (in_liquid && (m->collided_horizontal || (m->stuck_ticks > 10) || (rand() % 10) < 3)) {
+        m->my += 0.035f;
+        if (m->my > 0.22f) m->my = 0.22f;
     }
-    if (!in_liquid && m->collided_horizontal && m->on_ground) {
-        m->my = 0.42f;
+    if (!in_liquid && m->collided_horizontal && m->on_ground && forward > 0.0f) {
+        if (m->type != PASSIVE_MOB_CHICKEN || m->stuck_ticks > 22) {
+            passive_mob_request_jump(m, "horizontal-collision");
+        } else {
+            m->has_path_target = 0;
+            m->wander_cooldown = 30 + (rand() % 60);
+        }
     }
 
     if (m->type == PASSIVE_MOB_CHICKEN) {
@@ -554,7 +628,7 @@ static void passive_mob_update_living(PassiveMob *m) {
         m->my *= m->in_water ? 0.80f : 0.50f;
         m->mz *= m->in_water ? 0.80f : 0.50f;
         m->my -= 0.02f;
-        if (m->collided_horizontal && m->my < 0.30f) m->my = 0.30f;
+        if (m->collided_horizontal && m->my < 0.18f) m->my = 0.18f;
     } else {
         m->my -= 0.08f;
         if (m->my < -1.0f) m->my = -1.0f;
@@ -570,6 +644,17 @@ static void passive_mob_update_living(PassiveMob *m) {
     float dx = m->x - m->prev_x;
     float dz = m->z - m->prev_z;
     float speed = sqrtf(dx*dx + dz*dz);
+    if (m->has_path_target && forward > 0.0f && speed < 0.006f && (m->collided_horizontal || m->on_ground)) {
+        if (m->stuck_ticks < 200) ++m->stuck_ticks;
+    } else if (m->stuck_ticks > 0) {
+        --m->stuck_ticks;
+    }
+    if (m->stuck_ticks > 35) {
+        m->has_path_target = 0;
+        m->wander_cooldown = 20 + (rand() % 40);
+        m->stuck_ticks = 0;
+        pex_logf("passive mob dropped stuck target type=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), m->x, m->y, m->z);
+    }
     float target_amount = (speed > 0.01f && (m->on_ground || in_liquid)) ? pex_clamp_float(speed * 7.0f, 0.0f, 1.0f) : 0.0f;
     m->limb_amount += (target_amount - m->limb_amount) * 0.4f;
     m->limb_swing += m->limb_amount;
@@ -835,5 +920,8 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         m->chicken_prev_wing_rot = m->chicken_wing_rot;
         m->chicken_prev_dest_pos = m->chicken_dest_pos;
         if (m->type == PASSIVE_MOB_CHICKEN && m->egg_timer <= 0) m->egg_timer = rand() % 6000 + 6000;
+        m->jump_cooldown = 0;
+        m->stuck_ticks = 0;
+        m->wander_cooldown = 20 + (rand() % 80);
     }
 }

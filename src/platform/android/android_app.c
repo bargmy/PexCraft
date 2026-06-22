@@ -293,6 +293,9 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    pex_log_init();
+    pex_install_crash_handlers();
+    pex_logf("app main enter: %s", APP_TITLE);
     /* Android exposes the accelerometer as a fake joystick unless this hint is
        disabled before SDL_Init().  If it is left on, the shared gamepad camera
        code treats tilt as a controller stick and the view drifts forever. */
@@ -348,5 +351,7 @@ int main(int argc, char **argv) {
     DeleteCriticalSection(&g_save_cs);
     if (g_hwnd) SDL_DestroyWindow(g_hwnd);
     SDL_Quit();
+    pex_logf("app main exit");
+    pex_log_shutdown();
     return 0;
 }

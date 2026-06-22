@@ -299,6 +299,9 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    pex_log_init();
+    pex_install_crash_handlers();
+    pex_logf("app main enter: %s", APP_TITLE);
 #ifdef SDL_HINT_VIDEO_HIGHDPI_DISABLED
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "1");
 #endif
@@ -358,5 +361,7 @@ int main(int argc, char **argv) {
     if (g_hwnd) SDL_DestroyWindow(g_hwnd);
     IMG_Quit();
     SDL_Quit();
+    pex_logf("app main exit");
+    pex_log_shutdown();
     return 0;
 }

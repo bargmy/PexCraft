@@ -4,6 +4,7 @@ static void rebuild_screen(void);
 
 static void set_screen(ScreenId s) {
     ScreenId old_screen = g_screen;
+    if (old_screen != s) pex_logf("screen change %d -> %d", (int)old_screen, (int)s);
     if (old_screen == SCREEN_FURNACE && s != SCREEN_FURNACE) furnace_close_open_inventory();
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;

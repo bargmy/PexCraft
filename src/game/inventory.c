@@ -413,7 +413,10 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
     unsigned char *sky = (unsigned char*)calloc((size_t)cap, 1);
     unsigned char *block = (unsigned char*)calloc((size_t)cap, 1);
     FlatLightQueueCell *q = (FlatLightQueueCell*)malloc(sizeof(FlatLightQueueCell) * (size_t)cap);
-    if (!sky || !block || !q) { free(sky); free(block); free(q); return; }
+    if (!sky || !block || !q) {
+        pex_logf("lighting region failed alloc x=%d..%d z=%d..%d cap=%d", x0, x1, z0, z1, cap);
+        free(sky); free(block); free(q); return;
+    }
 
     int tail = 0;
     for (int z = z0; z <= z1; ++z) {
@@ -480,6 +483,7 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             }
         }
     }
+    pex_logf("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1);
     free(sky); free(block); free(q);
 }
 
@@ -525,6 +529,7 @@ static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
     if (flat_local_chunk_valid(lcx, lcz)) {
         for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
     }
+    pex_logf("lighting fast surface chunk=%d,%d local=%d,%d", cx, cz, lcx, lcz);
 }
 
 
@@ -652,6 +657,7 @@ static void flat_flush_pending_lighting(void) {
     if (!g_flat_light_dirty) return;
     int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
     g_flat_light_dirty = 0;
+    pex_logf("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
     flat_recalculate_lighting_region(x0, z0, x1, z1);
 }
 
@@ -1258,6 +1264,7 @@ static void stream_mark_neighbor_boundary_dirty(int cx, int cz, int sy) {
 
 static void stream_mark_local_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
+    pex_logf("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
 
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
@@ -5930,6 +5937,7 @@ static void stream_destroy_direct_mesh_handle(unsigned int h) {
 
 static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_origin_z,
                                                     int new_origin_x, int new_origin_z) {
+    pex_logf("chunk render remap origin old=%d,%d new=%d,%d", old_origin_x, old_origin_z, new_origin_x, new_origin_z);
     GLuint old_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     GLuint old_liquid_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_dirty[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -6284,6 +6292,7 @@ static void process_stream_generation_queue(void) {
 #if defined(PEX_PLATFORM_WII)
             wii_debug_logf("stream coop chunk %d/%d wc=%d,%d type=%d", idx + 1, g_stream_gen_queue_count, wcx, wcz, g_world_type);
 #endif
+            pex_logf("chunk stream sync install index=%d/%d world=%d,%d", idx + 1, g_stream_gen_queue_count, wcx, wcz);
             beta_preview_copy_chunk_to_flat(wcx, wcz);
             stream_mark_local_chunk_generated(stream_world_chunk_local_x(wcx), stream_world_chunk_local_z(wcz));
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
@@ -6301,7 +6310,10 @@ static void process_stream_generation_queue(void) {
        arrays and marks render sections dirty, so throttle it hard enough that
        walking cannot create a 4-8 ms hitch every tick. */
     int allow_install = ((s_stream_install_tick++ & 3) == 0);
-    if (allow_install) stream_async_install_ready(1);
+    if (allow_install) {
+        pex_logf("chunk stream async install tick queue=%d/%d", g_stream_gen_queue_index, g_stream_gen_queue_count);
+        stream_async_install_ready(1);
+    }
     stream_async_submit_next();
 
     if (!stream_generation_active() && !g_stream_generation_keep_completed) {

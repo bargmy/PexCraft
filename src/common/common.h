@@ -36,6 +36,7 @@
 #endif
 
 #include "net_protocol.h"
+#include <signal.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -79,6 +80,113 @@
 #else
 #define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 1
 #endif
+
+#ifndef PEX_LOG_EVERYTHING
+#define PEX_LOG_EVERYTHING 1
+#endif
+
+static FILE *g_pex_log_file = NULL;
+static int g_pex_log_ready = 0;
+static int g_pex_crash_handlers_ready = 0;
+
+static void pex_log_timestamp(char *out, size_t cap) {
+    time_t t = time(NULL);
+    struct tm tmv;
+    memset(&tmv, 0, sizeof(tmv));
+#if defined(_MSC_VER)
+    localtime_s(&tmv, &t);
+#else
+    struct tm *tmp = localtime(&t);
+    if (tmp) tmv = *tmp;
+#endif
+    snprintf(out, cap, "%04d-%02d-%02d %02d:%02d:%02d",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+}
+
+static void pex_log_init(void) {
+    if (g_pex_log_ready) return;
+    g_pex_log_file = fopen("log.txt", "a");
+    g_pex_log_ready = 1;
+    if (g_pex_log_file) {
+        char ts[64];
+        pex_log_timestamp(ts, sizeof(ts));
+        fprintf(g_pex_log_file, "[%s] {log open: %s}\n", ts, VERSION_TEXT);
+        fflush(g_pex_log_file);
+    }
+}
+
+static void pex_log_shutdown(void) {
+    if (g_pex_log_file) {
+        char ts[64];
+        pex_log_timestamp(ts, sizeof(ts));
+        fprintf(g_pex_log_file, "[%s] {log close}\n", ts);
+        fclose(g_pex_log_file);
+        g_pex_log_file = NULL;
+    }
+    g_pex_log_ready = 0;
+}
+
+static void pex_logf(const char *fmt, ...) {
+#if PEX_LOG_EVERYTHING
+    if (!fmt) return;
+    if (!g_pex_log_ready) pex_log_init();
+    char msg[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    char ts[64];
+    pex_log_timestamp(ts, sizeof(ts));
+    if (g_pex_log_file) {
+        fprintf(g_pex_log_file, "[%s] {%s}\n", ts, msg);
+        fflush(g_pex_log_file);
+    }
+#else
+    (void)fmt;
+#endif
+}
+
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+static void pex_signal_crash_handler(int sig) {
+    pex_logf("CRASH: signal=%d", sig);
+    pex_log_shutdown();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+#endif
+
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+static LONG WINAPI pex_windows_exception_filter(EXCEPTION_POINTERS *info) {
+    void *addr = NULL;
+    unsigned long code = 0;
+    uintptr_t offset = 0;
+    if (info && info->ExceptionRecord) {
+        addr = info->ExceptionRecord->ExceptionAddress;
+        code = (unsigned long)info->ExceptionRecord->ExceptionCode;
+        HMODULE mod = GetModuleHandleA(NULL);
+        if (mod && addr) offset = (uintptr_t)addr - (uintptr_t)mod;
+    }
+    pex_logf("CRASH: unhandled exception code=0x%08lX address=%p exe_offset=0x%llX; rebuild with map/PDB for function name", code, addr, (unsigned long long)offset);
+    pex_log_shutdown();
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+static void pex_install_crash_handlers(void) {
+    if (g_pex_crash_handlers_ready) return;
+    g_pex_crash_handlers_ready = 1;
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+    signal(SIGSEGV, pex_signal_crash_handler);
+    signal(SIGABRT, pex_signal_crash_handler);
+    signal(SIGFPE, pex_signal_crash_handler);
+    signal(SIGILL, pex_signal_crash_handler);
+#endif
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+    SetUnhandledExceptionFilter(pex_windows_exception_filter);
+#endif
+    pex_logf("crash handlers installed");
+}
 
 typedef struct Texture {
     GLuint id;
@@ -369,6 +477,9 @@ typedef struct PassiveMob {
     float chicken_prev_dest_pos;
     float chicken_wing_speed;
     int egg_timer;
+    int jump_cooldown;
+    int stuck_ticks;
+    int wander_cooldown;
 } PassiveMob;
 
 #ifdef PEX_PLATFORM_SDL2
@@ -1326,6 +1437,7 @@ static void apply_player_fluid_velocity(int is_water);
 static void update_falling_blocks(void);
 static void passive_mobs_reset(void);
 static void passive_mobs_spawn_initial(void);
+static void passive_mobs_ensure_minimum_population(int wanted, int attempts);
 static void update_passive_mobs(void);
 static void passive_mobs_apply_riding(void);
 static int passive_mobs_attack_from_player(void);

@@ -294,6 +294,9 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    pex_log_init();
+    pex_install_crash_handlers();
+    pex_logf("app main enter: %s", APP_TITLE);
     PEX_PSP_LOGF("main() entered");
     pspDebugScreenInit();
     PEX_PSP_LOGF("pspDebugScreenInit done");
@@ -380,5 +383,7 @@ int main(int argc, char **argv) {
     DeleteCriticalSection(&g_save_cs);
     PEX_PSP_LOGF("cleanup finished; entering hold");
     psp_boot_debug_hold("Cleanup finished. The game would normally call sceKernelExitGame now.");
+    pex_logf("app main exit");
+    pex_log_shutdown();
     return 0;
 }

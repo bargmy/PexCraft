@@ -368,6 +368,9 @@ static void main_loop(void) {
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrev; (void)lpCmdLine;
+    pex_log_init();
+    pex_install_crash_handlers();
+    pex_logf("WinMain enter: %s", APP_TITLE);
     enable_windows_dpi_awareness();
     g_inst = hInstance;
     begin_high_res_timer();
@@ -466,5 +469,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     pex_join_save_thread_for_exit();
     DeleteCriticalSection(&g_save_cs);
     end_high_res_timer();
+    pex_logf("WinMain exit");
+    pex_log_shutdown();
     return 0;
 }

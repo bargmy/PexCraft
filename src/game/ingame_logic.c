@@ -2,6 +2,7 @@
 
 static void hud_add_chat(const char *msg) {
     if (!msg || !msg[0]) return;
+    pex_logf("chat: %s", msg);
     memmove(&g_chat_lines[1], &g_chat_lines[0], sizeof(ChatLine) * (MAX_CHAT_LINES - 1));
     snprintf(g_chat_lines[0].text, sizeof(g_chat_lines[0].text), "%s", msg);
     g_chat_lines[0].age = 0;
@@ -59,12 +60,10 @@ static void player_take_damage(int amount, const char *reason) {
     g_player_attacked_at_yaw = 0.0f;
     g_player_health -= amount;
     pex_sound_play("random.hurt", 1.0f, 1.0f);
+    pex_logf("player damage amount=%d reason=%s health=%d", amount, reason ? reason : "", g_player_health);
     if (g_player_health <= 0) {
         player_die(reason);
     } else {
-        char msg[96];
-        snprintf(msg, sizeof(msg), "Ouch! -%d", amount);
-        hud_add_chat(msg);
         g_save_dirty = 1;
     }
 }

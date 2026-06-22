@@ -4313,7 +4313,11 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
         can_submit = 0;
     }
     LeaveCriticalSection(&g_async_section_mesh_cs);
-    if (can_submit) { SetEvent(g_async_section_mesh_event); return 1; }
+    if (can_submit) {
+        pex_logf("chunk mesh submit sy=%d local=%d,%d version=%u origin=%d,%d", sy, cx, cz, job.version, job.origin_x, job.origin_z);
+        SetEvent(g_async_section_mesh_event);
+        return 1;
+    }
     return 2;
 }
 
@@ -4360,11 +4364,13 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 g_flat_section_valid[r.sy][r.cz][r.cx] = 1;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][0] = r.skip0;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][1] = r.skip1;
+                pex_logf("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
             } else {
                 g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
             }
         } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS) {
             g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
+            pex_logf("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
         }
         async_section_mesh_free_result(&r);
     }
@@ -4469,8 +4475,50 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
     return count;
 }
 
+static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
+    int direct = flat_direct_backend() ? 1 : 0;
+    int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
+    for (int i = 0; i < count; i++) {
+        int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) continue;
+        if (!g_flat_world_chunk_generated[cz][cx]) continue;
+        if (!flat_section_has_any_block_local(cx, cz, sy)) {
+            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
+                flat_mark_section_after_generation(cx, cz, sy);
+                pex_logf("chunk render self-heal empty section local=%d,%d sy=%d", cx, cz, sy);
+            }
+            continue;
+        }
+
+        int missing = (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]);
+        if (!missing) {
+            if (direct) {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) missing = 1;
+                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) missing = 1;
+            } else if (async_mesh) {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) missing = 1;
+                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) missing = 1;
+            } else {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && g_flat_section_lists[sy][cz][cx][0] == 0) missing = 1;
+                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && g_flat_section_lists[sy][cz][cx][1] == 0) missing = 1;
+            }
+        }
+        if (missing && !g_flat_section_dirty[sy][cz][cx]) {
+            g_flat_section_dirty[sy][cz][cx] = 1;
+            g_flat_world_chunk_dirty[cz][cx] = 1;
+            g_flat_renderer_sort_dirty = 1;
+            pex_logf("chunk render self-heal missing mesh local=%d,%d sy=%d valid=%d direct=%d async=%d", cx, cz, sy, g_flat_section_valid[sy][cz][cx], direct, async_mesh);
+        }
+        if (missing && g_flat_section_mesh_building[sy][cz][cx] && (g_ingame_ticks % 100) == 0) {
+            g_flat_section_mesh_building[sy][cz][cx] = 0;
+            pex_logf("chunk render self-heal cleared stuck build flag local=%d,%d sy=%d", cx, cz, sy);
+        }
+    }
+}
+
 static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int count) {
     flat_gl_cpu_mesh_check_origin();
+    flat_self_heal_visible_sections(refs, count);
     int direct = flat_direct_backend() ? 1 : 0;
     int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
     int streaming = stream_generation_active() ? 1 : 0;
@@ -4485,14 +4533,14 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         g_prof_mesh_uploads_last = 0;
         g_prof_mesh_results_last = 0;
     }
-    int rebuilds_left = direct ? 4 : 4;
-    if (streaming) rebuilds_left = direct ? 1 : 2;
-    double deadline = now_seconds() + (streaming ? 0.0015 : 0.0030);
+    int rebuilds_left = direct ? 6 : 6;
+    if (streaming) rebuilds_left = direct ? 2 : 3;
+    double deadline = now_seconds() + (streaming ? 0.0025 : 0.0050);
 
 #if defined(PEX_PLATFORM_PSP)
     if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
 #else
-    if (async_mesh) async_section_mesh_install_ready(2);
+    if (async_mesh) async_section_mesh_install_ready(streaming ? 3 : 6);
 #endif
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
@@ -4535,6 +4583,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                    streaming. */
                 (void)async_section_mesh_submit(sy, cx, cz);
             } else {
+                pex_logf("chunk mesh sync rebuild sy=%d local=%d,%d", sy, cx, cz);
                 rebuild_flat_world_section_list(sy, cx, cz);
             }
             rebuilds_left--;
@@ -5565,6 +5614,8 @@ static void draw_flat_test_world(void) {
     if (g_flat_world_geometry_dirty || g_flat_section_geometry_dirty) {
         mark_flat_render_chunks_dirty_all();
     }
+
+    flat_flush_pending_lighting();
 
     double prof_part = pex_profile_begin();
     FlatFrustum fr;

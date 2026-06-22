@@ -272,6 +272,9 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    pex_log_init();
+    pex_install_crash_handlers();
+    pex_logf("app main enter: %s", APP_TITLE);
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
@@ -327,5 +330,7 @@ int main(int argc, char **argv) {
     if (g_hwnd) SDL_DestroyWindow(g_hwnd);
     IMG_Quit();
     SDL_Quit();
+    pex_logf("app main exit");
+    pex_log_shutdown();
     return 0;
 }

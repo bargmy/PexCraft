@@ -466,7 +466,7 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     char path[MAX_PATHBUF];
     level_path_for_dir(ss->loaded_world_dir, path, sizeof(path));
     FILE *f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
     int version = 16;
@@ -787,6 +787,7 @@ static void save_current_world_state_sync(void) {
     g_save_dirty = 0;
     g_last_autosave_tick = g_ingame_ticks;
     g_save_message_ticks = SAVE_MESSAGE_TICKS;
+    pex_logf("save sync complete path=%s health=%d dead=%d origin=%d,%d", path, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
 }
 
 static void save_current_world_state(void) {
@@ -799,7 +800,7 @@ static void save_current_world_state(void) {
     if (!g_loaded_world_dir[0]) return;
 
     PexSaveSnapshot *ss = pex_save_snapshot_create(1);
-    if (!ss) return;
+    if (!ss) { pex_logf("save async snapshot create failed dir=%s", g_loaded_world_dir); return; }
 
     pex_clear_snapshot_chunk_modified_flags(ss);
     g_save_dirty = 0;
@@ -807,12 +808,22 @@ static void save_current_world_state(void) {
     g_save_message_ticks = SAVE_MESSAGE_TICKS;
 
     if (!pex_save_enqueue_snapshot(ss)) {
+        pex_logf("save async enqueue failed dir=%s", g_loaded_world_dir);
         pex_restore_snapshot_chunk_modified_flags(ss);
         g_save_dirty = 1;
         pex_save_snapshot_free(ss);
+    } else {
+        pex_logf("save async enqueued dir=%s health=%d dead=%d origin=%d,%d", g_loaded_world_dir, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
     }
 }
 
+
+static void reset_player_damage_visual_state(void) {
+    g_player_prev_health = g_player_health;
+    g_hearts_life = 0;
+    g_player_hurt_time = 0;
+    g_player_attacked_at_yaw = 0.0f;
+}
 
 static int load_current_world_state(void) {
     g_last_load_state_had_terrain = 0;
@@ -1057,6 +1068,8 @@ static int load_current_world_state(void) {
     memset(&g_carried_stack, 0, sizeof(g_carried_stack));
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
+    reset_player_damage_visual_state();
+    pex_logf("world state loaded dir=%s version=%d health=%d dead=%d origin=%d,%d", g_loaded_world_dir, version, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
     g_save_dirty = (version < 16) ? 1 : 0;
     return 1;
 }
@@ -1078,9 +1091,17 @@ static void finish_prepared_world_entry(int loaded_state) {
         passive_mobs_spawn_initial();
         g_passive_mobs_need_initial_spawn = 0;
     }
+    if (loaded_state) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+        passive_mobs_ensure_minimum_population(10, 1200);
+#else
+        passive_mobs_ensure_minimum_population(16, 1800);
+#endif
+    }
 
     g_chat_input[0] = 0;
     g_chat_count = 0;
+    reset_player_damage_visual_state();
     g_last_autosave_tick = g_ingame_ticks;
     g_save_message_ticks = 0;
     hud_add_chat(loaded_state ? "Loaded saved world." : "Loaded world.");
@@ -1112,6 +1133,7 @@ static void enter_world_from_job(void) {
         inventory_reset();
         g_player_health = 20;
         g_player_prev_health = 20;
+        reset_player_damage_visual_state();
         g_player_armor = 0;
         g_ingame_ticks = 0;
         flat_world_center_origin_near(g_player_x, g_player_z);
@@ -1134,6 +1156,9 @@ static void leave_world_to_title(void) {
     g_loaded_world_dir[0] = 0;
     g_loaded_world_name[0] = 0;
     g_chat_input[0] = 0;
+    g_chat_count = 0;
+    reset_player_damage_visual_state();
+    pex_logf("left world to title");
     set_screen(SCREEN_TITLE);
 }
 
@@ -1260,6 +1285,7 @@ static void worldgen_tick(void) {
             inventory_reset();
             g_player_health = 20;
             g_player_prev_health = 20;
+            reset_player_damage_visual_state();
             g_player_armor = 0;
             g_player_dead = 0;
             g_player_fall_distance = 0.0f;

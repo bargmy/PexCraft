@@ -162,6 +162,9 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    pex_log_init();
+    pex_install_crash_handlers();
+    pex_logf("app main enter: %s", APP_TITLE);
     wii_debug_init_console();
     wii_debug_stagef("main entered");
     wii_debug_memoryf("main entry");
@@ -213,5 +216,7 @@ int main(int argc, char **argv) {
     pex_renderer_shutdown();
     pex_join_save_thread_for_exit();
     DeleteCriticalSection(&g_save_cs);
+    pex_logf("app main exit");
+    pex_log_shutdown();
     return 0;
 }
