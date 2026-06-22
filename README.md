@@ -1,5 +1,5 @@
 # PexCraft
-a rewritten version of Minecraft b1.0 in "C", still in pure prototype
+a rewritten version of Minecraft b1.0 in "C", almost complete
 - PSP State = barely playble
 - Windows State = Playble.
 - Linux SDL2 State = Playble.
