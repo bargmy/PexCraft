@@ -315,11 +315,22 @@ static void classic_resource_size_format(char *out, size_t cap) {
         LONG tex = InterlockedCompareExchange(&g_classic_texture_download_size_bytes, 0, 0);
         LONG snd = InterlockedCompareExchange(&g_classic_sound_download_size_bytes, 0, 0);
         LONG cnt = InterlockedCompareExchange(&g_classic_sound_download_count, 0, 0);
-        double tex_mb = tex > 0 ? (double)tex / (1024.0 * 1024.0) : 0.0;
-        double snd_mb = snd > 0 ? (double)snd / (1024.0 * 1024.0) : 0.0;
-        if (g_opts.download_classic_sounds && snd > 0) snprintf(out, cap, "Textures: %.2f MB | Sounds: %.2f MB (%ld files)", tex_mb, snd_mb, cnt);
-        else if (g_opts.download_classic_sounds) snprintf(out, cap, "Textures: %.2f MB | Sounds: unavailable", tex_mb);
-        else snprintf(out, cap, "Textures: %.2f MB | Sounds: off", tex_mb);
+        char tex_part[64];
+        char snd_part[96];
+        if (tex < 0) snprintf(tex_part, sizeof(tex_part), "Textures: installed");
+        else if (tex > 0) snprintf(tex_part, sizeof(tex_part), "Textures: %.2f MB", (double)tex / (1024.0 * 1024.0));
+        else snprintf(tex_part, sizeof(tex_part), "Textures: unavailable");
+
+#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
+        if (!g_opts.download_classic_sounds) snprintf(snd_part, sizeof(snd_part), "Sounds: off");
+        else if (classic_sounds_installed()) snprintf(snd_part, sizeof(snd_part), "Sounds: installed");
+        else if (g_opts.ignore_classic_sounds_warning) snprintf(snd_part, sizeof(snd_part), "Sounds: ignored");
+        else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Sounds: %.2f MB (%ld files)", (double)snd / (1024.0 * 1024.0), cnt);
+        else snprintf(snd_part, sizeof(snd_part), "Sounds: unavailable");
+#else
+        snprintf(snd_part, sizeof(snd_part), "Sounds: unsupported");
+#endif
+        snprintf(out, cap, "%s | %s", tex_part, snd_part);
         return;
     } else if (state == CLASSIC_SIZE_FETCHING) {
         snprintf(out, cap, "Download size: checking Mojang...");
@@ -330,13 +341,25 @@ static void classic_resource_size_format(char *out, size_t cap) {
 
 static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
     (void)unused;
+    int need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
     int got_any = 0;
-    unsigned long long bytes = 0;
-    if (classic_query_download_size_bytes(CLASSIC_PACK_URL, &bytes) && bytes > 0 && bytes <= 0x7fffffffULL) {
-        InterlockedExchange(&g_classic_texture_download_size_bytes, (LONG)bytes);
+
+    InterlockedExchange(&g_classic_texture_download_size_bytes, need_textures ? 0 : -1);
+    InterlockedExchange(&g_classic_sound_download_size_bytes, need_sounds ? 0 : -1);
+    InterlockedExchange(&g_classic_sound_download_count, 0);
+
+    if (need_textures) {
+        unsigned long long bytes = 0;
+        if (classic_query_download_size_bytes(CLASSIC_PACK_URL, &bytes) && bytes > 0 && bytes <= 0x7fffffffULL) {
+            InterlockedExchange(&g_classic_texture_download_size_bytes, (LONG)bytes);
+            got_any = 1;
+        }
+    } else {
         got_any = 1;
     }
-    if (g_opts.download_classic_sounds) {
+
+    if (need_sounds) {
         unsigned long long sound_bytes = 0;
         int sound_count = 0;
         if (classic_query_sound_index_size(&sound_bytes, &sound_count) && sound_bytes > 0 && sound_bytes <= 0x7fffffffULL) {
@@ -344,7 +367,10 @@ static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
             InterlockedExchange(&g_classic_sound_download_count, (LONG)sound_count);
             got_any = 1;
         }
+    } else {
+        got_any = 1;
     }
+
     InterlockedExchange(&g_classic_download_size_state, got_any ? CLASSIC_SIZE_READY : CLASSIC_SIZE_ERROR);
     return 0;
 }
@@ -470,7 +496,7 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
     char zip_path[MAX_PATHBUF];
     char pack_dir[MAX_PATHBUF];
     int need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
-    int need_sounds = g_opts.download_classic_sounds && !classic_sounds_installed();
+    int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
     ensure_dir(g_texpack_dir);
     classic_pack_path(pack_dir, sizeof(pack_dir));
     snprintf(zip_path, sizeof(zip_path), "%s/minecraft_classic_client.jar", g_mc_dir);

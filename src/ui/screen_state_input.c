@@ -339,7 +339,8 @@ static void on_button(Button *b) {
             if (g_opts.download_classic_sounds) g_opts.ignore_classic_sounds_warning = 0;
             InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_UNKNOWN);
             save_options();
-            set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
+            if (classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
+            else set_screen(SCREEN_TITLE);
         } else {
             if (!classic_pack_installed() || classic_pack_missing_required_textures()) g_opts.ignore_classic_resources_warning = 1;
             if (g_opts.download_classic_sounds && !classic_sounds_installed()) g_opts.ignore_classic_sounds_warning = 1;

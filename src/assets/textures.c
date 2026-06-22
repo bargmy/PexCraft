@@ -554,8 +554,26 @@ static int classic_sounds_installed(void) {
     return 1;
 #else
     char marker[MAX_PATHBUF];
+    char root[MAX_PATHBUF];
+    char sound_dir[MAX_PATHBUF];
+    char random_dir[MAX_PATHBUF];
+    char step_dir[MAX_PATHBUF];
+    char click[MAX_PATHBUF];
+    char grass[MAX_PATHBUF];
+
     classic_sound_marker_path(marker, sizeof(marker));
     if (!file_exists(marker)) return 0;
+
+    /* Do not trust the marker by itself. If a user deleted or moved the actual
+       downloaded sound tree, ask for a resource update again. */
+    classic_resources_path(root, sizeof(root));
+    path_join(sound_dir, sizeof(sound_dir), root, "sound");
+    path_join(random_dir, sizeof(random_dir), sound_dir, "random");
+    path_join(step_dir, sizeof(step_dir), sound_dir, "step");
+    path_join(click, sizeof(click), random_dir, "click.ogg");
+    path_join(grass, sizeof(grass), step_dir, "grass1.ogg");
+    if (!file_exists(click)) return 0;
+    if (!file_exists(grass)) return 0;
     return 1;
 #endif
 }
