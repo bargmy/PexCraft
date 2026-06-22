@@ -2019,7 +2019,7 @@ static int flat_solid_for_spawn(int id) {
     return flat_block_is_solid_for_collision(id);
 }
 
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static int psp_spawn_surface_marked_at(int x, int y, int z) {
     if (!g_psp_spawn_surface_guard_active) return 0;
     if (y != g_psp_spawn_surface_ground_y) return 0;
@@ -4876,7 +4876,7 @@ static int flat_spawn_has_open_sky(int x, int z, int foot_y) {
 
 static int flat_column_spawn_y_ex(int x, int z, int require_sky) {
     if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE || z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return -9999;
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     if (!flat_world_chunk_generated_at_block(x, z)) return -9999;
 #endif
     for (int y = FLAT_WORLD_Y_MAX - 3; y >= FLAT_WORLD_Y_MIN; y--) {
@@ -4956,8 +4956,8 @@ static int flat_find_safe_spawn_pass(float *out_x, float *out_y, float *out_z, i
 }
 
 static int flat_find_safe_spawn(float *out_x, float *out_y, float *out_z) {
-#if defined(PEX_PLATFORM_PSP)
-    /* PSP-only: never spawn above empty async terrain and hope collision catches
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    /* PSP/Wii: never spawn above empty or not-yet-meshed terrain and hope collision catches
        up.  First try real generated terrain; then stamp a tiny metadata-tagged
        flat safety surface so first spawn/respawn has a guaranteed solid block
        under the player's feet while the real Beta chunks finish streaming. */
@@ -5237,7 +5237,7 @@ static void reset_flat_player_spawn(void) {
     g_suffocation_damage_timer = 0;
     g_player_yaw = g_player_prev_yaw = 0.0f;
     g_player_pitch = g_player_prev_pitch = 0.0f;
-#if defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     psp_ensure_spawn_surface_for_position(&g_player_x, &g_player_y, &g_player_z, 0);
     g_player_prev_x = g_player_x;
     g_player_prev_y = g_player_y;
@@ -6276,6 +6276,9 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 }
 
 static void world_stream_service_ensure(void) {
+#if defined(PEX_PLATFORM_WII)
+    return;
+#endif
     if (g_world_stream_service_initialized) return;
     InitializeCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_stop = 0;
@@ -6286,6 +6289,9 @@ static void world_stream_service_ensure(void) {
 }
 
 static int world_stream_service_active(void) {
+#if defined(PEX_PLATFORM_WII)
+    return 0;
+#endif
     if (!g_world_stream_service_initialized) return 0;
     int active = 0;
     EnterCriticalSection(&g_world_stream_service_cs);
@@ -6361,11 +6367,24 @@ static void update_infinite_world_streaming(void) {
     g_stream_last_center_chunk_x = pcx;
     g_stream_last_center_chunk_z = pcz;
 
+#if defined(PEX_PLATFORM_WII)
+    static int s_wii_stream_chat_active = 0;
+    if (g_stream_gen_queue_count > 0) {
+        if (!s_wii_stream_chat_active) {
+            hud_add_chat("Generating terrain chunks...");
+            s_wii_stream_chat_active = 1;
+        }
+    } else {
+        if (s_wii_stream_chat_active) hud_add_chat("Generated new terrain chunks.");
+        s_wii_stream_chat_active = 0;
+    }
+#else
     if (g_stream_gen_queue_count > 0) {
         hud_add_chat("Generating terrain chunks...");
     } else {
         hud_add_chat("Generated new terrain chunks.");
     }
+#endif
 }
 
 

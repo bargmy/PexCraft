@@ -591,7 +591,13 @@ static void pex_gamepad_update(void) {
     memcpy(oldpads, g_gamepads, sizeof(oldpads));
     pex_gamepad_platform_poll(oldpads);
     PexGamepadState *p = pex_gamepad_primary_pad();
+#if defined(PEX_PLATFORM_WII)
+    /* Wii has no keyboard/mouse gameplay path.  Keep the controller path active
+       as long as a Wiimote/GameCube pad is present, not only on button edges. */
+    if (p) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
+#else
     if (pex_gamepad_has_intentional_input(p)) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
+#endif
 
     PexGamepadState *active_pad = (g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD) ? p : NULL;
     pex_gamepad_rebuild_virtual_keys(active_pad);

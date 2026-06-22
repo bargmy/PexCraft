@@ -262,7 +262,9 @@ static void wii_poll_wiimote_buttons(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
            alive so D-pad/A/+ can always drive menus. */
         if (probe != WPAD_ERR_NONE) continue;
         u32 b = WPAD_ButtonsHeld(ch);
-        if (!b) continue;
+        /* Always expose a Wiimote pad while Dolphin/libogc says the remote is
+           present.  Otherwise the shared gamepad layer drops out of controller
+           mode every frame that no button is held. */
         PexGamepadState *p = wii_begin_pad(oldpads, "Wii Remote", "Wiimote");
         if (!p) return;
         p->a = (b & WPAD_BUTTON_A) != 0;

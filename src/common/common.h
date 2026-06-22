@@ -861,8 +861,8 @@ static int g_stream_generation_epoch = 1;
    of falling into air or doing a full blocking spawn scan on the main thread. */
 static int g_psp_respawn_snap_pending = 0;
 static int g_psp_terrain_wait_chat_tick = -1000;
-#if defined(PEX_PLATFORM_PSP)
-/* PSP-only spawn/platform guard.  Real Beta terrain generation is async on PSP,
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+/* PSP/Wii spawn/platform guard.  Real Beta terrain generation is async on PSP,
    so first spawn/respawn needs a tiny, explicit solid surface until the real
    chunk data and collision are ready.  The marker is stored in block metadata
    for the on-ground platform blocks so collision/spawn code can recognize the

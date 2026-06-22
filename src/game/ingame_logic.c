@@ -155,7 +155,7 @@ static void ingame_tick(void) {
            streaming/remap/light commits on this game thread there; the generic
            background service can race the renderer and corrupt the visible world
            while the active window slides. */
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP)
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
 #else
