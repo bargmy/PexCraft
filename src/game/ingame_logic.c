@@ -616,6 +616,7 @@ static double g_ingame_tick_async_last_completed_time = 0.0;
 
 static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
     (void)unused;
+    g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_TICK;
     const double tick_dt = 1.0 / 20.0;
     double next_tick_time = now_seconds() + tick_dt;
 
@@ -650,14 +651,21 @@ static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
         g_ingame_tick_async_busy_flag = 1;
         LeaveCriticalSection(&g_ingame_tick_async_cs);
 
+        double tick_start = now_seconds();
         g_ingame_tick_async_worker_context = 1;
         ingame_tick();
         g_ingame_tick_async_worker_context = 0;
+        double tick_ms = (now_seconds() - tick_start) * 1000.0;
+        if (tick_ms < 0.0) tick_ms = 0.0;
 
         EnterCriticalSection(&g_ingame_tick_async_cs);
         g_ingame_tick_async_busy_flag = 0;
         g_ingame_tick_async_completed++;
         g_ingame_tick_async_last_completed_time = now_seconds();
+        g_prof_async_tick_last_ms = tick_ms;
+        if (g_prof_async_tick_samples <= 0) g_prof_async_tick_avg_ms = tick_ms;
+        else g_prof_async_tick_avg_ms = g_prof_async_tick_avg_ms * 0.90 + tick_ms * 0.10;
+        g_prof_async_tick_samples++;
         LeaveCriticalSection(&g_ingame_tick_async_cs);
     }
     return 0;
@@ -765,6 +773,32 @@ static int ingame_tick_async_busy(void) {
     return v;
 #else
     return 0;
+#endif
+}
+
+static double ingame_tick_async_last_ms(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized) return 0.0;
+    double v = 0.0;
+    EnterCriticalSection(&g_ingame_tick_async_cs);
+    v = g_prof_async_tick_last_ms;
+    LeaveCriticalSection(&g_ingame_tick_async_cs);
+    return v;
+#else
+    return 0.0;
+#endif
+}
+
+static double ingame_tick_async_avg_ms(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized) return 0.0;
+    double v = 0.0;
+    EnterCriticalSection(&g_ingame_tick_async_cs);
+    v = g_prof_async_tick_avg_ms;
+    LeaveCriticalSection(&g_ingame_tick_async_cs);
+    return v;
+#else
+    return 0.0;
 #endif
 }
 

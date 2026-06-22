@@ -144,12 +144,17 @@ static void draw_hud(void) {
         draw_text(line, right_x, ry, 14737632); ry += 10;
         snprintf(line, sizeof(line), "Mesh jobs %d  uploads %d  results %d", g_prof_mesh_jobs_last, g_prof_mesh_uploads_last, g_prof_mesh_results_last);
         draw_text(line, right_x, ry, 14737632); ry += 10;
+        snprintf(line, sizeof(line), "Mesh scheduler refs %d  busy %d", g_prof_async_mesh_scheduler_refs, g_prof_async_mesh_scheduler_busy);
+        draw_text(line, right_x, ry, 14737632); ry += 10;
         snprintf(line, sizeof(line), "Falling active %d  wakeups %d  spawned %d", g_prof_falling_active_last, g_prof_falling_cells_last, g_prof_falling_spawns_last);
         draw_text(line, right_x, ry, 14737632); ry += 10;
         snprintf(line, sizeof(line), "Stream pending %d", g_prof_stream_pending_last);
         draw_text(line, right_x, ry, 14737632); ry += 10;
         snprintf(line, sizeof(line), "Async tick pending %d  busy %d  dropped %d",
                  ingame_tick_async_pending_count(), ingame_tick_async_busy(), ingame_tick_async_dropped_count());
+        draw_text(line, right_x, ry, 14737632); ry += 10;
+        snprintf(line, sizeof(line), "Async tick %.2fms avg %.2fms",
+                 ingame_tick_async_last_ms(), ingame_tick_async_avg_ms());
         draw_text(line, right_x, ry, 14737632);
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);

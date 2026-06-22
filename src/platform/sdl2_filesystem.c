@@ -9,6 +9,7 @@ static double now_seconds(void) {
 static double pex_profile_begin(void) { return now_seconds(); }
 
 static void pex_profile_add(PexMainThreadProfileId id, double start_time) {
+    if (g_pex_profile_thread_role != PEX_PROFILE_ROLE_MAIN) return;
     if (id < 0 || id >= PROF_COUNT) return;
     double ms = (now_seconds() - start_time) * 1000.0;
     if (ms < 0.0) ms = 0.0;

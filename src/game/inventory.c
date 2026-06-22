@@ -6341,6 +6341,7 @@ static HANDLE g_world_stream_service_thread = NULL;
 
 static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
     (void)unused;
+    g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_STREAM;
     for (;;) {
         int stop = 0;
         EnterCriticalSection(&g_world_stream_service_cs);

@@ -1314,7 +1314,7 @@ static const char *g_prof_names[PROF_COUNT] = {
     "Liquids",
     "Buttons/plates",
     "Player logic",
-    "Mesh main",
+    "Mesh install",
     "Cull/sort",
     "World draw",
     "HUD/GUI",
@@ -1329,6 +1329,24 @@ static double g_prof_accum_frame_ms = 0.0;
 static double g_prof_display_frame_ms = 0.0;
 static double g_prof_accum_start_time = 0.0;
 static int g_prof_accum_frames = 0;
+
+typedef enum PexProfileThreadRole {
+    PEX_PROFILE_ROLE_MAIN = 0,
+    PEX_PROFILE_ROLE_ASYNC_TICK = 1,
+    PEX_PROFILE_ROLE_ASYNC_MESH = 2,
+    PEX_PROFILE_ROLE_ASYNC_STREAM = 3
+} PexProfileThreadRole;
+
+/* The F3 profiler is explicitly a render/main-thread profiler.  Worker threads
+   set this TLS role so their timings do not get mixed into "Main thread average"
+   and so worker writes do not race with the frame accumulator. */
+static PEX_THREAD_LOCAL int g_pex_profile_thread_role = PEX_PROFILE_ROLE_MAIN;
+static double g_prof_async_tick_last_ms = 0.0;
+static double g_prof_async_tick_avg_ms = 0.0;
+static int g_prof_async_tick_samples = 0;
+static int g_prof_async_mesh_scheduler_refs = 0;
+static int g_prof_async_mesh_scheduler_busy = 0;
+
 static int g_prof_packets_last = 0;
 static int g_prof_chunks_last = 0;
 static int g_prof_rx_queue_last = 0;
@@ -1432,6 +1450,8 @@ static void ingame_tick_async_shutdown(void);
 static int ingame_tick_async_pending_count(void);
 static int ingame_tick_async_busy(void);
 static int ingame_tick_async_dropped_count(void);
+static double ingame_tick_async_last_ms(void);
+static double ingame_tick_async_avg_ms(void);
 static void hud_add_chat(const char *msg);
 static void reset_flat_player_spawn(void);
 static void start_air_swing_once(void);
