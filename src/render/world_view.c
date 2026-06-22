@@ -717,7 +717,13 @@ static void flat_direct_free_builder(FlatDirectMeshBuilder *b) {
 }
 
 static int flat_async_section_mesh_enabled(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WII)
+    /* libogc/LWP builds have been crashing in the worker-mesh path while
+       preparing chunks: Dolphin reports DSI at flat_get_block() with a bogus
+       async snapshot pointer. Keep Wii section meshing synchronous on the
+       main thread until the port is stable. */
+    return 0;
+#elif defined(PEX_PLATFORM_PSP)
     return flat_direct_backend() != NULL;
 #else
     return tex_terrain.rgba != NULL;
@@ -4504,6 +4510,14 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) needs = 1;
                 else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) needs = 1;
             }
+        } else if (direct) {
+            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
+                needs = 1;
+            } else if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) {
+                needs = 1;
+            } else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) {
+                needs = 1;
+            }
         } else {
             if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
                 g_flat_section_lists[sy][cz][cx][1] == 0 ||
@@ -4542,6 +4556,12 @@ static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx) {
             if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) return 1;
             if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) return 1;
         }
+        return 0;
+    }
+    if (flat_direct_backend()) {
+        if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) return 1;
+        if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) return 1;
+        if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
         return 0;
     }
     if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
@@ -4622,6 +4642,22 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
     if (max_rebuilds < 1) max_rebuilds = 1;
 
     if (flat_direct_backend()) {
+#if defined(PEX_PLATFORM_WII)
+        /* Wii: do not enter the async section-mesh worker while loading a world.
+           The previous build crashed at flat_get_block() from the worker snapshot
+           path during "Preparing chunks". Build a small number of direct GX
+           meshes synchronously instead. */
+        int built = 0;
+        while (g_worldgen_mesh_prep_index < g_worldgen_mesh_prep_count && built < max_rebuilds) {
+            FlatRenderSectionRef *r = &g_worldgen_mesh_prep_refs[g_worldgen_mesh_prep_index++];
+            if (flat_section_needs_mesh_rebuild(r->sy, r->cz, r->cx)) {
+                wii_debug_logf("wii sync prep mesh sy=%d cx=%d cz=%d", r->sy, r->cx, r->cz);
+                rebuild_flat_world_section_list(r->sy, r->cx, r->cz);
+                built++;
+            }
+        }
+        return (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count);
+#else
         /* Loading/pre-entry chunk preparation is not gameplay-critical, so drain
            a batch of completed worker uploads here.  Runtime rendering still
            uses the one-install-per-frame budget in rebuild_visible_flat_sections. */
@@ -4643,6 +4679,7 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
             submitted++;
         }
         return (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count);
+#endif
     }
 
     int built = 0;
