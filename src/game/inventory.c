@@ -487,6 +487,7 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
 #define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
 #endif
 static int flat_chunk_buf_index(int lx, int y, int lz);
+static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1);
 
 static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
     int x0 = cx * 16, z0 = cz * 16;
@@ -553,6 +554,31 @@ static void flat_compute_chunk_light_fast_from_buffers(const unsigned char *buf,
     }
 }
 
+static int flat_id_is_saved_user_light_source(int id) {
+    return id == BLOCK_TORCH || id == BLOCK_FURNACE_LIT ||
+           id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_FIRE ||
+           id == BLOCK_GLOWSTONE || id == BLOCK_JACK_O_LANTERN ||
+           id == BLOCK_PORTAL;
+}
+
+static int flat_chunk_buffer_has_saved_user_light_source(const unsigned char *buf) {
+    if (!buf) return 0;
+    for (int lx = 0; lx < 16; lx++) {
+        for (int lz = 0; lz < 16; lz++) {
+            for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+                if (flat_id_is_saved_user_light_source(buf[flat_chunk_buf_index(lx, y, lz)])) return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void flat_note_chunk_block_light_dirty(int cx, int cz) {
+    int x0 = cx * 16;
+    int z0 = cz * 16;
+    flat_note_lighting_dirty_region(x0 - 15, z0 - 15, x0 + 30, z0 + 30);
+}
+
 static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigned char *sky, const unsigned char *block) {
     if (!sky || !block) return;
     for (int lx = 0; lx < 16; lx++) {
@@ -606,11 +632,16 @@ static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id,
     (void)y;
     int old_light = flat_block_light_value_for_id(old_id);
     int new_light = flat_block_light_value_for_id(new_id);
-    if (old_light > 0 || new_light > 0) {
-        /* Block light spreads up to 15 cells.  The old 1-column dirty range made
-           torches light only their own column or a tiny slice until a larger
-           chunk rebuild happened.  This still runs through the background
-           streaming/light service, not the main tick. */
+    int old_opacity = flat_light_opacity_for_id(old_id);
+    int new_opacity = flat_light_opacity_for_id(new_id);
+
+    if (old_light > 0 || new_light > 0 || old_opacity != new_opacity) {
+        /* Block light can be affected by either a source changing or an occluder
+           changing.  The previous code widened only source edits; placing a
+           normal block near a torch recalculated a tiny area that often did not
+           include the torch, then wrote zeros over the torch's propagated light.
+           Rebuild the whole possible 15-block influence area for both source and
+           opacity changes so nearby edits cannot make torch light disappear. */
         flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
     } else {
         flat_note_lighting_dirty_around_block(x, y, z);
@@ -884,6 +915,7 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
     flat_recalculate_lighting_chunk_fast_surface(cx, cz);
+    if (flat_chunk_buffer_has_saved_user_light_source(buf)) flat_note_chunk_block_light_dirty(cx, cz);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_surface_mark_dirty_block(cx * 16 + 8, cz * 16 + 8);
 #endif
@@ -1032,6 +1064,7 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
     if (!g_copy_chunk_skip_main_light) flat_recalculate_lighting_chunk_fast_surface(cx, cz);
+    if (flat_chunk_buffer_has_saved_user_light_source(buf)) flat_note_chunk_block_light_dirty(cx, cz);
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
@@ -2704,6 +2737,7 @@ static void inventory_reset(void) {
     g_inventory[3] = make_stack(ITEM_STONE_SHOVEL, 1, 0);
     g_inventory[4] = make_stack(BLOCK_GRASS, 64, 0);
     g_inventory[5] = make_stack(BLOCK_LOG, 64, 0);
+    g_inventory[6] = make_stack(BLOCK_TORCH, 64, 0);
 
     /* Keep the earlier requested reserve of 10 stone shovels in the main inventory. */
     for (int i = 0; i < 10; i++) {
@@ -3111,6 +3145,10 @@ static void furnace_set_lit_at(FurnaceTile *ft, int lit) {
         flat_set_block(ft->x, ft->y, ft->z, want);
         flat_set_meta_raw(ft->x, ft->y, ft->z, meta);
         flat_end_persistent_edit();
+        /* Furnace on/off changes are visible light-source changes.  Flush the
+           pending block-light rebuild immediately so the furnace starts/stops
+           lighting the room as soon as smelting begins/ends. */
+        flat_flush_pending_lighting();
     }
 }
 
