@@ -574,12 +574,12 @@ static void draw_texturepack_install_screen(void) {
     int y = g_gui_h / 2 + 16;
     int p = (int)InterlockedCompareExchange(&g_classic_install_progress, 0, 0);
     char status[MAX_LABEL];
-    lstrcpynA(status, g_classic_install_status[0] ? g_classic_install_status : "Downloading client.jar...", sizeof(status));
+    lstrcpynA(status, g_classic_install_status[0] ? g_classic_install_status : "Downloading resources...", sizeof(status));
     if (p < 0) p = 0;
     if (p > 100) p = 100;
     draw_rect(x, y, x + bar_w, y + bar_h, 8421504);
     draw_rect(x, y, x + p, y + bar_h, 8454016);
-    draw_centered_text("Downloading texture pack", g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
+    draw_centered_text("Downloading Classic resources", g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
     draw_centered_text(status, g_gui_w / 2, g_gui_h / 2 + 8, 16777215);
 }
 
@@ -605,23 +605,34 @@ static void draw_renderer_restart_prompt(void) {
 
 static void draw_classic_pack_download_prompt(void) {
     char size_line[MAX_LABEL];
+    char summary[MAX_LABEL];
     classic_resource_size_start_fetch();
+    classic_resource_missing_summary(summary, sizeof(summary));
     draw_default_bg();
     draw_centered_text("Classic Resources Recommended", g_gui_w / 2, g_gui_h / 4 - 60 + 18, 16777215);
-    draw_text("The built-in default textures are heavily prototype", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 48, 10526880);
-    draw_text("and some blocks/items may look wrong or unfinished.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 59, 10526880);
-    draw_text("I recommend downloading the Classic resources.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 76, 16777215);
+    draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 45, 16777215);
+    draw_text("Textures come from b1.0 client.jar.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 61, 10526880);
+#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
+    draw_text("Sound effects come from b1.0 legacy.json.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
+#else
+    draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
+#endif
     classic_resource_size_format(size_line, sizeof(size_line));
-    draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 93, 10526880);
+    draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 89, 10526880);
+#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
+    draw_text("Toggle sounds if you only want textures.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);
+#endif
     draw_all_buttons();
 }
 
 static void draw_classic_pack_warning(void) {
+    char summary[MAX_LABEL];
+    classic_resource_missing_summary(summary, sizeof(summary));
     draw_default_bg();
-    draw_centered_text("Texture Pack Warning", g_gui_w / 2, g_gui_h / 4 - 60 + 20, 16777215);
-    draw_text("The currently saved Minecraft Classic texture pack", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 56, 10526880);
-    draw_text("does not have the required Beta block/item textures.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 67, 10526880);
-    draw_text("Do you want to re-download it now?", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 86, 16777215);
+    draw_centered_text("Resource Update Needed", g_gui_w / 2, g_gui_h / 4 - 60 + 20, 16777215);
+    draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 56, 10526880);
+    draw_text("Do you want to download the missing resources now?", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 75, 16777215);
+    draw_text("No keeps the current files unchanged.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 92, 10526880);
     draw_all_buttons();
 }
 

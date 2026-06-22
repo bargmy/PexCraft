@@ -539,10 +539,54 @@ static int classic_pack_missing_required_textures(void) {
     return 0;
 }
 
-static int should_show_classic_pack_download_prompt(void) {
-    if (g_opts.ignore_classic_resources_warning) return 0;
-    if (classic_pack_installed()) return 0;
+static void classic_resources_path(char *out, size_t cap) {
+    path_join(out, cap, g_mc_dir, "resources");
+}
+
+static void classic_sound_marker_path(char *out, size_t cap) {
+    char root[MAX_PATHBUF];
+    classic_resources_path(root, sizeof(root));
+    path_join(out, cap, root, ".pexcraft-b1-legacy-sounds");
+}
+
+static int classic_sounds_installed(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 1;
+#else
+    char marker[MAX_PATHBUF];
+    classic_sound_marker_path(marker, sizeof(marker));
+    if (!file_exists(marker)) return 0;
+    return 1;
+#endif
+}
+
+static int classic_wants_sound_download(void) {
+#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
+    return g_opts.download_classic_sounds && !g_opts.ignore_classic_sounds_warning;
+#else
+    return 0;
+#endif
+}
+
+static int classic_resources_need_update(void) {
+    int missing_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
+    if (missing_textures && !g_opts.ignore_classic_resources_warning) return 1;
+    if (missing_sounds) return 1;
+    return 0;
+}
+
+static int should_show_classic_pack_download_prompt(void) {
+    return classic_resources_need_update();
+}
+
+static void classic_resource_missing_summary(char *out, size_t cap) {
+    int missing_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
+    if (missing_textures && missing_sounds) snprintf(out, cap, "Textures and sounds should be updated.");
+    else if (missing_textures) snprintf(out, cap, "Textures should be updated.");
+    else if (missing_sounds) snprintf(out, cap, "Sounds should be downloaded.");
+    else snprintf(out, cap, "Classic resources are up to date.");
 }
 
 static void add_builtin_classic_texture_pack(int *wanted) {
@@ -555,9 +599,11 @@ static void add_builtin_classic_texture_pack(int *wanted) {
     int installed = classic_pack_installed();
     if (installed) {
         if (classic_pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block textures");
+        else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing b1.0 sounds");
+        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Textures + sounds installed");
         else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from client.jar");
     } else {
-        snprintf(e->desc2, sizeof(e->desc2), "Click to download client.jar");
+        snprintf(e->desc2, sizeof(e->desc2), "Click to download resources");
     }
     e->is_builtin_classic = 1;
     /* Use the normal fallback icon slot so the built-in Minecraft Classic entry

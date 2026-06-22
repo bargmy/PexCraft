@@ -72,6 +72,13 @@
 #define MAX_WORLD_SIM_CHANGES_PER_TICK 48
 #define CLASSIC_PACK_NAME "Minecraft Classic"
 #define CLASSIC_PACK_URL "https://piston-data.mojang.com/v1/objects/93faf3398ebf8008d59852dc3c2b22b909ca8a49/client.jar"
+#define CLASSIC_SOUNDS_INDEX_URL "https://launchermeta.mojang.com/v1/packages/770572e819335b6c0a053f8378ad88eda189fc14/legacy.json"
+#define CLASSIC_SOUND_OBJECT_URL_PREFIX "https://resources.download.minecraft.net"
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 0
+#else
+#define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 1
+#endif
 
 typedef struct Texture {
     GLuint id;
@@ -215,6 +222,8 @@ typedef struct Options {
     int show_fps;
     int renderer_backend; /* RendererBackend saved to options.txt; restart required after changing */
     int ignore_classic_resources_warning;
+    int download_classic_sounds;
+    int ignore_classic_sounds_warning;
     char skin[64]; /* selected texture-pack name, kept for old options.txt compatibility */
     char skin_path[MAX_PATHBUF];
     char last_server[64];
@@ -1169,7 +1178,10 @@ static void start_world_generation(int slot);
 static void worldgen_tick(void);
 static int classic_pack_installed(void);
 static int classic_pack_missing_required_textures(void);
+static int classic_sounds_installed(void);
+static int classic_resources_need_update(void);
 static int should_show_classic_pack_download_prompt(void);
+static void classic_resource_missing_summary(char *out, size_t cap);
 static void start_classic_pack_install(void);
 static void classic_pack_install_tick(void);
 static void enter_world_from_job(void);

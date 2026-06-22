@@ -136,8 +136,16 @@ static void rebuild_screen(void) {
         add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 120 + 12, 150, 20, "Restart", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 120 + 12, 150, 20, "Ignore", BUTTON_NORMAL);
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
-        add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 120 + 12, 150, 20, "Use", BUTTON_NORMAL);
+#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
+        char snd_label[MAX_LABEL];
+        snprintf(snd_label, sizeof(snd_label), "Sounds: %s", g_opts.download_classic_sounds ? "ON" : "OFF");
+        add_button_full(2, g_gui_w / 2 - 100, g_gui_h / 4 + 112, 200, 20, snd_label, BUTTON_NORMAL);
+        add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 140, 150, 20, "Download", BUTTON_NORMAL);
+        add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 140, 150, 20, "Ignore", BUTTON_NORMAL);
+#else
+        add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 120 + 12, 150, 20, "Download", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 120 + 12, 150, 20, "Ignore", BUTTON_NORMAL);
+#endif
     } else if (g_screen == SCREEN_CLASSIC_PACK_WARNING) {
         add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 120 + 12, 150, 20, "Yes", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 120 + 12, 150, 20, "No", BUTTON_NORMAL);
@@ -326,8 +334,15 @@ static void on_button(Button *b) {
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
         if (b->id == 0) {
             start_classic_pack_install();
+        } else if (b->id == 2) {
+            g_opts.download_classic_sounds = !g_opts.download_classic_sounds;
+            if (g_opts.download_classic_sounds) g_opts.ignore_classic_sounds_warning = 0;
+            InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_UNKNOWN);
+            save_options();
+            set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
         } else {
-            g_opts.ignore_classic_resources_warning = 1;
+            if (!classic_pack_installed() || classic_pack_missing_required_textures()) g_opts.ignore_classic_resources_warning = 1;
+            if (g_opts.download_classic_sounds && !classic_sounds_installed()) g_opts.ignore_classic_sounds_warning = 1;
             save_options();
             set_screen(SCREEN_TITLE);
         }
@@ -349,7 +364,7 @@ static void texpack_mouse_down(int mx, int my) {
             if (e->is_builtin_classic && !classic_pack_installed()) {
                 start_classic_pack_install();
                 return;
-            } else if (e->is_builtin_classic && classic_pack_missing_required_textures()) {
+            } else if (e->is_builtin_classic && classic_resources_need_update()) {
                 set_screen(SCREEN_CLASSIC_PACK_WARNING);
                 return;
             } else if (idx != g_selected_texpack) {

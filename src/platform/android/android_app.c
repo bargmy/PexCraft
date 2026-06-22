@@ -331,7 +331,7 @@ int main(int argc, char **argv) {
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
     if (should_show_classic_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
-    else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_pack_missing_required_textures()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
+    else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else set_screen(SCREEN_TITLE);
     InitializeCriticalSection(&g_save_cs);
     main_loop();

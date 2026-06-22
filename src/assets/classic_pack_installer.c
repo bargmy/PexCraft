@@ -63,7 +63,12 @@ typedef BOOL (WINAPI *PxcHttpQueryInfoA)(PxcHInternet, DWORD, LPVOID, LPDWORD, L
 #define CLASSIC_SIZE_ERROR 3
 
 static volatile LONG g_classic_download_size_state = CLASSIC_SIZE_UNKNOWN;
-static volatile LONG g_classic_download_size_bytes = 0;
+static volatile LONG g_classic_texture_download_size_bytes = 0;
+static volatile LONG g_classic_sound_download_size_bytes = 0;
+static volatile LONG g_classic_sound_download_count = 0;
+
+static void classic_install_set_state(LONG state, LONG progress, const char *status);
+static void classic_install_fail(const char *msg);
 
 static unsigned long long parse_decimal_u64(const char *s) {
     unsigned long long v = 0;
@@ -121,6 +126,282 @@ static int classic_query_content_length(PxcHInternet req, PxcHttpQueryInfoA pHtt
 
     if (value == 0) return 0;
     if (out_bytes) *out_bytes = value;
+    return 1;
+}
+
+
+typedef struct ClassicSoundAsset {
+    char path[MAX_PATHBUF];
+    char hash[48];
+    unsigned int size;
+} ClassicSoundAsset;
+
+static unsigned long long classic_file_size_bytes(const char *path) {
+    FILE *f = fopen(path, "rb");
+    long n;
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    n = ftell(f);
+    fclose(f);
+    return n > 0 ? (unsigned long long)n : 0ULL;
+}
+
+static int classic_sound_asset_path_ok(const char *path) {
+    size_t n;
+    if (!path) return 0;
+    /* b1.0 uses the legacy sound/ tree for effects.  Do not mirror songs
+       from music/ or records/, and do not download the newer duplicate
+       sounds/ layout from the same legacy index. */
+    if (strncmp(path, "sound/", 6)) return 0;
+    if (!strncmp(path, "music/", 6) || !strncmp(path, "records/", 8)) return 0;
+    n = strlen(path);
+    if (n < 5 || strcmp(path + n - 4, ".ogg")) return 0;
+    return 1;
+}
+
+static const char *classic_json_find_token(const char *p, const char *end, const char *token) {
+    size_t tl = strlen(token);
+    for (; p && p + tl <= end; ++p) {
+        if (!memcmp(p, token, tl)) return p;
+    }
+    return NULL;
+}
+
+static int classic_parse_legacy_sounds(const char *json, size_t len, ClassicSoundAsset **out_assets, int *out_count, unsigned long long *out_size) {
+    const char *p = json;
+    const char *end = json + len;
+    int cap = 0, count = 0;
+    unsigned long long total = 0;
+    ClassicSoundAsset *assets = NULL;
+    if (out_assets) *out_assets = NULL;
+    if (out_count) *out_count = 0;
+    if (out_size) *out_size = 0;
+    if (!json || len == 0) return 0;
+
+    while (p < end) {
+        const char *q = strchr(p, '"');
+        const char *r;
+        char key[MAX_PATHBUF];
+        size_t key_len;
+        const char *obj_end;
+        const char *hash_tok;
+        const char *size_tok;
+        char hash[48];
+        unsigned int sz = 0;
+        if (!q || q >= end) break;
+        r = q + 1;
+        while (r < end && *r != '"') r++;
+        if (r >= end) break;
+        key_len = (size_t)(r - (q + 1));
+        if (key_len == 0 || key_len >= sizeof(key)) { p = r + 1; continue; }
+        memcpy(key, q + 1, key_len); key[key_len] = 0;
+        p = r + 1;
+        if (!classic_sound_asset_path_ok(key)) continue;
+        obj_end = strchr(p, '}');
+        if (!obj_end || obj_end > end) break;
+        hash_tok = classic_json_find_token(p, obj_end, "\"hash\"");
+        size_tok = classic_json_find_token(p, obj_end, "\"size\"");
+        if (!hash_tok || !size_tok) { p = obj_end + 1; continue; }
+        hash_tok = strchr(hash_tok + 6, '"');
+        if (!hash_tok || hash_tok >= obj_end) { p = obj_end + 1; continue; }
+        hash_tok++;
+        if (hash_tok + 40 > obj_end) { p = obj_end + 1; continue; }
+        memcpy(hash, hash_tok, 40); hash[40] = 0;
+        size_tok = strchr(size_tok + 6, ':');
+        if (!size_tok || size_tok >= obj_end) { p = obj_end + 1; continue; }
+        size_tok++;
+        while (size_tok < obj_end && (*size_tok == ' ' || *size_tok == '\t')) size_tok++;
+        sz = (unsigned int)parse_decimal_u64(size_tok);
+        if (sz == 0) { p = obj_end + 1; continue; }
+        total += sz;
+        if (out_assets) {
+            if (count >= cap) {
+                int new_cap = cap ? cap * 2 : 256;
+                ClassicSoundAsset *na = (ClassicSoundAsset *)realloc(assets, (size_t)new_cap * sizeof(ClassicSoundAsset));
+                if (!na) { free(assets); return 0; }
+                assets = na;
+                cap = new_cap;
+            }
+            snprintf(assets[count].path, sizeof(assets[count].path), "%s", key);
+            snprintf(assets[count].hash, sizeof(assets[count].hash), "%s", hash);
+            assets[count].size = sz;
+        }
+        count++;
+        p = obj_end + 1;
+    }
+    if (out_assets) *out_assets = assets;
+    else free(assets);
+    if (out_count) *out_count = count;
+    if (out_size) *out_size = total;
+    return count > 0;
+}
+
+static int classic_download_url_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len) {
+    HMODULE wininet;
+    PxcInternetOpenA pInternetOpenA;
+    PxcInternetOpenUrlA pInternetOpenUrlA;
+    PxcInternetReadFile pInternetReadFile;
+    PxcInternetCloseHandle pInternetCloseHandle;
+    PxcHInternet inet = NULL, req = NULL;
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    int ok = 0;
+    if (out_data) *out_data = NULL;
+    if (out_len) *out_len = 0;
+    wininet = LoadLibraryA("wininet.dll");
+    if (!wininet) return 0;
+    pInternetOpenA = (PxcInternetOpenA)GetProcAddress(wininet, "InternetOpenA");
+    pInternetOpenUrlA = (PxcInternetOpenUrlA)GetProcAddress(wininet, "InternetOpenUrlA");
+    pInternetReadFile = (PxcInternetReadFile)GetProcAddress(wininet, "InternetReadFile");
+    pInternetCloseHandle = (PxcInternetCloseHandle)GetProcAddress(wininet, "InternetCloseHandle");
+    if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) goto done;
+    inet = pInternetOpenA("PEXCRAFT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!inet) goto done;
+    req = pInternetOpenUrlA(inet, url, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+    if (!req) goto done;
+    for (;;) {
+        unsigned char tmp[32768];
+        DWORD got = 0;
+        if (!pInternetReadFile(req, tmp, sizeof(tmp), &got)) goto done;
+        if (got == 0) break;
+        if (len + got + 1 > max_len) goto done;
+        if (len + got + 1 > cap) {
+            size_t nc = cap ? cap * 2 : 65536;
+            while (nc < len + got + 1) nc *= 2;
+            char *nb = (char *)realloc(buf, nc);
+            if (!nb) goto done;
+            buf = nb; cap = nc;
+        }
+        memcpy(buf + len, tmp, got);
+        len += got;
+    }
+    if (!buf) goto done;
+    buf[len] = 0;
+    ok = 1;
+done:
+    if (req) pInternetCloseHandle(req);
+    if (inet) pInternetCloseHandle(inet);
+    FreeLibrary(wininet);
+    if (!ok) { free(buf); return 0; }
+    if (out_data) *out_data = buf; else free(buf);
+    if (out_len) *out_len = len;
+    return 1;
+}
+
+static int classic_download_url_to_file_simple(const char *url, const char *path, unsigned int expect_size) {
+    HMODULE wininet = LoadLibraryA("wininet.dll");
+    PxcInternetOpenA pInternetOpenA;
+    PxcInternetOpenUrlA pInternetOpenUrlA;
+    PxcInternetReadFile pInternetReadFile;
+    PxcInternetCloseHandle pInternetCloseHandle;
+    PxcHInternet inet = NULL, req = NULL;
+    FILE *out = NULL;
+    unsigned long long written = 0;
+    int ok = 0;
+    if (!wininet) return 0;
+    pInternetOpenA = (PxcInternetOpenA)GetProcAddress(wininet, "InternetOpenA");
+    pInternetOpenUrlA = (PxcInternetOpenUrlA)GetProcAddress(wininet, "InternetOpenUrlA");
+    pInternetReadFile = (PxcInternetReadFile)GetProcAddress(wininet, "InternetReadFile");
+    pInternetCloseHandle = (PxcInternetCloseHandle)GetProcAddress(wininet, "InternetCloseHandle");
+    if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) goto done;
+    pxc_mkdirs_for_file(path);
+    out = fopen(path, "wb");
+    if (!out) goto done;
+    inet = pInternetOpenA("PEXCRAFT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!inet) goto done;
+    req = pInternetOpenUrlA(inet, url, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+    if (!req) goto done;
+    for (;;) {
+        unsigned char tmp[32768];
+        DWORD got = 0;
+        if (!pInternetReadFile(req, tmp, sizeof(tmp), &got)) goto done;
+        if (got == 0) break;
+        if (fwrite(tmp, 1, got, out) != got) goto done;
+        written += got;
+    }
+    ok = (written > 0 && (!expect_size || written == (unsigned long long)expect_size));
+done:
+    if (out) fclose(out);
+    if (req) pInternetCloseHandle(req);
+    if (inet) pInternetCloseHandle(inet);
+    FreeLibrary(wininet);
+    if (!ok) DeleteFileA(path);
+    return ok;
+}
+
+static int classic_query_sound_index_size(unsigned long long *out_bytes, int *out_count) {
+    char *json = NULL;
+    size_t len = 0;
+    unsigned long long total = 0;
+    int count = 0;
+    int ok = 0;
+    if (out_bytes) *out_bytes = 0;
+    if (out_count) *out_count = 0;
+    if (!classic_download_url_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) return 0;
+    ok = classic_parse_legacy_sounds(json, len, NULL, &count, &total);
+    free(json);
+    if (!ok) return 0;
+    if (out_bytes) *out_bytes = total;
+    if (out_count) *out_count = count;
+    return 1;
+}
+
+static int classic_download_legacy_sounds(void) {
+    char *json = NULL;
+    size_t len = 0;
+    ClassicSoundAsset *assets = NULL;
+    int count = 0, downloaded = 0;
+    unsigned long long total = 0;
+    char root[MAX_PATHBUF];
+    char marker[MAX_PATHBUF];
+    int ok = 0;
+
+    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading sound index...");
+    if (!classic_download_url_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
+        classic_install_fail("Could not download legacy sound index");
+        return 0;
+    }
+    if (!classic_parse_legacy_sounds(json, len, &assets, &count, &total)) {
+        free(json);
+        classic_install_fail("Could not parse legacy sound index");
+        return 0;
+    }
+    free(json);
+
+    classic_resources_path(root, sizeof(root));
+    ensure_dir(root);
+
+    for (int i = 0; i < count; ++i) {
+        char out_path[MAX_PATHBUF];
+        char url[256];
+        int pct;
+        char st[MAX_LABEL];
+        pxc_zip_make_output_path(out_path, sizeof(out_path), root, assets[i].path);
+        if (classic_file_size_bytes(out_path) == assets[i].size) {
+            downloaded++;
+        } else {
+            snprintf(url, sizeof(url), "%s/%.2s/%s", CLASSIC_SOUND_OBJECT_URL_PREFIX, assets[i].hash, assets[i].hash);
+            pct = 5 + (int)(((unsigned long long)i * 90ULL) / (unsigned long long)(count > 0 ? count : 1));
+            snprintf(st, sizeof(st), "Downloading sounds %d/%d", i + 1, count);
+            classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
+            if (!classic_download_url_to_file_simple(url, out_path, assets[i].size)) {
+                free(assets);
+                classic_install_fail("Could not download a b1.0 sound");
+                return 0;
+            }
+            downloaded++;
+        }
+    }
+
+    classic_sound_marker_path(marker, sizeof(marker));
+    {
+        char text[160];
+        snprintf(text, sizeof(text), "PexCraft b1.0 legacy sounds\nfiles:%d\nbytes:%llu\n", downloaded, total);
+        ok = pxc_write_file_all(marker, (const unsigned char *)text, strlen(text));
+    }
+    free(assets);
+    if (!ok) { classic_install_fail("Could not write sound install marker"); return 0; }
+    log_msg("Installed Minecraft b1.0 legacy sounds: %d files, %llu bytes", downloaded, total);
     return 1;
 }
 
@@ -201,14 +482,24 @@ static int classic_query_download_size_bytes(const char *url, unsigned long long
 static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
     (void)unused;
     unsigned long long bytes = 0;
+    int got_any = 0;
     if (classic_query_download_size_bytes(CLASSIC_PACK_URL, &bytes) && bytes > 0 && bytes <= 0x7fffffffULL) {
-        InterlockedExchange(&g_classic_download_size_bytes, (LONG)bytes);
-        InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_READY);
-        log_msg("Minecraft Classic resource download size: %llu bytes", bytes);
-    } else {
-        InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_ERROR);
-        log_msg("Could not query Minecraft Classic resource Content-Length");
+        InterlockedExchange(&g_classic_texture_download_size_bytes, (LONG)bytes);
+        got_any = 1;
+        log_msg("Minecraft Classic texture download size: %llu bytes", bytes);
     }
+    if (g_opts.download_classic_sounds) {
+        unsigned long long sound_bytes = 0;
+        int sound_count = 0;
+        if (classic_query_sound_index_size(&sound_bytes, &sound_count) && sound_bytes > 0 && sound_bytes <= 0x7fffffffULL) {
+            InterlockedExchange(&g_classic_sound_download_size_bytes, (LONG)sound_bytes);
+            InterlockedExchange(&g_classic_sound_download_count, (LONG)sound_count);
+            got_any = 1;
+            log_msg("Minecraft b1.0 sound download size: %llu bytes (%d files)", sound_bytes, sound_count);
+        }
+    }
+    InterlockedExchange(&g_classic_download_size_state, got_any ? CLASSIC_SIZE_READY : CLASSIC_SIZE_ERROR);
+    if (!got_any) log_msg("Could not query Minecraft Classic resource sizes");
     return 0;
 }
 
@@ -226,14 +517,21 @@ static void classic_resource_size_start_fetch(void) {
 static void classic_resource_size_format(char *out, size_t cap) {
     LONG state = InterlockedCompareExchange(&g_classic_download_size_state, 0, 0);
     if (state == CLASSIC_SIZE_READY) {
-        LONG bytes = InterlockedCompareExchange(&g_classic_download_size_bytes, 0, 0);
-        if (bytes > 0) {
-            double mb = (double)bytes / (1024.0 * 1024.0);
-            snprintf(out, cap, "Download size: %.2f MB (%ld bytes)", mb, bytes);
-            return;
+        LONG tex = InterlockedCompareExchange(&g_classic_texture_download_size_bytes, 0, 0);
+        LONG snd = InterlockedCompareExchange(&g_classic_sound_download_size_bytes, 0, 0);
+        LONG cnt = InterlockedCompareExchange(&g_classic_sound_download_count, 0, 0);
+        double tex_mb = tex > 0 ? (double)tex / (1024.0 * 1024.0) : 0.0;
+        double snd_mb = snd > 0 ? (double)snd / (1024.0 * 1024.0) : 0.0;
+        if (g_opts.download_classic_sounds && snd > 0) {
+            snprintf(out, cap, "Textures: %.2f MB | Sounds: %.2f MB (%ld files)", tex_mb, snd_mb, cnt);
+        } else if (g_opts.download_classic_sounds) {
+            snprintf(out, cap, "Textures: %.2f MB | Sounds: unavailable", tex_mb);
+        } else {
+            snprintf(out, cap, "Textures: %.2f MB | Sounds: off", tex_mb);
         }
+        return;
     } else if (state == CLASSIC_SIZE_FETCHING) {
-        snprintf(out, cap, "Download size: checking server...");
+        snprintf(out, cap, "Download size: checking Mojang...");
         return;
     }
     snprintf(out, cap, "Download size: unavailable");
@@ -373,7 +671,7 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
     classic_pack_path(pack_dir, sizeof(pack_dir));
     snprintf(zip_path, sizeof(zip_path), "%s\\minecraft_classic_client.zip", g_mc_dir);
 
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading client.jar...");
+    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading resources...");
     if (!classic_download_client_jar(CLASSIC_PACK_URL, zip_path)) return 0;
     if (!classic_extract_downloaded_pack(zip_path, pack_dir)) return 0;
 
@@ -395,7 +693,7 @@ static void start_classic_pack_install(void) {
     }
 
     g_classic_install_error[0] = 0;
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading client.jar...");
+    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading resources...");
     set_screen(SCREEN_TEXPACK_INSTALL);
     g_classic_install_thread = CreateThread(NULL, 0, classic_install_worker, NULL, 0, NULL);
     if (!g_classic_install_thread) {
@@ -427,6 +725,6 @@ static void classic_pack_install_tick(void) {
             g_classic_install_thread = NULL;
         }
         InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);
-        open_notice("Texture Pack", "Could not install Minecraft Classic.", g_classic_install_error);
+        open_notice("Texture Pack", "Could not install Minecraft Classic resources.", g_classic_install_error);
     }
 }

@@ -426,7 +426,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
     if (should_show_classic_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
-    else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_pack_missing_required_textures()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
+    else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else if (g_renderer_backend_unavailable_notice) {
         char line[MAX_LABEL];
         snprintf(line, sizeof(line), "%s is unavailable on this system.", renderer_backend_label(g_opts.renderer_backend));
