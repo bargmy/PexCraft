@@ -53,6 +53,7 @@ static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot
 #include "game/world_session.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
+#include "audio/sound.c"
 #include "platform/sdl2_input.c"
 
 static void steve_set_texture_dims(const Texture *tex);

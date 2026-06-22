@@ -3218,6 +3218,7 @@ static void inventory_drop_selected_one(void) {
     if (g_mp_connected) pex_net_send_drop_item(one);
     else {
         spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, one, 0);
+        pex_sound_play("random.pop", 0.20f, 0.6f);
         g_save_dirty = 1;
     }
     restart_hand_swing();
@@ -3847,6 +3848,7 @@ static void door_toggle_at(int x, int y, int z) {
     flat_set_meta_raw(x, ly, z, meta);
     if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, meta + 8);
     if (!g_mp_connected) flat_end_persistent_edit();
+    pex_sound_play_at((meta & 4) ? "random.door_open" : "random.door_close", (float)x + 0.5f, (float)ly + 0.5f, (float)z + 0.5f, 1.0f, 1.0f);
     if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, ly == y ? x : x, ly, z, 0, id);
     restart_hand_swing();
 }
@@ -4137,6 +4139,7 @@ static void press_button_at(int x, int y, int z) {
     int meta = flat_get_meta(x, y, z);
     if (meta & 8) return;
     flat_set_meta_raw(x, y, z, (meta & 7) | 8);
+    pex_sound_play_at("random.click", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.30f, 0.6f);
     add_button_timer(x, y, z);
     redstone_update_near(x, y, z);
     if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
@@ -4146,7 +4149,9 @@ static void press_button_at(int x, int y, int z) {
 static void toggle_lever_at(int x, int y, int z) {
     int id = flat_get_block(x, y, z);
     if (id != BLOCK_LEVER) return;
-    flat_set_meta_raw(x, y, z, flat_get_meta(x, y, z) ^ 8);
+    int new_meta = flat_get_meta(x, y, z) ^ 8;
+    flat_set_meta_raw(x, y, z, new_meta);
+    pex_sound_play_at("random.click", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.30f, (new_meta & 8) ? 0.6f : 0.5f);
     redstone_update_near(x, y, z);
     if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
     restart_hand_swing();
@@ -4190,6 +4195,7 @@ static void update_buttons_and_pressure_plates(void) {
             int meta = flat_get_meta(bt->x, bt->y, bt->z);
             if (meta & 8) {
                 flat_set_meta_raw(bt->x, bt->y, bt->z, meta & 7);
+                pex_sound_play_at("random.click", (float)bt->x + 0.5f, (float)bt->y + 0.5f, (float)bt->z + 0.5f, 0.30f, 0.5f);
                 redstone_update_near(bt->x, bt->y, bt->z);
                 if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, bt->x, bt->y, bt->z, 0, BLOCK_STONE_BUTTON);
             }
@@ -4216,6 +4222,7 @@ static void update_buttons_and_pressure_plates(void) {
             if (player_over_pressure_plate_at(x, y, z)) {
                 if ((flat_get_meta(x, y, z) & 1) == 0) {
                     flat_set_meta_raw(x, y, z, 1);
+                    pex_sound_play_at("random.click", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.30f, 0.6f);
                     redstone_update_near(x, y, z);
                     if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
                 }
@@ -4233,6 +4240,7 @@ static void update_buttons_and_pressure_plates(void) {
             pt->ticks_left = 20;
             if ((flat_get_meta(pt->x, pt->y, pt->z) & 1) == 0) {
                 flat_set_meta_raw(pt->x, pt->y, pt->z, 1);
+                pex_sound_play_at("random.click", (float)pt->x + 0.5f, (float)pt->y + 0.5f, (float)pt->z + 0.5f, 0.30f, 0.6f);
                 redstone_update_near(pt->x, pt->y, pt->z);
                 if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, pt->x, pt->y, pt->z, 0, id);
             }
@@ -4241,6 +4249,7 @@ static void update_buttons_and_pressure_plates(void) {
         if (--pt->ticks_left <= 0) {
             if (flat_get_meta(pt->x, pt->y, pt->z) & 1) {
                 flat_set_meta_raw(pt->x, pt->y, pt->z, 0);
+                pex_sound_play_at("random.click", (float)pt->x + 0.5f, (float)pt->y + 0.5f, (float)pt->z + 0.5f, 0.30f, 0.5f);
                 redstone_update_near(pt->x, pt->y, pt->z);
                 if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, pt->x, pt->y, pt->z, 0, id);
             }
@@ -4336,6 +4345,8 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
 static void break_target_block(void) {
     int id = flat_get_block(g_break_x, g_break_y, g_break_z);
     if (id == 0 || id == BLOCK_BEDROCK) return;
+    if (id == BLOCK_GLASS) pex_sound_play_at("random.glass", (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 1.0f);
+    else pex_sound_play_at(pex_block_step_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
 
     if (block_is_door_id(id)) {
         if (g_mp_connected) {
@@ -4432,6 +4443,9 @@ static void update_breaking(void) {
         }
     }
     g_break_sound_counter += 1.0f;
+    if (((int)g_break_sound_counter % 4) == 0) {
+        pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.35f, 0.5f);
+    }
     if (g_break_damage >= 1.0f) {
         break_target_block();
         reset_breaking_state();
@@ -4515,6 +4529,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
             if (!g_mp_connected) flat_end_persistent_edit();
             if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, hit->bx, hit->by, hit->bz, hit->face, BLOCK_FARMLAND);
             else g_save_dirty = 1;
+            pex_sound_play_at("step.gravel", (float)hit->bx + 0.5f, (float)hit->by + 0.5f, (float)hit->bz + 0.5f, 1.0f, 0.8f);
             restart_hand_swing();
             return 1;
         }
@@ -4528,6 +4543,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
             if (!g_mp_connected) flat_end_persistent_edit();
             if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, px, py, pz, hit->face, BLOCK_FIRE);
             else g_save_dirty = 1;
+            pex_sound_play_at("fire.ignite", (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 1.0f);
             restart_hand_swing();
             return 1;
         }
@@ -4541,6 +4557,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
             flat_begin_persistent_edit();
             flat_set_block(sx, sy, sz, 0);
             flat_end_persistent_edit();
+            pex_sound_play_at(is_water ? "random.splash" : "random.fizz", (float)sx + 0.5f, (float)sy + 0.5f, (float)sz + 0.5f, 1.0f, 1.0f);
             consume_held_stack_one(held, is_water ? ITEM_BUCKET_WATER : ITEM_BUCKET_LAVA);
             if (g_mp_connected) {
                 pex_net_send_block_action(PEX_BLOCK_BUCKET_PICKUP, sx, sy, sz, 0, is_water ? BLOCK_WATER : BLOCK_LAVA);
@@ -4562,6 +4579,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
             flat_begin_persistent_edit();
             flat_place_fluid_source(px, py, pz, fluid);
             flat_end_persistent_edit();
+            pex_sound_play_at(fluid == BLOCK_WATER ? "random.splash" : "random.fizz", (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 1.0f);
             consume_held_stack_one(held, ITEM_BUCKET_EMPTY);
             if (g_mp_connected) {
                 pex_net_send_block_action(PEX_BLOCK_BUCKET_PLACE, px, py, pz, hit->face, fluid);
@@ -4651,6 +4669,7 @@ static void ingame_right_click(void) {
         }
         if (--held->count <= 0) stack_clear(held);
         if (!g_mp_connected) g_save_dirty = 1;
+        pex_sound_play_at(pex_block_step_sound_key(held->id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
         restart_hand_swing();
         return;
     }
@@ -4707,6 +4726,7 @@ static void ingame_right_click(void) {
     }
     if (--held->count <= 0) stack_clear(held);
     if (!g_mp_connected) g_save_dirty = 1;
+    pex_sound_play_at(pex_block_step_sound_key(place_id), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
     restart_hand_swing();
 }
 
@@ -4848,6 +4868,7 @@ static void update_dropped_items(void) {
         if (!g_player_dead && g_screen == SCREEN_INGAME && e->pickup_delay <= 0 && dropped_item_touches_player(e)) {
             if (inventory_add_stack(e->stack)) {
                 spawn_pickup_fx_from_drop(e);
+                pex_sound_play("random.pop", 0.20f, (((float)rand() / (float)RAND_MAX) - ((float)rand() / (float)RAND_MAX)) * 0.7f + 1.0f);
                 e->active = 0;
                 g_save_dirty = 1;
             }

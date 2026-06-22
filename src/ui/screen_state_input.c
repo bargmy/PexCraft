@@ -428,6 +428,7 @@ static void mouse_down(int mx, int my) {
                 b->dragging = 1;
                 update_slider(b, mx);
             }
+            pex_sound_play("random.click", 1.0f, 1.0f);
             on_button(b);
             break;
         }

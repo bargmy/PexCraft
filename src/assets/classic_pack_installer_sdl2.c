@@ -571,6 +571,7 @@ static int classic_download_legacy_sounds(void) {
     free(assets);
     if (!ok) { classic_install_fail("Could not write sound install marker"); return 0; }
     log_msg("Installed Minecraft b1.0 legacy sounds with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
+    pex_sound_rescan();
     return 1;
 }
 

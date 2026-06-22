@@ -272,7 +272,7 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -285,6 +285,7 @@ int main(int argc, char **argv) {
 
     init_dirs();
     load_options();
+    pex_sound_rescan();
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_opts.last_server);
@@ -318,6 +319,7 @@ int main(int argc, char **argv) {
     free_texture(&tex_icons); free_texture(&tex_inventory); free_texture(&tex_items); free_texture(&tex_steve);
     free_texture(&tex_chest_entity); free_texture(&tex_large_chest_entity); free_texture_pack_icons();
     pex_gamepad_shutdown();
+    pex_sound_shutdown();
     pex_renderer_shutdown();
     if (g_glrc) { SDL_GL_DeleteContext(g_glrc); g_glrc = NULL; }
     pex_join_save_thread_for_exit();

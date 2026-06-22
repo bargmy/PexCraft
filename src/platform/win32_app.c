@@ -373,6 +373,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     begin_high_res_timer();
     init_dirs();
     load_options();
+    pex_sound_rescan();
     g_runtime_renderer_backend = g_opts.renderer_backend;
     g_selected_renderer_backend = g_opts.renderer_backend;
     if (!renderer_backend_supported(g_runtime_renderer_backend)) {
@@ -453,6 +454,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     free_texture(&tex_large_chest_entity);
     free_texture_pack_icons();
     pex_gamepad_shutdown();
+    pex_sound_shutdown();
     pex_renderer_shutdown();
     if (g_wic_factory) { IWICImagingFactory_Release(g_wic_factory); g_wic_factory = NULL; }
     CoUninitialize();

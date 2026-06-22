@@ -58,6 +58,7 @@ static void player_take_damage(int amount, const char *reason) {
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_attacked_at_yaw = 0.0f;
     g_player_health -= amount;
+    pex_sound_play("random.hurt", 1.0f, 1.0f);
     if (g_player_health <= 0) {
         player_die(reason);
     } else {
@@ -276,6 +277,7 @@ static void ingame_tick(void) {
     int in_lava = flat_player_in_lava();
     if (in_water && !g_player_was_in_water) {
         spawn_water_entry_particles(g_player_x, g_player_y - 1.0f, g_player_z, g_player_motion_x, g_player_motion_z);
+        pex_sound_play("random.splash", 1.0f, 1.0f);
     }
     g_player_was_in_water = in_water;
     int in_ladder = flat_player_in_ladder();
@@ -481,6 +483,9 @@ static void ingame_tick(void) {
 
     /* Deobf EntityLiving.fall: damage is ceil(fallDistance - 3). */
     if (g_player_on_ground) {
+        if (!was_on_ground && g_player_fall_distance > 0.5f) {
+            pex_sound_play(g_player_fall_distance > 3.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
+        }
         if (!was_on_ground && g_player_fall_distance > 3.0f) {
             int dmg = (int)ceilf(g_player_fall_distance - 3.0f);
             if (dmg > 0) player_take_damage(dmg, "fell from a high place");
@@ -521,6 +526,17 @@ static void ingame_tick(void) {
     float dz = g_player_z - g_player_prev_z;
     float horizontal = sqrtf(dx * dx + dz * dz);
     g_distance_walked += horizontal * 0.6f;
+    if (g_player_on_ground && horizontal > 0.015f && g_distance_walked >= g_next_footstep_distance) {
+        int bx = (int)floorf(g_player_x);
+        int by = (int)floorf(g_player_y - 1.75f);
+        int bz = (int)floorf(g_player_z);
+        int step_block = flat_get_block(bx, by, bz);
+        if (step_block > 0 && !block_is_liquid(step_block)) {
+            pex_sound_play_at(pex_block_step_sound_key(step_block), g_player_x, g_player_y - 1.0f, g_player_z, 0.25f, 1.0f);
+        }
+        g_next_footstep_distance = g_distance_walked + 0.60f;
+    }
+    if (!g_player_on_ground) g_next_footstep_distance = g_distance_walked + 0.30f;
 
     float target_limb = horizontal * 4.0f;
     if (target_limb > 1.0f) target_limb = 1.0f;
