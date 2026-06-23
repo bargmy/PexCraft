@@ -47,6 +47,7 @@
 #define MAX_BUTTONS 64
 #define MAX_LABEL 256
 #define MAX_PATHBUF 1024
+#define MAX_WORLD_SAVES 256
 #define ARRAY_COUNT(a) ((int)(sizeof(a)/sizeof((a)[0])))
 #ifndef PEX_GL_CLAMP_EDGE
 #ifdef GL_CLAMP_TO_EDGE
@@ -299,11 +300,20 @@ typedef struct WorldGenJob {
     int terrain_total;
     int terrain_done;
     long long seed;
-    char world_name[32];
+    char world_name[MAX_LABEL];
     char world_dir[MAX_PATHBUF];
     char title[MAX_LABEL];
     char status[MAX_LABEL];
 } WorldGenJob;
+
+typedef struct WorldSaveEntry {
+    char dir_name[MAX_LABEL];
+    char display_name[MAX_LABEL];
+    char path[MAX_PATHBUF];
+    long long last_played;
+    unsigned long long size_on_disk;
+    int world_type;
+} WorldSaveEntry;
 
 typedef enum ScreenId {
     SCREEN_TITLE,
@@ -634,9 +644,15 @@ static double g_mp_render_last_time = 0.0;
 static int g_ticks = 0;
 static int g_waiting_key = -1;
 static int g_confirm_world = 0;
-static int g_selected_world_slot = -1;
 static int g_pending_world_slot = 0;
 static int g_pending_world_type = 0;
+static char g_pending_world_dir[MAX_PATHBUF] = "";
+static char g_pending_world_name[MAX_LABEL] = "";
+static WorldSaveEntry g_world_saves[MAX_WORLD_SAVES];
+static int g_world_save_count = 0;
+static int g_selected_world_index = -1;
+static int g_world_save_scroll = 0;
+static int g_world_drag_scroll_pixels = 0;
 static int g_world_type = 0; /* 0 flat, 1 normal/local terrain */
 static long long g_world_seed = 0;
 static WorldGenJob g_worldgen;
@@ -1474,6 +1490,7 @@ static int renderer_backend_supported(int backend);
 static const char *renderer_backend_label(int backend);
 static void restart_application_now(void);
 static void start_world_generation(int slot);
+static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot);
 static void worldgen_tick(void);
 static int classic_pack_installed(void);
 static int release_resources_install_blocking(void);

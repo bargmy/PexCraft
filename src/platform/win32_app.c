@@ -172,6 +172,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
         case WM_MOUSEMOVE: {
             int px = (short)LOWORD(lparam);
             int py = (short)HIWORD(lparam);
+            int old_mouse_y = g_mouse_y;
             if (g_mouse_grabbed && g_screen == SCREEN_INGAME) {
                 handle_grabbed_mouse_move(px, py);
                 g_mouse_x = g_gui_w / 2;
@@ -182,6 +183,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             g_mouse_y = py * g_gui_h / (g_win_h ? g_win_h : 1);
             if (g_mouse_down && g_drag_slider) update_slider(g_drag_slider, g_mouse_x);
             if (g_mouse_down && g_screen == SCREEN_TEXPACK) texpack_mouse_drag(g_mouse_y);
+            if (g_mouse_down && (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE)) world_save_drag_scroll(g_mouse_y - old_mouse_y);
             return 0;
         }
         case WM_LBUTTONDOWN: {
@@ -215,10 +217,15 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             ReleaseCapture();
             return 0;
         case WM_MOUSEWHEEL:
-            if (g_screen == SCREEN_INGAME) {
+            {
                 int delta = GET_WHEEL_DELTA_WPARAM(wparam);
-                if (delta > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
-                else if (delta < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
+                if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
+                    if (delta > 0) world_save_scroll_by(-1);
+                    else if (delta < 0) world_save_scroll_by(1);
+                } else if (g_screen == SCREEN_INGAME) {
+                    if (delta > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
+                    else if (delta < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
+                }
             }
             return 0;
         case WM_KEYDOWN:

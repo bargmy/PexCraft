@@ -105,7 +105,7 @@ static int read_level_string_tag_for_dir(const char *dir, const char *tag, char 
     return 0;
 }
 
-static int read_binary_level_metadata_for_dir(const char *dir, long long *out_seed, int *out_world_type) {
+static int read_binary_level_summary_for_dir(const char *dir, long long *out_seed, int *out_world_type, long long *out_last_played) {
     char path[MAX_PATHBUF];
     level_path_for_dir(dir, path, sizeof(path));
     FILE *f = fopen(path, "rb");
@@ -120,7 +120,7 @@ static int read_binary_level_metadata_for_dir(const char *dir, long long *out_se
         fread(&h, sizeof(h), 1, f) == 1 &&
         fread(&y_min, sizeof(y_min), 1, f) == 1 &&
         memcmp(magic, "LEVELST1", 8) == 0 && version >= 13 &&
-        w == FLAT_WORLD_SIZE && h == FLAT_WORLD_HEIGHT && y_min == FLAT_WORLD_Y_MIN) {
+        h == FLAT_WORLD_HEIGHT && y_min == FLAT_WORLD_Y_MIN) {
         long long seed = 0;
         float px = 0, py = 0, pz = 0, yaw = 0, pitch = 0, fall = 0;
         int health = 0, armor = 0, slot = 0, dead = 0, wt = 0;
@@ -142,7 +142,30 @@ static int read_binary_level_metadata_for_dir(const char *dir, long long *out_se
         }
     }
     fclose(f);
+    (void)w;
+    if (ok && out_last_played) {
+#ifdef _WIN32
+        WIN32_FIND_DATAA fd;
+        HANDLE hfind = FindFirstFileA(path, &fd);
+        if (hfind != INVALID_HANDLE_VALUE) {
+            ULARGE_INTEGER t;
+            t.LowPart = fd.ftLastWriteTime.dwLowDateTime;
+            t.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+            *out_last_played = (long long)((t.QuadPart - 116444736000000000ULL) / 10000ULL);
+            FindClose(hfind);
+        }
+#else
+        char norm[MAX_PATHBUF];
+        pex_normalize_path(norm, sizeof(norm), path);
+        struct stat st;
+        if (stat(norm, &st) == 0) *out_last_played = (long long)st.st_mtime * 1000LL;
+#endif
+    }
     return ok;
+}
+
+static int read_binary_level_metadata_for_dir(const char *dir, long long *out_seed, int *out_world_type) {
+    return read_binary_level_summary_for_dir(dir, out_seed, out_world_type, NULL);
 }
 
 static int read_level_seed_for_dir(const char *dir, long long *out_seed) {
@@ -1191,7 +1214,7 @@ static void leave_world_to_title(void) {
     set_screen(SCREEN_TITLE);
 }
 
-static void start_world_generation(int slot) {
+static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot) {
     memset(&g_worldgen, 0, sizeof(g_worldgen));
     g_worldgen.active = 1;
     g_worldgen.slot = slot;
@@ -1200,17 +1223,17 @@ static void start_world_generation(int slot) {
     g_worldgen.seed = ((long long)time(NULL) << 32) ^ (long long)GetTickCount();
     g_world_seed = g_worldgen.seed;
     g_world_type = g_pending_world_type;
-    snprintf(g_worldgen.world_name, sizeof(g_worldgen.world_name), "World%d", slot);
+    snprintf(g_worldgen.world_name, sizeof(g_worldgen.world_name), "%s", (world_name && world_name[0]) ? world_name : "World");
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
-    snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/World%d", slot);
+    snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/%s", g_worldgen.world_name);
 #elif defined(PEX_PLATFORM_WII)
     /* Dolphin/homebrew can run without an SD image.  In that case do not touch
        FAT at all while creating/loading worlds; generate an in-RAM world like
        the PSP memory build. */
-    if (!g_wii_fat_ready) snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/World%d", slot);
-    else snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s\\World%d", g_save_dir, slot);
+    if (!g_wii_fat_ready) snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/%s", g_worldgen.world_name);
+    else snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s", (world_dir && world_dir[0]) ? world_dir : g_save_dir);
 #else
-    snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s\\World%d", g_save_dir, slot);
+    snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "%s", (world_dir && world_dir[0]) ? world_dir : g_save_dir);
 #endif
     snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating level");
     snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
@@ -1260,6 +1283,14 @@ static void start_world_generation(int slot) {
     wii_debug_logf("worldgen start: slot=%d type=%d dir=%s title=%s", slot, g_world_type, g_worldgen.world_dir, g_worldgen.title);
 #endif
     set_screen(SCREEN_GENERATING);
+}
+
+static void start_world_generation(int slot) {
+    char dir[MAX_PATHBUF];
+    char name[64];
+    snprintf(name, sizeof(name), "World%d", slot);
+    snprintf(dir, sizeof(dir), "%s\\%s", g_save_dir, name);
+    start_world_generation_in_dir(dir, name, slot);
 }
 
 static void worldgen_tick(void) {
@@ -1386,4 +1417,3 @@ static void worldgen_tick(void) {
         finish_prepared_world_entry(g_worldgen.loaded_state);
     }
 }
-

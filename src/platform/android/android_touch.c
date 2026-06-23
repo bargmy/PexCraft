@@ -277,10 +277,14 @@ static void pex_android_touch_ui_down(SDL_FingerID id, int x, int y) {
 
 static void pex_android_touch_ui_motion(SDL_FingerID id, int x, int y) {
     if (g_android_ui_finger != id) return;
+    int old_y = g_mouse_y;
     g_mouse_x = x;
     g_mouse_y = y;
     if (g_drag_slider) update_slider(g_drag_slider, x);
     if (g_screen == SCREEN_TEXPACK) texpack_mouse_drag(y);
+    if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
+        world_save_drag_scroll(y - old_y);
+    }
     if (g_android_inv_dragging) {
         int dx = x - g_android_inv_drag_down_x;
         int dy = y - g_android_inv_drag_down_y;

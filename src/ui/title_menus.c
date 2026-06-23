@@ -527,49 +527,53 @@ static void format_world_last_played(long long ms, char *out, size_t cap) {
 }
 
 static void draw_world_slot_rows(void) {
-    int top = 32;
-    int bottom = g_gui_h - 64;
+    int top = world_save_list_top();
+    int bottom = world_save_list_bottom();
     int left = g_gui_w / 2 - 110;
     int right = g_gui_w / 2 + 110;
 
-    if (bottom < top + 36) bottom = top + 36;
     draw_tiled_rect_tint(0, top, g_gui_w, bottom, 0x202020, 0);
 
-    for (int i = 0; i < 5; i++) {
+    int visible_rows = world_save_visible_rows();
+    if (visible_rows > g_world_save_count - g_world_save_scroll) visible_rows = g_world_save_count - g_world_save_scroll;
+    if (visible_rows < 0) visible_rows = 0;
+
+    for (int i = 0; i < visible_rows; i++) {
+        int save_index = g_world_save_scroll + i;
+        WorldSaveEntry *e = &g_world_saves[save_index];
         int row_y = top + 4 + i * 36;
         int row_h = 32;
         if (row_y > bottom || row_y + row_h < top) continue;
-        if (i == g_selected_world_slot) {
+        if (save_index == g_selected_world_index) {
             draw_rect(left, row_y - 2, right, row_y + row_h + 2, 8421504);
             draw_rect(left + 1, row_y - 1, right - 1, row_y + row_h + 1, 0);
         }
 
-        char dir[MAX_PATHBUF], level_path[MAX_PATHBUF];
-        snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, i + 1);
-        snprintf(level_path, sizeof(level_path), "%s\\level.dat", dir);
-        if (!file_exists(level_path)) {
-            char name[32];
-            snprintf(name, sizeof(name), "World %d", i + 1);
-            draw_text(name, left + 18, row_y + 7, 8421504);
-            draw_text("- empty -", left + 18, row_y + 18, 8421504);
-            continue;
-        }
-
-        char world_name[64] = "";
-        if (!read_level_string_tag_for_dir(dir, "LevelName", world_name, sizeof(world_name)) || !world_name[0]) {
-            snprintf(world_name, sizeof(world_name), "World %d", i + 1);
-        }
-        long long last_played = 0;
         char date[64];
-        read_level_long_tag_for_dir(dir, "LastPlayed", &last_played);
-        format_world_last_played(last_played, date, sizeof(date));
-        int type = read_world_type_for_dir(dir);
+        format_world_last_played(e->last_played, date, sizeof(date));
 
         char file_line[128];
-        snprintf(file_line, sizeof(file_line), "World%d (%s)", i + 1, date);
-        draw_text(world_name, left + 2, row_y + 1, 16777215);
+        snprintf(file_line, sizeof(file_line), "%s (%s)", e->dir_name, date);
+        draw_text(e->display_name[0] ? e->display_name : e->dir_name, left + 2, row_y + 1, 16777215);
         draw_text(file_line, left + 2, row_y + 12, 8421504);
-        draw_text(type ? "Survival Mode" : "Survival Mode, Flat", left + 2, row_y + 22, 8421504);
+        draw_text(e->world_type ? "Survival Mode" : "Survival Mode, Flat", left + 2, row_y + 22, 8421504);
+    }
+
+    if (g_world_save_count == 0) draw_centered_text("No worlds found", g_gui_w / 2, top + 24, 8421504);
+
+    int max_scroll = g_world_save_count - world_save_visible_rows();
+    if (max_scroll > 0) {
+        int content_h = g_world_save_count * 36;
+        int bar_x0 = g_gui_w / 2 + 124;
+        int bar_x1 = bar_x0 + 6;
+        int thumb_h = (bottom - top) * (bottom - top) / content_h;
+        if (thumb_h < 32) thumb_h = 32;
+        if (thumb_h > bottom - top - 8) thumb_h = bottom - top - 8;
+        int thumb_y = top + g_world_save_scroll * (bottom - top - thumb_h) / max_scroll;
+        if (thumb_y < top) thumb_y = top;
+        draw_rect(bar_x0, top, bar_x1, bottom, 0);
+        draw_rect(bar_x0, thumb_y, bar_x1, thumb_y + thumb_h, 8421504);
+        draw_rect(bar_x0, thumb_y, bar_x1 - 1, thumb_y + thumb_h - 1, 12632256);
     }
 
     draw_tiled_rect_tint(0, 0, g_gui_w, top, 0x404040, 0);
@@ -587,7 +591,7 @@ static void draw_world_screen(void) {
 static void draw_confirm_delete(void) {
     draw_default_bg();
     char world_line[64];
-    snprintf(world_line, sizeof(world_line), "'World%d' will be lost forever!", g_confirm_world);
+    snprintf(world_line, sizeof(world_line), "'%s' will be lost forever!", g_pending_world_name[0] ? g_pending_world_name : "World");
     draw_centered_text("Are you sure you want to delete this world?", g_gui_w / 2, 70, 16777215);
     draw_centered_text(world_line, g_gui_w / 2, 90, 16777215);
     draw_all_buttons();
