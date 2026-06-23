@@ -991,14 +991,4 @@ static void apply_texture_pack_index(int index) {
     init_font_widths();
     log_msg("Applied texture pack: %s", g_current_texpack);
 }
-ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
-    ok = try_release_texture(&tex_mojang, "title\\mojang.png", 0) && ok;
-    set_texture_filter_wrap(&tex_title_logo, 0, 0);
-    set_texture_filter_wrap(&tex_mojang, 1, 0);
-    for (int i = 0; i < 6; ++i) {
-        char rel[64];
-        snprintf(rel, sizeof(rel), "title\\bg\\panorama%d.png", i);
-        ok = try_release_texture(&tex_panorama[i], rel, 0) && ok;
-        set_texture_filter_wrap(&tex_panorama[i], 1, 0);
-    }
 
