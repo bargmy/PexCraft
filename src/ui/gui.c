@@ -366,6 +366,11 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
     steve_part(0, 16,  2, 12, 0, -2, 0, -2, 4, 12, 4, 0.0f, 1, 0, 0, 0);
     steve_part(0, 0, 0, 0, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, head_pitch, head_yaw, 0);
     steve_part(32, 0, 0, 0, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, head_pitch, head_yaw, 0);
+    draw_armor_model_for_slots(g_armor_inventory, 0.0f, 12.0f, 0.0f,
+                               0.0f, head_pitch, head_yaw,
+                               arm_pitch, 0.0f, arm_roll,
+                               -arm_pitch, 0.0f, -arm_roll,
+                               0.0f, 0.0f);
 
     glDisable(GL_ALPHA_TEST);
     glDisable(GL_DEPTH_TEST);
@@ -408,6 +413,9 @@ static void draw_inventory_screen(void) {
     int y = (g_gui_h - 166) / 2;
     draw_textured_rect_tex(&tex_inventory, x, y, 0, 0, 176, 166, 0xFFFFFF);
     draw_inventory_steve(x, y);
+    for (int row = 0; row < 4; row++) {
+        draw_item_stack_gui(&g_armor_inventory[3 - row], x + 8, y + 8 + row * 18);
+    }
     for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
         int slot = 9 + col + row * 9;
         draw_item_stack_gui(&g_inventory[slot], x + 8 + col * 18, y + 84 + row * 18);

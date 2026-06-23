@@ -32,6 +32,118 @@ static int stack_limit_for_id(int id) {
 
 static ItemStack make_stack(int id, int count, int damage) { ItemStack s; s.id = id; s.count = count; s.damage = damage; s.pop_time = 0; return s; }
 
+static int armor_stack_type(int id) {
+    if (id == ITEM_HELMET_LEATHER || id == ITEM_HELMET_CHAIN || id == ITEM_HELMET_IRON || id == ITEM_HELMET_DIAMOND || id == ITEM_HELMET_GOLD) return 0;
+    if (id == ITEM_PLATE_LEATHER || id == ITEM_PLATE_CHAIN || id == ITEM_PLATE_IRON || id == ITEM_PLATE_DIAMOND || id == ITEM_PLATE_GOLD) return 1;
+    if (id == ITEM_LEGS_LEATHER || id == ITEM_LEGS_CHAIN || id == ITEM_LEGS_IRON || id == ITEM_LEGS_DIAMOND || id == ITEM_LEGS_GOLD) return 2;
+    if (id == ITEM_BOOTS_LEATHER || id == ITEM_BOOTS_CHAIN || id == ITEM_BOOTS_IRON || id == ITEM_BOOTS_DIAMOND || id == ITEM_BOOTS_GOLD) return 3;
+    return -1;
+}
+
+static int armor_slot_index_for_type(int armor_type) {
+    /* Matches Java InventoryPlayer: armorInventory[0]=boots, [1]=legs, [2]=chest, [3]=helmet. */
+    if (armor_type < 0 || armor_type > 3) return -1;
+    return 3 - armor_type;
+}
+
+static int armor_stack_material_index(int id) {
+    if (id == ITEM_HELMET_LEATHER || id == ITEM_PLATE_LEATHER || id == ITEM_LEGS_LEATHER || id == ITEM_BOOTS_LEATHER) return 0;
+    if (id == ITEM_HELMET_CHAIN || id == ITEM_PLATE_CHAIN || id == ITEM_LEGS_CHAIN || id == ITEM_BOOTS_CHAIN) return 1;
+    if (id == ITEM_HELMET_IRON || id == ITEM_PLATE_IRON || id == ITEM_LEGS_IRON || id == ITEM_BOOTS_IRON) return 2;
+    if (id == ITEM_HELMET_DIAMOND || id == ITEM_PLATE_DIAMOND || id == ITEM_LEGS_DIAMOND || id == ITEM_BOOTS_DIAMOND) return 3;
+    if (id == ITEM_HELMET_GOLD || id == ITEM_PLATE_GOLD || id == ITEM_LEGS_GOLD || id == ITEM_BOOTS_GOLD) return 4;
+    return -1;
+}
+
+static int armor_stack_level(int id) {
+    int mat = armor_stack_material_index(id);
+    if (mat == 0) return 0;       /* leather */
+    if (mat == 1 || mat == 4) return 1; /* chain/gold */
+    if (mat == 2) return 2;       /* iron */
+    if (mat == 3) return 3;       /* diamond */
+    return 0;
+}
+
+static int armor_stack_max_damage(int id) {
+    static const int base_by_type[4] = {11, 16, 15, 13};
+    int type = armor_stack_type(id);
+    if (type < 0) return 0;
+    return (base_by_type[type] * 3) << armor_stack_level(id);
+}
+
+static int armor_stack_damage_reduce_amount(int id) {
+    static const int reduce_by_type[4] = {3, 8, 6, 3};
+    int type = armor_stack_type(id);
+    return (type >= 0) ? reduce_by_type[type] : 0;
+}
+
+static int armor_slot_is_armor(int slot) { return slot >= 110 && slot < 114; }
+
+static int armor_inventory_index_for_slot(int slot) {
+    if (!armor_slot_is_armor(slot)) return -1;
+    return 3 - (slot - 110);
+}
+
+static int armor_slot_type_for_slot(int slot) {
+    if (!armor_slot_is_armor(slot)) return -1;
+    return slot - 110;
+}
+
+static int armor_stack_valid_for_slot(const ItemStack *st, int slot) {
+    int required_type = armor_slot_type_for_slot(slot);
+    int type = st ? armor_stack_type(st->id) : -1;
+    return required_type >= 0 && type == required_type && st->count == 1;
+}
+
+static int armor_total_value(void) {
+    int total_reduce = 0;
+    int total_remaining = 0;
+    int total_max = 0;
+    for (int i = 0; i < 4; i++) {
+        ItemStack *s = &g_armor_inventory[i];
+        if (stack_empty(s) || armor_stack_type(s->id) < 0) continue;
+        int max_damage = armor_stack_max_damage(s->id);
+        int remaining = max_damage - s->damage;
+        if (remaining < 0) remaining = 0;
+        total_reduce += armor_stack_damage_reduce_amount(s->id);
+        total_remaining += remaining;
+        total_max += max_damage;
+    }
+    if (total_max == 0) return 0;
+    return (total_reduce - 1) * total_remaining / total_max + 1;
+}
+
+static void armor_sync_player_armor(void) {
+    g_player_armor = armor_total_value();
+    if (g_player_armor < 0) g_player_armor = 0;
+    if (g_player_armor > 20) g_player_armor = 20;
+}
+
+static void armor_damage_equipped(int amount) {
+    if (amount <= 0) return;
+    for (int i = 0; i < 4; i++) {
+        ItemStack *s = &g_armor_inventory[i];
+        if (stack_empty(s) || armor_stack_type(s->id) < 0) continue;
+        int max_damage = armor_stack_max_damage(s->id);
+        s->damage += amount;
+        if (s->damage > max_damage) {
+            stack_clear(s);
+        }
+    }
+    armor_sync_player_armor();
+}
+
+static int armor_apply_damage_reduction(int incoming) {
+    if (incoming <= 0) return 0;
+    int armor = armor_total_value();
+    int scaled = incoming * (25 - armor) + g_player_damage_remainder;
+    armor_damage_equipped(incoming);
+    int out = scaled / 25;
+    g_player_damage_remainder = scaled % 25;
+    if (out < 0) out = 0;
+    return out;
+}
+
 static int flat_index(int coord) { return coord - g_flat_world_origin_x; }
 static int flat_z_index(int coord) { return coord - g_flat_world_origin_z; }
 static int floor_div16(int v);
@@ -2736,6 +2848,9 @@ static void dropped_item_move_entity(FlatDroppedItem *e, float dx, float dy, flo
 
 static void inventory_reset(void) {
     memset(g_inventory, 0, sizeof(g_inventory));
+    memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
+    armor_sync_player_armor();
+    g_player_damage_remainder = 0;
     memset(g_craft_grid, 0, sizeof(g_craft_grid));
     memset(g_workbench_grid, 0, sizeof(g_workbench_grid));
     memset(g_chest_slots, 0, sizeof(g_chest_slots));
@@ -3547,6 +3662,7 @@ static int inventory_take_crafting_output(void) {
 
 static ItemStack *inventory_slot_ptr(int slot) {
     if (slot >= 0 && slot < 36) return &g_inventory[slot];
+    if (armor_slot_is_armor(slot)) return &g_armor_inventory[armor_inventory_index_for_slot(slot)];
     if (slot >= 100 && slot < 104) return &g_craft_grid[slot - 100];
     if (slot >= 300 && slot < 309) return &g_workbench_grid[slot - 300];
     if (slot >= 200 && slot < 254) return chest_get_open_slot_ptr(slot - 200);
@@ -3558,6 +3674,12 @@ static int inventory_slot_allows_place(int slot) {
     /* Java furnace output slot is take-only; players cannot place or swap
        arbitrary items into the smelt result slot. */
     return slot != 402;
+}
+
+static int inventory_slot_accepts_stack(int slot, const ItemStack *st) {
+    if (!inventory_slot_allows_place(slot)) return 0;
+    if (armor_slot_is_armor(slot)) return armor_stack_valid_for_slot(st, slot);
+    return 1;
 }
 
 static int inventory_slot_at(int mx, int my) {
@@ -3615,6 +3737,12 @@ static int inventory_slot_at(int mx, int my) {
         return -1;
     }
 
+    for (int row = 0; row < 4; row++) {
+        int sx = 8;
+        int sy = 8 + row * 18;
+        if (rx >= sx - 1 && rx < sx + 17 && ry >= sy - 1 && ry < sy + 17) return 110 + row;
+    }
+
     /* 2x2 crafting grid, matching gui_inventory.mcrw layout. */
     for (int row = 0; row < 2; row++) {
         for (int col = 0; col < 2; col++) {
@@ -3649,6 +3777,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
     int inv_y = (g_gui_h - container_h) / 2;
     int outside = (mx < inv_x || my < inv_y || mx >= inv_x + 176 || my >= inv_y + container_h);
     int slot = inventory_slot_at(mx, my);
+    int armor_slot_touched = armor_slot_is_armor(slot);
     if (outside && !stack_empty(&g_carried_stack)) {
         if (button == 0) { spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, g_carried_stack, 0); stack_clear(&g_carried_stack); }
         else { ItemStack one = make_stack(g_carried_stack.id, 1, g_carried_stack.damage); spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, one, 0); if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack); }
@@ -3668,7 +3797,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
         if (stack_empty(&g_carried_stack)) {
             if (!stack_empty(s)) { g_carried_stack = *s; stack_clear(s); }
         } else if (stack_empty(s)) {
-            if (!inventory_slot_allows_place(slot)) return;
+            if (!inventory_slot_accepts_stack(slot, &g_carried_stack)) return;
             *s = g_carried_stack; stack_clear(&g_carried_stack);
         } else if (stack_same_item(s, &g_carried_stack) && s->count < stack_limit_for_id(s->id)) {
             if (!inventory_slot_allows_place(slot)) {
@@ -3687,7 +3816,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
                 if (g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
             }
         } else {
-            if (!inventory_slot_allows_place(slot)) return;
+            if (!inventory_slot_accepts_stack(slot, &g_carried_stack)) return;
             ItemStack tmp = *s; *s = g_carried_stack; g_carried_stack = tmp;
         }
     } else {
@@ -3699,7 +3828,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
                 if (s->count <= 0) stack_clear(s);
             }
         } else if (stack_empty(s)) {
-            if (!inventory_slot_allows_place(slot)) return;
+            if (!inventory_slot_accepts_stack(slot, &g_carried_stack)) return;
             *s = make_stack(g_carried_stack.id, 1, g_carried_stack.damage);
             if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
         } else if (stack_same_item(s, &g_carried_stack) && s->count < stack_limit_for_id(s->id)) {
@@ -3715,6 +3844,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
             }
         }
     }
+    if (armor_slot_touched) armor_sync_player_armor();
     if (sync_chest_after) pex_net_send_chest_update();
     g_save_dirty = 1;
 }
@@ -4864,6 +4994,15 @@ static void inventory_drop_all_items_on_death(void) {
             stack_clear(&g_inventory[i]);
         }
     }
+    for (int i = 0; i < 4; i++) {
+        if (!stack_empty(&g_armor_inventory[i])) {
+            if (g_mp_connected) pex_net_send_drop_item(g_armor_inventory[i]);
+            else spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, g_armor_inventory[i], 1);
+            stack_clear(&g_armor_inventory[i]);
+        }
+    }
+    armor_sync_player_armor();
+    g_player_damage_remainder = 0;
     if (!stack_empty(&g_carried_stack)) {
         if (g_mp_connected) pex_net_send_drop_item(g_carried_stack);
         else spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, g_carried_stack, 1);

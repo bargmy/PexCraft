@@ -636,6 +636,7 @@ static int g_selected_hotbar_slot = 0;
 static int g_player_health = 20;
 static int g_player_prev_health = 20;
 static int g_player_armor = 0;
+static int g_player_damage_remainder = 0;
 static int g_ingame_ticks = 0;
 static int g_hearts_life = 0;
 
@@ -935,6 +936,11 @@ typedef struct ItemStack {
     int pop_time;
 } ItemStack;
 
+static void armor_sync_player_armor(void);
+static int armor_stack_type(int id);
+static int armor_stack_material_index(int id);
+static int armor_apply_damage_reduction(int incoming);
+
 typedef struct FlatDroppedItem {
     int active;
     int net_id;
@@ -1117,6 +1123,7 @@ static int g_psp_spawn_surface_ground_y = 0;
 static int g_save_dirty = 0;
 static int g_last_autosave_tick = 0;
 static int g_save_message_ticks = 0;
+static ItemStack g_armor_inventory[4]; /* 0 boots, 1 leggings, 2 chestplate, 3 helmet */
 static ItemStack g_inventory[36];
 static ItemStack g_craft_grid[4];
 static ItemStack g_workbench_grid[9];
@@ -1169,6 +1176,8 @@ typedef struct PexSaveSnapshot {
     float player_fall_distance;
     int player_dead;
     ItemStack inventory[36];
+    ItemStack armor_inventory[4];
+
     ChestTile chest_tiles[MAX_CHEST_TILES];
     FurnaceTile furnace_tiles[MAX_FURNACE_TILES];
     FlatDroppedItem drops[MAX_DROP_ENTITIES];
@@ -1397,6 +1406,7 @@ static double g_last_time = 0.0;
 
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
 static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
+static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;

@@ -355,6 +355,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     ss->player_fall_distance = g_player_fall_distance;
     ss->player_dead = g_player_dead;
     memcpy(ss->inventory, g_inventory, sizeof(g_inventory));
+    memcpy(ss->armor_inventory, g_armor_inventory, sizeof(g_armor_inventory));
     memcpy(ss->chest_tiles, g_chest_tiles, sizeof(g_chest_tiles));
     memcpy(ss->furnace_tiles, g_furnace_tiles, sizeof(g_furnace_tiles));
     memcpy(ss->drops, g_drops, sizeof(g_drops));
@@ -469,7 +470,7 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 16;
+    int version = 17;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -498,6 +499,11 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
         fwrite(&ss->inventory[i].id, sizeof(int), 1, f);
         fwrite(&ss->inventory[i].count, sizeof(int), 1, f);
         fwrite(&ss->inventory[i].damage, sizeof(int), 1, f);
+    }
+    for (int i = 0; i < 4; i++) {
+        fwrite(&ss->armor_inventory[i].id, sizeof(int), 1, f);
+        fwrite(&ss->armor_inventory[i].count, sizeof(int), 1, f);
+        fwrite(&ss->armor_inventory[i].damage, sizeof(int), 1, f);
     }
 
     ItemStack empty_legacy_chest[27];
@@ -678,7 +684,7 @@ static void save_current_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 16;
+    int version = 17;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -707,6 +713,11 @@ static void save_current_world_state_sync(void) {
         fwrite(&g_inventory[i].id, sizeof(int), 1, f);
         fwrite(&g_inventory[i].count, sizeof(int), 1, f);
         fwrite(&g_inventory[i].damage, sizeof(int), 1, f);
+    }
+    for (int i = 0; i < 4; i++) {
+        fwrite(&g_armor_inventory[i].id, sizeof(int), 1, f);
+        fwrite(&g_armor_inventory[i].count, sizeof(int), 1, f);
+        fwrite(&g_armor_inventory[i].damage, sizeof(int), 1, f);
     }
     /* Legacy shared chest payload retained as zeroed padding for v9-v13 save
        migration. v14+ uses coordinate-bound ChestTile records below. */
@@ -847,7 +858,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -914,6 +925,22 @@ static int load_current_world_state(void) {
         g_inventory[i].pop_time = 0;
         if (g_inventory[i].count <= 0) memset(&g_inventory[i], 0, sizeof(g_inventory[i]));
     }
+    memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
+    if (version >= 17) {
+        for (int i = 0; i < 4; i++) {
+            if (fread(&g_armor_inventory[i].id, sizeof(int), 1, f) != 1 ||
+                fread(&g_armor_inventory[i].count, sizeof(int), 1, f) != 1 ||
+                fread(&g_armor_inventory[i].damage, sizeof(int), 1, f) != 1) {
+                fclose(f);
+                return 0;
+            }
+            g_armor_inventory[i].pop_time = 0;
+            if (g_armor_inventory[i].count <= 0 || armor_stack_type(g_armor_inventory[i].id) < 0) memset(&g_armor_inventory[i], 0, sizeof(g_armor_inventory[i]));
+        }
+    }
+    armor_sync_player_armor();
+    g_player_damage_remainder = 0;
+
     memset(g_chest_slots, 0, sizeof(g_chest_slots));
     if (version >= 9) {
         for (int i = 0; i < 27; i++) {
@@ -1070,7 +1097,7 @@ static int load_current_world_state(void) {
     g_flat_section_geometry_dirty = 0;
     reset_player_damage_visual_state();
     pex_logf("world state loaded dir=%s version=%d health=%d dead=%d origin=%d,%d", g_loaded_world_dir, version, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
-    g_save_dirty = (version < 16) ? 1 : 0;
+    g_save_dirty = (version < 17) ? 1 : 0;
     return 1;
 }
 
@@ -1134,7 +1161,9 @@ static void enter_world_from_job(void) {
         g_player_health = 20;
         g_player_prev_health = 20;
         reset_player_damage_visual_state();
+        memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
         g_player_armor = 0;
+        g_player_damage_remainder = 0;
         g_ingame_ticks = 0;
         flat_world_center_origin_near(g_player_x, g_player_z);
         flat_world_generate_blocks_for_current_origin();
@@ -1286,7 +1315,9 @@ static void worldgen_tick(void) {
             g_player_health = 20;
             g_player_prev_health = 20;
             reset_player_damage_visual_state();
+            memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
             g_player_armor = 0;
+            g_player_damage_remainder = 0;
             g_player_dead = 0;
             g_player_fall_distance = 0.0f;
             g_ingame_ticks = 0;

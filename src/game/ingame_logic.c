@@ -54,6 +54,15 @@ static void player_die(const char *reason) {
 
 static void player_take_damage(int amount, const char *reason) {
     if (amount <= 0 || g_player_dead) return;
+    int raw_amount = amount;
+    if (!g_mp_connected) amount = armor_apply_damage_reduction(amount);
+    if (amount <= 0 && raw_amount > 0) {
+        g_hearts_life = g_ingame_ticks + 20;
+        g_player_hurt_time = g_player_max_hurt_time;
+        pex_sound_play("random.hurt", 1.0f, 1.0f);
+        g_save_dirty = 1;
+        return;
+    }
     g_player_prev_health = g_player_health;
     g_hearts_life = g_ingame_ticks + 20;
     g_player_hurt_time = g_player_max_hurt_time;
@@ -94,7 +103,9 @@ static void player_respawn(void) {
     g_player_death_time = 0;
     g_player_health = 20;
     g_player_prev_health = 20;
+    memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
     g_player_armor = 0;
+    g_player_damage_remainder = 0;
     g_hearts_life = 0;
     g_player_hurt_time = 0;
     g_player_attacked_at_yaw = 0.0f;

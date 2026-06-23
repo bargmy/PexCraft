@@ -1640,7 +1640,9 @@ static void pex_net_handle_packet(uint16_t type, const void *payload, uint32_t s
         g_player_y = g_player_prev_y = w->spawn_y;
         g_player_z = g_player_prev_z = w->spawn_z;
         g_player_health = g_player_prev_health = 20;
+        memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
         g_player_armor = 0;
+        g_player_damage_remainder = 0;
         g_player_dead = 0;
         g_player_death_time = 0;
         g_player_hurt_time = 0;

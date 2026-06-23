@@ -4886,6 +4886,50 @@ static void rebuild_flat_world_geometry_list(void) {
 }
 
 
+
+static void draw_armor_model_for_slots(const ItemStack armor_slots[4],
+                                       float head_pivot_y, float leg_pivot_y, float leg_pivot_z,
+                                       float body_pitch, float head_pitch, float head_yaw,
+                                       float right_arm_pitch, float right_arm_yaw, float right_arm_roll,
+                                       float left_arm_pitch, float left_arm_yaw, float left_arm_roll,
+                                       float right_leg_pitch, float left_leg_pitch) {
+    if (!armor_slots) return;
+
+    for (int pass = 0; pass < 4; pass++) {
+        int armor_index = 3 - pass;
+        const ItemStack *st = &armor_slots[armor_index];
+        if (stack_empty(st) || armor_stack_type(st->id) < 0) continue;
+        int mat = armor_stack_material_index(st->id);
+        int layer = (pass == 2) ? 1 : 0;
+        if (mat < 0 || mat >= 5 || !tex_armor[mat][layer].id) continue;
+
+        glBindTexture(GL_TEXTURE_2D, tex_armor[mat][layer].id);
+        steve_set_texture_dims(&tex_armor[mat][layer]);
+        steve_set_tint(1.0f, 1.0f, 1.0f);
+        glColor4f(1, 1, 1, 1);
+
+        if (pass == 0) {
+            /* Helmet pass: ModelBiped(1.0F) head plus helmet/hat cube. */
+            steve_part(0, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 1.0f, 0, head_pitch, head_yaw, 0);
+            steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 1.5f, 0, head_pitch, head_yaw, 0);
+        } else if (pass == 1) {
+            /* Chestplate pass: torso and both arms from armor layer 1. */
+            steve_part(16, 16, 0, 0, 0, -4, 0, -2, 8, 12, 4, 1.0f, 0, body_pitch, 0, 0);
+            steve_part(40, 16, -5, 2, 0, -3, -2, -2, 4, 12, 4, 1.0f, 0, right_arm_pitch, right_arm_yaw, right_arm_roll);
+            steve_part(40, 16,  5, 2, 0, -1, -2, -2, 4, 12, 4, 1.0f, 1, left_arm_pitch, left_arm_yaw, left_arm_roll);
+        } else if (pass == 2) {
+            /* Leggings pass: Beta uses armor layer 2 with the slimmer 0.5F model and includes the waist. */
+            steve_part(16, 16, 0, 0, 0, -4, 0, -2, 8, 12, 4, 0.5f, 0, body_pitch, 0, 0);
+            steve_part(0, 16, -2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.5f, 0, right_leg_pitch, 0, 0);
+            steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.5f, 1, left_leg_pitch, 0, 0);
+        } else {
+            /* Boots pass: both legs from armor layer 1. */
+            steve_part(0, 16, -2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 1.0f, 0, right_leg_pitch, 0, 0);
+            steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 1.0f, 1, left_leg_pitch, 0, 0);
+        }
+    }
+}
+
 static void draw_third_person_player(void) {
     if (!g_third_person_view || !tex_steve.id) return;
 
@@ -4981,6 +5025,11 @@ static void draw_third_person_player(void) {
     steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.0f, 1, left_leg_pitch, 0, 0);
     steve_part(0, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, pitch, 0, 0);
     steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
+    draw_armor_model_for_slots(g_armor_inventory, head_pivot_y, leg_pivot_y, leg_pivot_z,
+                               body_pitch, pitch, 0.0f,
+                               right_arm_pitch, right_arm_yaw, right_arm_roll,
+                               left_arm_pitch, left_arm_yaw, left_arm_roll,
+                               right_leg_pitch, left_leg_pitch);
 
     glDisable(GL_ALPHA_TEST);
     steve_set_tint(1.0f, 1.0f, 1.0f);
