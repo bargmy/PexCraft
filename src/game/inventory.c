@@ -430,7 +430,10 @@ static int flat_has_leaf_canopy_above(int x, int y, int z) {
             id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_WOOD_DOOR ||
             id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL) continue;
         if (id == BLOCK_LEAVES) { saw_leaf = 1; continue; }
-        break;
+        /* A real solid block above the leaves means this is an overhang/cave,
+           not just tree canopy.  Do not let the leaf fallback brighten caves or
+           create odd mixed shadow columns under terrain. */
+        return 0;
     }
     return saw_leaf;
 }
@@ -465,16 +468,48 @@ static int flat_cell_has_clear_vertical_sky(int x, int y, int z) {
     return 1;
 }
 
+static int flat_neighbor_smoothed_combined_light(int x, int y, int z) {
+    int best = flat_combined_light_value(x, y, z);
+    const int dx[6] = { 1, -1, 0, 0, 0, 0 };
+    const int dy[6] = { 0, 0, 1, -1, 0, 0 };
+    const int dz[6] = { 0, 0, 0, 0, 1, -1 };
+    for (int i = 0; i < 6; ++i) {
+        int v = flat_combined_light_value(x + dx[i], y + dy[i], z + dz[i]) - 1;
+        if (v > best) best = v;
+    }
+    return best;
+}
+
+static int flat_leaf_canopy_smoothed_light(int x, int y, int z, int base) {
+    int best = base;
+    /* Beta skylight bleeds sideways under leaves.  Per-column leaf opacity makes
+       checkerboard/dark-square tree shadows, especially while neighboring chunks
+       stream in.  Take a tiny Manhattan neighborhood max so tree shade is a soft
+       canopy dimming instead of random black patches. */
+    for (int dz = -3; dz <= 3; ++dz) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            int dist = abs(dx) + abs(dz);
+            if (dist > 3) continue;
+            int v0 = flat_combined_light_value(x + dx, y, z + dz) - dist;
+            int v1 = flat_combined_light_value(x + dx, y + 1, z + dz) - dist - 1;
+            if (v0 > best) best = v0;
+            if (v1 > best) best = v1;
+        }
+    }
+    if (best < 11) best = 11;
+    if (best > 13) best = 13;
+    return best;
+}
+
 static float flat_light_brightness(int x, int y, int z) {
-    int l = flat_combined_light_value(x, y, z);
-    /* The fast column skylight pass intentionally avoids a full flood fill while
-       streaming.  Open cliff/valley side cells can therefore read sky=0 even
-       though Java's skylight would have spilled in from the side.  Raise only
-       exposed air/translucent sample cells that have nearby skylight, avoiding
-       the pure-black mountain rectangles without brightening sealed caves. */
+    int l = flat_neighbor_smoothed_combined_light(x, y, z);
+    /* The fast column skylight pass intentionally avoids a full Java metadata
+       queue while streaming.  These read-time clamps only affect exposed air
+       sample cells, so sealed caves stay dark while cliffs and tree canopies do
+       not get one-cell black glitches. */
     if (l < 12 && y >= 50 && flat_cell_has_clear_vertical_sky(x, y, z)) l = 15;
-    if (l < 8 && flat_air_cell_has_lateral_sky(x, y, z)) l = 8;
-    if (l < 8 && flat_has_leaf_canopy_above(x, y, z)) l = 8;
+    if (flat_has_leaf_canopy_above(x, y, z)) l = flat_leaf_canopy_smoothed_light(x, y, z, l);
+    else if (l < 8 && flat_air_cell_has_lateral_sky(x, y, z)) l = 8;
     if (l < 0) l = 0;
     if (l > 15) l = 15;
     return g_java_light_brightness_table[l];
@@ -756,7 +791,7 @@ static void flat_apply_chunk_environment_light_local(int lcx, int lcz) {
     int wcx = floor_div16(g_flat_world_origin_x) + lcx;
     int wcz = floor_div16(g_flat_world_origin_z) + lcz;
     pex_logf_trace("lighting immediate environment pass local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
-    flat_recalculate_lighting_region_ex(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15, 8, 1);
+    flat_recalculate_lighting_region_ex(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15, 16, 1);
 }
 
 static int flat_chunk_sky_light_needs_rebuild_local(int lcx, int lcz) {

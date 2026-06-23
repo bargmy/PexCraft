@@ -496,9 +496,11 @@ typedef struct FlatFallingBlock {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_PASSIVE_MOBS 8
 #else
-/* Keep the b1.0 passive cap small.  The original port draws mobs with
-   immediate-mode cube parts, so 40 animals can murder the frame rate. */
-#define MAX_PASSIVE_MOBS 8
+/* Beta 1.0 passive animals cap at about 20 around a single player
+   (EnumCreatureType.creature=20 over the 17x17 eligible chunk set).  The
+   renderer culls by distance/FOV, so keep the simulation cap Beta-like while
+   still limiting how many models are drawn in one frame. */
+#define MAX_PASSIVE_MOBS 24
 #endif
 
 typedef enum PassiveMobType {

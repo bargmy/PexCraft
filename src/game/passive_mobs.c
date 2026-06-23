@@ -12,10 +12,13 @@
 #define PEX_PASSIVE_RENDER_LIMIT 6
 #define PEX_PASSIVE_RENDER_DIST 40.0f
 #else
-#define PEX_PASSIVE_TARGET_CAP 6
-#define PEX_PASSIVE_INITIAL_TARGET 4
-#define PEX_PASSIVE_RENDER_LIMIT 4
-#define PEX_PASSIVE_RENDER_DIST 36.0f
+/* Match Beta b1.0 much closer: creature cap is 20 for the 17x17 eligible
+   chunk area around one player.  Rendering is separately culled so this does
+   not force every animal model to draw every frame. */
+#define PEX_PASSIVE_TARGET_CAP 20
+#define PEX_PASSIVE_INITIAL_TARGET 12
+#define PEX_PASSIVE_RENDER_LIMIT 16
+#define PEX_PASSIVE_RENDER_DIST 72.0f
 #endif
 
 #define PEX_PASSIVE_RENDER_WORKER 0
@@ -194,7 +197,9 @@ static int passive_mob_ground_target_ok(int x, int y, int z) {
     if (passive_block_is_liquid(below)) return 0;
     if (below != BLOCK_GRASS && !flat_block_is_solid_for_collision(below)) return 0;
     if (flat_get_block(x, y, z) != 0 || flat_get_block(x, y + 1, z) != 0) return 0;
-    if (passive_mob_spawn_near_liquid(x, y, z)) return 0;
+    /* Vanilla b1.0 does not reject grass near water.  The old extra shore/water
+       guard made beach/forest worlds feel empty because most valid grass around
+       lakes and coasts was thrown away before the actual spawn rules ran. */
     return 1;
 }
 
@@ -296,12 +301,12 @@ static void passive_mobs_try_natural_spawn(void) {
     /* Vanilla b1.0 does not keep shoving passive groups into the active area
        every few frames.  The previous 5-tick retry loop was the source of the
        huge animal piles and CPU spike. */
-    if ((g_ingame_ticks % 80) != 0) return;
+    if ((g_ingame_ticks % 20) != 0) return;
 
     int pcx = floor_div16((int)floorf(g_player_x));
     int pcz = floor_div16((int)floorf(g_player_z));
     int count_now = passive_mob_count();
-    int batches = count_now < 4 ? 3 : (count_now < 8 ? 2 : 1);
+    int batches = count_now < 8 ? 6 : (count_now < 16 ? 4 : 2);
     for (int batch = 0; batch < batches && passive_mob_count() < cap; ++batch) {
         /* Sample a few nearby chunks instead of scanning the whole active world. */
         if (passive_mob_count() >= cap - 2 && (rand() % 3) != 0) continue;
@@ -313,7 +318,7 @@ static void passive_mobs_try_natural_spawn(void) {
         int type = r == 0 ? PASSIVE_MOB_SHEEP : r == 1 ? PASSIVE_MOB_PIG : r == 2 ? PASSIVE_MOB_CHICKEN : PASSIVE_MOB_COW;
 
         int spawned = 0;
-        for (int tries = 0; tries < 10 && spawned < 2 && passive_mob_count() < cap; ++tries) {
+        for (int tries = 0; tries < 16 && spawned < 4 && passive_mob_count() < cap; ++tries) {
             int x = base_x + (rand() % 6) - (rand() % 6);
             int z = base_z + (rand() % 6) - (rand() % 6);
             int y = passive_mob_column_spawn_y(x, z);
@@ -738,6 +743,9 @@ static int passive_mob_tick_stride(const PassiveMob *m) {
 static void update_passive_mobs(void) {
     if (g_mp_connected) return;
     passive_mobs_enforce_cap();
+    if ((g_ingame_ticks % 40) == 5 && passive_mob_count() < PEX_PASSIVE_INITIAL_TARGET) {
+        passive_mobs_ensure_minimum_population(PEX_PASSIVE_INITIAL_TARGET, 500);
+    }
     passive_mobs_try_natural_spawn();
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         PassiveMob *m = &g_passive_mobs[i];
