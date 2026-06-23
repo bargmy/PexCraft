@@ -939,11 +939,6 @@ static void world_set_shade(float shade) {
        table bottoms out above black and the next light rebuild will refine it. */
     if (!g_force_fullbright_item_model) {
         if (light < 0.05f) light = 0.05f;
-        /* The fast streaming light pass can still leave daylight terrain faces at
-           Java brightness index 0 for one or more frames.  Do not render outdoor
-           terrain as pitch-black rectangles; sealed caves below sea level can
-           still be dark. */
-        if (g_world_light_y >= 50 && light < 0.30f) light = 0.30f;
     }
     shade *= light;
     flat_direct_set_color4f(shade, shade, shade, 1.0f);
@@ -953,11 +948,6 @@ static void world_set_color_shade(int rgb, float shade) {
     float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
     if (!g_force_fullbright_item_model) {
         if (light < 0.05f) light = 0.05f;
-        /* The fast streaming light pass can still leave daylight terrain faces at
-           Java brightness index 0 for one or more frames.  Do not render outdoor
-           terrain as pitch-black rectangles; sealed caves below sea level can
-           still be dark. */
-        if (g_world_light_y >= 50 && light < 0.30f) light = 0.30f;
     }
     shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;

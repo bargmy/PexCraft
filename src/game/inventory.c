@@ -151,6 +151,8 @@ static void mark_flat_render_chunks_dirty_around(int x, int z);
 static void mark_flat_render_sections_dirty_around_block(int x, int y, int z);
 static void flat_mark_section_after_generation(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy);
+static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz);
+static void flat_apply_chunk_environment_light_local(int lcx, int lcz);
 static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
@@ -391,6 +393,17 @@ static int flat_block_light_value_for_id(int id) {
     }
 }
 
+static int flat_sky_light_after_block(int incoming, int id) {
+    if (incoming <= 0) return 0;
+    if (incoming > 15) incoming = 15;
+    int opacity = flat_light_opacity_for_id(id);
+    if (opacity <= 0) return incoming;
+    if (opacity >= 255) return 0;
+    incoming -= opacity;
+    if (incoming < 0) incoming = 0;
+    return incoming;
+}
+
 static const float g_java_light_brightness_table[16] = {
     0.050000f, 0.066667f, 0.085714f, 0.107692f,
     0.133333f, 0.163636f, 0.200000f, 0.244444f,
@@ -515,14 +528,11 @@ static void flat_propagate_light_region(unsigned char *arr, int x0, int y0, int 
     }
 }
 
-static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
+static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky) {
     if (rx1 < rx0) { int t = rx0; rx0 = rx1; rx1 = t; }
     if (rz1 < rz0) { int t = rz0; rz0 = rz1; rz1 = t; }
-    /* Rebuilding light was being done for every streamed chunk.  A 16-block
-       margin plus full sky BFS made new chunks stutter and sometimes mesh before
-       stable light arrived.  Surface skylight is column based here; use a small
-       neighbour margin and keep 15-block spreading only for actual light sources. */
-    const int margin = 2;
+    if (margin < 0) margin = 0;
+    if (margin > 16) margin = 16;
     int x0 = rx0 - margin, x1 = rx1 + margin;
     int z0 = rz0 - margin, z1 = rz1 + margin;
     if (x0 < g_flat_world_origin_x) x0 = g_flat_world_origin_x;
@@ -549,28 +559,28 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             int light = 15;
             for (int y = y1; y >= y0; --y) {
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
-                sky[idx] = (unsigned char)light;
                 int bid = flat_get_block(x, y, z);
-                int opacity = flat_light_opacity_for_id(bid);
-                if (opacity > 0 && light > 0) {
-                    if (bid == BLOCK_LEAVES) {
-                        /* Leaves are not additive black decals.  Source skylight dims
-                           under canopies, but thick generated trees should not stack
-                           to full black in this renderer. */
-                        if (light > 8) light -= 1;
-                    } else if (opacity >= 255) {
-                        light = 0;
-                    } else {
-                        light -= opacity;
-                        if (light < 0) light = 0;
-                    }
-                }
+                light = flat_sky_light_after_block(light, bid);
+                sky[idx] = (unsigned char)light;
             }
         }
     }
-    /* Java skylight travels mostly down columns.  Do not flood-fill the whole
-       region for every chunk load; exposed face rendering samples the neighbour
-       air block, so cliffs stay lit without an expensive sky BFS. */
+    if (propagate_sky) {
+        tail = 0;
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                for (int y = y0; y <= y1; ++y) {
+                    int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
+                    int v = sky[idx] & 15;
+                    if (v <= 1) continue;
+                    int bid = flat_get_block(x, y, z);
+                    if (flat_light_opacity_for_id(bid) >= 255) continue;
+                    flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
+                }
+            }
+        }
+        if (tail > 0) flat_propagate_light_region(sky, x0, y0, z0, x1, y1, z1, q, 0, tail);
+    }
 
     tail = 0;
     for (int z = z0; z <= z1; ++z) {
@@ -608,8 +618,14 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
             }
         }
     }
-    pex_logf("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1);
+    pex_logf("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky);
     free(sky); free(block); free(q);
+}
+
+static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
+    /* Normal block edits keep the small fast path.  Streamed/generated chunks run
+       the environment-light pass immediately after their block data is installed. */
+    flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 2, 0);
 }
 
 #ifndef FLAT_CHUNK_BLOCK_COUNT
@@ -633,19 +649,9 @@ static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int yi = flat_y_index(y);
                 int id = g_flat_blocks[yi][fz][fx];
+                light = flat_sky_light_after_block(light, id);
                 g_flat_sky_light[yi][fz][fx] = (unsigned char)(light & 15);
                 g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
-                int opacity = flat_light_opacity_for_id(id);
-                if (opacity > 0 && light > 0) {
-                    if (id == BLOCK_LEAVES) {
-                        if (light > 8) light -= 1;
-                    } else if (opacity >= 255) {
-                        light = 0;
-                    } else {
-                        light -= opacity;
-                        if (light < 0) light = 0;
-                    }
-                }
             }
         }
     }
@@ -666,19 +672,9 @@ static void flat_compute_chunk_light_fast_from_buffers(const unsigned char *buf,
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int bi = flat_chunk_buf_index(lx, y, lz);
                 int id = buf[bi];
+                light = flat_sky_light_after_block(light, id);
                 sky[bi] = (unsigned char)(light & 15);
                 block[bi] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
-                int opacity = flat_light_opacity_for_id(id);
-                if (opacity > 0 && light > 0) {
-                    if (id == BLOCK_LEAVES) {
-                        if (light > 8) light -= 1;
-                    } else if (opacity >= 255) {
-                        light = 0;
-                    } else {
-                        light -= opacity;
-                        if (light < 0) light = 0;
-                    }
-                }
             }
         }
     }
@@ -732,6 +728,35 @@ static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigne
     if (flat_local_chunk_valid(lcx, lcz)) {
         for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
     }
+}
+
+static int g_flat_chunk_environment_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+
+static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    int x0 = lcx * FLAT_RENDER_CHUNK;
+    int z0 = lcz * FLAT_RENDER_CHUNK;
+    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
+        int yi = flat_y_index(y);
+        for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
+            int fz = z0 + lz;
+            for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
+                int fx = x0 + lx;
+                int id = g_flat_blocks[yi][fz][fx];
+                g_flat_sky_light[yi][fz][fx] = 15;
+                g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
+            }
+        }
+    }
+}
+
+static void flat_apply_chunk_environment_light_local(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    if (!g_flat_world_chunk_generated[lcz][lcx]) return;
+    int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+    int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+    pex_logf_trace("lighting immediate environment pass local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
+    flat_recalculate_lighting_region_ex(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15, 8, 1);
 }
 
 static int flat_chunk_sky_light_needs_rebuild_local(int lcx, int lcz) {
@@ -828,11 +853,12 @@ static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id,
 }
 
 static void flat_flush_pending_lighting(void) {
-    if (!g_flat_light_dirty) return;
-    int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
-    g_flat_light_dirty = 0;
-    pex_logf("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
-    flat_recalculate_lighting_region(x0, z0, x1, z1);
+    if (g_flat_light_dirty) {
+        int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
+        g_flat_light_dirty = 0;
+        pex_logf("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
+        flat_recalculate_lighting_region(x0, z0, x1, z1);
+    }
 }
 
 static void flat_set_level_raw(int x, int y, int z, int level) {
@@ -1441,6 +1467,12 @@ static void stream_mark_local_chunk_generated(int lcx, int lcz) {
     pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
 
+    /* New chunks install bright first, then immediately run the environment light
+       pass before section meshes are marked for rebuild.  This keeps the user's
+       requested no-stale-shadow reset semantics without the old one-second delay. */
+    flat_reset_chunk_light_no_shadows_local(lcx, lcz);
+    flat_apply_chunk_environment_light_local(lcx, lcz);
+
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
        This replaces the old 3x3x16 section scan performed for every installed
        streamed chunk.  Only the new chunk gets invalidated; existing neighbor
@@ -1655,19 +1687,9 @@ static int wii_safe_copy_chunk_to_flat_direct(int cx, int cz) {
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int yi = flat_y_index(y);
                 int id = g_flat_blocks[yi][fz][fx];
+                light = flat_sky_light_after_block(light, id);
                 g_flat_sky_light[yi][fz][fx] = (unsigned char)(light & 15);
                 g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
-                int opacity = flat_light_opacity_for_id(id);
-                if (opacity > 0 && light > 0) {
-                    if (id == BLOCK_LEAVES) {
-                        if (light > 8) light -= 1;
-                    } else if (opacity >= 255) {
-                        light = 0;
-                    } else {
-                        light -= opacity;
-                        if (light < 0) light = 0;
-                    }
-                }
             }
         }
     }
@@ -2004,8 +2026,7 @@ static void flat_world_generate_blocks_for_current_origin(void) {
         beta_preview_generate_flat_world();
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++)
             for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++) {
-                g_flat_world_chunk_generated[lcz][lcx] = 1;
-                flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+                stream_mark_local_chunk_generated(lcx, lcz);
             }
     } else {
         int min_cx = floor_div16(g_flat_world_origin_x);
@@ -2022,8 +2043,7 @@ static void flat_world_generate_blocks_for_current_origin(void) {
                     int lcx = stream_world_chunk_local_x(cx);
                     int lcz = stream_world_chunk_local_z(cz);
                     if (lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS) {
-                        g_flat_world_chunk_generated[lcz][lcx] = 1;
-                        flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+                        stream_mark_local_chunk_generated(lcx, lcz);
                     }
                 }
             }
@@ -6154,6 +6174,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     int old_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    int old_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned short old_section_masks[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     GLuint old_section_lists[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
     int old_section_dirty[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -6176,6 +6197,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memcpy(old_has_liquid, g_flat_world_chunk_has_liquid, sizeof(old_has_liquid));
     memcpy(old_generated, g_flat_world_chunk_generated, sizeof(old_generated));
     memcpy(old_modified, g_flat_world_chunk_modified, sizeof(old_modified));
+    memcpy(old_light_due, g_flat_chunk_environment_light_due, sizeof(old_light_due));
     memcpy(old_section_masks, g_flat_chunk_section_non_empty_mask, sizeof(old_section_masks));
     memcpy(old_section_lists, g_flat_section_lists, sizeof(old_section_lists));
     memcpy(old_section_dirty, g_flat_section_dirty, sizeof(old_section_dirty));
@@ -6216,6 +6238,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memset(g_flat_world_chunk_has_liquid, 0, sizeof(g_flat_world_chunk_has_liquid));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
+    memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     memset(g_flat_section_lists, 0, sizeof(g_flat_section_lists));
     memset(g_flat_section_direct_mesh, 0, sizeof(g_flat_section_direct_mesh));
@@ -6244,6 +6267,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                 g_flat_world_chunk_has_liquid[ncz][ncx] = old_has_liquid[ocz][ocx];
                 g_flat_world_chunk_generated[ncz][ncx] = old_generated[ocz][ocx];
                 g_flat_world_chunk_modified[ncz][ncx] = old_modified[ocz][ocx];
+                g_flat_chunk_environment_light_due[ncz][ncx] = old_light_due[ocz][ocx];
                 g_flat_chunk_section_non_empty_mask[ncz][ncx] = old_section_masks[ocz][ocx];
             } else {
                 if (reusable_index < reusable_count) {
@@ -6259,6 +6283,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                 g_flat_world_chunk_has_liquid[ncz][ncx] = 0;
                 g_flat_world_chunk_generated[ncz][ncx] = 0;
                 g_flat_world_chunk_modified[ncz][ncx] = 0;
+                g_flat_chunk_environment_light_due[ncz][ncx] = 0;
                 g_flat_chunk_section_non_empty_mask[ncz][ncx] = 0;
             }
         }
@@ -6322,6 +6347,7 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
         memset(g_flat_levels, 0, sizeof(g_flat_levels));
         memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
         memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+        memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
         return;
     }
 
