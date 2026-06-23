@@ -68,6 +68,7 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     color_from_int_alpha(c2, &r2,&g2,&b2,&a2, 0);
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 #ifdef GL_SMOOTH
     glShadeModel(GL_SMOOTH);
@@ -76,6 +77,11 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     glColor4f(r1,g1,b1,a1); glVertex3f((float)x2, (float)y1, 0.0f); glVertex3f((float)x1, (float)y1, 0.0f);
     glColor4f(r2,g2,b2,a2); glVertex3f((float)x1, (float)y2, 0.0f); glVertex3f((float)x2, (float)y2, 0.0f);
     glEnd();
+#ifdef GL_FLAT
+    glShadeModel(GL_FLAT);
+#endif
+    glDisable(GL_BLEND);
+    glEnable(GL_ALPHA_TEST);
     glEnable(GL_TEXTURE_2D);
     glColor4f(1,1,1,1);
 }

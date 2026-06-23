@@ -811,8 +811,8 @@ static int load_release_textures_from_pack(void) {
     for (int i = 0; i < 6; ++i) {
         char rel[64];
         snprintf(rel, sizeof(rel), "title\\bg\\panorama%d.png", i);
-        ok = try_release_texture(&tex_panorama[i], rel, 0) && ok;
-        set_texture_filter_wrap(&tex_panorama[i], 1, 0);
+        ok = try_release_texture(&tex_panorama[i], rel, 1) && ok;
+        set_texture_filter_wrap(&tex_panorama[i], 0, 1);
     }
     return ok;
 }

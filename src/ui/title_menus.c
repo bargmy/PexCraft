@@ -210,10 +210,10 @@ static void ensure_release_panorama_viewport_texture(void) {
     if (g_release_panorama_viewport_tex) return;
     glGenTextures(1, &g_release_panorama_viewport_tex);
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, PEX_GL_CLAMP_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, PEX_GL_CLAMP_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 }
 
@@ -250,10 +250,6 @@ static void draw_release_panorama_cube(float partial) {
             if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
             if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
             glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, PEX_GL_CLAMP_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, PEX_GL_CLAMP_EDGE);
             glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(pass + 1));
             glBegin(GL_QUADS);
             glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
@@ -341,29 +337,11 @@ static void draw_release_skybox(float partial) {
     float u = (float)g_gui_h * scale / 256.0f;
     float v = (float)g_gui_w * scale / 256.0f;
     glColor4f(1,1,1,1);
-    int panorama_flip_for_opengl = 0;
-#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
-    panorama_flip_for_opengl = 1;
-#elif defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    panorama_flip_for_opengl = 0;
-#else
-    panorama_flip_for_opengl = !pex_using_gpu_backend();
-#endif
     glBegin(GL_QUADS);
-    if (panorama_flip_for_opengl) {
-        /* OpenGL's glCopyTexSubImage2D keeps the copied backbuffer bottom-up;
-           the D3D compatibility layer already compensates for that internally.
-           Flip V only.  Do not flip U, or the skybox face edges become visible. */
-        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
-        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
-        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f(0.0f,          0.0f,          0.0f);
-    } else {
-        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
-        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
-        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
-    }
+    glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+    glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+    glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+    glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
     glEnd();
 }
 
@@ -404,8 +382,8 @@ static void draw_title_screen(float partial) {
     }
 
     draw_release_skybox(partial);
-    draw_gradient(0, 0, g_gui_w, g_gui_h, -2130706433, 16777215);
-    draw_gradient(0, 0, g_gui_w, g_gui_h, 0, (int)0x80000000u);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, (int)0x80FFFFFFu, 0x00FFFFFF);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, 0x00000000, (int)0x80000000u);
     draw_release_minecraft_logo();
     glPushMatrix();
     glTranslatef((float)(g_gui_w / 2 + 90), 70.0f, 0.0f);
