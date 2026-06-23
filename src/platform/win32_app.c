@@ -367,6 +367,284 @@ static void main_loop(void) {
     }
 }
 
+
+#define PEX_STARTUP_DL_TIMER 9101
+#define PEX_STARTUP_DL_DONE  (WM_APP + 125)
+#define PEX_STARTUP_DL_BUTTON_DOWNLOAD 101
+#define PEX_STARTUP_DL_BUTTON_QUIT 102
+
+typedef struct PexStartupDownloadDialog {
+    HWND hwnd;
+    HWND title;
+    HWND body;
+    HWND size_text;
+    HWND status_text;
+    HWND download_button;
+    HWND quit_button;
+    HANDLE worker;
+    volatile LONG active;
+    volatile LONG finished;
+    volatile LONG ok;
+    int result;
+} PexStartupDownloadDialog;
+
+static DWORD WINAPI pex_startup_download_worker(LPVOID arg) {
+    PexStartupDownloadDialog *ctx = (PexStartupDownloadDialog *)arg;
+    int ok;
+    pex_logf("Startup Release resource download worker started");
+    ok = release_resources_install_blocking();
+    InterlockedExchange(&ctx->ok, ok ? 1 : 0);
+    InterlockedExchange(&ctx->finished, 1);
+    InterlockedExchange(&ctx->active, 0);
+    pex_logf("Startup Release resource download worker finished ok=%d error=%s", ok, g_classic_install_error[0] ? g_classic_install_error : "none");
+    if (ctx->hwnd) PostMessageA(ctx->hwnd, PEX_STARTUP_DL_DONE, ok ? 1 : 0, 0);
+    return 0;
+}
+
+static void pex_startup_download_set_font(HWND hwnd, HFONT font) {
+    if (hwnd && font) SendMessageA(hwnd, WM_SETFONT, (WPARAM)font, TRUE);
+}
+
+static void pex_startup_download_update_ui(PexStartupDownloadDialog *ctx) {
+    char size_text[256];
+    char status[512];
+    LONG state;
+    LONG progress;
+    if (!ctx || !ctx->hwnd) return;
+
+    classic_resource_size_format(size_text, sizeof(size_text));
+    SetWindowTextA(ctx->size_text, size_text);
+
+    state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
+    progress = InterlockedCompareExchange(&g_classic_install_progress, 0, 0);
+    if (progress < 0) progress = 0;
+    if (progress > 100) progress = 100;
+
+    if (InterlockedCompareExchange(&ctx->active, 0, 0)) {
+        char current[MAX_LABEL];
+        lstrcpynA(current, g_classic_install_status[0] ? g_classic_install_status : "Downloading...", sizeof(current));
+        snprintf(status, sizeof(status), "%s", current);
+        SetWindowTextA(ctx->status_text, status);
+        SetWindowTextA(ctx->download_button, "Downloading...");
+        EnableWindow(ctx->download_button, FALSE);
+        SetWindowTextA(ctx->quit_button, classic_install_cancel_requested() ? "Cancelling..." : "Quit");
+        EnableWindow(ctx->quit_button, classic_install_cancel_requested() ? FALSE : TRUE);
+    } else if (state == CLASSIC_INSTALL_ERROR) {
+        snprintf(status, sizeof(status), "Failed: %s", g_classic_install_error[0] ? g_classic_install_error : "Unknown error. See log.txt.");
+        SetWindowTextA(ctx->status_text, status);
+        SetWindowTextA(ctx->download_button, "Retry Download");
+        EnableWindow(ctx->download_button, TRUE);
+        SetWindowTextA(ctx->quit_button, "Quit");
+        EnableWindow(ctx->quit_button, TRUE);
+    } else if (state == CLASSIC_INSTALL_DONE || InterlockedCompareExchange(&ctx->ok, 0, 0)) {
+        SetWindowTextA(ctx->status_text, "Release resources ready. Starting PexCraft...");
+        SetWindowTextA(ctx->download_button, "Done");
+        EnableWindow(ctx->download_button, FALSE);
+        EnableWindow(ctx->quit_button, FALSE);
+    } else {
+        SetWindowTextA(ctx->status_text, "Ready to download official Release textures and Moog City 2.");
+        SetWindowTextA(ctx->download_button, "Download");
+        EnableWindow(ctx->download_button, TRUE);
+        SetWindowTextA(ctx->quit_button, "Quit");
+        EnableWindow(ctx->quit_button, TRUE);
+    }
+
+    InvalidateRect(ctx->hwnd, NULL, FALSE);
+}
+
+static void pex_startup_download_start(PexStartupDownloadDialog *ctx) {
+    if (!ctx || InterlockedCompareExchange(&ctx->active, 0, 0)) return;
+    if (ctx->worker) {
+        WaitForSingleObject(ctx->worker, 0);
+        CloseHandle(ctx->worker);
+        ctx->worker = NULL;
+    }
+    classic_install_reset_cancel();
+    g_classic_install_error[0] = 0;
+    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Preparing download...");
+    InterlockedExchange(&ctx->finished, 0);
+    InterlockedExchange(&ctx->ok, 0);
+    InterlockedExchange(&ctx->active, 1);
+    ctx->worker = CreateThread(NULL, 0, pex_startup_download_worker, ctx, 0, NULL);
+    if (!ctx->worker) {
+        InterlockedExchange(&ctx->active, 0);
+        classic_log_win_error("CreateThread startup resource downloader");
+        classic_install_fail("Could not start resource downloader");
+    }
+    pex_startup_download_update_ui(ctx);
+}
+
+static void pex_startup_download_request_quit(PexStartupDownloadDialog *ctx) {
+    if (!ctx || !ctx->hwnd) return;
+    if (InterlockedCompareExchange(&ctx->active, 0, 0)) {
+        classic_install_request_cancel();
+        SetWindowTextA(ctx->status_text, "Cancelling download...");
+        SetWindowTextA(ctx->quit_button, "Cancelling...");
+        EnableWindow(ctx->quit_button, FALSE);
+        return;
+    }
+    ctx->result = 0;
+    DestroyWindow(ctx->hwnd);
+}
+
+static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    PexStartupDownloadDialog *ctx = (PexStartupDownloadDialog *)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+    switch (msg) {
+        case WM_CREATE: {
+            CREATESTRUCTA *cs = (CREATESTRUCTA *)lparam;
+            HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            ctx = (PexStartupDownloadDialog *)cs->lpCreateParams;
+            SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
+            ctx->hwnd = hwnd;
+
+            ctx->title = CreateWindowExA(0, "STATIC", "PexCraft needs Release resources", WS_CHILD | WS_VISIBLE,
+                20, 18, 460, 24, hwnd, NULL, g_inst, NULL);
+            ctx->body = CreateWindowExA(0, "STATIC",
+                "This port downloads the official Minecraft 1.2.5 Release textures and only Moog City 2. Nothing is bundled in the executable.",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 50, 460, 44, hwnd, NULL, g_inst, NULL);
+            ctx->size_text = CreateWindowExA(0, "STATIC", "Download size: checking Mojang...",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 98, 460, 20, hwnd, NULL, g_inst, NULL);
+            ctx->status_text = CreateWindowExA(0, "STATIC", "Ready to download official Release textures and Moog City 2.",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 150, 460, 22, hwnd, NULL, g_inst, NULL);
+            ctx->download_button = CreateWindowExA(0, "BUTTON", "Download", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                288, 186, 94, 28, hwnd, (HMENU)(INT_PTR)PEX_STARTUP_DL_BUTTON_DOWNLOAD, g_inst, NULL);
+            ctx->quit_button = CreateWindowExA(0, "BUTTON", "Quit", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                392, 186, 86, 28, hwnd, (HMENU)(INT_PTR)PEX_STARTUP_DL_BUTTON_QUIT, g_inst, NULL);
+            pex_startup_download_set_font(ctx->title, font);
+            pex_startup_download_set_font(ctx->body, font);
+            pex_startup_download_set_font(ctx->size_text, font);
+            pex_startup_download_set_font(ctx->status_text, font);
+            pex_startup_download_set_font(ctx->download_button, font);
+            pex_startup_download_set_font(ctx->quit_button, font);
+            classic_resource_size_start_fetch();
+            SetTimer(hwnd, PEX_STARTUP_DL_TIMER, 100, NULL);
+            pex_startup_download_update_ui(ctx);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wparam) == PEX_STARTUP_DL_BUTTON_DOWNLOAD) {
+                pex_startup_download_start(ctx);
+                return 0;
+            }
+            if (LOWORD(wparam) == PEX_STARTUP_DL_BUTTON_QUIT) {
+                pex_startup_download_request_quit(ctx);
+                return 0;
+            }
+            break;
+        case WM_TIMER:
+            if (wparam == PEX_STARTUP_DL_TIMER) {
+                pex_startup_download_update_ui(ctx);
+                if (ctx && InterlockedCompareExchange(&ctx->finished, 0, 0) && InterlockedCompareExchange(&ctx->ok, 0, 0)) {
+                    ctx->result = 1;
+                    DestroyWindow(hwnd);
+                }
+                return 0;
+            }
+            break;
+        case PEX_STARTUP_DL_DONE:
+            if (ctx) {
+                if (wparam) {
+                    ctx->result = 1;
+                    DestroyWindow(hwnd);
+                } else if (classic_install_cancel_requested()) {
+                    ctx->result = 0;
+                    DestroyWindow(hwnd);
+                } else {
+                    pex_startup_download_update_ui(ctx);
+                    MessageBoxA(hwnd,
+                        "PexCraft could not download the required Release resources.\n\nCheck log.txt for the exact WinINet or file error, then press Retry Download or Quit.",
+                        APP_TITLE, MB_ICONERROR | MB_OK);
+                }
+                return 0;
+            }
+            break;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(hwnd, &ps);
+            RECT outer = {20, 124, 480, 144};
+            RECT inner = {22, 126, 478, 142};
+            LONG progress = InterlockedCompareExchange(&g_classic_install_progress, 0, 0);
+            if (progress < 0) progress = 0;
+            if (progress > 100) progress = 100;
+            Rectangle(dc, outer.left, outer.top, outer.right, outer.bottom);
+            FillRect(dc, &inner, (HBRUSH)(COLOR_WINDOW + 1));
+            if (progress > 0) {
+                RECT fill = inner;
+                fill.right = fill.left + (int)(((fill.right - fill.left) * progress) / 100);
+                FillRect(dc, &fill, (HBRUSH)(COLOR_HIGHLIGHT + 1));
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_CLOSE:
+            pex_startup_download_request_quit(ctx);
+            return 0;
+        case WM_DESTROY:
+            KillTimer(hwnd, PEX_STARTUP_DL_TIMER);
+            if (ctx) {
+                if (ctx->worker) {
+                    WaitForSingleObject(ctx->worker, INFINITE);
+                    CloseHandle(ctx->worker);
+                    ctx->worker = NULL;
+                }
+                ctx->hwnd = NULL;
+            }
+            return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wparam, lparam);
+}
+
+static int pex_show_release_resources_downloader(HINSTANCE inst) {
+    WNDCLASSA wc;
+    HWND hwnd;
+    RECT rc;
+    int w = 520, h = 260;
+    int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
+    PexStartupDownloadDialog ctx;
+    MSG msg;
+
+    if (!release_resources_need_download()) {
+        pex_logf("Release resources already installed; startup downloader skipped");
+        return 1;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.result = 0;
+    pex_logf("Release resources missing; showing startup downloader UI");
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = startup_resource_wndproc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.lpszClassName = "PexCraftReleaseResourceDownloader";
+    RegisterClassA(&wc);
+
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &rc, 0)) {
+        x = rc.left + ((rc.right - rc.left) - w) / 2;
+        y = rc.top + ((rc.bottom - rc.top) - h) / 2;
+        if (x < rc.left) x = rc.left;
+        if (y < rc.top) y = rc.top;
+    }
+
+    hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME, wc.lpszClassName, "PexCraft 1.2.5 Resources",
+        WS_CAPTION | WS_SYSMENU | WS_VISIBLE, x, y, w, h, NULL, NULL, inst, &ctx);
+    if (!hwnd) {
+        classic_log_win_error("CreateWindow startup resource downloader");
+        MessageBoxA(NULL, "PexCraft could not open the resource downloader window.", APP_TITLE, MB_ICONERROR | MB_OK);
+        return 0;
+    }
+
+    while (ctx.hwnd && GetMessageA(&msg, NULL, 0, 0) > 0) {
+        if (!IsDialogMessageA(ctx.hwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
+    pex_logf("Startup downloader closed result=%d", ctx.result);
+    return ctx.result ? 1 : 0;
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrev; (void)lpCmdLine;
     pex_log_init();
@@ -378,12 +656,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     init_dirs();
     srand((unsigned int)time(NULL));
     load_options();
-    if (!release_resources_install_blocking()) {
-        char msg[512];
-        snprintf(msg, sizeof(msg), "PexCraft could not download the required Release resources.\n\n%s",
-                 g_classic_install_error[0] ? g_classic_install_error : "Check your internet connection and try again.");
-        MessageBoxA(NULL, msg, APP_TITLE, MB_ICONERROR);
+    if (!pex_show_release_resources_downloader(hInstance)) {
+        pex_logf("WinMain exit: Release resources unavailable");
         end_high_res_timer();
+        pex_log_shutdown();
         return 1;
     }
     pex_sound_rescan();

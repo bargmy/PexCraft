@@ -41,6 +41,16 @@ static void free_texture(Texture *t) {
     t->rgba = NULL;
 }
 
+
+static void set_texture_filter_wrap(Texture *t, int linear, int repeat) {
+    if (!t || !t->id) return;
+    glBindTexture(GL_TEXTURE_2D, t->id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
+}
+
 static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, int repeat) {
     if (!t || !rgba || w <= 0 || h <= 0) return 0;
     free_texture(t);
@@ -51,8 +61,8 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     glBindTexture(GL_TEXTURE_2D, t->id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : GL_CLAMP);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t->rgba);
     return t->id != 0;
 }
@@ -796,10 +806,13 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_particles, "particles.png", 0);
     ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
     ok = try_release_texture(&tex_mojang, "title\\mojang.png", 0) && ok;
+    set_texture_filter_wrap(&tex_title_logo, 0, 0);
+    set_texture_filter_wrap(&tex_mojang, 1, 0);
     for (int i = 0; i < 6; ++i) {
         char rel[64];
         snprintf(rel, sizeof(rel), "title\\bg\\panorama%d.png", i);
         ok = try_release_texture(&tex_panorama[i], rel, 0) && ok;
+        set_texture_filter_wrap(&tex_panorama[i], 1, 0);
     }
     return ok;
 }
@@ -978,4 +991,14 @@ static void apply_texture_pack_index(int index) {
     init_font_widths();
     log_msg("Applied texture pack: %s", g_current_texpack);
 }
+ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
+    ok = try_release_texture(&tex_mojang, "title\\mojang.png", 0) && ok;
+    set_texture_filter_wrap(&tex_title_logo, 0, 0);
+    set_texture_filter_wrap(&tex_mojang, 1, 0);
+    for (int i = 0; i < 6; ++i) {
+        char rel[64];
+        snprintf(rel, sizeof(rel), "title\\bg\\panorama%d.png", i);
+        ok = try_release_texture(&tex_panorama[i], rel, 0) && ok;
+        set_texture_filter_wrap(&tex_panorama[i], 1, 0);
+    }
 

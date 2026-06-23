@@ -8,9 +8,35 @@
 
 static volatile LONG g_classic_install_state = CLASSIC_INSTALL_IDLE;
 static volatile LONG g_classic_install_progress = 0;
+static volatile LONG g_classic_install_cancel_requested = 0;
 static HANDLE g_classic_install_thread = NULL;
 static char g_classic_install_status[MAX_LABEL] = "";
 static char g_classic_install_error[MAX_LABEL] = "";
+
+static void classic_install_reset_cancel(void) {
+    InterlockedExchange(&g_classic_install_cancel_requested, 0);
+}
+
+static void classic_install_request_cancel(void) {
+    InterlockedExchange(&g_classic_install_cancel_requested, 1);
+    log_msg("Release resource download cancel requested");
+}
+
+static int classic_install_cancel_requested(void) {
+    return InterlockedCompareExchange(&g_classic_install_cancel_requested, 0, 0) != 0;
+}
+
+static void classic_log_win_error(const char *where) {
+    DWORD err = GetLastError();
+    char text[512];
+    text[0] = 0;
+    if (err) {
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, 0, text, sizeof(text), NULL);
+        for (char *p = text; *p; ++p) if (*p == '\r' || *p == '\n') *p = ' ';
+    }
+    log_msg("WinINet/resource error at %s: code=%lu%s%s", where ? where : "unknown",
+            (unsigned long)err, text[0] ? " message=" : "", text);
+}
 
 typedef void *PxcHInternet;
 typedef WORD PxcInternetPort;
@@ -56,6 +82,10 @@ typedef BOOL (WINAPI *PxcHttpQueryInfoA)(PxcHInternet, DWORD, LPVOID, LPDWORD, L
 #ifndef INTERNET_DEFAULT_HTTPS_PORT
 #define INTERNET_DEFAULT_HTTPS_PORT 443
 #endif
+#ifndef INTERNET_FLAG_KEEP_CONNECTION
+#define INTERNET_FLAG_KEEP_CONNECTION 0x00400000u
+#endif
+#define PEX_WININET_DOWNLOAD_FLAGS (INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI | INTERNET_FLAG_PRAGMA_NOCACHE | INTERNET_FLAG_SECURE | INTERNET_FLAG_KEEP_CONNECTION)
 
 #define CLASSIC_SIZE_UNKNOWN 0
 #define CLASSIC_SIZE_FETCHING 1
@@ -265,39 +295,44 @@ static int classic_download_url_to_memory(const char *url, char **out_data, size
     char *buf = NULL;
     size_t len = 0, cap = 0;
     int ok = 0;
+    const char *fail_where = NULL;
     if (out_data) *out_data = NULL;
     if (out_len) *out_len = 0;
     wininet = LoadLibraryA("wininet.dll");
-    if (!wininet) return 0;
+    if (!wininet) { log_msg("Download failed before opening %s: wininet.dll missing", url ? url : "(null)"); return 0; }
     pInternetOpenA = (PxcInternetOpenA)GetProcAddress(wininet, "InternetOpenA");
     pInternetOpenUrlA = (PxcInternetOpenUrlA)GetProcAddress(wininet, "InternetOpenUrlA");
     pInternetReadFile = (PxcInternetReadFile)GetProcAddress(wininet, "InternetReadFile");
     pInternetCloseHandle = (PxcInternetCloseHandle)GetProcAddress(wininet, "InternetCloseHandle");
-    if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) goto done;
+    if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) { fail_where = "resolve WinINet entry points"; goto done; }
+    if (classic_install_cancel_requested()) { fail_where = "cancel before open memory download"; goto done; }
     inet = pInternetOpenA("PEXCRAFT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!inet) goto done;
-    req = pInternetOpenUrlA(inet, url, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
-    if (!req) goto done;
+    if (!inet) { fail_where = "InternetOpenA memory"; goto done; }
+    req = pInternetOpenUrlA(inet, url, NULL, 0, PEX_WININET_DOWNLOAD_FLAGS, 0);
+    if (!req) { fail_where = "InternetOpenUrlA memory"; goto done; }
     for (;;) {
         unsigned char tmp[32768];
         DWORD got = 0;
-        if (!pInternetReadFile(req, tmp, sizeof(tmp), &got)) goto done;
+        if (classic_install_cancel_requested()) { fail_where = "cancel memory download"; goto done; }
+        if (!pInternetReadFile(req, tmp, sizeof(tmp), &got)) { fail_where = "InternetReadFile memory"; goto done; }
         if (got == 0) break;
-        if (len + got + 1 > max_len) goto done;
+        if (len + got + 1 > max_len) { fail_where = "memory download too large"; goto done; }
         if (len + got + 1 > cap) {
             size_t nc = cap ? cap * 2 : 65536;
             while (nc < len + got + 1) nc *= 2;
             char *nb = (char *)realloc(buf, nc);
-            if (!nb) goto done;
+            if (!nb) { fail_where = "allocate memory download buffer"; goto done; }
             buf = nb; cap = nc;
         }
         memcpy(buf + len, tmp, got);
         len += got;
     }
-    if (!buf) goto done;
+    if (!buf) { fail_where = "empty memory download"; goto done; }
     buf[len] = 0;
     ok = 1;
 done:
+    if (!ok && fail_where) classic_log_win_error(fail_where);
+    if (!ok) log_msg("Download to memory failed: url=%s bytes=%u", url ? url : "(null)", (unsigned)len);
     if (req) pInternetCloseHandle(req);
     if (inet) pInternetCloseHandle(inet);
     FreeLibrary(wininet);
@@ -317,29 +352,35 @@ static int classic_download_url_to_file_simple(const char *url, const char *path
     FILE *out = NULL;
     unsigned long long written = 0;
     int ok = 0;
-    if (!wininet) return 0;
+    const char *fail_where = NULL;
+    if (!wininet) { log_msg("Download failed before opening %s: wininet.dll missing", url ? url : "(null)"); return 0; }
     pInternetOpenA = (PxcInternetOpenA)GetProcAddress(wininet, "InternetOpenA");
     pInternetOpenUrlA = (PxcInternetOpenUrlA)GetProcAddress(wininet, "InternetOpenUrlA");
     pInternetReadFile = (PxcInternetReadFile)GetProcAddress(wininet, "InternetReadFile");
     pInternetCloseHandle = (PxcInternetCloseHandle)GetProcAddress(wininet, "InternetCloseHandle");
-    if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) goto done;
+    if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) { fail_where = "resolve WinINet entry points file"; goto done; }
+    if (classic_install_cancel_requested()) { fail_where = "cancel before file download"; goto done; }
     pxc_mkdirs_for_file(path);
     out = fopen(path, "wb");
-    if (!out) goto done;
+    if (!out) { fail_where = "open output file"; goto done; }
     inet = pInternetOpenA("PEXCRAFT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!inet) goto done;
-    req = pInternetOpenUrlA(inet, url, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
-    if (!req) goto done;
+    if (!inet) { fail_where = "InternetOpenA file"; goto done; }
+    req = pInternetOpenUrlA(inet, url, NULL, 0, PEX_WININET_DOWNLOAD_FLAGS, 0);
+    if (!req) { fail_where = "InternetOpenUrlA file"; goto done; }
     for (;;) {
         unsigned char tmp[32768];
         DWORD got = 0;
-        if (!pInternetReadFile(req, tmp, sizeof(tmp), &got)) goto done;
+        if (classic_install_cancel_requested()) { fail_where = "cancel file download"; goto done; }
+        if (!pInternetReadFile(req, tmp, sizeof(tmp), &got)) { fail_where = "InternetReadFile file"; goto done; }
         if (got == 0) break;
-        if (fwrite(tmp, 1, got, out) != got) goto done;
+        if (fwrite(tmp, 1, got, out) != got) { fail_where = "write output file"; goto done; }
         written += got;
     }
     ok = (written > 0 && (!expect_size || written == (unsigned long long)expect_size));
+    if (!ok) fail_where = "downloaded file size mismatch";
 done:
+    if (!ok && fail_where) classic_log_win_error(fail_where);
+    if (!ok) log_msg("Download to file failed: url=%s path=%s bytes=%llu expected=%u", url ? url : "(null)", path ? path : "(null)", written, expect_size);
     if (out) fclose(out);
     if (req) pInternetCloseHandle(req);
     if (inet) pInternetCloseHandle(inet);
@@ -378,6 +419,7 @@ static DWORD WINAPI classic_sound_download_worker(LPVOID arg) {
         int pct;
         if (idx < 0 || idx >= ctx->count) break;
         if (InterlockedCompareExchange(&ctx->failed, 0, 0)) break;
+        if (classic_install_cancel_requested()) { InterlockedExchange(&ctx->failed, 1); break; }
         asset = &ctx->assets[idx];
         pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, classic_sound_output_rel(asset->path));
         if (classic_file_size_bytes(out_path) != asset->size) {
@@ -461,7 +503,8 @@ static int classic_download_legacy_sounds(void) {
     downloaded = (int)InterlockedCompareExchange(&ctx.completed, 0, 0);
     if (InterlockedCompareExchange(&ctx.failed, 0, 0) || downloaded < count) {
         free(assets);
-        classic_install_fail("Could not download Moog City 2");
+        if (classic_install_cancel_requested()) classic_install_fail("Download cancelled");
+        else classic_install_fail("Could not download Moog City 2");
         return 0;
     }
 
@@ -538,7 +581,7 @@ static int classic_query_download_size_bytes(const char *url, unsigned long long
     if (!ok) {
         const char *headers = "Accept: */*\r\nCache-Control: no-cache\r\n";
         PxcHInternet req = pInternetOpenUrlA(inet, url, headers, (DWORD)strlen(headers),
-            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI | INTERNET_FLAG_PRAGMA_NOCACHE, 0);
+            PEX_WININET_DOWNLOAD_FLAGS, 0);
         if (req) {
             ok = classic_query_content_length(req, pHttpQueryInfoA, &value);
             pInternetCloseHandle(req);
@@ -644,13 +687,26 @@ static void classic_install_fail(const char *msg) {
 
 static int classic_download_client_jar(const char *url, const char *zip_path) {
     HMODULE wininet = LoadLibraryA("wininet.dll");
+    PxcInternetOpenA pInternetOpenA;
+    PxcInternetOpenUrlA pInternetOpenUrlA;
+    PxcInternetReadFile pInternetReadFile;
+    PxcInternetCloseHandle pInternetCloseHandle;
+    PxcHttpQueryInfoA pHttpQueryInfoA;
+    PxcHInternet inet = NULL;
+    PxcHInternet req = NULL;
+    FILE *out = NULL;
+    DWORD total = 0;
+    DWORD downloaded = 0;
+    int ok = 0;
+    const char *fail_where = NULL;
+
     if (!wininet) { classic_install_fail("wininet.dll was not found"); return 0; }
 
-    PxcInternetOpenA pInternetOpenA = (PxcInternetOpenA)GetProcAddress(wininet, "InternetOpenA");
-    PxcInternetOpenUrlA pInternetOpenUrlA = (PxcInternetOpenUrlA)GetProcAddress(wininet, "InternetOpenUrlA");
-    PxcInternetReadFile pInternetReadFile = (PxcInternetReadFile)GetProcAddress(wininet, "InternetReadFile");
-    PxcInternetCloseHandle pInternetCloseHandle = (PxcInternetCloseHandle)GetProcAddress(wininet, "InternetCloseHandle");
-    PxcHttpQueryInfoA pHttpQueryInfoA = (PxcHttpQueryInfoA)GetProcAddress(wininet, "HttpQueryInfoA");
+    pInternetOpenA = (PxcInternetOpenA)GetProcAddress(wininet, "InternetOpenA");
+    pInternetOpenUrlA = (PxcInternetOpenUrlA)GetProcAddress(wininet, "InternetOpenUrlA");
+    pInternetReadFile = (PxcInternetReadFile)GetProcAddress(wininet, "InternetReadFile");
+    pInternetCloseHandle = (PxcInternetCloseHandle)GetProcAddress(wininet, "InternetCloseHandle");
+    pHttpQueryInfoA = (PxcHttpQueryInfoA)GetProcAddress(wininet, "HttpQueryInfoA");
 
     if (!pInternetOpenA || !pInternetOpenUrlA || !pInternetReadFile || !pInternetCloseHandle) {
         FreeLibrary(wininet);
@@ -659,59 +715,35 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
     }
 
     DeleteFileA(zip_path);
-    FILE *out = fopen(zip_path, "wb");
+    out = fopen(zip_path, "wb");
     if (!out) {
+        classic_log_win_error("create downloaded client.jar file");
         FreeLibrary(wininet);
         classic_install_fail("Could not create downloaded 1.2.5 client file");
         return 0;
     }
 
-    PxcHInternet inet = pInternetOpenA("PEXCRAFT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!inet) {
-        fclose(out);
-        FreeLibrary(wininet);
-        classic_install_fail("Could not start internet session");
-        return 0;
-    }
+    if (classic_install_cancel_requested()) { fail_where = "cancel before client.jar download"; goto done; }
+    inet = pInternetOpenA("PEXCRAFT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!inet) { fail_where = "InternetOpenA client.jar"; goto done; }
 
     classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 1, "Connecting to Mojang...");
-    PxcHInternet req = pInternetOpenUrlA(inet, url, NULL, 0,
-        INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
-    if (!req) {
-        fclose(out);
-        pInternetCloseHandle(inet);
-        FreeLibrary(wininet);
-        classic_install_fail("Could not download 1.2.5 client.jar");
-        return 0;
-    }
+    req = pInternetOpenUrlA(inet, url, NULL, 0, PEX_WININET_DOWNLOAD_FLAGS, 0);
+    if (!req) { fail_where = "InternetOpenUrlA client.jar"; goto done; }
 
-    DWORD total = 0;
     if (pHttpQueryInfoA) {
         DWORD total_len = sizeof(total);
         pHttpQueryInfoA(req, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &total, &total_len, NULL);
     }
+    log_msg("Downloading Release textures from %s to %s; expected bytes=%lu", url ? url : "(null)", zip_path ? zip_path : "(null)", (unsigned long)total);
 
-    unsigned char buf[32768];
-    DWORD got = 0;
-    DWORD downloaded = 0;
     for (;;) {
-        if (!pInternetReadFile(req, buf, sizeof(buf), &got)) {
-            fclose(out);
-            pInternetCloseHandle(req);
-            pInternetCloseHandle(inet);
-            FreeLibrary(wininet);
-            classic_install_fail("Download failed while reading");
-            return 0;
-        }
+        unsigned char buf[32768];
+        DWORD got = 0;
+        if (classic_install_cancel_requested()) { fail_where = "cancel client.jar download"; goto done; }
+        if (!pInternetReadFile(req, buf, sizeof(buf), &got)) { fail_where = "InternetReadFile client.jar"; goto done; }
         if (got == 0) break;
-        if (fwrite(buf, 1, got, out) != got) {
-            fclose(out);
-            pInternetCloseHandle(req);
-            pInternetCloseHandle(inet);
-            FreeLibrary(wininet);
-            classic_install_fail("Could not write downloaded file");
-            return 0;
-        }
+        if (fwrite(buf, 1, got, out) != got) { fail_where = "write client.jar download"; goto done; }
         downloaded += got;
         if (total > 0) {
             int pct = 1 + (int)(((unsigned long long)downloaded * 84ULL) / (unsigned long long)total);
@@ -725,15 +757,26 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
         }
     }
 
-    fclose(out);
-    pInternetCloseHandle(req);
-    pInternetCloseHandle(inet);
+    if (downloaded < 1024) { fail_where = "downloaded client.jar empty"; goto done; }
+    ok = 1;
+
+done:
+    if (out) { fclose(out); out = NULL; }
+    if (!ok && fail_where) classic_log_win_error(fail_where);
+    if (!ok) {
+        log_msg("Release texture download failed: url=%s path=%s bytes=%lu expected=%lu", url ? url : "(null)", zip_path ? zip_path : "(null)", (unsigned long)downloaded, (unsigned long)total);
+        DeleteFileA(zip_path);
+    }
+    if (req) pInternetCloseHandle(req);
+    if (inet) pInternetCloseHandle(inet);
     FreeLibrary(wininet);
 
-    if (downloaded < 1024) {
-        classic_install_fail("Downloaded 1.2.5 client.jar was empty");
+    if (!ok) {
+        if (classic_install_cancel_requested()) classic_install_fail("Download cancelled");
+        else classic_install_fail("Could not download 1.2.5 client.jar");
         return 0;
     }
+    log_msg("Downloaded Release textures client.jar bytes=%lu", (unsigned long)downloaded);
     return 1;
 }
 
@@ -742,7 +785,9 @@ static int classic_extract_downloaded_pack(const char *zip_path, const char *pac
     classic_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
     err[0] = 0;
 
+    log_msg("Extracting Release textures from %s into %s", zip_path ? zip_path : "(null)", pack_dir ? pack_dir : "(null)");
     if (!pxc_extract_zip_file(zip_path, pack_dir, err, sizeof(err))) {
+        log_msg("Release texture extraction failed: %s", err[0] ? err : "unknown extraction error");
         classic_install_fail(err[0] ? err : "Could not extract 1.2.5 client.jar internally");
         return 0;
     }
@@ -762,6 +807,7 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
     int need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
     int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
 
+    classic_install_reset_cancel();
     ensure_dir(g_texpack_dir);
     classic_pack_path(pack_dir, sizeof(pack_dir));
     snprintf(zip_path, sizeof(zip_path), "%s\\minecraft_1_2_5_client.zip", g_mc_dir);
@@ -788,6 +834,14 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
     return 0;
 }
 
+static int release_resources_need_download(void) {
+    int need_textures;
+    int need_music;
+    ensure_dir(g_texpack_dir);
+    need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    need_music = classic_wants_sound_download() && !classic_sounds_installed();
+    return need_textures || need_music;
+}
 
 static int release_resources_install_blocking(void) {
     char zip_path[MAX_PATHBUF];
@@ -832,6 +886,7 @@ static void start_classic_pack_install(void) {
         g_classic_install_thread = NULL;
     }
 
+    classic_install_reset_cancel();
     g_classic_install_error[0] = 0;
     classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading resources...");
     set_screen(SCREEN_TEXPACK_INSTALL);

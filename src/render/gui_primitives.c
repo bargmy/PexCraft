@@ -64,10 +64,13 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
 }
 
 static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
-    float u0 = (float)sx / (float)tex->w;
-    float v0 = (float)sy / (float)tex->h;
-    float u1 = (float)(sx + w) / (float)tex->w;
-    float v1 = (float)(sy + h) / (float)tex->h;
+    if (!tex || !tex->id || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
+    float u0 = ((float)sx + 0.5f) / (float)tex->w;
+    float v0 = ((float)sy + 0.5f) / (float)tex->h;
+    float u1 = ((float)(sx + w) - 0.5f) / (float)tex->w;
+    float v1 = ((float)(sy + h) - 0.5f) / (float)tex->h;
+    if (u1 < u0) { float mid = ((float)sx + (float)(sx + w)) * 0.5f / (float)tex->w; u0 = u1 = mid; }
+    if (v1 < v0) { float mid = ((float)sy + (float)(sy + h)) * 0.5f / (float)tex->h; v0 = v1 = mid; }
     glBindTexture(GL_TEXTURE_2D, tex->id);
     set_color_int(color);
     glBegin(GL_QUADS);
@@ -80,11 +83,13 @@ static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, i
 }
 
 static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, int dh, int sx, int sy, int sw, int sh, int color) {
-    if (!tex || tex->id == 0 || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
-    float u0 = (float)sx / (float)tex->w;
-    float v0 = (float)sy / (float)tex->h;
-    float u1 = (float)(sx + sw) / (float)tex->w;
-    float v1 = (float)(sy + sh) / (float)tex->h;
+    if (!tex || tex->id == 0 || tex->w <= 0 || tex->h <= 0 || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+    float u0 = ((float)sx + 0.5f) / (float)tex->w;
+    float v0 = ((float)sy + 0.5f) / (float)tex->h;
+    float u1 = ((float)(sx + sw) - 0.5f) / (float)tex->w;
+    float v1 = ((float)(sy + sh) - 0.5f) / (float)tex->h;
+    if (u1 < u0) { float mid = ((float)sx + (float)(sx + sw)) * 0.5f / (float)tex->w; u0 = u1 = mid; }
+    if (v1 < v0) { float mid = ((float)sy + (float)(sy + sh)) * 0.5f / (float)tex->h; v0 = v1 = mid; }
     glBindTexture(GL_TEXTURE_2D, tex->id);
     set_color_int(color);
     glBegin(GL_QUADS);
@@ -97,14 +102,16 @@ static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, i
 }
 
 static void draw_texture_scaled_full(Texture *tex, int x, int y, int w, int h, int color) {
-    if (!tex || tex->id == 0 || w <= 0 || h <= 0) return;
+    if (!tex || tex->id == 0 || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
+    float inset_u = 0.5f / (float)tex->w;
+    float inset_v = 0.5f / (float)tex->h;
     glBindTexture(GL_TEXTURE_2D, tex->id);
     set_color_int(color);
     glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 1.0f); glVertex3f((float)x, (float)(y + h), 0.0f);
-    glTexCoord2f(1.0f, 1.0f); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
-    glTexCoord2f(1.0f, 0.0f); glVertex3f((float)(x + w), (float)y, 0.0f);
-    glTexCoord2f(0.0f, 0.0f); glVertex3f((float)x, (float)y, 0.0f);
+    glTexCoord2f(inset_u, 1.0f - inset_v); glVertex3f((float)x, (float)(y + h), 0.0f);
+    glTexCoord2f(1.0f - inset_u, 1.0f - inset_v); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
+    glTexCoord2f(1.0f - inset_u, inset_v); glVertex3f((float)(x + w), (float)y, 0.0f);
+    glTexCoord2f(inset_u, inset_v); glVertex3f((float)x, (float)y, 0.0f);
     glEnd();
     glColor4f(1,1,1,1);
 }

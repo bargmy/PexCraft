@@ -48,6 +48,13 @@
 #define MAX_LABEL 256
 #define MAX_PATHBUF 1024
 #define ARRAY_COUNT(a) ((int)(sizeof(a)/sizeof((a)[0])))
+#ifndef PEX_GL_CLAMP_EDGE
+#ifdef GL_CLAMP_TO_EDGE
+#define PEX_GL_CLAMP_EDGE GL_CLAMP_TO_EDGE
+#else
+#define PEX_GL_CLAMP_EDGE GL_CLAMP
+#endif
+#endif
 #ifndef PEX_THREAD_LOCAL
 #if defined(PEX_PLATFORM_WII)
 /* devkitPPC/libogc Wii DOLs do not have the desktop TLS runtime that GCC
@@ -156,7 +163,8 @@ static void pex_logf(const char *fmt, ...) {
         fprintf(g_pex_log_file, "[%s] {%s}\n", ts, msg);
         g_pex_log_lines_since_flush++;
         if ((g_pex_log_lines_since_flush & 63u) == 0u ||
-            strstr(msg, "CRASH") || strstr(msg, "ERROR") || strstr(msg, "log close")) {
+            strstr(msg, "CRASH") || strstr(msg, "ERROR") || strstr(msg, "error") ||
+            strstr(msg, "failed") || strstr(msg, "WinINet") || strstr(msg, "log close")) {
             fflush(g_pex_log_file);
         }
     }

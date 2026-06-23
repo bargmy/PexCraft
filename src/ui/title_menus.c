@@ -109,8 +109,8 @@ static void capture_title_logo_snapshot(int title_h) {
         glBindTexture(GL_TEXTURE_2D, g_title_snapshot_tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, PEX_GL_CLAMP_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, PEX_GL_CLAMP_EDGE);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_render_w, title_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         g_title_snapshot_w = g_render_w;
         g_title_snapshot_h = title_h;
@@ -211,8 +211,8 @@ static void ensure_release_panorama_viewport_texture(void) {
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, PEX_GL_CLAMP_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, PEX_GL_CLAMP_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 }
 
@@ -249,6 +249,10 @@ static void draw_release_panorama_cube(float partial) {
             if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
             if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
             glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, PEX_GL_CLAMP_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, PEX_GL_CLAMP_EDGE);
             glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(pass + 1));
             glBegin(GL_QUADS);
             glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
@@ -377,7 +381,7 @@ static void draw_title_screen(float partial) {
     draw_centered_text(g_splash, 0, -8, 16776960);
     glPopMatrix();
     draw_text(VERSION_TEXT, 2, g_gui_h - 10, 16777215);
-    const char *copy = "Copyright Mojang AB. Do not distribute!";
+    const char *copy = "Copyright to no one. This is for everyone!";
     draw_text(copy, g_gui_w - text_width(copy) - 2, g_gui_h - 10, 16777215);
     draw_all_buttons();
 }
