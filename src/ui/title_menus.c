@@ -284,28 +284,17 @@ static void release_panorama_blur_pass(void) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
-    glLoadIdentity();
-    glOrtho(0, 256, 256, 0, 1000, 3000);
-    glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
-    glLoadIdentity();
-    glTranslatef(0.0f, 0.0f, -2000.0f);
+    setup_gui_projection();
     for (int i = 0; i < 3; ++i) {
         float off = (float)(i - 1) / 256.0f;
-        glColor4f(1,1,1,1.0f / (float)(i + 1));
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(i + 1));
         glBegin(GL_QUADS);
-        glTexCoord2f(0.0f + off, 1.0f); glVertex3f(256.0f, 256.0f, 0.0f);
-        glTexCoord2f(1.0f + off, 1.0f); glVertex3f(256.0f,   0.0f, 0.0f);
-        glTexCoord2f(1.0f + off, 0.0f); glVertex3f(  0.0f,   0.0f, 0.0f);
-        glTexCoord2f(0.0f + off, 0.0f); glVertex3f(  0.0f, 256.0f, 0.0f);
+        glTexCoord2f(0.0f + off, 0.0f); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+        glTexCoord2f(1.0f + off, 0.0f); glVertex3f((float)g_gui_w, 0.0f, 0.0f);
+        glTexCoord2f(1.0f + off, 1.0f); glVertex3f(0.0f, 0.0f, 0.0f);
+        glTexCoord2f(0.0f + off, 1.0f); glVertex3f(0.0f, (float)g_gui_h, 0.0f);
         glEnd();
     }
-    glMatrixMode(GL_MODELVIEW);
-    glPopMatrix();
-    glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glColor4f(1,1,1,1);
 }
@@ -337,15 +326,18 @@ static void draw_release_skybox(float partial) {
 
 static void draw_release_minecraft_logo(void) {
     if (!tex_title_logo.id) return;
-    const int logo_w = 274;
-    int x = g_gui_w / 2 - logo_w / 2;
+    const int logo_anchor_w = 274;
+    int x = g_gui_w / 2 - logo_anchor_w / 2;
     int y = 30;
-    draw_textured_rect_tex(&tex_title_logo, x + 0,   y, 0,  0, 155, 44, 0xFFFFFF);
-    draw_textured_rect_tex(&tex_title_logo, x + 155, y, 0, 45, 155, 44, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_title_logo, x + 0,   y + 0, 0,   0, 99, 44, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_title_logo, x + 99,  y + 0, 129, 0, 27, 44, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_title_logo, x + 125, y + 0, 126, 0, 3,  44, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_title_logo, x + 128, y + 0, 99,  0, 26, 44, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_title_logo, x + 155, y + 0, 0,  45, 155, 44, 0xFFFFFF);
 }
 
 static void draw_boot_mojang_logo(void) {
-    draw_rect(0, 0, g_gui_w, g_gui_h, 0x000000);
+    draw_rect(0, 0, g_gui_w, g_gui_h, 0xD0D0D0);
     if (!tex_mojang.id) return;
     int w = tex_mojang.w;
     int h = tex_mojang.h;

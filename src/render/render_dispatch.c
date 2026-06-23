@@ -1,7 +1,7 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
 static void draw_fps_counter(void) {
-    if (!g_opts.show_fps || g_debug_menu_shown) return;
+    if (!g_opts.show_fps || g_debug_menu_shown || g_screen == SCREEN_TITLE) return;
     char line[32];
     snprintf(line, sizeof(line), "FPS: %d", g_debug_fps);
     draw_text(line, 2, 12, 14737632);

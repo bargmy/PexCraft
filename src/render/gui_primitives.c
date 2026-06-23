@@ -82,6 +82,21 @@ static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, i
     glColor4f(1,1,1,1);
 }
 
+static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
+    if (!tex || !tex->id || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
+    float us = 1.0f / (float)tex->w;
+    float vs = 1.0f / (float)tex->h;
+    glBindTexture(GL_TEXTURE_2D, tex->id);
+    set_color_int(color);
+    glBegin(GL_QUADS);
+    glTexCoord2f((float)(sx + 0) * us, (float)(sy + h) * vs); glVertex3f((float)(x + 0), (float)(y + h), 0.0f);
+    glTexCoord2f((float)(sx + w) * us, (float)(sy + h) * vs); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
+    glTexCoord2f((float)(sx + w) * us, (float)(sy + 0) * vs); glVertex3f((float)(x + w), (float)(y + 0), 0.0f);
+    glTexCoord2f((float)(sx + 0) * us, (float)(sy + 0) * vs); glVertex3f((float)(x + 0), (float)(y + 0), 0.0f);
+    glEnd();
+    glColor4f(1,1,1,1);
+}
+
 static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, int dh, int sx, int sy, int sw, int sh, int color) {
     if (!tex || tex->id == 0 || tex->w <= 0 || tex->h <= 0 || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
     float u0 = ((float)sx + 0.5f) / (float)tex->w;
@@ -201,7 +216,7 @@ static void draw_text_raw(const char *s, int x, int y, int color) {
             int code = idx + 32;
             int sx = (code % 16) * 8;
             int sy = (code / 16) * 8;
-            draw_textured_rect_tex(&tex_font, cx, y, sx, sy, 8, 8, color);
+            draw_textured_modal_rect(&tex_font, cx, y, sx, sy, 8, 8, color);
             cx += font_widths[code];
         }
     }
@@ -260,15 +275,16 @@ static void draw_button(Button *b) {
     if (!b->enabled) state = 0;
     else if (hover) state = 2;
     if (b->kind == BUTTON_SLIDER) state = 0;
-    draw_textured_rect_tex(&tex_gui, b->x, b->y, 0, 46 + state * 20, b->w / 2, b->h, 0xFFFFFF);
-    draw_textured_rect_tex(&tex_gui, b->x + b->w / 2, b->y, 200 - b->w / 2, 46 + state * 20, b->w / 2, b->h, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_gui, b->x, b->y, 0, 46 + state * 20, b->w / 2, b->h, 0xFFFFFF);
+    draw_textured_modal_rect(&tex_gui, b->x + b->w / 2, b->y, 200 - b->w / 2, 46 + state * 20, b->w / 2, b->h, 0xFFFFFF);
     if (b->kind == BUTTON_SLIDER) {
         int knob = b->x + (int)(b->slider_value * (float)(b->w - 8));
-        draw_textured_rect_tex(&tex_gui, knob, b->y, 0, 66, 4, 20, 0xFFFFFF);
-        draw_textured_rect_tex(&tex_gui, knob + 4, b->y, 196, 66, 4, 20, 0xFFFFFF);
+        draw_textured_modal_rect(&tex_gui, knob, b->y, 0, 66, 4, 20, 0xFFFFFF);
+        draw_textured_modal_rect(&tex_gui, knob + 4, b->y, 196, 66, 4, 20, 0xFFFFFF);
     }
     if (b->kind == BUTTON_LANGUAGE) {
-        draw_textured_rect_tex(&tex_gui, b->x + 2, b->y + 2, 0, 146, 16, 16, 0xFFFFFF);
+        int lang_y = hover ? 126 : 106;
+        draw_textured_modal_rect(&tex_gui, b->x, b->y, 0, lang_y, b->w, b->h, 0xFFFFFF);
         return;
     }
     int col;
