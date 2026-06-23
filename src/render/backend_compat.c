@@ -108,6 +108,7 @@ typedef struct PexD3DTexture {
     ID3D11ShaderResourceView *srv11;
     int w, h;
     DWORD address_u, address_v;
+    DWORD min_filter, mag_filter;
 } PexD3DTexture;
 
 typedef struct PexD3DBackend {
@@ -190,6 +191,8 @@ typedef struct PexD3D11Backend {
     UINT dynamic_vb_capacity;
     ID3D11SamplerState *sampler_wrap;
     ID3D11SamplerState *sampler_clamp;
+    ID3D11SamplerState *sampler_wrap_linear;
+    ID3D11SamplerState *sampler_clamp_linear;
     ID3D11BlendState *blend_off;
     ID3D11BlendState *blend_alpha;
     ID3D11BlendState *blend_multiply;
@@ -652,6 +655,9 @@ static void pex_d3d_apply_state(const PexD3DStateSnap *s) {
         pex_d3d_set_texture_stage_state(D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
         pex_d3d_set_sampler_state(D3DSAMP_ADDRESSU, g_d3d9.textures[s->texture_id].address_u);
         pex_d3d_set_sampler_state(D3DSAMP_ADDRESSV, g_d3d9.textures[s->texture_id].address_v);
+        pex_d3d_set_sampler_state(D3DSAMP_MINFILTER, g_d3d9.textures[s->texture_id].min_filter ? g_d3d9.textures[s->texture_id].min_filter : D3DTEXF_POINT);
+        pex_d3d_set_sampler_state(D3DSAMP_MAGFILTER, g_d3d9.textures[s->texture_id].mag_filter ? g_d3d9.textures[s->texture_id].mag_filter : D3DTEXF_POINT);
+        pex_d3d_set_sampler_state(D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     } else {
         pex_d3d_set_texture0(NULL);
         pex_d3d_set_texture_stage_state(D3DTSS_COLOROP, D3DTOP_SELECTARG1);
@@ -900,6 +906,8 @@ static void pex_d3d11_release_pipeline(void) {
     if (g_d3d11.ps) { ID3D11PixelShader_Release(g_d3d11.ps); g_d3d11.ps = NULL; }
     if (g_d3d11.sampler_wrap) { ID3D11SamplerState_Release(g_d3d11.sampler_wrap); g_d3d11.sampler_wrap = NULL; }
     if (g_d3d11.sampler_clamp) { ID3D11SamplerState_Release(g_d3d11.sampler_clamp); g_d3d11.sampler_clamp = NULL; }
+    if (g_d3d11.sampler_wrap_linear) { ID3D11SamplerState_Release(g_d3d11.sampler_wrap_linear); g_d3d11.sampler_wrap_linear = NULL; }
+    if (g_d3d11.sampler_clamp_linear) { ID3D11SamplerState_Release(g_d3d11.sampler_clamp_linear); g_d3d11.sampler_clamp_linear = NULL; }
     if (g_d3d11.blend_off) { ID3D11BlendState_Release(g_d3d11.blend_off); g_d3d11.blend_off = NULL; }
     if (g_d3d11.blend_alpha) { ID3D11BlendState_Release(g_d3d11.blend_alpha); g_d3d11.blend_alpha = NULL; }
     if (g_d3d11.blend_multiply) { ID3D11BlendState_Release(g_d3d11.blend_multiply); g_d3d11.blend_multiply = NULL; }
@@ -947,6 +955,10 @@ static int pex_d3d11_create_pipeline(void) {
     ID3D11Device_CreateSamplerState(g_d3d11.dev, &sd, &g_d3d11.sampler_wrap);
     sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;
     ID3D11Device_CreateSamplerState(g_d3d11.dev, &sd, &g_d3d11.sampler_clamp);
+    sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR; sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_WRAP;
+    ID3D11Device_CreateSamplerState(g_d3d11.dev, &sd, &g_d3d11.sampler_wrap_linear);
+    sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;
+    ID3D11Device_CreateSamplerState(g_d3d11.dev, &sd, &g_d3d11.sampler_clamp_linear);
     D3D11_BLEND_DESC bd; memset(&bd,0,sizeof(bd)); bd.RenderTarget[0].RenderTargetWriteMask=D3D11_COLOR_WRITE_ENABLE_ALL;
     ID3D11Device_CreateBlendState(g_d3d11.dev, &bd, &g_d3d11.blend_off);
     D3D11_BLEND_DESC bd_mask = bd; bd_mask.RenderTarget[0].RenderTargetWriteMask = 0;
@@ -1115,8 +1127,11 @@ static void pex_d3d11_apply_state(const PexD3DStateSnap *s) {
     ID3D11SamplerState *samp = g_d3d11.sampler_clamp;
     ID3D11ShaderResourceView *srv = NULL;
     if (s->texture_enabled && s->texture_id < PEX_D3D_MAX_TEXTURES && g_d3d9.textures[s->texture_id].srv11) {
+        int wrap = (g_d3d9.textures[s->texture_id].address_u == D3DTADDRESS_WRAP || g_d3d9.textures[s->texture_id].address_v == D3DTADDRESS_WRAP);
+        int linear = (g_d3d9.textures[s->texture_id].min_filter == D3DTEXF_LINEAR || g_d3d9.textures[s->texture_id].mag_filter == D3DTEXF_LINEAR);
         srv = g_d3d9.textures[s->texture_id].srv11;
-        if (g_d3d9.textures[s->texture_id].address_u == D3DTADDRESS_WRAP || g_d3d9.textures[s->texture_id].address_v == D3DTADDRESS_WRAP) samp = g_d3d11.sampler_wrap;
+        if (linear) samp = wrap ? g_d3d11.sampler_wrap_linear : g_d3d11.sampler_clamp_linear;
+        else if (wrap) samp = g_d3d11.sampler_wrap;
     }
     ID3D11DeviceContext_PSSetShaderResources(g_d3d11.ctx, 0, 1, &srv);
     ID3D11DeviceContext_PSSetSamplers(g_d3d11.ctx, 0, 1, &samp);
@@ -1433,9 +1448,25 @@ static void pex_glNewList(GLuint list, GLenum mode) { if (!pex_using_gpu_backend
 static void pex_glEndList(void) { if (!pex_using_gpu_backend()) { glEndList(); return; } g_d3d9.compiling=0; g_d3d9.compile_list=0; }
 static void pex_glCallList(GLuint list) { if (!pex_using_gpu_backend()) { glCallList(list); return; } pex_gpu_flush_immediate_stream(); if(list>=PEX_D3D_MAX_LISTS||!g_d3d9.lists[list])return; PexD3DList *l=g_d3d9.lists[list]; for(int i=0;i<l->count;i++){ if(pex_using_d3d11()) pex_d3d11_draw_compiled_batch(&l->batches[i]); else pex_d3d_draw_compiled_batch(&l->batches[i]); } }
 
-static void pex_glGenTextures(GLsizei n, GLuint *ids) { if (!pex_using_gpu_backend()) { glGenTextures(n,ids); return; } for(int i=0;i<n;i++){ if(g_d3d9.next_texture>=PEX_D3D_MAX_TEXTURES) ids[i]=0; else { ids[i]=g_d3d9.next_texture++; g_d3d9.textures[ids[i]].address_u=D3DTADDRESS_CLAMP; g_d3d9.textures[ids[i]].address_v=D3DTADDRESS_CLAMP; } } }
+static void pex_glGenTextures(GLsizei n, GLuint *ids) { if (!pex_using_gpu_backend()) { glGenTextures(n,ids); return; } for(int i=0;i<n;i++){ if(g_d3d9.next_texture>=PEX_D3D_MAX_TEXTURES) ids[i]=0; else { ids[i]=g_d3d9.next_texture++; g_d3d9.textures[ids[i]].address_u=D3DTADDRESS_CLAMP; g_d3d9.textures[ids[i]].address_v=D3DTADDRESS_CLAMP; g_d3d9.textures[ids[i]].min_filter=D3DTEXF_POINT; g_d3d9.textures[ids[i]].mag_filter=D3DTEXF_POINT; } } }
 static void pex_glBindTexture(GLenum target, GLuint id) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glBindTexture(target,id); return; } (void)target; g_d3d9.bound_texture=id; }
-static void pex_glTexParameteri(GLenum target, GLenum pname, GLint param) { if (!pex_using_gpu_backend()) { glTexParameteri(target,pname,param); return; } pex_gpu_flush_immediate_stream(); (void)target; if(g_d3d9.bound_texture<PEX_D3D_MAX_TEXTURES){ DWORD addr=(param==GL_REPEAT)?D3DTADDRESS_WRAP:D3DTADDRESS_CLAMP; if(pname==GL_TEXTURE_WRAP_S)g_d3d9.textures[g_d3d9.bound_texture].address_u=addr; else if(pname==GL_TEXTURE_WRAP_T)g_d3d9.textures[g_d3d9.bound_texture].address_v=addr; } }
+static void pex_glTexParameteri(GLenum target, GLenum pname, GLint param) {
+    if (!pex_using_gpu_backend()) { glTexParameteri(target,pname,param); return; }
+    pex_gpu_flush_immediate_stream();
+    (void)target;
+    if (g_d3d9.bound_texture < PEX_D3D_MAX_TEXTURES) {
+        PexD3DTexture *t = &g_d3d9.textures[g_d3d9.bound_texture];
+        if (pname == GL_TEXTURE_WRAP_S) {
+            t->address_u = (param == GL_REPEAT) ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP;
+        } else if (pname == GL_TEXTURE_WRAP_T) {
+            t->address_v = (param == GL_REPEAT) ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP;
+        } else if (pname == GL_TEXTURE_MIN_FILTER) {
+            t->min_filter = (param == GL_LINEAR) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+        } else if (pname == GL_TEXTURE_MAG_FILTER) {
+            t->mag_filter = (param == GL_LINEAR) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+        }
+    }
+}
 static void pex_glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const GLvoid *pixels) {
     if (!pex_using_gpu_backend()) { glTexImage2D(target,level,internal,w,h,border,format,type,pixels); return; }
     pex_gpu_flush_immediate_stream();

@@ -23,18 +23,22 @@ static void setup_gui_projection(void) {
     glColor4f(1,1,1,1);
 }
 
-static void color_from_int(int color, float *r, float *g, float *b, float *a) {
+static void color_from_int_alpha(int color, float *r, float *g, float *b, float *a, int zero_alpha_is_opaque) {
     unsigned int c = (unsigned int)color;
     *a = ((c >> 24) & 255) / 255.0f;
-    if (*a == 0.0f) *a = 1.0f;
+    if (zero_alpha_is_opaque && *a == 0.0f) *a = 1.0f;
     *r = ((c >> 16) & 255) / 255.0f;
     *g = ((c >> 8) & 255) / 255.0f;
     *b = (c & 255) / 255.0f;
 }
 
+static void color_from_int(int color, float *r, float *g, float *b, float *a) {
+    color_from_int_alpha(color, r, g, b, a, 1);
+}
+
 static void set_color_int(int color) {
     float r,g,b,a;
-    color_from_int(color, &r, &g, &b, &a);
+    color_from_int_alpha(color, &r, &g, &b, &a, 1);
     glColor4f(r,g,b,a);
 }
 
