@@ -204,17 +204,39 @@ static void draw_title_logo_3d(float partial) {
 
 
 static GLuint g_release_panorama_viewport_tex = 0;
+static int g_release_panorama_alloc_size = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
+#define RELEASE_PANORAMA_TEX_SIZE_GL 1024
+
+static int release_panorama_uses_native_opengl(void) {
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    return 1;
+#elif defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return 0;
+#else
+    return !pex_using_gpu_backend();
+#endif
+}
+
+static int release_panorama_target_size(void) {
+    return release_panorama_uses_native_opengl() ? RELEASE_PANORAMA_TEX_SIZE_GL : RELEASE_PANORAMA_TEX_SIZE;
+}
 
 static void ensure_release_panorama_viewport_texture(void) {
-    if (g_release_panorama_viewport_tex) return;
+    int size = release_panorama_target_size();
+    if (g_release_panorama_viewport_tex && g_release_panorama_alloc_size == size) return;
+    if (g_release_panorama_viewport_tex) {
+        glDeleteTextures(1, &g_release_panorama_viewport_tex);
+        g_release_panorama_viewport_tex = 0;
+    }
+    g_release_panorama_alloc_size = size;
     glGenTextures(1, &g_release_panorama_viewport_tex);
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 }
 
 static void draw_release_panorama_cube(float partial) {
@@ -279,7 +301,8 @@ static void release_panorama_blur_pass(void) {
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE);
+    int target_size = release_panorama_target_size();
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, target_size, target_size);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
@@ -297,7 +320,7 @@ static void release_panorama_blur_pass(void) {
     glTranslatef(0.0f, 0.0f, -2000.0f);
 
     for (int i = 0; i < 3; ++i) {
-        float off = (float)(i - 1) / 256.0f;
+        float off = (float)(i - 1) / (float)target_size;
         glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(i + 1));
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f + off, 0.0f); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
@@ -320,7 +343,8 @@ static void draw_release_skybox(float partial) {
     ensure_release_panorama_viewport_texture();
 
     /* Java GuiMainMenu.renderSkybox: fixed 256x256 panorama target first. */
-    glViewport(0, 0, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE);
+    int target_size = release_panorama_target_size();
+    glViewport(0, 0, target_size, target_size);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     draw_release_panorama_cube(partial);
     glDisable(GL_TEXTURE_2D);
@@ -336,17 +360,10 @@ static void draw_release_skybox(float partial) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     float scale = g_gui_w > g_gui_h ? 120.0f / (float)g_gui_w : 120.0f / (float)g_gui_h;
-    float u = (float)g_gui_h * scale / 256.0f;
-    float v = (float)g_gui_w * scale / 256.0f;
+    float u = (float)g_gui_h * scale / (float)target_size;
+    float v = (float)g_gui_w * scale / (float)target_size;
     glColor4f(1,1,1,1);
-    int native_opengl_viewport_copy = 0;
-#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
-    native_opengl_viewport_copy = 1;
-#elif defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    native_opengl_viewport_copy = 0;
-#else
-    native_opengl_viewport_copy = !pex_using_gpu_backend();
-#endif
+    int native_opengl_viewport_copy = release_panorama_uses_native_opengl();
     glBegin(GL_QUADS);
     if (native_opengl_viewport_copy) {
         /* Native OpenGL glCopyTexSubImage2D stores the viewport texture with
@@ -379,7 +396,7 @@ static void draw_release_minecraft_logo(void) {
 }
 
 static void draw_boot_mojang_logo(void) {
-    draw_rect(0, 0, g_gui_w, g_gui_h, 0xD0D0D0);
+    draw_rect(0, 0, g_gui_w, g_gui_h, 0xFFFFFF);
     if (!tex_mojang.id) return;
     int w = tex_mojang.w;
     int h = tex_mojang.h;
