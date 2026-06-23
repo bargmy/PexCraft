@@ -255,8 +255,12 @@ static void ingame_tick(void) {
         update_falling_blocks();
         pex_profile_add(PROF_FALLING, prof_part);
         prof_part = pex_profile_begin();
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
+#else
+        world_stream_service_ensure();
+#endif
         pex_profile_add(PROF_WORLD_STREAM, prof_part);
         prof_part = pex_profile_begin();
         update_liquids();

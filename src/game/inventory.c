@@ -6350,12 +6350,10 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
         LeaveCriticalSection(&g_world_stream_service_cs);
         if (stop) break;
 
-        if (g_screen == SCREEN_GENERATING && !g_mp_connected) {
-            /* Loading-screen terrain generation may run here, but in-game
-               streaming is deliberately NOT run on this service thread anymore.
-               The async ingame worker owns gameplay streaming so world-origin
-               remaps and player physics cannot fight each other.  Do not write
-               into the main-frame profiler from this worker. */
+        if ((g_screen == SCREEN_GENERATING || g_screen == SCREEN_INGAME) && !g_mp_connected) {
+            /* Keep desktop gameplay streaming off the main tick.  Console and
+               Android builds do not start this service, so they keep their
+               render-safe synchronous path in ingame_tick(). */
             update_infinite_world_streaming();
             flat_flush_pending_lighting();
         }
@@ -6386,7 +6384,7 @@ static void world_stream_service_ensure(void) {
     g_world_stream_service_thread = CreateThread(NULL, 0x400000, world_stream_service_proc, NULL, 0, NULL);
     if (g_world_stream_service_thread) {
         SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
-        pex_logf("world stream service started for loading screen only; gameplay streaming runs on async sim worker");
+        pex_logf("world stream service started");
     } else {
         pex_logf("world stream service failed to start; streaming will be serviced by fallbacks only");
     }
