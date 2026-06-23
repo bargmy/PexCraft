@@ -204,6 +204,7 @@ static void draw_title_logo_3d(float partial) {
 
 
 static GLuint g_release_panorama_viewport_tex = 0;
+#define RELEASE_PANORAMA_TEX_SIZE 1024
 
 static void ensure_release_panorama_viewport_texture(void) {
     if (g_release_panorama_viewport_tex) return;
@@ -213,7 +214,7 @@ static void ensure_release_panorama_viewport_texture(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, PEX_GL_CLAMP_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, PEX_GL_CLAMP_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 }
 
 static void draw_release_panorama_cube(float partial) {
@@ -280,14 +281,15 @@ static void draw_release_panorama_cube(float partial) {
 static void release_panorama_blur_pass(void) {
     ensure_release_panorama_viewport_texture();
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
-    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 256, 256);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
 
-    /* Match GuiMainMenu.rotateAndBlurSkybox: keep the 256x256 viewport, but
-       draw using GUI-space coordinates.  Do not call setup_gui_projection()
-       here, because that resets the viewport back to the full window. */
+    /* Match GuiMainMenu.rotateAndBlurSkybox, but render into a larger
+       offscreen texture so fullscreen desktop windows do not expose chunky
+       256x256 pixels. Do not call setup_gui_projection() here, because
+       that resets the viewport back to the full window. */
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
@@ -298,7 +300,7 @@ static void release_panorama_blur_pass(void) {
     glTranslatef(0.0f, 0.0f, -2000.0f);
 
     for (int i = 0; i < 3; ++i) {
-        float off = (float)(i - 1) / 256.0f;
+        float off = (float)(i - 1) / 256.0f; /* Java GuiMainMenu blur offset; keep this even with a larger render texture. */
         glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(i + 1));
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f + off, 0.0f); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
@@ -319,7 +321,7 @@ static void release_panorama_blur_pass(void) {
 
 static void draw_release_skybox(float partial) {
     ensure_release_panorama_viewport_texture();
-    glViewport(0, 0, 256, 256);
+    glViewport(0, 0, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     draw_release_panorama_cube(partial);
     for (int i = 0; i < 8; ++i) release_panorama_blur_pass();
@@ -338,8 +340,6 @@ static void draw_release_skybox(float partial) {
     glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,       0.0f);
     glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,       0.0f,       0.0f);
     glEnd();
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 }
 
 static void draw_release_minecraft_logo(void) {
