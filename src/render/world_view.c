@@ -4485,10 +4485,15 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
 static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
     int direct = flat_direct_backend() ? 1 : 0;
     int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
+    static unsigned int s_light_repair_tick[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) continue;
         if (!g_flat_world_chunk_generated[cz][cx]) continue;
+        if (s_light_repair_tick[cz][cx] != (unsigned int)g_ingame_ticks) {
+            s_light_repair_tick[cz][cx] = (unsigned int)g_ingame_ticks;
+            flat_repair_chunk_light_if_missing_local(cx, cz);
+        }
         if (!flat_section_has_any_block_local(cx, cz, sy)) {
             if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
                 flat_mark_section_after_generation(cx, cz, sy);

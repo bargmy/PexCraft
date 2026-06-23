@@ -440,6 +440,18 @@ static int flat_air_cell_has_lateral_sky(int x, int y, int z) {
     return 0;
 }
 
+static int flat_cell_has_clear_vertical_sky(int x, int y, int z) {
+    if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) return 0;
+    int id = flat_get_block(x, y, z);
+    if (id != 0 && flat_light_opacity_for_id(id) >= 255) return 0;
+    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
+        int bid = flat_get_block(x, yy, z);
+        int opacity = flat_light_opacity_for_id(bid);
+        if (opacity >= 255) return 0;
+    }
+    return 1;
+}
+
 static float flat_light_brightness(int x, int y, int z) {
     int l = flat_combined_light_value(x, y, z);
     /* The fast column skylight pass intentionally avoids a full flood fill while
@@ -447,6 +459,7 @@ static float flat_light_brightness(int x, int y, int z) {
        though Java's skylight would have spilled in from the side.  Raise only
        exposed air/translucent sample cells that have nearby skylight, avoiding
        the pure-black mountain rectangles without brightening sealed caves. */
+    if (l < 12 && y >= 50 && flat_cell_has_clear_vertical_sky(x, y, z)) l = 15;
     if (l < 8 && flat_air_cell_has_lateral_sky(x, y, z)) l = 8;
     if (l < 8 && flat_has_leaf_canopy_above(x, y, z)) l = 8;
     if (l < 0) l = 0;
@@ -719,6 +732,55 @@ static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigne
     if (flat_local_chunk_valid(lcx, lcz)) {
         for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
     }
+}
+
+static int flat_chunk_sky_light_needs_rebuild_local(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return 0;
+    if (!g_flat_world_chunk_generated[lcz][lcx]) return 0;
+    int x0 = g_flat_world_origin_x + lcx * FLAT_RENDER_CHUNK;
+    int z0 = g_flat_world_origin_z + lcz * FLAT_RENDER_CHUNK;
+
+    /* A shifted active window used to move blocks without moving their light
+       arrays.  That left whole generated chunks with zero skylight until the
+       player edited a block.  Sample the chunk against the same cheap column
+       skylight model used by the streamer and rebuild only chunks that are
+       visibly impossible: open-sky cells carrying near-black skylight. */
+    for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz += 3) {
+        int wz = z0 + lz;
+        int fz = flat_z_index(wz);
+        for (int lx = 0; lx < FLAT_RENDER_CHUNK; lx += 3) {
+            int wx = x0 + lx;
+            int fx = flat_index(wx);
+            int expected = 15;
+            for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
+                int yi = flat_y_index(y);
+                int id = g_flat_blocks[yi][fz][fx];
+                int have = g_flat_sky_light[yi][fz][fx] & 15;
+                if (expected >= 12 && have <= 1 && flat_light_opacity_for_id(id) < 255) return 1;
+                int opacity = flat_light_opacity_for_id(id);
+                if (opacity > 0 && expected > 0) {
+                    if (id == BLOCK_LEAVES) {
+                        if (expected > 8) expected -= 1;
+                    } else if (opacity >= 255) {
+                        expected = 0;
+                    } else {
+                        expected -= opacity;
+                        if (expected < 0) expected = 0;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int flat_repair_chunk_light_if_missing_local(int lcx, int lcz) {
+    if (!flat_chunk_sky_light_needs_rebuild_local(lcx, lcz)) return 0;
+    int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+    int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+    pex_logf("lighting repaired missing skylight chunk local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
+    flat_recalculate_lighting_chunk_fast_surface(wcx, wcz);
+    return 1;
 }
 
 static void flat_recalculate_lighting_chunk(int cx, int cz) {
@@ -6258,6 +6320,8 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
         memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
         memset(g_flat_meta, 0, sizeof(g_flat_meta));
         memset(g_flat_levels, 0, sizeof(g_flat_levels));
+        memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
+        memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
         return;
     }
 
@@ -6274,6 +6338,8 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
             memmove(&g_flat_blocks[y][new_fz][new_fx], &g_flat_blocks[y][old_fz][old_fx], (size_t)row_len);
             memmove(&g_flat_meta[y][new_fz][new_fx], &g_flat_meta[y][old_fz][old_fx], (size_t)row_len);
             memmove(&g_flat_levels[y][new_fz][new_fx], &g_flat_levels[y][old_fz][old_fx], (size_t)row_len);
+            memmove(&g_flat_sky_light[y][new_fz][new_fx], &g_flat_sky_light[y][old_fz][old_fx], (size_t)row_len);
+            memmove(&g_flat_block_light[y][new_fz][new_fx], &g_flat_block_light[y][old_fz][old_fx], (size_t)row_len);
         }
 
         int dz = new_origin_z - old_origin_z;
@@ -6283,12 +6349,16 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
             memset(&g_flat_blocks[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
             memset(&g_flat_meta[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
             memset(&g_flat_levels[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
+            memset(&g_flat_sky_light[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
+            memset(&g_flat_block_light[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
         } else if (dz < 0) {
             int n = -dz;
             if (n > FLAT_WORLD_SIZE) n = FLAT_WORLD_SIZE;
             memset(&g_flat_blocks[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
             memset(&g_flat_meta[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
             memset(&g_flat_levels[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
+            memset(&g_flat_sky_light[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
+            memset(&g_flat_block_light[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
         }
 
         int dx = new_origin_x - old_origin_x;
@@ -6300,6 +6370,8 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
                 memset(&g_flat_blocks[y][z][x0], 0, (size_t)n);
                 memset(&g_flat_meta[y][z][x0], 0, (size_t)n);
                 memset(&g_flat_levels[y][z][x0], 0, (size_t)n);
+                memset(&g_flat_sky_light[y][z][x0], 0, (size_t)n);
+                memset(&g_flat_block_light[y][z][x0], 0, (size_t)n);
             }
         } else if (dx < 0) {
             int n = -dx;
@@ -6308,6 +6380,8 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
                 memset(&g_flat_blocks[y][z][0], 0, (size_t)n);
                 memset(&g_flat_meta[y][z][0], 0, (size_t)n);
                 memset(&g_flat_levels[y][z][0], 0, (size_t)n);
+                memset(&g_flat_sky_light[y][z][0], 0, (size_t)n);
+                memset(&g_flat_block_light[y][z][0], 0, (size_t)n);
             }
         }
     }
