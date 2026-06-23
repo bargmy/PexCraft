@@ -277,6 +277,8 @@ static void draw_release_panorama_cube(float partial) {
 static void release_panorama_blur_pass(void) {
     ensure_release_panorama_viewport_texture();
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, RELEASE_PANORAMA_TEX_SIZE, RELEASE_PANORAMA_TEX_SIZE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -337,11 +339,30 @@ static void draw_release_skybox(float partial) {
     float u = (float)g_gui_h * scale / 256.0f;
     float v = (float)g_gui_w * scale / 256.0f;
     glColor4f(1,1,1,1);
+    int native_opengl_viewport_copy = 0;
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    native_opengl_viewport_copy = 1;
+#elif defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    native_opengl_viewport_copy = 0;
+#else
+    native_opengl_viewport_copy = !pex_using_gpu_backend();
+#endif
     glBegin(GL_QUADS);
-    glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
-    glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-    glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
-    glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
+    if (native_opengl_viewport_copy) {
+        /* Native OpenGL glCopyTexSubImage2D stores the viewport texture with
+           the opposite screen-Y orientation from the D3D compatibility copy.
+           In Java's final skybox quad, screen Y is mapped through texture U,
+           so the correct OpenGL compensation is U-flip, not V-flip. */
+        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
+    } else {
+        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
+    }
     glEnd();
 }
 
