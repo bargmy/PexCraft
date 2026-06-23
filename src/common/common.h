@@ -1367,8 +1367,6 @@ static PEX_THREAD_LOCAL int g_pex_profile_thread_role = PEX_PROFILE_ROLE_MAIN;
 static double g_prof_async_tick_last_ms = 0.0;
 static double g_prof_async_tick_avg_ms = 0.0;
 static int g_prof_async_tick_samples = 0;
-static int g_prof_async_mesh_scheduler_refs = 0;
-static int g_prof_async_mesh_scheduler_busy = 0;
 
 static int g_prof_packets_last = 0;
 static int g_prof_chunks_last = 0;

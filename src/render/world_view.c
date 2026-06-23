@@ -3963,7 +3963,6 @@ typedef struct AsyncSectionMeshJob {
     int cx, cz, sy;
     int origin_x, origin_z;
     unsigned int version;
-    int snapshot_ready;
     unsigned char blocks[ASYNC_SECTION_MESH_BYTES];
     unsigned char meta[ASYNC_SECTION_MESH_BYTES];
     unsigned char levels[ASYNC_SECTION_MESH_BYTES];
@@ -4157,30 +4156,6 @@ static DWORD WINAPI async_section_mesh_upload_worker_proc(LPVOID unused) {
     }
 }
 
-
-static void async_section_mesh_capture_snapshot(AsyncSectionMeshJob *job) {
-    if (!job || job->snapshot_ready) return;
-    int sx0 = job->origin_x + job->cx * FLAT_RENDER_CHUNK - 1;
-    int sy0 = FLAT_WORLD_Y_MIN + job->sy * FLAT_RENDER_SECTION - 1;
-    int sz0 = job->origin_z + job->cz * FLAT_RENDER_CHUNK - 1;
-    for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
-        int wy = sy0 + iy;
-        for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
-            int wz = sz0 + iz;
-            for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
-                int wx = sx0 + ix;
-                int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
-                job->blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
-                job->meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
-                job->levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
-                job->sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
-                job->block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
-            }
-        }
-    }
-    job->snapshot_ready = 1;
-}
-
 static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
     (void)unused;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
@@ -4204,12 +4179,6 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             }
             LeaveCriticalSection(&g_async_section_mesh_cs);
             if (!have_job) break;
-
-            /* Snapshot capture is intentionally on this worker, not in
-               rebuild_visible_flat_sections().  That removes the 18x18x18
-               block/light scan from the render frame.  Origin/version checks
-               below discard the result if the world shifted meanwhile. */
-            async_section_mesh_capture_snapshot(&job);
 
             FlatDirectMeshBuilder mb0, mb1;
             int skip0 = 1, skip1 = 1;
@@ -4301,8 +4270,6 @@ static int async_section_mesh_pending(void) {
     return pending;
 }
 
-static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx);
-
 static int async_section_mesh_submit(int sy, int cx, int cz) {
     if (!flat_async_section_mesh_enabled()) return 0;
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
@@ -4311,184 +4278,53 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
     if (!g_async_section_mesh_event || !g_async_section_mesh_thread) return 0;
     if (pex_using_d3d11() && (!g_async_section_mesh_upload_event || !g_async_section_mesh_upload_thread)) return 0;
 
+    int can_submit = 0;
     EnterCriticalSection(&g_async_section_mesh_cs);
-    if (g_async_section_mesh_stop || g_async_section_mesh_job_count >= ASYNC_SECTION_MESH_JOB_QUEUE_MAX ||
-        g_flat_section_mesh_building[sy][cz][cx]) {
-        LeaveCriticalSection(&g_async_section_mesh_cs);
-        return 2;
-    }
-
-    /* Do not copy the section here.  This function only enqueues a tiny
-       request; the worker captures the block/light snapshot and builds the
-       mesh. Runtime callers are normally the async visible-section scheduler,
-       not the render frame. */
-    int origin_x = g_flat_world_origin_x;
-    int origin_z = g_flat_world_origin_z;
-    unsigned int version = g_flat_section_mesh_version[sy][cz][cx];
-    AsyncSectionMeshJob *job = &g_async_section_mesh_jobs[g_async_section_mesh_job_tail];
-    job->cx = cx;
-    job->cz = cz;
-    job->sy = sy;
-    job->origin_x = origin_x;
-    job->origin_z = origin_z;
-    job->version = version;
-    job->snapshot_ready = 0;
-    g_async_section_mesh_job_tail = (g_async_section_mesh_job_tail + 1) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
-    g_async_section_mesh_job_count++;
-    g_flat_section_mesh_building[sy][cz][cx] = 1;
+    if (!g_async_section_mesh_stop && g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX) can_submit = 1;
     LeaveCriticalSection(&g_async_section_mesh_cs);
+    if (!can_submit) return 2;
 
-    pex_logf_trace("chunk mesh request sy=%d local=%d,%d version=%u origin=%d,%d", sy, cx, cz, version, origin_x, origin_z);
-    SetEvent(g_async_section_mesh_event);
-    return 1;
-}
-
-
-/* -------------------------------------------------------------------------
-   Runtime visible-section mesh scheduler
-
-   Rendering still has to adopt completed GPU/CPU mesh handles on the render
-   thread, but the per-frame visible-section scan and worker-job submission do
-   not need to run on the render thread.  The old Mesh main block both installed
-   ready results and walked the entire visible-section list looking for dirty or
-   missing meshes.  During streaming that scan happened every frame while the
-   simulation worker was also shifting/generating chunks, so the frame thread was
-   still doing gameplay-adjacent chunk work.  The scheduler below receives a
-   copied visible-ref list from render and performs dirty/missing checks plus
-   async job submission on a worker.  Render is left with only a tiny completed
-   mesh adoption budget.
-   ------------------------------------------------------------------------- */
-static CRITICAL_SECTION g_async_mesh_scheduler_cs;
-static HANDLE g_async_mesh_scheduler_event = NULL;
-static HANDLE g_async_mesh_scheduler_thread = NULL;
-static int g_async_mesh_scheduler_initialized = 0;
-static int g_async_mesh_scheduler_stop = 0;
-static int g_async_mesh_scheduler_ref_count = 0;
-static int g_async_mesh_scheduler_epoch = 0;
-static FlatRenderSectionRef g_async_mesh_scheduler_refs[FLAT_MAX_VISIBLE_SECTIONS];
-
-static int async_mesh_scheduler_section_missing(int sy, int cz, int cx) {
-    if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
-    if (!g_flat_world_chunk_generated[cz][cx]) return 0;
-    if (!flat_section_has_any_block_local(cx, cz, sy)) {
-        if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
-            flat_mark_section_after_generation(cx, cz, sy);
-        }
-        return 0;
-    }
-    return flat_section_needs_mesh_rebuild(sy, cz, cx);
-}
-
-static DWORD WINAPI async_mesh_scheduler_proc(LPVOID unused) {
-    (void)unused;
-    g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
-    FlatRenderSectionRef *local = (FlatRenderSectionRef*)malloc(sizeof(FlatRenderSectionRef) * (size_t)FLAT_MAX_VISIBLE_SECTIONS);
-    if (!local) return 0;
-    int seen_epoch = -1;
-
-    for (;;) {
-        WaitForSingleObject(g_async_mesh_scheduler_event, INFINITE);
-
-        int local_count = 0;
-        int stop = 0;
-        EnterCriticalSection(&g_async_mesh_scheduler_cs);
-        stop = g_async_mesh_scheduler_stop;
-        if (!stop && g_async_mesh_scheduler_epoch != seen_epoch) {
-            seen_epoch = g_async_mesh_scheduler_epoch;
-            local_count = g_async_mesh_scheduler_ref_count;
-            if (local_count > FLAT_MAX_VISIBLE_SECTIONS) local_count = FLAT_MAX_VISIBLE_SECTIONS;
-            if (local_count > 0) memcpy(local, g_async_mesh_scheduler_refs, sizeof(FlatRenderSectionRef) * (size_t)local_count);
-            g_prof_async_mesh_scheduler_refs = local_count;
-            g_prof_async_mesh_scheduler_busy = 1;
-        }
-        LeaveCriticalSection(&g_async_mesh_scheduler_cs);
-        if (stop) break;
-        if (local_count <= 0) {
-            EnterCriticalSection(&g_async_mesh_scheduler_cs);
-            g_prof_async_mesh_scheduler_busy = 0;
-            LeaveCriticalSection(&g_async_mesh_scheduler_cs);
-            continue;
-        }
-
-        int submitted = 0;
-        const int submit_budget = stream_generation_active() ? 4 : 10;
-        double deadline = now_seconds() + (stream_generation_active() ? 0.0025 : 0.0060);
-        for (int i = 0; i < local_count && submitted < submit_budget; ++i) {
-            if (now_seconds() > deadline) break;
-            int cx = local[i].cx, cz = local[i].cz, sy = local[i].sy;
-            if (!async_mesh_scheduler_section_missing(sy, cz, cx)) continue;
-            if (g_flat_section_mesh_building[sy][cz][cx]) {
-                if ((g_ingame_ticks % 100) == 0) g_flat_section_mesh_building[sy][cz][cx] = 0;
-                continue;
+    AsyncSectionMeshJob job;
+    memset(&job, 0, sizeof(job));
+    job.cx = cx;
+    job.cz = cz;
+    job.sy = sy;
+    job.origin_x = g_flat_world_origin_x;
+    job.origin_z = g_flat_world_origin_z;
+    job.version = g_flat_section_mesh_version[sy][cz][cx];
+    int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
+    int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
+    int sz0 = job.origin_z + cz * FLAT_RENDER_CHUNK - 1;
+    for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
+        int wy = sy0 + iy;
+        for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
+            int wz = sz0 + iz;
+            for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
+                int wx = sx0 + ix;
+                int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
+                job.blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
+                job.meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
+                job.levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
+                job.sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
+                job.block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
             }
-            int submit_result = async_section_mesh_submit(sy, cx, cz);
-            if (submit_result == 2) break;
-            if (submit_result == 1) submitted++;
         }
-
-        EnterCriticalSection(&g_async_mesh_scheduler_cs);
-        g_prof_async_mesh_scheduler_busy = 0;
-        LeaveCriticalSection(&g_async_mesh_scheduler_cs);
     }
 
-    free(local);
-    EnterCriticalSection(&g_async_mesh_scheduler_cs);
-    g_prof_async_mesh_scheduler_busy = 0;
-    LeaveCriticalSection(&g_async_mesh_scheduler_cs);
-    return 0;
-}
-
-static void async_mesh_scheduler_init(void) {
-    if (g_async_mesh_scheduler_initialized) return;
-    g_async_mesh_scheduler_initialized = 1;
-    g_async_mesh_scheduler_stop = 0;
-    g_async_mesh_scheduler_ref_count = 0;
-    g_async_mesh_scheduler_epoch = 0;
-    InitializeCriticalSection(&g_async_mesh_scheduler_cs);
-    g_async_mesh_scheduler_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (!g_async_mesh_scheduler_event) return;
-    g_async_mesh_scheduler_thread = CreateThread(NULL, 0x80000, async_mesh_scheduler_proc, NULL, 0, NULL);
-    if (g_async_mesh_scheduler_thread) SetThreadPriority(g_async_mesh_scheduler_thread, THREAD_PRIORITY_BELOW_NORMAL);
-}
-
-static void async_mesh_scheduler_publish_visible(const FlatRenderSectionRef *refs, int count) {
-    if (!flat_async_section_mesh_enabled() || !refs || count <= 0) return;
-    async_mesh_scheduler_init();
-    if (!g_async_mesh_scheduler_event || !g_async_mesh_scheduler_thread) return;
-    if (count > FLAT_MAX_VISIBLE_SECTIONS) count = FLAT_MAX_VISIBLE_SECTIONS;
-    EnterCriticalSection(&g_async_mesh_scheduler_cs);
-    memcpy(g_async_mesh_scheduler_refs, refs, sizeof(FlatRenderSectionRef) * (size_t)count);
-    g_async_mesh_scheduler_ref_count = count;
-    g_async_mesh_scheduler_epoch++;
-    g_prof_async_mesh_scheduler_refs = count;
-    LeaveCriticalSection(&g_async_mesh_scheduler_cs);
-    SetEvent(g_async_mesh_scheduler_event);
-}
-
-static void async_mesh_scheduler_shutdown(void) {
-    if (!g_async_mesh_scheduler_initialized) return;
-    if (g_async_mesh_scheduler_event) {
-        EnterCriticalSection(&g_async_mesh_scheduler_cs);
-        g_async_mesh_scheduler_stop = 1;
-        LeaveCriticalSection(&g_async_mesh_scheduler_cs);
-        SetEvent(g_async_mesh_scheduler_event);
+    EnterCriticalSection(&g_async_section_mesh_cs);
+    if (!g_async_section_mesh_stop && g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX &&
+        !g_flat_section_mesh_building[sy][cz][cx]) {
+        g_async_section_mesh_jobs[g_async_section_mesh_job_tail] = job;
+        g_async_section_mesh_job_tail = (g_async_section_mesh_job_tail + 1) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
+        g_async_section_mesh_job_count++;
+        g_flat_section_mesh_building[sy][cz][cx] = 1;
+        can_submit = 1;
+    } else {
+        can_submit = 0;
     }
-    if (g_async_mesh_scheduler_thread) {
-        WaitForSingleObject(g_async_mesh_scheduler_thread, INFINITE);
-        CloseHandle(g_async_mesh_scheduler_thread);
-        g_async_mesh_scheduler_thread = NULL;
-    }
-    if (g_async_mesh_scheduler_event) {
-        CloseHandle(g_async_mesh_scheduler_event);
-        g_async_mesh_scheduler_event = NULL;
-    }
-    DeleteCriticalSection(&g_async_mesh_scheduler_cs);
-    g_async_mesh_scheduler_initialized = 0;
-    g_async_mesh_scheduler_stop = 0;
-    g_async_mesh_scheduler_ref_count = 0;
-    g_async_mesh_scheduler_epoch = 0;
-    g_prof_async_mesh_scheduler_refs = 0;
-    g_prof_async_mesh_scheduler_busy = 0;
+    LeaveCriticalSection(&g_async_section_mesh_cs);
+    if (can_submit) { SetEvent(g_async_section_mesh_event); return 1; }
+    return 2;
 }
 
 static void async_section_mesh_install_ready(int max_uploads) {
@@ -4547,7 +4383,6 @@ static void async_section_mesh_install_ready(int max_uploads) {
 }
 
 static void async_section_mesh_shutdown(void) {
-    async_mesh_scheduler_shutdown();
     if (!g_async_section_mesh_initialized) return;
     if (g_async_section_mesh_event || g_async_section_mesh_upload_event) {
         EnterCriticalSection(&g_async_section_mesh_cs);
@@ -4705,21 +4540,16 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         g_prof_mesh_results_last = 0;
     }
 
-    if (async_mesh) {
-        /* Main thread now only adopts one completed mesh result.  The visible
-           section scan and worker-job submission happen on async_mesh_scheduler.
-           This keeps the runtime Mesh main block from doing terrain-work loops. */
-        if (!streaming || (g_debug_frame_counter & 1) == 0 || g_prof_mesh_results_last > 12) {
-            async_section_mesh_install_ready(1);
-        }
-        async_mesh_scheduler_publish_visible(refs, count);
-        return;
-    }
-
     flat_self_heal_visible_sections(refs, count);
-    int rebuilds_left = direct ? 3 : 3;
-    if (streaming) rebuilds_left = 1;
+    int rebuilds_left = direct ? 4 : 4;
+    if (streaming) rebuilds_left = direct ? 1 : 2;
     double deadline = now_seconds() + (streaming ? 0.0015 : 0.0030);
+
+#if defined(PEX_PLATFORM_PSP)
+    if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
+#else
+    if (async_mesh) async_section_mesh_install_ready(2);
+#endif
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
         if (now_seconds() > deadline) break;
@@ -6062,4 +5892,3 @@ static void draw_ingame_world_view(int with_hand) {
     draw_in_block_overlay();
     setup_gui_projection();
 }
-
