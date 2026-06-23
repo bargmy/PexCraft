@@ -312,6 +312,7 @@ static int button_hover(Button *b, int mx, int my) {
 
 static void draw_button(Button *b) {
     if (!b->visible) return;
+    if (b->kind == BUTTON_HITBOX) return;
     int hover = button_hover(b, g_mouse_x, g_mouse_y);
     int state = 1;
     if (!b->enabled) state = 0;

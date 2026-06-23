@@ -448,7 +448,7 @@ static void draw_options_screen(void) {
 
 static void draw_options_more_screen(void) {
     draw_default_bg();
-    draw_centered_text(tr("More Settings"), g_gui_w / 2, 20, 16777215);
+    draw_centered_text(tr("Video Settings"), g_gui_w / 2, 20, 16777215);
     draw_all_buttons();
 }
 
@@ -511,9 +511,76 @@ static void draw_controls_screen(void) {
     draw_all_buttons();
 }
 
+static void format_world_last_played(long long ms, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    if (ms <= 0) {
+        snprintf(out, cap, "Unknown time");
+        return;
+    }
+    time_t seconds = (time_t)(ms / 1000LL);
+    struct tm *tmv = localtime(&seconds);
+    if (!tmv) {
+        snprintf(out, cap, "Unknown time");
+        return;
+    }
+    strftime(out, cap, "%x %X", tmv);
+}
+
+static void draw_world_slot_rows(void) {
+    int top = 32;
+    int bottom = g_gui_h - 64;
+    int left = g_gui_w / 2 - 110;
+    int right = g_gui_w / 2 + 110;
+
+    if (bottom < top + 36) bottom = top + 36;
+    draw_tiled_rect_tint(0, top, g_gui_w, bottom, 0x202020, 0);
+
+    for (int i = 0; i < 5; i++) {
+        int row_y = top + 4 + i * 36;
+        int row_h = 32;
+        if (row_y > bottom || row_y + row_h < top) continue;
+        if (i == g_selected_world_slot) {
+            draw_rect(left, row_y - 2, right, row_y + row_h + 2, 8421504);
+            draw_rect(left + 1, row_y - 1, right - 1, row_y + row_h + 1, 0);
+        }
+
+        char dir[MAX_PATHBUF], level_path[MAX_PATHBUF];
+        snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, i + 1);
+        snprintf(level_path, sizeof(level_path), "%s\\level.dat", dir);
+        if (!file_exists(level_path)) {
+            char name[32];
+            snprintf(name, sizeof(name), "World %d", i + 1);
+            draw_text(name, left + 18, row_y + 7, 8421504);
+            draw_text("- empty -", left + 18, row_y + 18, 8421504);
+            continue;
+        }
+
+        char world_name[64] = "";
+        if (!read_level_string_tag_for_dir(dir, "LevelName", world_name, sizeof(world_name)) || !world_name[0]) {
+            snprintf(world_name, sizeof(world_name), "World %d", i + 1);
+        }
+        long long last_played = 0;
+        char date[64];
+        read_level_long_tag_for_dir(dir, "LastPlayed", &last_played);
+        format_world_last_played(last_played, date, sizeof(date));
+        int type = read_world_type_for_dir(dir);
+
+        char file_line[128];
+        snprintf(file_line, sizeof(file_line), "World%d (%s)", i + 1, date);
+        draw_text(world_name, left + 2, row_y + 1, 16777215);
+        draw_text(file_line, left + 2, row_y + 12, 8421504);
+        draw_text(type ? "Survival Mode" : "Survival Mode, Flat", left + 2, row_y + 22, 8421504);
+    }
+
+    draw_tiled_rect_tint(0, 0, g_gui_w, top, 0x404040, 0);
+    draw_tiled_rect_tint(0, bottom, g_gui_w, g_gui_h, 0x404040, 0);
+    draw_gradient(0, top, g_gui_w, top + 4, 0xFF000000, 0x00000000);
+    draw_gradient(0, bottom - 4, g_gui_w, bottom, 0x00000000, 0xFF000000);
+}
+
 static void draw_world_screen(void) {
-    draw_default_bg();
-    draw_centered_text(g_screen == SCREEN_WORLD_DELETE ? "Delete world" : "Select World", g_gui_w / 2, 20, 16777215);
+    draw_world_slot_rows();
+    draw_centered_text(g_screen == SCREEN_WORLD_DELETE ? "Delete World" : "Select World", g_gui_w / 2, 20, 16777215);
     draw_all_buttons();
 }
 

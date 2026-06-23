@@ -12,6 +12,7 @@ static void set_screen(ScreenId s) {
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
         g_menu_music_started = 0;
     }
+    if (s == SCREEN_WORLD_SELECT || s == SCREEN_WORLD_DELETE) g_selected_world_slot = -1;
     g_waiting_key = -1;
     g_gamepad_menu_index = 0;
     g_gamepad_virtual_cursor_active = 0;
@@ -97,39 +98,43 @@ static void rebuild_screen(void) {
         add_button_full(4, g_gui_w / 2 + 2, y0 + 72 + 12, 98, 20, "Quit Game", BUTTON_NORMAL);
         add_button_full(5, g_gui_w / 2 - 124, y0 + 72 + 12, 20, 20, "", BUTTON_LANGUAGE);
     } else if (g_screen == SCREEN_OPTIONS) {
-        int shown = 0;
-        for (int i = 0; i < OPT_COUNT; i++) {
-            if (i == OPT_FOV || i == OPT_RENDERER) continue; /* kept on More Settings so the main options page stays uncluttered */
+        const OptionId main_options[] = {
+            OPT_MUSIC, OPT_SOUND, OPT_INVERT_MOUSE, OPT_SENSITIVITY, OPT_FOV, OPT_DIFFICULTY
+        };
+        for (int shown = 0; shown < ARRAY_COUNT(main_options); shown++) {
+            OptionId opt = main_options[shown];
             int x = g_gui_w / 2 - 155 + (shown % 2) * 160;
             int y = g_gui_h / 6 + 24 * (shown >> 1);
             char label[MAX_LABEL];
-            get_option_label((OptionId)i, label, sizeof(label));
-            Button *b = add_button_full(i, x, y, 150, 20, label, opt_is_slider[i] ? BUTTON_SLIDER : BUTTON_NORMAL);
-            b->opt = (OptionId)i;
-            if (b->kind == BUTTON_SLIDER) b->slider_value = get_option_float((OptionId)i);
-            shown++;
+            get_option_label(opt, label, sizeof(label));
+            Button *b = add_button_full((int)opt, x, y, 150, 20, label, opt_is_slider[opt] ? BUTTON_SLIDER : BUTTON_NORMAL);
+            b->opt = opt;
+            if (b->kind == BUTTON_SLIDER) b->slider_value = get_option_float(opt);
         }
-        int row = g_gui_h / 6 + 152;
-        add_button_full(100, g_gui_w / 2 - 100, row, 98, 20, tr("Controls"), BUTTON_NORMAL);
-        add_button_full(300, g_gui_w / 2 + 2, row, 98, 20, tr("Next Page"), BUTTON_NORMAL);
-        add_button_full(200, g_gui_w / 2 - 100, row + 24, 200, 20, tr("Done"), BUTTON_NORMAL);
+        add_button_full(300, g_gui_w / 2 - 100, g_gui_h / 6 + 96 - 6, 200, 20, tr("Video Settings..."), BUTTON_NORMAL);
+        add_button_full(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, tr("Controls..."), BUTTON_NORMAL);
+        add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
+        add_button_full(200, g_gui_w / 2 - 100, g_gui_h / 6 + 168, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
-        char fov_label[MAX_LABEL];
-        get_option_label(OPT_FOV, fov_label, sizeof(fov_label));
-        Button *fov = add_button_full(20, g_gui_w / 2 - 100, g_gui_h / 4 + 8, 200, 20, fov_label, BUTTON_SLIDER);
-        fov->opt = OPT_FOV;
-        fov->slider_value = get_option_float(OPT_FOV);
-        char renderer_label[MAX_LABEL];
-        get_option_label(OPT_RENDERER, renderer_label, sizeof(renderer_label));
-        Button *renderer = add_button_full(21, g_gui_w / 2 - 100, g_gui_h / 4 + 40, 200, 20, renderer_label, BUTTON_NORMAL);
-        renderer->opt = OPT_RENDERER;
+        const OptionId video_options[] = {
+            OPT_GRAPHICS, OPT_RENDER_DISTANCE, OPT_VIEW_BOBBING, OPT_LIMIT_FRAMERATE,
+            OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDERER
+        };
+        for (int i = 0; i < ARRAY_COUNT(video_options); i++) {
+            OptionId opt = video_options[i];
+            int x = g_gui_w / 2 - 155 + (i % 2) * 160;
+            int y = g_gui_h / 6 + 24 * (i >> 1);
+            char label[MAX_LABEL];
+            get_option_label(opt, label, sizeof(label));
+            Button *b = add_button_full((int)opt, x, y, 150, 20, label, opt_is_slider[opt] ? BUTTON_SLIDER : BUTTON_NORMAL);
+            b->opt = opt;
+            if (b->kind == BUTTON_SLIDER) b->slider_value = get_option_float(opt);
 #ifdef PEX_PLATFORM_PSP
-        renderer->enabled = 0;
+            if (opt == OPT_RENDERER) b->enabled = 0;
 #endif
-        add_button(10, g_gui_w / 2 - 100, g_gui_h / 4 + 72, tr("Skins..."));
-        add_button(22, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Info...");
-        add_button_full(199, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Back"), BUTTON_NORMAL);
-        add_button_full(200, g_gui_w / 2 + 2, g_gui_h - 52, 98, 20, tr("Done"), BUTTON_NORMAL);
+        }
+        add_button_full(122, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, "Info...", BUTTON_NORMAL);
+        add_button_full(199, g_gui_w / 2 - 100, g_gui_h / 6 + 168, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 24, 200, 20, tr("Back"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SKINS) {
@@ -154,16 +159,21 @@ static void rebuild_screen(void) {
             snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, i + 1);
             char level_path[MAX_PATHBUF];
             snprintf(level_path, sizeof(level_path), "%s\\level.dat", dir);
-            if (!file_exists(level_path)) snprintf(label, sizeof(label), "- empty -");
-            else {
-                unsigned long long sz = dir_size(dir);
-                float mb = (float)((sz / 1024ULL) * 100ULL / 1024ULL) / 100.0f;
-                snprintf(label, sizeof(label), "World %d (%.2f MB)", i + 1, mb);
-            }
-            add_button(i, g_gui_w / 2 - 100, g_gui_h / 6 + 24 * i, label);
+            snprintf(label, sizeof(label), "%s", file_exists(level_path) ? "" : "- empty -");
+            add_button_full(i, g_gui_w / 2 - 110, 32 + 4 + i * 36, 220, 32, label, BUTTON_HITBOX);
         }
-        if (g_screen == SCREEN_WORLD_SELECT) add_button(5, g_gui_w / 2 - 100, g_gui_h / 6 + 120 + 12, "Delete world...");
-        add_button(6, g_gui_w / 2 - 100, g_gui_h / 6 + 168, "Cancel");
+        if (g_screen == SCREEN_WORLD_SELECT) {
+            Button *select = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, "Play Selected World", BUTTON_NORMAL);
+            Button *delete = add_button_full(5, g_gui_w / 2 - 154, g_gui_h - 28, 150, 20, "Delete", BUTTON_NORMAL);
+            add_button_full(11, g_gui_w / 2 + 4, g_gui_h - 52, 150, 20, "Create New World", BUTTON_NORMAL);
+            add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 28, 150, 20, "Cancel", BUTTON_NORMAL);
+            select->enabled = g_selected_world_slot >= 0;
+            delete->enabled = g_selected_world_slot >= 0;
+        } else {
+            Button *delete = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, "Delete", BUTTON_NORMAL);
+            add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 52, 150, 20, "Cancel", BUTTON_NORMAL);
+            delete->enabled = g_selected_world_slot >= 0;
+        }
     } else if (g_screen == SCREEN_CONFIRM_DELETE) {
         add_button_full(0, g_gui_w / 2 - 155 + 0, g_gui_h / 6 + 96, 150, 20, "Yes", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 - 155 + 160, g_gui_h / 6 + 96, 150, 20, "No", BUTTON_NORMAL);
@@ -275,15 +285,15 @@ static void on_button(Button *b) {
         } else if (b->id == 100) set_screen(SCREEN_CONTROLS);
         else if (b->id == 200) finish_options_to(g_parent_screen);
         else if (b->id == 300) set_screen(SCREEN_OPTIONS_MORE);
+        else if (b->id == 301) set_screen(SCREEN_SKINS);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
-        if (b->id == 10) set_screen(SCREEN_SKINS);
-        else if (b->id == 22) set_screen(SCREEN_SYSTEM_INFO);
-        else if (b->id == 21) {
-            bump_option(OPT_RENDERER, 1);
-            get_option_label(OPT_RENDERER, b->label, sizeof(b->label));
-        }
-        else if (b->id == 199) set_screen(SCREEN_OPTIONS);
-        else if (b->id == 200) finish_options_to(g_parent_screen);
+        if (b->id < 100) {
+            if (b->kind == BUTTON_NORMAL) {
+                bump_option(b->opt, 1);
+                get_option_label(b->opt, b->label, sizeof(b->label));
+            }
+        } else if (b->id == 122) set_screen(SCREEN_SYSTEM_INFO);
+        else if (b->id == 199) { save_options(); set_screen(SCREEN_OPTIONS); }
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_SKINS) {
@@ -294,7 +304,7 @@ static void on_button(Button *b) {
             apply_texture_pack_index(g_selected_texpack);
             save_options();
             set_screen(SCREEN_SKINS);
-        } else if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
+        } else if (b->id == 200) set_screen(SCREEN_OPTIONS);
     } else if (g_screen == SCREEN_CONTROLS) {
         if (b->id == 200) { save_options(); set_screen(SCREEN_OPTIONS); }
         else {
@@ -308,24 +318,40 @@ static void on_button(Button *b) {
         }
     } else if (g_screen == SCREEN_WORLD_SELECT) {
         if (b->id < 5) {
+            g_selected_world_slot = b->id;
+            rebuild_screen();
+        } else if (b->id == 10 && g_selected_world_slot >= 0) {
             char dir[MAX_PATHBUF];
             char level_path[MAX_PATHBUF];
-            snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, b->id + 1);
+            snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, g_selected_world_slot + 1);
             snprintf(level_path, sizeof(level_path), "%s\\level.dat", dir);
             /* A slot is only occupied when level.dat exists.  Deleting a world can
                leave an empty WorldN folder behind on Windows if Explorer/cmd is
                currently inside it, and treating that folder as a real save skipped
                the world-type picker and reused stale/default generator state. */
             if (file_exists(level_path)) {
-                g_pending_world_slot = b->id + 1;
+                g_pending_world_slot = g_selected_world_slot + 1;
                 g_pending_world_type = read_world_type_for_dir(dir);
-                start_world_generation(b->id + 1);
+                start_world_generation(g_selected_world_slot + 1);
             } else {
-                g_pending_world_slot = b->id + 1;
+                g_pending_world_slot = g_selected_world_slot + 1;
                 g_pending_world_type = 0;
                 set_screen(SCREEN_WORLD_TYPE);
             }
         } else if (b->id == 5) set_screen(SCREEN_WORLD_DELETE);
+        else if (b->id == 11) {
+            int slot = -1;
+            for (int i = 0; i < 5; i++) {
+                char path[MAX_PATHBUF];
+                snprintf(path, sizeof(path), "%s\\World%d\\level.dat", g_save_dir, i + 1);
+                if (!file_exists(path)) { slot = i; break; }
+            }
+            if (slot < 0) slot = 0;
+            g_selected_world_slot = slot;
+            g_pending_world_slot = slot + 1;
+            g_pending_world_type = 0;
+            set_screen(SCREEN_WORLD_TYPE);
+        }
         else if (b->id == 6) set_screen(g_parent_screen);
     } else if (g_screen == SCREEN_WORLD_TYPE) {
         if (b->id == 0 || b->id == 1) {
@@ -337,7 +363,14 @@ static void on_button(Button *b) {
         if (b->id < 5) {
             char dir[MAX_PATHBUF];
             snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, b->id + 1);
-            if (dir_exists(dir)) { g_confirm_world = b->id + 1; set_screen(SCREEN_CONFIRM_DELETE); }
+            if (dir_exists(dir)) {
+                g_selected_world_slot = b->id;
+                rebuild_screen();
+            }
+        } else if (b->id == 10 && g_selected_world_slot >= 0) {
+            char dir[MAX_PATHBUF];
+            snprintf(dir, sizeof(dir), "%s\\World%d", g_save_dir, g_selected_world_slot + 1);
+            if (dir_exists(dir)) { g_confirm_world = g_selected_world_slot + 1; set_screen(SCREEN_CONFIRM_DELETE); }
         } else if (b->id == 6) set_screen(SCREEN_WORLD_SELECT);
     } else if (g_screen == SCREEN_CONFIRM_DELETE) {
         if (b->id == 0 && g_confirm_world > 0) {
@@ -563,7 +596,7 @@ static void handle_keydown(WPARAM vk) {
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_SYSTEM_INFO) set_screen(SCREEN_OPTIONS_MORE);
-        else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS_MORE);
+        else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_WORLD_SELECT) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_WORLD_TYPE) set_screen(SCREEN_WORLD_SELECT);
@@ -627,4 +660,3 @@ static void handle_char(WPARAM ch) {
 static void draw_all_buttons(void) {
     for (int i = 0; i < g_button_count; i++) draw_button(&g_buttons[i]);
 }
-

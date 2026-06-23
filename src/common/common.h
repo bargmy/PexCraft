@@ -338,7 +338,8 @@ typedef enum ScreenId {
 typedef enum ButtonKind {
     BUTTON_NORMAL,
     BUTTON_SLIDER,
-    BUTTON_LANGUAGE
+    BUTTON_LANGUAGE,
+    BUTTON_HITBOX
 } ButtonKind;
 
 
@@ -633,6 +634,7 @@ static double g_mp_render_last_time = 0.0;
 static int g_ticks = 0;
 static int g_waiting_key = -1;
 static int g_confirm_world = 0;
+static int g_selected_world_slot = -1;
 static int g_pending_world_slot = 0;
 static int g_pending_world_type = 0;
 static int g_world_type = 0; /* 0 flat, 1 normal/local terrain */
