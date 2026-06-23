@@ -218,8 +218,23 @@ static int release_panorama_uses_native_opengl(void) {
 #endif
 }
 
+static int release_panorama_next_pow2(int v) {
+    int p = 1;
+    while (p < v && p < 4096) p <<= 1;
+    return p;
+}
+
 static int release_panorama_target_size(void) {
-    return release_panorama_uses_native_opengl() ? RELEASE_PANORAMA_TEX_SIZE_GL : RELEASE_PANORAMA_TEX_SIZE;
+    if (!release_panorama_uses_native_opengl()) return RELEASE_PANORAMA_TEX_SIZE;
+
+    /* Native OpenGL renders the panorama into a larger square texture so the
+       final Java skybox draw can stay visually smooth at many window sizes.
+       Keep Java's 256-based UV math later; only the offscreen buffer scales. */
+    int max_dim = g_render_w > g_render_h ? g_render_w : g_render_h;
+    int target = release_panorama_next_pow2(max_dim);
+    if (target < RELEASE_PANORAMA_TEX_SIZE_GL) target = RELEASE_PANORAMA_TEX_SIZE_GL;
+    if (target > 4096) target = 4096;
+    return target;
 }
 
 static void ensure_release_panorama_viewport_texture(void) {
@@ -320,7 +335,7 @@ static void release_panorama_blur_pass(void) {
     glTranslatef(0.0f, 0.0f, -2000.0f);
 
     for (int i = 0; i < 3; ++i) {
-        float off = (float)(i - 1) / (float)target_size;
+        float off = (float)(i - 1) / 256.0f;
         glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(i + 1));
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f + off, 0.0f); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
@@ -360,8 +375,8 @@ static void draw_release_skybox(float partial) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     float scale = g_gui_w > g_gui_h ? 120.0f / (float)g_gui_w : 120.0f / (float)g_gui_h;
-    float u = (float)g_gui_h * scale / (float)target_size;
-    float v = (float)g_gui_w * scale / (float)target_size;
+    float u = (float)g_gui_h * scale / 256.0f;
+    float v = (float)g_gui_w * scale / 256.0f;
     glColor4f(1,1,1,1);
     int native_opengl_viewport_copy = release_panorama_uses_native_opengl();
     glBegin(GL_QUADS);
