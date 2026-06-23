@@ -4485,14 +4485,35 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
 static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
     int direct = flat_direct_backend() ? 1 : 0;
     int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
-    static unsigned int s_light_repair_tick[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    /* The lighting safety net used to rescan every visible chunk once per game
+       tick.  At render distance 11 that is hundreds of chunks * 36 sampled
+       columns * world height inside the main-thread "Mesh install" phase, which
+       is why F3 could show 80-100 ms spikes even when no mesh jobs were queued.
+       Chunk light now shifts with the stream window and generated chunks bring
+       precomputed light, so keep this only as a tiny rotating repair budget for
+       old/bad saves instead of a full visible-world scan. */
+    enum { LIGHT_REPAIR_MAX_CHUNKS_PER_FRAME = 2, LIGHT_REPAIR_MAX_REF_PROBES = 48 };
+    static unsigned int s_light_repair_epoch[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int s_light_repair_cursor = 0;
+    static unsigned int s_light_repair_epoch_counter = 1;
+    unsigned int light_epoch = s_light_repair_epoch_counter++;
+    if (s_light_repair_epoch_counter == 0) s_light_repair_epoch_counter = 1;
+    int light_budget = LIGHT_REPAIR_MAX_CHUNKS_PER_FRAME;
+    int light_probes = 0;
+    int start = (count > 0) ? (s_light_repair_cursor % count) : 0;
+    if (count > 0) s_light_repair_cursor = (start + 1) % count;
+
     for (int i = 0; i < count; i++) {
-        int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        int ri = (count > 0) ? ((start + i) % count) : i;
+        int cx = refs[ri].cx, cz = refs[ri].cz, sy = refs[ri].sy;
         if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) continue;
         if (!g_flat_world_chunk_generated[cz][cx]) continue;
-        if (s_light_repair_tick[cz][cx] != (unsigned int)g_ingame_ticks) {
-            s_light_repair_tick[cz][cx] = (unsigned int)g_ingame_ticks;
-            flat_repair_chunk_light_if_missing_local(cx, cz);
+        if (light_budget > 0 && light_probes < LIGHT_REPAIR_MAX_REF_PROBES &&
+            s_light_repair_epoch[cz][cx] != light_epoch) {
+            s_light_repair_epoch[cz][cx] = light_epoch;
+            light_probes++;
+            if (flat_repair_chunk_light_if_missing_local(cx, cz)) light_budget--;
+            else light_budget--;
         }
         if (!flat_section_has_any_block_local(cx, cz, sy)) {
             if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
