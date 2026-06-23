@@ -206,8 +206,6 @@ static void draw_title_logo_3d(float partial) {
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
-#define RELEASE_PANORAMA_TEX_SIZE_GL 1024
-
 static int release_panorama_uses_native_opengl(void) {
 #if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
     return 1;
@@ -218,23 +216,12 @@ static int release_panorama_uses_native_opengl(void) {
 #endif
 }
 
-static int release_panorama_next_pow2(int v) {
-    int p = 1;
-    while (p < v && p < 4096) p <<= 1;
-    return p;
-}
-
 static int release_panorama_target_size(void) {
-    if (!release_panorama_uses_native_opengl()) return RELEASE_PANORAMA_TEX_SIZE;
-
-    /* Native OpenGL renders the panorama into a larger square texture so the
-       final Java skybox draw can stay visually smooth at many window sizes.
-       Keep Java's 256-based UV math later; only the offscreen buffer scales. */
-    int max_dim = g_render_w > g_render_h ? g_render_w : g_render_h;
-    int target = release_panorama_next_pow2(max_dim);
-    if (target < RELEASE_PANORAMA_TEX_SIZE_GL) target = RELEASE_PANORAMA_TEX_SIZE_GL;
-    if (target > 4096) target = 4096;
-    return target;
+    /* Java GuiMainMenu.renderSkybox always renders and copies a 256x256
+       viewport texture.  Do not scale this with the window size: copying a
+       larger region than the real framebuffer breaks native OpenGL on
+       resizable windows and causes quadrant/split artifacts. */
+    return RELEASE_PANORAMA_TEX_SIZE;
 }
 
 static void ensure_release_panorama_viewport_texture(void) {
