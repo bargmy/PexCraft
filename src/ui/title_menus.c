@@ -352,11 +352,12 @@ static void draw_release_skybox(float partial) {
     glBegin(GL_QUADS);
     if (panorama_flip_for_opengl) {
         /* OpenGL's glCopyTexSubImage2D keeps the copied backbuffer bottom-up;
-           the D3D compatibility layer already compensates for that internally. */
-        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
-        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
-        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f(0.0f,          0.0f,          0.0f);
+           the D3D compatibility layer already compensates for that internally.
+           Flip V only.  Do not flip U, or the skybox face edges become visible. */
+        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f(0.0f,          0.0f,          0.0f);
     } else {
         glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
         glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);

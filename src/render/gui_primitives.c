@@ -69,34 +69,13 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    int h = y2 - y1;
-    if (h <= 0) h = 1;
-    int steps = h;
-    if (steps < 16) steps = 16;
-    if (steps > 128) steps = 128;
-
+#ifdef GL_SMOOTH
+    glShadeModel(GL_SMOOTH);
+#endif
     glBegin(GL_QUADS);
-    for (int i = 0; i < steps; ++i) {
-        float t0 = (float)i / (float)steps;
-        float t1 = (float)(i + 1) / (float)steps;
-        float y0f = (float)y1 + (float)(y2 - y1) * t0;
-        float y1f = (float)y1 + (float)(y2 - y1) * t1;
-
-        float r0 = r1 + (r2 - r1) * t0;
-        float g0 = g1 + (g2 - g1) * t0;
-        float b0 = b1 + (b2 - b1) * t0;
-        float a0 = a1 + (a2 - a1) * t0;
-        float rB = r1 + (r2 - r1) * t1;
-        float gB = g1 + (g2 - g1) * t1;
-        float bB = b1 + (b2 - b1) * t1;
-        float aB = a1 + (a2 - a1) * t1;
-
-        glColor4f(r0,g0,b0,a0); glVertex3f((float)x2, y0f, 0.0f); glVertex3f((float)x1, y0f, 0.0f);
-        glColor4f(rB,gB,bB,aB); glVertex3f((float)x1, y1f, 0.0f); glVertex3f((float)x2, y1f, 0.0f);
-    }
+    glColor4f(r1,g1,b1,a1); glVertex3f((float)x2, (float)y1, 0.0f); glVertex3f((float)x1, (float)y1, 0.0f);
+    glColor4f(r2,g2,b2,a2); glVertex3f((float)x1, (float)y2, 0.0f); glVertex3f((float)x2, (float)y2, 0.0f);
     glEnd();
-
     glEnable(GL_TEXTURE_2D);
     glColor4f(1,1,1,1);
 }
