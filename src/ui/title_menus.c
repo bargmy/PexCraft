@@ -341,11 +341,28 @@ static void draw_release_skybox(float partial) {
     float u = (float)g_gui_h * scale / 256.0f;
     float v = (float)g_gui_w * scale / 256.0f;
     glColor4f(1,1,1,1);
+    int panorama_flip_for_opengl = 0;
+#if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    panorama_flip_for_opengl = 1;
+#elif defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    panorama_flip_for_opengl = 0;
+#else
+    panorama_flip_for_opengl = !pex_using_gpu_backend();
+#endif
     glBegin(GL_QUADS);
-    glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
-    glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-    glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
-    glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
+    if (panorama_flip_for_opengl) {
+        /* OpenGL's glCopyTexSubImage2D keeps the copied backbuffer bottom-up;
+           the D3D compatibility layer already compensates for that internally. */
+        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f(0.0f,          0.0f,          0.0f);
+    } else {
+        glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+        glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+        glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
+    }
     glEnd();
 }
 
