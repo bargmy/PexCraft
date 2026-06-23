@@ -288,7 +288,14 @@ int main(int argc, char **argv) {
     }
 
     init_dirs();
+    srand((unsigned int)time(NULL));
     load_options();
+    if (!release_resources_install_blocking()) {
+        fprintf(stderr, "PexCraft could not download the required Release resources: %s\n",
+                g_classic_install_error[0] ? g_classic_install_error : "check your internet connection");
+        SDL_Quit();
+        return 1;
+    }
     pex_sound_rescan();
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
@@ -323,7 +330,7 @@ int main(int argc, char **argv) {
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);
     free_texture(&tex_black); free_texture(&tex_pack); free_texture(&tex_default_pack_icon); free_texture(&tex_unknown_pack);
     free_texture(&tex_icons); free_texture(&tex_inventory); free_texture(&tex_items); free_texture(&tex_steve); free_texture(&tex_mob_pig); free_texture(&tex_mob_sheep); free_texture(&tex_mob_sheep_fur); free_texture(&tex_mob_cow); free_texture(&tex_mob_chicken); free_texture(&tex_mob_saddle);
-    free_texture(&tex_chest_entity); free_texture(&tex_large_chest_entity); free_texture_pack_icons();
+    free_texture(&tex_chest_entity); free_texture(&tex_large_chest_entity); free_texture(&tex_title_logo); free_texture(&tex_mojang); for (int i = 0; i < 6; ++i) free_texture(&tex_panorama[i]); free_texture_pack_icons();
     pex_gamepad_shutdown();
     pex_sound_shutdown();
     pex_renderer_shutdown();

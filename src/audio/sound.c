@@ -536,11 +536,33 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
 static void pex_sound_shutdown(void) { }
 #endif
 
+
+static void pex_menu_music_start_once(void) {
+    if (g_opts.music <= 0.001f) return;
+    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], menu2[MAX_PATHBUF];
+    classic_resources_path(resources, sizeof(resources));
+    path_join(music, sizeof(music), resources, "music");
+    path_join(menu, sizeof(menu), music, "menu");
+    path_join(menu2, sizeof(menu2), menu, "menu2.ogg");
+    if (!file_exists(menu2)) {
+        char sounds[MAX_PATHBUF], music2[MAX_PATHBUF], menu_dir2[MAX_PATHBUF];
+        path_join(sounds, sizeof(sounds), resources, "sounds");
+        path_join(music2, sizeof(music2), sounds, "music");
+        path_join(menu_dir2, sizeof(menu_dir2), music2, "menu");
+        path_join(menu2, sizeof(menu2), menu_dir2, "menu2.ogg");
+    }
+    if (!file_exists(menu2)) return;
+    float volume = g_opts.music;
+    if (volume > 1.0f) volume = 1.0f;
+    if (volume < 0.0f) volume = 0.0f;
+    pex_sound_backend_play_file(menu2, volume, 1.0f);
+}
+
 static void pex_sound_missing_notice_once(void) {
     double t = now_seconds();
     if (t - g_pex_last_missing_sound_notice < 8.0) return;
     g_pex_last_missing_sound_notice = t;
-    log_msg("Sound requested but no b1.0 sound assets are installed or no OGG backend is available");
+    log_msg("Sound requested but Moog City 2 is not installed or no OGG backend is available");
 }
 
 static void pex_sound_play(const char *key, float volume, float pitch) {

@@ -260,6 +260,10 @@ static void draw_button(Button *b) {
         draw_textured_rect_tex(&tex_gui, knob, b->y, 0, 66, 4, 20, 0xFFFFFF);
         draw_textured_rect_tex(&tex_gui, knob + 4, b->y, 196, 66, 4, 20, 0xFFFFFF);
     }
+    if (b->kind == BUTTON_LANGUAGE) {
+        draw_textured_rect_tex(&tex_gui, b->x + 2, b->y + 2, 0, 146, 16, 16, 0xFFFFFF);
+        return;
+    }
     int col;
     if (!b->enabled) col = -6250336;
     else if (hover) col = 16777120;

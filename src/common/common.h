@@ -42,8 +42,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define APP_TITLE "PEXCRAFT"
-#define VERSION_TEXT "PEXCRAFT Beta 1.0"
+#define APP_TITLE "PexCraft"
+#define VERSION_TEXT "PexCraft 1.2.5"
 #define MAX_BUTTONS 64
 #define MAX_LABEL 256
 #define MAX_PATHBUF 1024
@@ -71,8 +71,8 @@
 #define MAX_CHUNK_REBUILDS_PER_FRAME 1 /* legacy column renderer */
 #define MAX_SECTION_REBUILDS_PER_FRAME 3
 #define MAX_WORLD_SIM_CHANGES_PER_TICK 48
-#define CLASSIC_PACK_NAME "Minecraft Classic"
-#define CLASSIC_PACK_URL "https://piston-data.mojang.com/v1/objects/93faf3398ebf8008d59852dc3c2b22b909ca8a49/client.jar"
+#define CLASSIC_PACK_NAME "Release"
+#define CLASSIC_PACK_URL "https://piston-data.mojang.com/v1/objects/4a2fac7504182a97dcbcd7560c6392d7c8139928/client.jar"
 #define CLASSIC_SOUNDS_INDEX_URL "https://launchermeta.mojang.com/v1/packages/770572e819335b6c0a053f8378ad88eda189fc14/legacy.json"
 #define CLASSIC_SOUND_OBJECT_URL_PREFIX "https://resources.download.minecraft.net"
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
@@ -329,7 +329,8 @@ typedef enum ScreenId {
 
 typedef enum ButtonKind {
     BUTTON_NORMAL,
-    BUTTON_SLIDER
+    BUTTON_SLIDER,
+    BUTTON_LANGUAGE
 } ButtonKind;
 
 
@@ -1412,6 +1413,7 @@ static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;
+static Texture tex_title_logo, tex_mojang, tex_panorama[6];
 static int font_widths[256];
 
 static const char *TITLE_BLOCKS[5] = {
@@ -1427,6 +1429,9 @@ static double title_z[TITLE_COLS][TITLE_ROWS];
 static double title_z_prev[TITLE_COLS][TITLE_ROWS];
 static double title_vel[TITLE_COLS][TITLE_ROWS];
 static int title_inited = 0;
+static double g_title_enter_time = 0.0;
+static int g_menu_music_started = 0;
+static int g_boot_sequence_done = 0;
 
 static const char *FONT_CHARS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~";
 static const char *opt_names[OPT_COUNT] = {
@@ -1461,6 +1466,8 @@ static void restart_application_now(void);
 static void start_world_generation(int slot);
 static void worldgen_tick(void);
 static int classic_pack_installed(void);
+static int release_resources_install_blocking(void);
+static void pex_menu_music_start_once(void);
 static int classic_pack_missing_required_textures(void);
 static int classic_sounds_installed(void);
 static void pex_sound_rescan(void);

@@ -376,7 +376,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     g_inst = hInstance;
     begin_high_res_timer();
     init_dirs();
+    srand((unsigned int)time(NULL));
     load_options();
+    if (!release_resources_install_blocking()) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "PexCraft could not download the required Release resources.\n\n%s",
+                 g_classic_install_error[0] ? g_classic_install_error : "Check your internet connection and try again.");
+        MessageBoxA(NULL, msg, APP_TITLE, MB_ICONERROR);
+        end_high_res_timer();
+        return 1;
+    }
     pex_sound_rescan();
     g_runtime_renderer_backend = g_opts.renderer_backend;
     g_selected_renderer_backend = g_opts.renderer_backend;
@@ -458,6 +467,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     free_texture(&tex_steve); free_texture(&tex_mob_pig); free_texture(&tex_mob_sheep); free_texture(&tex_mob_sheep_fur); free_texture(&tex_mob_cow); free_texture(&tex_mob_chicken); free_texture(&tex_mob_saddle);
     free_texture(&tex_chest_entity);
     free_texture(&tex_large_chest_entity);
+    free_texture(&tex_title_logo);
+    free_texture(&tex_mojang);
+    for (int i = 0; i < 6; ++i) free_texture(&tex_panorama[i]);
     free_texture_pack_icons();
     pex_gamepad_shutdown();
     pex_sound_shutdown();

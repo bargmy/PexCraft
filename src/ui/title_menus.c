@@ -202,20 +202,172 @@ static void draw_title_logo_3d(float partial) {
     setup_gui_projection();
 }
 
-static void draw_title_screen(float partial) {
-    draw_default_bg();
-    int title_h = 120 * g_gui_scale;
-    if (title_h < 1) title_h = 1;
-    if (title_h > g_render_h) title_h = g_render_h;
-    title_snapshot_reset_if_size_changed(title_h);
-    if (title_animation_finished() && g_title_snapshot_ready) {
-        draw_title_logo_snapshot();
-    } else {
-        draw_title_logo_3d(partial);
-        if (title_animation_finished()) {
-            if (g_title_snapshot_wait_frames++ >= 1) capture_title_logo_snapshot(title_h);
+
+static GLuint g_release_panorama_viewport_tex = 0;
+
+static void ensure_release_panorama_viewport_texture(void) {
+    if (g_release_panorama_viewport_tex) return;
+    glGenTextures(1, &g_release_panorama_viewport_tex);
+    glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+}
+
+static void draw_release_panorama_cube(float partial) {
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    gluPerspective(120.0, 1.0, 0.05, 10.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    glColor4f(1,1,1,1);
+    glRotatef(180.0f, 1.0f, 0.0f, 0.0f);
+    glEnable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    const int samples = 8;
+    float timer = (float)g_ticks + partial;
+    for (int pass = 0; pass < samples * samples; ++pass) {
+        glPushMatrix();
+        float ox = (((float)(pass % samples) / (float)samples) - 0.5f) / 64.0f;
+        float oy = (((float)(pass / samples) / (float)samples) - 0.5f) / 64.0f;
+        glTranslatef(ox, oy, 0.0f);
+        glRotatef(sinf(timer / 400.0f) * 25.0f + 20.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(-timer * 0.1f, 0.0f, 1.0f, 0.0f);
+        for (int face = 0; face < 6; ++face) {
+            if (!tex_panorama[face].id) continue;
+            glPushMatrix();
+            if (face == 1) glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
+            if (face == 2) glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
+            if (face == 3) glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
+            if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+            if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
+            glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
+            glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(pass + 1));
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
+            glTexCoord2f(1.0f, 0.0f); glVertex3f( 1.0f, -1.0f, 1.0f);
+            glTexCoord2f(1.0f, 1.0f); glVertex3f( 1.0f,  1.0f, 1.0f);
+            glTexCoord2f(0.0f, 1.0f); glVertex3f(-1.0f,  1.0f, 1.0f);
+            glEnd();
+            glPopMatrix();
         }
+        glPopMatrix();
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glDepthMask(GL_TRUE);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glColor4f(1,1,1,1);
+}
+
+static void release_panorama_blur_pass(void) {
+    ensure_release_panorama_viewport_texture();
+    glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 256, 256);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, 256, 256, 0, 1000, 3000);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    glTranslatef(0.0f, 0.0f, -2000.0f);
+    for (int i = 0; i < 3; ++i) {
+        float off = (float)(i - 1) / 256.0f;
+        glColor4f(1,1,1,1.0f / (float)(i + 1));
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f + off, 1.0f); glVertex3f(256.0f, 256.0f, 0.0f);
+        glTexCoord2f(1.0f + off, 1.0f); glVertex3f(256.0f,   0.0f, 0.0f);
+        glTexCoord2f(1.0f + off, 0.0f); glVertex3f(  0.0f,   0.0f, 0.0f);
+        glTexCoord2f(0.0f + off, 0.0f); glVertex3f(  0.0f, 256.0f, 0.0f);
+        glEnd();
+    }
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glColor4f(1,1,1,1);
+}
+
+static void draw_release_skybox(float partial) {
+    ensure_release_panorama_viewport_texture();
+    glViewport(0, 0, 256, 256);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    draw_release_panorama_cube(partial);
+    for (int i = 0; i < 8; ++i) release_panorama_blur_pass();
+    glViewport(0, 0, g_render_w, g_render_h);
+    setup_gui_projection();
+    glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    float scale = g_gui_w > g_gui_h ? 120.0f / (float)g_gui_w : 120.0f / (float)g_gui_h;
+    float u = (float)g_gui_h * scale / 256.0f;
+    float v = (float)g_gui_w * scale / 256.0f;
+    glColor4f(1,1,1,1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,       (float)g_gui_h, 0.0f);
+    glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+    glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,       0.0f);
+    glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,       0.0f,       0.0f);
+    glEnd();
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+}
+
+static void draw_release_minecraft_logo(void) {
+    if (!tex_title_logo.id) return;
+    const int logo_w = 274;
+    int x = g_gui_w / 2 - logo_w / 2;
+    int y = 30;
+    draw_textured_rect_tex(&tex_title_logo, x + 0,   y, 0,  0, 155, 44, 0xFFFFFF);
+    draw_textured_rect_tex(&tex_title_logo, x + 155, y, 0, 45, 155, 44, 0xFFFFFF);
+}
+
+static void draw_boot_mojang_logo(void) {
+    draw_rect(0, 0, g_gui_w, g_gui_h, 0x000000);
+    if (!tex_mojang.id) return;
+    int w = tex_mojang.w;
+    int h = tex_mojang.h;
+    if (w > g_gui_w - 16) { h = h * (g_gui_w - 16) / w; w = g_gui_w - 16; }
+    if (h > g_gui_h - 16) { w = w * (g_gui_h - 16) / h; h = g_gui_h - 16; }
+    draw_texture_scaled_full(&tex_mojang, (g_gui_w - w) / 2, (g_gui_h - h) / 2, w, h, 0xFFFFFF);
+}
+
+static void draw_title_screen(float partial) {
+    if (!g_boot_sequence_done && g_title_enter_time > 0.0) {
+        double elapsed = now_seconds() - g_title_enter_time;
+        if (elapsed >= 2.0 && !g_menu_music_started) {
+            pex_menu_music_start_once();
+            g_menu_music_started = 1;
+        }
+        if (elapsed < 3.0) {
+            draw_boot_mojang_logo();
+            return;
+        }
+        g_boot_sequence_done = 1;
+    }
+
+    draw_release_skybox(partial);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, -2130706433, 16777215);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, 0, (int)0x80000000u);
+    draw_release_minecraft_logo();
     glPushMatrix();
     glTranslatef((float)(g_gui_w / 2 + 90), 70.0f, 0.0f);
     glRotatef(-20.0f, 0.0f, 0.0f, 1.0f);
@@ -224,11 +376,12 @@ static void draw_title_screen(float partial) {
     glScalef(s, s, s);
     draw_centered_text(g_splash, 0, -8, 16776960);
     glPopMatrix();
-    draw_text(VERSION_TEXT, 2, 2, 5263440);
-    const char *copy = "Copyright No One. This is for everyone.";
+    draw_text(VERSION_TEXT, 2, g_gui_h - 10, 16777215);
+    const char *copy = "Copyright Mojang AB. Do not distribute!";
     draw_text(copy, g_gui_w - text_width(copy) - 2, g_gui_h - 10, 16777215);
     draw_all_buttons();
 }
+
 
 static void draw_options_screen(void) {
     draw_default_bg();

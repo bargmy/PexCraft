@@ -492,7 +492,7 @@ static void read_pack_text(TexturePackEntry *e) {
     e->desc1[0] = 0;
     e->desc2[0] = 0;
     char txt[MAX_PATHBUF];
-    snprintf(txt, sizeof(txt), "%s\\pack.txt", e->path);
+    path_join(txt, sizeof(txt), e->path, "pack.txt");
     FILE *f = fopen(txt, "r");
     if (!f) return;
     if (fgets(e->desc1, sizeof(e->desc1), f)) trim_pack_line_34(e->desc1);
@@ -502,49 +502,73 @@ static void read_pack_text(TexturePackEntry *e) {
 
 static void load_pack_icon(TexturePackEntry *e) {
     char path[MAX_PATHBUF];
-    snprintf(path, sizeof(path), "%s\\pack.png", e->path);
+    path_join(path, sizeof(path), e->path, "pack.png");
     if (load_png_texture(&e->icon, path, 0)) e->has_icon = 1;
 }
 
 
 static void classic_pack_path(char *out, size_t cap) {
-    snprintf(out, cap, "%s\\%s", g_texpack_dir, CLASSIC_PACK_NAME);
+    path_join(out, cap, g_texpack_dir, CLASSIC_PACK_NAME);
+}
+
+static int release_file_exists_in_dir(const char *dir, const char *rel) {
+    char norm[MAX_PATHBUF], path[MAX_PATHBUF];
+    snprintf(norm, sizeof(norm), "%s", rel ? rel : "");
+    for (char *c = norm; *c; ++c) {
+#ifdef PEX_PLATFORM_SDL2
+        if (*c == '\\') *c = '/';
+#else
+        if (*c == '/') *c = '\\';
+#endif
+    }
+    path_join(path, sizeof(path), dir, norm);
+    return file_exists(path);
 }
 
 static int classic_pack_installed(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 1;
 #endif
-    char dir[MAX_PATHBUF], terrain[MAX_PATHBUF], gui[MAX_PATHBUF], font[MAX_PATHBUF];
+    char dir[MAX_PATHBUF];
     classic_pack_path(dir, sizeof(dir));
-    snprintf(terrain, sizeof(terrain), "%s\\terrain.png", dir);
-    snprintf(gui, sizeof(gui), "%s\\gui\\gui.png", dir);
-    snprintf(font, sizeof(font), "%s\\font\\default.png", dir);
-    return file_exists(terrain) && file_exists(gui) && file_exists(font);
+    return release_file_exists_in_dir(dir, "terrain.png") &&
+           release_file_exists_in_dir(dir, "gui/gui.png") &&
+           release_file_exists_in_dir(dir, "font/default.png") &&
+           release_file_exists_in_dir(dir, "title/mclogo.png") &&
+           release_file_exists_in_dir(dir, "title/mojang.png") &&
+           release_file_exists_in_dir(dir, "title/bg/panorama0.png");
 }
 
 static int classic_pack_missing_required_textures(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #endif
-    char dir[MAX_PATHBUF], path[MAX_PATHBUF];
+    char dir[MAX_PATHBUF];
     static const char *required[] = {
         "terrain.png",
-        "gui\\items.png",
-        "mob\\pig.png",
-        "mob\\sheep.png",
-        "mob\\sheep_fur.png",
-        "mob\\cow.png",
-        "mob\\chicken.png",
-        "mob\\saddle.png"
+        "gui/gui.png",
+        "gui/items.png",
+        "gui/icons.png",
+        "font/default.png",
+        "title/mclogo.png",
+        "title/mojang.png",
+        "title/bg/panorama0.png",
+        "title/bg/panorama1.png",
+        "title/bg/panorama2.png",
+        "title/bg/panorama3.png",
+        "title/bg/panorama4.png",
+        "title/bg/panorama5.png",
+        "mob/pig.png",
+        "mob/sheep.png",
+        "mob/sheep_fur.png",
+        "mob/cow.png",
+        "mob/chicken.png",
+        "mob/saddle.png"
     };
     if (!classic_pack_installed()) return 0;
     classic_pack_path(dir, sizeof(dir));
-    /* Old Classic downloads can have terrain/gui/font only.  Passive mobs need
-       their b1.0 mob textures too, so force a resource update when they are absent. */
     for (int i = 0; i < (int)(sizeof(required) / sizeof(required[0])); ++i) {
-        snprintf(path, sizeof(path), "%s\\%s", dir, required[i]);
-        if (!file_exists(path)) return 1;
+        if (!release_file_exists_in_dir(dir, required[i])) return 1;
     }
     return 0;
 }
@@ -556,7 +580,7 @@ static void classic_resources_path(char *out, size_t cap) {
 static void classic_sound_marker_path(char *out, size_t cap) {
     char root[MAX_PATHBUF];
     classic_resources_path(root, sizeof(root));
-    path_join(out, cap, root, ".pexcraft-b1-legacy-sounds");
+    path_join(out, cap, root, ".pexcraft-release-music");
 }
 
 static int classic_sounds_installed(void) {
@@ -565,32 +589,24 @@ static int classic_sounds_installed(void) {
 #else
     char marker[MAX_PATHBUF];
     char root[MAX_PATHBUF];
-    char sound_dir[MAX_PATHBUF];
-    char random_dir[MAX_PATHBUF];
-    char step_dir[MAX_PATHBUF];
-    char click[MAX_PATHBUF];
-    char grass[MAX_PATHBUF];
+    char music_dir[MAX_PATHBUF];
+    char menu_dir[MAX_PATHBUF];
+    char menu2[MAX_PATHBUF];
 
     classic_sound_marker_path(marker, sizeof(marker));
     if (!file_exists(marker)) return 0;
 
-    /* Do not trust the marker by itself. If a user deleted or moved the actual
-       downloaded sound tree, ask for a resource update again. */
     classic_resources_path(root, sizeof(root));
-    path_join(sound_dir, sizeof(sound_dir), root, "sound");
-    path_join(random_dir, sizeof(random_dir), sound_dir, "random");
-    path_join(step_dir, sizeof(step_dir), sound_dir, "step");
-    path_join(click, sizeof(click), random_dir, "click.ogg");
-    path_join(grass, sizeof(grass), step_dir, "grass1.ogg");
-    if (!file_exists(click)) return 0;
-    if (!file_exists(grass)) return 0;
-    return 1;
+    path_join(music_dir, sizeof(music_dir), root, "music");
+    path_join(menu_dir, sizeof(menu_dir), music_dir, "menu");
+    path_join(menu2, sizeof(menu2), menu_dir, "menu2.ogg");
+    return file_exists(menu2);
 #endif
 }
 
 static int classic_wants_sound_download(void) {
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    return g_opts.download_classic_sounds && !g_opts.ignore_classic_sounds_warning;
+    return !classic_sounds_installed();
 #else
     return 0;
 #endif
@@ -611,10 +627,10 @@ static int should_show_classic_pack_download_prompt(void) {
 static void classic_resource_missing_summary(char *out, size_t cap) {
     int missing_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
     int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
-    if (missing_textures && missing_sounds) snprintf(out, cap, "Textures and sounds should be updated.");
-    else if (missing_textures) snprintf(out, cap, "Textures should be updated.");
-    else if (missing_sounds) snprintf(out, cap, "Sounds should be downloaded.");
-    else snprintf(out, cap, "Classic resources are up to date.");
+    if (missing_textures && missing_sounds) snprintf(out, cap, "Release textures and Moog City 2 should be downloaded.");
+    else if (missing_textures) snprintf(out, cap, "Release textures should be downloaded.");
+    else if (missing_sounds) snprintf(out, cap, "Moog City 2 should be downloaded.");
+    else snprintf(out, cap, "Release resources are up to date.");
 }
 
 static void add_builtin_classic_texture_pack(int *wanted) {
@@ -623,19 +639,19 @@ static void add_builtin_classic_texture_pack(int *wanted) {
     memset(e, 0, sizeof(*e));
     snprintf(e->name, sizeof(e->name), "%s", CLASSIC_PACK_NAME);
     classic_pack_path(e->path, sizeof(e->path));
-    snprintf(e->desc1, sizeof(e->desc1), "Minecraft Classic texture pack");
+    snprintf(e->desc1, sizeof(e->desc1), "Minecraft 1.2.5 release textures");
+    e->is_default = 1;
     int installed = classic_pack_installed();
     if (installed) {
         if (classic_pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block/mob textures");
-        else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing b1.0 sounds");
-        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Textures + sounds installed");
-        else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from client.jar");
+        else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing Moog City 2");
+        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Release textures + Moog City 2");
+        else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from 1.2.5 client.jar");
     } else {
-        snprintf(e->desc2, sizeof(e->desc2), "Click to download resources");
+        snprintf(e->desc2, sizeof(e->desc2), "Click to download Release resources");
     }
     e->is_builtin_classic = 1;
-    /* Use the normal fallback icon slot so the built-in Minecraft Classic entry
-       shows the bundled unknown-pack icon instead of being iconless. */
+    /* Use the normal fallback icon slot so the built-in Release entry stays iconless only when missing. */
     e->no_icon = 0;
     if (installed && !strcmp(g_opts.skin, e->name)) *wanted = g_texpack_count - 1;
 }
@@ -654,13 +670,6 @@ static void scan_texture_packs(void) {
     g_texpack_count = 0;
     int wanted = 0;
 
-    TexturePackEntry *d = &g_texpacks[g_texpack_count++];
-    memset(d, 0, sizeof(*d));
-    snprintf(d->name, sizeof(d->name), "Default");
-    snprintf(d->desc1, sizeof(d->desc1), "The default look of PEXCRAFT");
-    d->desc2[0] = 0;
-    d->is_default = 1;
-
     add_builtin_classic_texture_pack(&wanted);
 
 #if (defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY) || defined(PEX_PLATFORM_WII)
@@ -674,7 +683,11 @@ static void scan_texture_packs(void) {
     ensure_dir(g_texpack_dir);
     char pattern[MAX_PATHBUF];
     WIN32_FIND_DATAA fd;
+#ifdef PEX_PLATFORM_SDL2
+    snprintf(pattern, sizeof(pattern), "%s/*", g_texpack_dir);
+#else
     snprintf(pattern, sizeof(pattern), "%s\\*", g_texpack_dir);
+#endif
     HANDLE h = FindFirstFileA(pattern, &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
@@ -685,7 +698,7 @@ static void scan_texture_packs(void) {
             TexturePackEntry *e = &g_texpacks[g_texpack_count++];
             memset(e, 0, sizeof(*e));
             snprintf(e->name, sizeof(e->name), "%s", fd.cFileName);
-            snprintf(e->path, sizeof(e->path), "%s\\%s", g_texpack_dir, fd.cFileName);
+            path_join(e->path, sizeof(e->path), g_texpack_dir, fd.cFileName);
             read_pack_text(e);
             load_pack_icon(e);
             if (!strcmp(g_opts.skin, e->name)) wanted = g_texpack_count - 1;
@@ -696,6 +709,99 @@ static void scan_texture_packs(void) {
     g_selected_texpack = wanted;
     snprintf(g_current_texpack, sizeof(g_current_texpack), "%s", g_texpacks[g_selected_texpack].name);
     clamp_texpack_scroll();
+}
+
+
+static int make_solid_texture(Texture *t, int w, int h, unsigned char r, unsigned char g, unsigned char b, unsigned char a, int repeat) {
+    if (w <= 0) w = 1;
+    if (h <= 0) h = 1;
+    size_t n = (size_t)w * (size_t)h * 4u;
+    unsigned char *rgba = (unsigned char *)malloc(n);
+    if (!rgba) return 0;
+    for (size_t i = 0; i < n; i += 4) {
+        rgba[i + 0] = r;
+        rgba[i + 1] = g;
+        rgba[i + 2] = b;
+        rgba[i + 3] = a;
+    }
+    return upload_rgba_texture(t, w, h, rgba, repeat);
+}
+
+static int try_release_texture(Texture *tex, const char *rel, int repeat) {
+    char dir[MAX_PATHBUF], path[MAX_PATHBUF];
+    classic_pack_path(dir, sizeof(dir));
+    snprintf(path, sizeof(path), "%s\\%s", dir, rel);
+    if (load_png_texture(tex, path, repeat)) return 1;
+    snprintf(path, sizeof(path), "%s/%s", dir, rel);
+    for (char *c = path; *c; ++c) if (*c == '\\') *c = '/';
+    return load_png_texture(tex, path, repeat);
+}
+
+static int load_release_textures_from_pack(void) {
+    if (!classic_pack_installed()) return 0;
+    int ok = 1;
+    ok = try_release_texture(&tex_bg, "gui\\background.png", 1) && ok;
+    ok = try_release_texture(&tex_gui, "gui\\gui.png", 0) && ok;
+    ok = try_release_texture(&tex_font, "font\\default.png", 0) && ok;
+    ok = try_release_texture(&tex_terrain, "terrain.png", 1) && ok;
+    make_solid_texture(&tex_black, 16, 16, 0, 0, 0, 255, 1);
+    try_release_texture(&tex_pack, "pack.png", 0);
+    if (!tex_pack.id) make_solid_texture(&tex_pack, 32, 32, 64, 64, 64, 255, 0);
+    if (tex_pack.id && tex_pack.rgba) {
+        Texture tmp = {0};
+        size_t bytes = (size_t)tex_pack.w * (size_t)tex_pack.h * 4u;
+        unsigned char *copy = (unsigned char*)malloc(bytes);
+        if (copy) { memcpy(copy, tex_pack.rgba, bytes); upload_rgba_texture(&tmp, tex_pack.w, tex_pack.h, copy, 0); }
+        tex_default_pack_icon = tmp;
+    } else make_solid_texture(&tex_default_pack_icon, 32, 32, 64, 64, 64, 255, 0);
+    if (tex_pack.id && tex_pack.rgba) {
+        Texture tmp = {0};
+        size_t bytes = (size_t)tex_pack.w * (size_t)tex_pack.h * 4u;
+        unsigned char *copy = (unsigned char*)malloc(bytes);
+        if (copy) { memcpy(copy, tex_pack.rgba, bytes); upload_rgba_texture(&tmp, tex_pack.w, tex_pack.h, copy, 0); }
+        tex_unknown_pack = tmp;
+    } else make_solid_texture(&tex_unknown_pack, 32, 32, 96, 96, 96, 255, 0);
+    ok = try_release_texture(&tex_icons, "gui\\icons.png", 0) && ok;
+    ok = try_release_texture(&tex_inventory, "gui\\inventory.png", 0) && ok;
+    try_release_texture(&tex_workbench, "gui\\crafting.png", 0);
+    try_release_texture(&tex_furnace_gui, "gui\\furnace.png", 0);
+    try_release_texture(&tex_chest_gui, "gui\\container.png", 0);
+    try_release_texture(&tex_chest_gui, "gui\\chest.png", 0);
+    try_release_texture(&tex_chest_entity, "item\\chest.png", 0);
+    try_release_texture(&tex_large_chest_entity, "item\\largechest.png", 0);
+    try_release_texture(&tex_items, "gui\\items.png", 0);
+    for (int m = 0; m < 5; m++) for (int l = 0; l < 2; l++) free_texture(&tex_armor[m][l]);
+    try_release_texture(&tex_armor[0][0], "armor\\cloth_1.png", 0);
+    try_release_texture(&tex_armor[0][1], "armor\\cloth_2.png", 0);
+    try_release_texture(&tex_armor[1][0], "armor\\chain_1.png", 0);
+    try_release_texture(&tex_armor[1][1], "armor\\chain_2.png", 0);
+    try_release_texture(&tex_armor[2][0], "armor\\iron_1.png", 0);
+    try_release_texture(&tex_armor[2][1], "armor\\iron_2.png", 0);
+    try_release_texture(&tex_armor[3][0], "armor\\diamond_1.png", 0);
+    try_release_texture(&tex_armor[3][1], "armor\\diamond_2.png", 0);
+    try_release_texture(&tex_armor[4][0], "armor\\gold_1.png", 0);
+    try_release_texture(&tex_armor[4][1], "armor\\gold_2.png", 0);
+    ok = (try_release_texture(&tex_steve, "mob\\char.png", 0) || try_release_texture(&tex_steve, "char.png", 0)) && ok;
+    try_release_texture(&tex_mob_pig, "mob\\pig.png", 0);
+    try_release_texture(&tex_mob_sheep, "mob\\sheep.png", 0);
+    try_release_texture(&tex_mob_sheep_fur, "mob\\sheep_fur.png", 0);
+    try_release_texture(&tex_mob_cow, "mob\\cow.png", 0);
+    try_release_texture(&tex_mob_chicken, "mob\\chicken.png", 0);
+    try_release_texture(&tex_mob_saddle, "mob\\saddle.png", 0);
+    try_release_texture(&tex_clouds, "environment\\clouds.png", 1);
+    try_release_texture(&tex_water_overlay, "misc\\water.png", 1);
+    try_release_texture(&tex_shadow, "misc\\shadow.png", 0);
+    try_release_texture(&tex_grasscolor, "misc\\grasscolor.png", 0);
+    try_release_texture(&tex_foliagecolor, "misc\\foliagecolor.png", 0);
+    try_release_texture(&tex_particles, "particles.png", 0);
+    ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
+    ok = try_release_texture(&tex_mojang, "title\\mojang.png", 0) && ok;
+    for (int i = 0; i < 6; ++i) {
+        char rel[64];
+        snprintf(rel, sizeof(rel), "title\\bg\\panorama%d.png", i);
+        ok = try_release_texture(&tex_panorama[i], rel, 0) && ok;
+    }
+    return ok;
 }
 
 static int load_default_textures(void) {
@@ -761,6 +867,7 @@ static int load_default_textures(void) {
 #undef PEX_PSP_LOAD_OPT
     return 1;
 #else
+    if (load_release_textures_from_pack()) return 1;
     int ok = 1;
     ok = load_mcrw(&tex_bg, "gui_background.mcrw", 1) && ok;
     ok = load_mcrw(&tex_gui, "gui_gui.mcrw", 0) && ok;

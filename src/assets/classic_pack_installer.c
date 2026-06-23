@@ -166,16 +166,16 @@ static unsigned long long classic_file_size_bytes(const char *path) {
 }
 
 static int classic_sound_asset_path_ok(const char *path) {
-    size_t n;
     if (!path) return 0;
-    /* b1.0 uses the legacy sound/ tree for effects.  Do not mirror songs
-       from music/ or records/, and do not download the newer duplicate
-       sounds/ layout from the same legacy index. */
-    if (strncmp(path, "sound/", 6)) return 0;
-    if (!strncmp(path, "music/", 6) || !strncmp(path, "records/", 8)) return 0;
-    n = strlen(path);
-    if (n < 5 || strcmp(path + n - 4, ".ogg")) return 0;
-    return 1;
+    /* User-requested release port: download only Moog City 2 from the legacy
+       asset index.  In that index it is named sounds/music/menu/menu2.ogg. */
+    return !strcmp(path, "sounds/music/menu/menu2.ogg") || !strcmp(path, "music/menu/menu2.ogg");
+}
+
+static const char *classic_sound_output_rel(const char *path) {
+    if (!path) return "";
+    if (!strncmp(path, "sounds/", 7)) return path + 7;
+    return path;
 }
 
 static const char *classic_json_find_token(const char *p, const char *end, const char *token) {
@@ -379,7 +379,7 @@ static DWORD WINAPI classic_sound_download_worker(LPVOID arg) {
         if (idx < 0 || idx >= ctx->count) break;
         if (InterlockedCompareExchange(&ctx->failed, 0, 0)) break;
         asset = &ctx->assets[idx];
-        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, asset->path);
+        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, classic_sound_output_rel(asset->path));
         if (classic_file_size_bytes(out_path) != asset->size) {
             snprintf(url, sizeof(url), "%s/%.2s/%s", CLASSIC_SOUND_OBJECT_URL_PREFIX, asset->hash, asset->hash);
             if (!classic_download_url_to_file_simple(url, out_path, asset->size)) {
@@ -390,7 +390,7 @@ static DWORD WINAPI classic_sound_download_worker(LPVOID arg) {
         done = (int)classic_atomic_inc(&ctx->completed);
         pct = 5 + (int)(((unsigned long long)done * 90ULL) / (unsigned long long)(ctx->count > 0 ? ctx->count : 1));
         if (pct > 95) pct = 95;
-        snprintf(st, sizeof(st), "Downloading sounds %d/%d", done, ctx->count);
+        snprintf(st, sizeof(st), "Downloading Moog City 2 %d/%d", done, ctx->count);
         classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
     }
     return 0;
@@ -414,14 +414,14 @@ static int classic_download_legacy_sounds(void) {
     memset(threads, 0, sizeof(threads));
     memset(&ctx, 0, sizeof(ctx));
 
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading sound index...");
+    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading release music index...");
     if (!classic_download_url_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
-        classic_install_fail("Could not download legacy sound index");
+        classic_install_fail("Could not download release music index");
         return 0;
     }
     if (!classic_parse_legacy_sounds(json, len, &assets, &count, &total)) {
         free(json);
-        classic_install_fail("Could not parse legacy sound index");
+        classic_install_fail("Could not find Moog City 2 in release music index");
         return 0;
     }
     free(json);
@@ -440,7 +440,7 @@ static int classic_download_legacy_sounds(void) {
     if (worker_count < 1) worker_count = 1;
     {
         char st[MAX_LABEL];
-        snprintf(st, sizeof(st), "Downloading sounds 0/%d", count);
+        snprintf(st, sizeof(st), "Downloading Moog City 2 0/%d", count);
         classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 5, st);
     }
 
@@ -461,19 +461,19 @@ static int classic_download_legacy_sounds(void) {
     downloaded = (int)InterlockedCompareExchange(&ctx.completed, 0, 0);
     if (InterlockedCompareExchange(&ctx.failed, 0, 0) || downloaded < count) {
         free(assets);
-        classic_install_fail("Could not download a b1.0 sound");
+        classic_install_fail("Could not download Moog City 2");
         return 0;
     }
 
     classic_sound_marker_path(marker, sizeof(marker));
     {
         char text[160];
-        snprintf(text, sizeof(text), "PexCraft b1.0 legacy sounds\nfiles:%d\nbytes:%llu\n", downloaded, total);
+        snprintf(text, sizeof(text), "PexCraft Release music\nfile:menu2.ogg\nbytes:%llu\n", total);
         ok = pxc_write_file_all(marker, (const unsigned char *)text, strlen(text));
     }
     free(assets);
     if (!ok) { classic_install_fail("Could not write sound install marker"); return 0; }
-    log_msg("Installed Minecraft b1.0 legacy sounds with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
+    log_msg("Installed Moog City 2 with %d threads: %d file, %llu bytes", worker_count, downloaded, total);
     pex_sound_rescan();
     return 1;
 }
@@ -568,7 +568,7 @@ static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
         if (classic_query_download_size_bytes(CLASSIC_PACK_URL, &bytes) && bytes > 0 && bytes <= 0x7fffffffULL) {
             InterlockedExchange(&g_classic_texture_download_size_bytes, (LONG)bytes);
             got_any = 1;
-            log_msg("Minecraft Classic texture download size: %llu bytes", bytes);
+            log_msg("Release texture download size: %llu bytes", bytes);
         }
     } else {
         got_any = 1;
@@ -581,14 +581,14 @@ static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
             InterlockedExchange(&g_classic_sound_download_size_bytes, (LONG)sound_bytes);
             InterlockedExchange(&g_classic_sound_download_count, (LONG)sound_count);
             got_any = 1;
-            log_msg("Minecraft b1.0 sound download size: %llu bytes (%d files)", sound_bytes, sound_count);
+            log_msg("Moog City 2 download size: %llu bytes (%d files)", sound_bytes, sound_count);
         }
     } else {
         got_any = 1;
     }
 
     InterlockedExchange(&g_classic_download_size_state, got_any ? CLASSIC_SIZE_READY : CLASSIC_SIZE_ERROR);
-    if (!got_any) log_msg("Could not query Minecraft Classic resource sizes");
+    if (!got_any) log_msg("Could not query Release resource sizes");
     return 0;
 }
 
@@ -608,7 +608,6 @@ static void classic_resource_size_format(char *out, size_t cap) {
     if (state == CLASSIC_SIZE_READY) {
         LONG tex = InterlockedCompareExchange(&g_classic_texture_download_size_bytes, 0, 0);
         LONG snd = InterlockedCompareExchange(&g_classic_sound_download_size_bytes, 0, 0);
-        LONG cnt = InterlockedCompareExchange(&g_classic_sound_download_count, 0, 0);
         char tex_part[64];
         char snd_part[96];
         if (tex < 0) snprintf(tex_part, sizeof(tex_part), "Textures: installed");
@@ -616,13 +615,11 @@ static void classic_resource_size_format(char *out, size_t cap) {
         else snprintf(tex_part, sizeof(tex_part), "Textures: unavailable");
 
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-        if (!g_opts.download_classic_sounds) snprintf(snd_part, sizeof(snd_part), "Sounds: off");
-        else if (classic_sounds_installed()) snprintf(snd_part, sizeof(snd_part), "Sounds: installed");
-        else if (g_opts.ignore_classic_sounds_warning) snprintf(snd_part, sizeof(snd_part), "Sounds: ignored");
-        else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Sounds: %.2f MB (%ld files)", (double)snd / (1024.0 * 1024.0), cnt);
-        else snprintf(snd_part, sizeof(snd_part), "Sounds: unavailable");
+        if (classic_sounds_installed()) snprintf(snd_part, sizeof(snd_part), "Moog City 2: installed");
+        else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Moog City 2: %.2f MB", (double)snd / (1024.0 * 1024.0));
+        else snprintf(snd_part, sizeof(snd_part), "Moog City 2: unavailable");
 #else
-        snprintf(snd_part, sizeof(snd_part), "Sounds: unsupported");
+        snprintf(snd_part, sizeof(snd_part), "Moog City 2: unsupported");
 #endif
         snprintf(out, cap, "%s | %s", tex_part, snd_part);
         return;
@@ -642,7 +639,7 @@ static void classic_install_set_state(LONG state, LONG progress, const char *sta
 static void classic_install_fail(const char *msg) {
     lstrcpynA(g_classic_install_error, msg ? msg : "Unknown error", sizeof(g_classic_install_error));
     classic_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
-    log_msg("Minecraft Classic texture pack install failed: %s", g_classic_install_error);
+    log_msg("Release resource install failed: %s", g_classic_install_error);
 }
 
 static int classic_download_client_jar(const char *url, const char *zip_path) {
@@ -665,7 +662,7 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
     FILE *out = fopen(zip_path, "wb");
     if (!out) {
         FreeLibrary(wininet);
-        classic_install_fail("Could not create downloaded client file");
+        classic_install_fail("Could not create downloaded 1.2.5 client file");
         return 0;
     }
 
@@ -684,7 +681,7 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
         fclose(out);
         pInternetCloseHandle(inet);
         FreeLibrary(wininet);
-        classic_install_fail("Could not download client.jar");
+        classic_install_fail("Could not download 1.2.5 client.jar");
         return 0;
     }
 
@@ -720,11 +717,11 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
             int pct = 1 + (int)(((unsigned long long)downloaded * 84ULL) / (unsigned long long)total);
             if (pct > 85) pct = 85;
             char st[MAX_LABEL];
-            snprintf(st, sizeof(st), "Downloading client.jar (%d%%)", pct);
+            snprintf(st, sizeof(st), "Downloading 1.2.5 client.jar (%d%%)", pct);
             classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
         } else {
             int pct = 5 + (int)((downloaded / 65536) % 70);
-            classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, "Downloading client.jar");
+            classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, "Downloading 1.2.5 client.jar");
         }
     }
 
@@ -734,7 +731,7 @@ static int classic_download_client_jar(const char *url, const char *zip_path) {
     FreeLibrary(wininet);
 
     if (downloaded < 1024) {
-        classic_install_fail("Downloaded client.jar was empty");
+        classic_install_fail("Downloaded 1.2.5 client.jar was empty");
         return 0;
     }
     return 1;
@@ -746,7 +743,7 @@ static int classic_extract_downloaded_pack(const char *zip_path, const char *pac
     err[0] = 0;
 
     if (!pxc_extract_zip_file(zip_path, pack_dir, err, sizeof(err))) {
-        classic_install_fail(err[0] ? err : "Could not extract client.jar internally");
+        classic_install_fail(err[0] ? err : "Could not extract 1.2.5 client.jar internally");
         return 0;
     }
 
@@ -767,7 +764,7 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
 
     ensure_dir(g_texpack_dir);
     classic_pack_path(pack_dir, sizeof(pack_dir));
-    snprintf(zip_path, sizeof(zip_path), "%s\\minecraft_classic_client.zip", g_mc_dir);
+    snprintf(zip_path, sizeof(zip_path), "%s\\minecraft_1_2_5_client.zip", g_mc_dir);
 
     if (!need_textures && !need_sounds) {
         classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Resources already installed");
@@ -775,12 +772,12 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
     }
 
     if (need_textures) {
-        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading client.jar...");
+        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading 1.2.5 client.jar...");
         if (!classic_download_client_jar(CLASSIC_PACK_URL, zip_path)) return 0;
         if (!classic_extract_downloaded_pack(zip_path, pack_dir)) return 0;
-        log_msg("Installed Minecraft Classic texture pack at %s", pack_dir);
+        log_msg("Installed Release textures at %s", pack_dir);
     } else {
-        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Textures already installed");
+        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Release textures already installed");
     }
 
     if (need_sounds) {
@@ -789,6 +786,38 @@ static DWORD WINAPI classic_install_worker(LPVOID unused) {
 
     classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
     return 0;
+}
+
+
+static int release_resources_install_blocking(void) {
+    char zip_path[MAX_PATHBUF];
+    char pack_dir[MAX_PATHBUF];
+    int need_textures;
+    int need_music;
+
+    ensure_dir(g_texpack_dir);
+    classic_pack_path(pack_dir, sizeof(pack_dir));
+    snprintf(zip_path, sizeof(zip_path), "%s\\minecraft_1_2_5_client.zip", g_mc_dir);
+
+    need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    need_music = classic_wants_sound_download() && !classic_sounds_installed();
+
+    if (!need_textures && !need_music) return 1;
+
+    g_classic_install_error[0] = 0;
+    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading Release resources...");
+
+    if (need_textures) {
+        if (!classic_download_client_jar(CLASSIC_PACK_URL, zip_path)) return 0;
+        if (!classic_extract_downloaded_pack(zip_path, pack_dir)) return 0;
+    }
+    if (need_music) {
+        if (!classic_download_legacy_sounds()) return 0;
+    }
+
+    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Release resources ready");
+    pex_sound_rescan();
+    return 1;
 }
 
 static void start_classic_pack_install(void) {
@@ -836,6 +865,6 @@ static void classic_pack_install_tick(void) {
             g_classic_install_thread = NULL;
         }
         InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);
-        open_notice("Texture Pack", "Could not install Minecraft Classic resources.", g_classic_install_error);
+        open_notice("Texture Pack", "Could not install Release resources.", g_classic_install_error);
     }
 }

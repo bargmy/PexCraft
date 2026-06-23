@@ -84,7 +84,6 @@ static int pxc_zip_entry_should_skip(const char *name) {
     if (name[strlen(name) - 1] == '/') return 1;
     if (pxc_ascii_starts_ci(name, "META-INF/") || pxc_ascii_starts_ci(name, "META-INF\\")) return 1;
     if (pxc_ascii_ends_ci(name, ".class")) return 1;
-    if (!strcmp(name, "pack.png")) return 1;
     return 0;
 }
 
@@ -210,7 +209,7 @@ static int pxc_zip_extract_one(const unsigned char *zip, size_t zip_len,
 static int pxc_write_classic_pack_txt(const char *pack_dir) {
     char path[MAX_PATHBUF];
     pxc_zip_make_output_path(path, sizeof(path), pack_dir, "pack.txt");
-    const char *txt = "Minecraft Classic texture pack\nDownloaded from client.jar\n";
+    const char *txt = "Release Textures\nDownloaded from Minecraft 1.2.5 client.jar\n";
     return pxc_write_file_all(path, (const unsigned char *)txt, strlen(txt));
 }
 

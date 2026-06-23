@@ -8,6 +8,10 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_FURNACE && s != SCREEN_FURNACE) furnace_close_open_inventory();
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
+    if (s == SCREEN_TITLE) {
+        if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
+        g_menu_music_started = 0;
+    }
     g_waiting_key = -1;
     g_gamepad_menu_index = 0;
     g_gamepad_virtual_cursor_active = 0;
@@ -15,6 +19,54 @@ static void set_screen(ScreenId s) {
     set_mouse_grabbed(s == SCREEN_INGAME);
     clear_buttons();
     rebuild_screen();
+}
+
+
+static int java_string_hash_compat(const char *s) {
+    int32_t h = 0;
+    if (!s) return 0;
+    while (*s) h = (int32_t)(31 * h + (unsigned char)*s++);
+    return (int)h;
+}
+
+static void trim_ascii_in_place(char *s) {
+    char *a, *b;
+    if (!s) return;
+    a = s;
+    while (*a == ' ' || *a == '\t' || *a == '\r' || *a == '\n') a++;
+    if (a != s) memmove(s, a, strlen(a) + 1);
+    b = s + strlen(s);
+    while (b > s && (b[-1] == ' ' || b[-1] == '\t' || b[-1] == '\r' || b[-1] == '\n')) --b;
+    *b = 0;
+}
+
+static void choose_release_splash(char *out, size_t cap) {
+    char pack_dir[MAX_PATHBUF], path[MAX_PATHBUF];
+    FILE *f;
+    char line[512];
+    char chosen[MAX_LABEL] = "missingno";
+    int count = 0;
+
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    classic_pack_path(pack_dir, sizeof(pack_dir));
+    snprintf(path, sizeof(path), "%s/title/splashes.txt", pack_dir);
+    f = fopen(path, "rb");
+    if (!f) {
+        snprintf(path, sizeof(path), "%s\\title\\splashes.txt", pack_dir);
+        f = fopen(path, "rb");
+    }
+    if (!f) { snprintf(out, cap, "%s", chosen); return; }
+
+    while (fgets(line, sizeof(line), f)) {
+        trim_ascii_in_place(line);
+        if (!line[0]) continue;
+        ++count;
+        if ((rand() % count) == 0) snprintf(chosen, sizeof(chosen), "%s", line);
+    }
+    fclose(f);
+    if (count > 1 && java_string_hash_compat(chosen) == 125780783) choose_release_splash(out, cap);
+    else snprintf(out, cap, "%s", chosen);
 }
 
 static int is_seasonal_splash(char *out, size_t cap) {
@@ -35,7 +87,7 @@ static void rebuild_screen(void) {
     clear_buttons();
     if (g_screen == SCREEN_TITLE) {
         char seasonal[MAX_LABEL];
-        snprintf(g_splash, sizeof(g_splash), "Finally beta!");
+        choose_release_splash(g_splash, sizeof(g_splash));
         if (is_seasonal_splash(seasonal, sizeof(seasonal))) snprintf(g_splash, sizeof(g_splash), "%s", seasonal);
         int y0 = g_gui_h / 4 + 48;
         add_button(1, g_gui_w / 2 - 100, y0, "Singleplayer");
@@ -43,6 +95,7 @@ static void rebuild_screen(void) {
         add_button(3, g_gui_w / 2 - 100, y0 + 48, "Mods and Texture Packs");
         add_button_full(0, g_gui_w / 2 - 100, y0 + 72 + 12, 98, 20, tr("Options"), BUTTON_NORMAL);
         add_button_full(4, g_gui_w / 2 + 2, y0 + 72 + 12, 98, 20, "Quit Game", BUTTON_NORMAL);
+        add_button_full(5, g_gui_w / 2 - 124, y0 + 72 + 12, 20, 20, "", BUTTON_LANGUAGE);
     } else if (g_screen == SCREEN_OPTIONS) {
         int shown = 0;
         for (int i = 0; i < OPT_COUNT; i++) {
@@ -139,7 +192,7 @@ static void rebuild_screen(void) {
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
         char snd_label[MAX_LABEL];
-        snprintf(snd_label, sizeof(snd_label), "Sounds: %s", g_opts.download_classic_sounds ? "ON" : "OFF");
+        snprintf(snd_label, sizeof(snd_label), "Music: Moog City 2");
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h / 4 + 112, 200, 20, snd_label, BUTTON_NORMAL);
         add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 140, 150, 20, "Download", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 140, 150, 20, "Ignore", BUTTON_NORMAL);
@@ -200,10 +253,12 @@ static void restart_application_now(void) {
 static void on_button(Button *b) {
     if (!b || !b->enabled) return;
     if (g_screen == SCREEN_TITLE) {
+        if (!g_boot_sequence_done && g_title_enter_time > 0.0 && now_seconds() - g_title_enter_time < 3.0) return;
         if (b->id == 0) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_OPTIONS); }
         else if (b->id == 1) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_WORLD_SELECT); }
         else if (b->id == 2) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_MULTIPLAYER); }
         else if (b->id == 3) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_TEXPACK); }
+        else if (b->id == 5) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_OPTIONS); }
         else if (b->id == 4) {
 #ifdef PEX_PLATFORM_PSP
             g_running = 0;

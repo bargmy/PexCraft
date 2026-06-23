@@ -600,7 +600,7 @@ static void draw_texturepack_install_screen(void) {
     if (p > 100) p = 100;
     draw_rect(x, y, x + bar_w, y + bar_h, 8421504);
     draw_rect(x, y, x + p, y + bar_h, 8454016);
-    draw_centered_text("Downloading Classic resources", g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
+    draw_centered_text("Downloading Release resources", g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
     draw_centered_text(status, g_gui_w / 2, g_gui_h / 2 + 8, 16777215);
 }
 
@@ -630,18 +630,18 @@ static void draw_classic_pack_download_prompt(void) {
     classic_resource_size_start_fetch();
     classic_resource_missing_summary(summary, sizeof(summary));
     draw_default_bg();
-    draw_centered_text("Classic Resources Recommended", g_gui_w / 2, g_gui_h / 4 - 60 + 18, 16777215);
+    draw_centered_text("Release Resources Required", g_gui_w / 2, g_gui_h / 4 - 60 + 18, 16777215);
     draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 45, 16777215);
-    draw_text("Textures come from b1.0 client.jar.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 61, 10526880);
+    draw_text("Textures come from Minecraft 1.2.5 client.jar.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 61, 10526880);
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    draw_text("Sound effects come from b1.0 legacy.json.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
+    draw_text("Only Moog City 2 comes from legacy.json.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
 #else
     draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
 #endif
     classic_resource_size_format(size_line, sizeof(size_line));
     draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 89, 10526880);
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    draw_text("Toggle sounds if you only want textures.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);
+    draw_text("Only Release textures and Moog City 2 are downloaded.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);
 #endif
     draw_all_buttons();
 }
