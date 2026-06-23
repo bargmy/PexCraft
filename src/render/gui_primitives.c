@@ -20,6 +20,8 @@ static void setup_gui_projection(void) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     glColor4f(1,1,1,1);
 }
 
@@ -82,6 +84,7 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
 #endif
     glDisable(GL_BLEND);
     glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     glEnable(GL_TEXTURE_2D);
     glColor4f(1,1,1,1);
 }
@@ -95,6 +98,10 @@ static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, i
     if (u1 < u0) { float mid = ((float)sx + (float)(sx + w)) * 0.5f / (float)tex->w; u0 = u1 = mid; }
     if (v1 < v0) { float mid = ((float)sy + (float)(sy + h)) * 0.5f / (float)tex->h; v0 = v1 = mid; }
     glBindTexture(GL_TEXTURE_2D, tex->id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
     glBegin(GL_QUADS);
     glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + h), 0.0f);
@@ -110,6 +117,10 @@ static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy,
     float us = 1.0f / (float)tex->w;
     float vs = 1.0f / (float)tex->h;
     glBindTexture(GL_TEXTURE_2D, tex->id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
     glBegin(GL_QUADS);
     glTexCoord2f((float)(sx + 0) * us, (float)(sy + h) * vs); glVertex3f((float)(x + 0), (float)(y + h), 0.0f);
@@ -129,6 +140,10 @@ static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, i
     if (u1 < u0) { float mid = ((float)sx + (float)(sx + sw)) * 0.5f / (float)tex->w; u0 = u1 = mid; }
     if (v1 < v0) { float mid = ((float)sy + (float)(sy + sh)) * 0.5f / (float)tex->h; v0 = v1 = mid; }
     glBindTexture(GL_TEXTURE_2D, tex->id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
     glBegin(GL_QUADS);
     glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + dh), 0.0f);
@@ -144,6 +159,10 @@ static void draw_texture_scaled_full(Texture *tex, int x, int y, int w, int h, i
     float inset_u = 0.5f / (float)tex->w;
     float inset_v = 0.5f / (float)tex->h;
     glBindTexture(GL_TEXTURE_2D, tex->id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
     glBegin(GL_QUADS);
     glTexCoord2f(inset_u, 1.0f - inset_v); glVertex3f((float)x, (float)(y + h), 0.0f);

@@ -18,6 +18,8 @@ static int init_gl(SDL_Window *window) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     scan_texture_packs();
     if (!load_default_textures()) return 0;
     if (g_selected_texpack > 0) apply_texture_pack_index(g_selected_texpack);
