@@ -50,11 +50,21 @@ static void draw_rect(int x1, int y1, int x2, int y2, int color) {
     glEnable(GL_TEXTURE_2D);
 }
 
+static void gradient_color_from_int(int color, float *r, float *g, float *b, float *a) {
+    unsigned int c = (unsigned int)color;
+    *a = ((c >> 24) & 255) / 255.0f;
+    *r = ((c >> 16) & 255) / 255.0f;
+    *g = ((c >> 8) & 255) / 255.0f;
+    *b = (c & 255) / 255.0f;
+}
+
 static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     float r1,g1,b1,a1,r2,g2,b2,a2;
-    color_from_int(c1, &r1,&g1,&b1,&a1);
-    color_from_int(c2, &r2,&g2,&b2,&a2);
+    gradient_color_from_int(c1, &r1,&g1,&b1,&a1);
+    gradient_color_from_int(c2, &r2,&g2,&b2,&a2);
     glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glBegin(GL_QUADS);
     glColor4f(r1,g1,b1,a1); glVertex3f((float)x2, (float)y1, 0.0f); glVertex3f((float)x1, (float)y1, 0.0f);
     glColor4f(r2,g2,b2,a2); glVertex3f((float)x1, (float)y2, 0.0f); glVertex3f((float)x2, (float)y2, 0.0f);

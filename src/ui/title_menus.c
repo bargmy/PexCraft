@@ -284,7 +284,19 @@ static void release_panorama_blur_pass(void) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-    setup_gui_projection();
+
+    /* Match GuiMainMenu.rotateAndBlurSkybox: keep the 256x256 viewport, but
+       draw using GUI-space coordinates.  Do not call setup_gui_projection()
+       here, because that resets the viewport back to the full window. */
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, (double)g_gui_w, (double)g_gui_h, 0.0, 1000.0, 3000.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    glTranslatef(0.0f, 0.0f, -2000.0f);
+
     for (int i = 0; i < 3; ++i) {
         float off = (float)(i - 1) / 256.0f;
         glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(i + 1));
@@ -295,6 +307,12 @@ static void release_panorama_blur_pass(void) {
         glTexCoord2f(0.0f + off, 1.0f); glVertex3f(0.0f, (float)g_gui_h, 0.0f);
         glEnd();
     }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glColor4f(1,1,1,1);
 }
