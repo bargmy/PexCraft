@@ -64,16 +64,63 @@ static float java125_star_brightness(float partial) {
     return f * f * 0.5f;
 }
 
-static void java125_sky_color(float partial, float *r, float *g, float *b) {
+static float java125_day_factor(float partial, float add) {
     float a = java125_celestial_angle(partial);
-    float f = cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.5f;
+    float f = cosf(a * (float)M_PI * 2.0f) * 2.0f + add;
     if (f < 0.0f) f = 0.0f;
     if (f > 1.0f) f = 1.0f;
-    /* BiomeGenBase.plains.getSkyColorByTemp(0.8F) -> Color.HSBtoRGB(...)
-       = 0x79A7FF in Java 1.2.5; rain/thunder/lightning are absent here. */
+    return f;
+}
+
+static void java125_sky_color(float partial, float *r, float *g, float *b) {
+    float f = java125_day_factor(partial, 0.5f);
+    /* World.getSkyColor(Entity,float) with plains sky-color fallback:
+       BiomeGenBase.plains.getSkyColorByTemp(0.8F) -> 0x79A7FF.
+       Rain, thunder, anaglyph, and lightningFlash are absent in this C project. */
     *r = (121.0f / 255.0f) * f;
     *g = (167.0f / 255.0f) * f;
     *b = (255.0f / 255.0f) * f;
+}
+
+static void java125_cloud_color(float partial, float *r, float *g, float *b) {
+    float f = java125_day_factor(partial, 0.5f);
+    /* World.drawClouds(float), with World.cloudColour = 0xFFFFFF and no
+       rain/thunder: RGB is not fixed white at night. */
+    *r = f * 0.90f + 0.10f;
+    *g = f * 0.90f + 0.10f;
+    *b = f * 0.85f + 0.15f;
+}
+
+static void java125_provider_fog_color(float partial, float *r, float *g, float *b) {
+    float f = java125_day_factor(partial, 0.5f);
+    /* WorldProvider.getFogColor(celestialAngle,float). */
+    *r = (192.0f / 255.0f) * (f * 0.94f + 0.06f);
+    *g = (216.0f / 255.0f) * (f * 0.94f + 0.06f);
+    *b = 1.0f * (f * 0.91f + 0.09f);
+}
+
+static void java125_effective_fog_color(float partial, float *r, float *g, float *b) {
+    float fr, fg, fb;
+    java125_provider_fog_color(partial, &fr, &fg, &fb);
+
+    /* EntityRenderer.updateFogColor() blends provider fog toward sky depending
+       on render-distance enum.  This C port stores render distance in chunks,
+       not the Java enum, so use Java's Far equivalent (0) rather than keeping a
+       constant daytime blue. */
+    float sr, sg, sb;
+    java125_sky_color(partial, &sr, &sg, &sb);
+    float blend = 1.0f - powf(1.0f / 4.0f, 0.25f);
+    *r = fr + (sr - fr) * blend;
+    *g = fg + (sg - fg) * blend;
+    *b = fb + (sb - fb) * blend;
+}
+
+static void apply_java125_fog_color(float partial) {
+    float r, g, b;
+    java125_effective_fog_color(partial, &r, &g, &b);
+    float fog_col[4] = { r, g, b, 1.0f };
+    glFogfv(GL_FOG_COLOR, fog_col);
+    glClearColor(r, g, b, 0.0f);
 }
 
 static void java125_generate_stars_once(void) {
@@ -213,8 +260,12 @@ static void draw_java125_sunrise_sunset_fan(float partial) {
 }
 
 static float java125_world_sea_level(void) {
-    /* World.getSeaLevel(): FLAT -> 0, otherwise 63. */
-    return (g_world_type == 0) ? 0.0f : 63.0f;
+    /* Java World.getSeaLevel() is FLAT -> 0, otherwise 63.  This project still
+       renders the old local Beta-style terrain preview whose documented sea
+       level is 32, so the RenderGlobal below-sea void/horizon test must use the
+       active terrain system's sea level until the terrain generator itself is
+       upgraded to Release 1.2.5. */
+    return (g_world_type == 0) ? 0.0f : 32.0f;
 }
 
 static float java125_render_eye_y(float partial) {
@@ -284,6 +335,7 @@ static void draw_sky_only(void) {
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glEnable(GL_FOG);
+    apply_java125_fog_color(g_frame_partial);
     glDisable(GL_ALPHA_TEST);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
@@ -451,16 +503,18 @@ static float current_render_distance_blocks(void) {
 static void apply_source_like_fog(void) {
     float end = current_render_distance_blocks();
     float start = end * 0.25f;
-    float fog_col[4] = {0.49f, 0.65f, 1.0f, 1.0f};
+    float fog_col[4];
+    java125_effective_fog_color(g_frame_partial, &fog_col[0], &fog_col[1], &fog_col[2]);
+    fog_col[3] = 1.0f;
 
     int fog_mode = GL_LINEAR;
     float fog_density = 0.0f;
 
-    /* Java EntityRenderer.func_4140_a uses exponential fog when the camera is
-       inside water/lava.  That is what makes deeper water become darker instead
-       of simply fading to a short linear blue wall. */
+    /* Java EntityRenderer.setupFog(float) switches to exponential medium fog
+       when the camera is in water/lava; otherwise it uses the time-dependent
+       fog color from EntityRenderer.updateFogColor(), not a fixed day blue. */
     if (flat_player_head_in_water()) {
-        fog_col[0] = 0.05f; fog_col[1] = 0.20f; fog_col[2] = 0.70f;
+        fog_col[0] = 0.02f; fog_col[1] = 0.02f; fog_col[2] = 0.20f;
         fog_mode = GL_EXP;
         fog_density = 0.10f;
     } else if (flat_player_head_in_lava()) {
@@ -472,18 +526,14 @@ static void apply_source_like_fog(void) {
     glEnable(GL_FOG);
     glFogi(GL_FOG_MODE, fog_mode);
     glFogfv(GL_FOG_COLOR, fog_col);
+    glClearColor(fog_col[0], fog_col[1], fog_col[2], 0.0f);
     if (fog_mode == GL_EXP) glFogf(GL_FOG_DENSITY, fog_density);
     else { glFogf(GL_FOG_START, start); glFogf(GL_FOG_END, end); }
 }
 
 
 static void cloud_color(float *r, float *g, float *b) {
-    /* Source RenderGlobal uses world.getCloudColor(partial).  This port has no
-       full day/night sky-color object yet, so use the same neutral Beta cloud
-       tint and let fog/sky handle later time-of-day work. */
-    *r = 0.92f;
-    *g = 0.96f;
-    *b = 1.0f;
+    java125_cloud_color(g_frame_partial, r, g, b);
 }
 
 static void cloud_tex_vertex(float x, float y, float z, float u, float v) {

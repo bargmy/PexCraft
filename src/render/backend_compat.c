@@ -195,6 +195,7 @@ typedef struct PexD3D11Backend {
     ID3D11SamplerState *sampler_clamp_linear;
     ID3D11BlendState *blend_off;
     ID3D11BlendState *blend_alpha;
+    ID3D11BlendState *blend_additive;
     ID3D11BlendState *blend_multiply;
     ID3D11BlendState *blend_color_off;
     ID3D11DepthStencilState *depth_on_write;
@@ -910,6 +911,7 @@ static void pex_d3d11_release_pipeline(void) {
     if (g_d3d11.sampler_clamp_linear) { ID3D11SamplerState_Release(g_d3d11.sampler_clamp_linear); g_d3d11.sampler_clamp_linear = NULL; }
     if (g_d3d11.blend_off) { ID3D11BlendState_Release(g_d3d11.blend_off); g_d3d11.blend_off = NULL; }
     if (g_d3d11.blend_alpha) { ID3D11BlendState_Release(g_d3d11.blend_alpha); g_d3d11.blend_alpha = NULL; }
+    if (g_d3d11.blend_additive) { ID3D11BlendState_Release(g_d3d11.blend_additive); g_d3d11.blend_additive = NULL; }
     if (g_d3d11.blend_multiply) { ID3D11BlendState_Release(g_d3d11.blend_multiply); g_d3d11.blend_multiply = NULL; }
     if (g_d3d11.blend_color_off) { ID3D11BlendState_Release(g_d3d11.blend_color_off); g_d3d11.blend_color_off = NULL; }
     if (g_d3d11.depth_on_write) { ID3D11DepthStencilState_Release(g_d3d11.depth_on_write); g_d3d11.depth_on_write = NULL; }
@@ -965,6 +967,8 @@ static int pex_d3d11_create_pipeline(void) {
     ID3D11Device_CreateBlendState(g_d3d11.dev, &bd_mask, &g_d3d11.blend_color_off);
     bd.RenderTarget[0].BlendEnable=TRUE; bd.RenderTarget[0].SrcBlend=D3D11_BLEND_SRC_ALPHA; bd.RenderTarget[0].DestBlend=D3D11_BLEND_INV_SRC_ALPHA; bd.RenderTarget[0].BlendOp=D3D11_BLEND_OP_ADD; bd.RenderTarget[0].SrcBlendAlpha=D3D11_BLEND_ONE; bd.RenderTarget[0].DestBlendAlpha=D3D11_BLEND_INV_SRC_ALPHA; bd.RenderTarget[0].BlendOpAlpha=D3D11_BLEND_OP_ADD;
     ID3D11Device_CreateBlendState(g_d3d11.dev, &bd, &g_d3d11.blend_alpha);
+    bd.RenderTarget[0].SrcBlend=D3D11_BLEND_SRC_ALPHA; bd.RenderTarget[0].DestBlend=D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOp=D3D11_BLEND_OP_ADD; bd.RenderTarget[0].SrcBlendAlpha=D3D11_BLEND_ONE; bd.RenderTarget[0].DestBlendAlpha=D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOpAlpha=D3D11_BLEND_OP_ADD;
+    ID3D11Device_CreateBlendState(g_d3d11.dev, &bd, &g_d3d11.blend_additive);
     bd.RenderTarget[0].SrcBlend=D3D11_BLEND_DEST_COLOR; bd.RenderTarget[0].DestBlend=D3D11_BLEND_SRC_COLOR; bd.RenderTarget[0].BlendOp=D3D11_BLEND_OP_ADD; bd.RenderTarget[0].SrcBlendAlpha=D3D11_BLEND_ONE; bd.RenderTarget[0].DestBlendAlpha=D3D11_BLEND_ZERO; bd.RenderTarget[0].BlendOpAlpha=D3D11_BLEND_OP_ADD;
     ID3D11Device_CreateBlendState(g_d3d11.dev, &bd, &g_d3d11.blend_multiply);
     D3D11_DEPTH_STENCIL_DESC dsd; memset(&dsd,0,sizeof(dsd)); dsd.DepthEnable=TRUE; dsd.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL; dsd.DepthFunc=D3D11_COMPARISON_LESS_EQUAL;
@@ -973,7 +977,7 @@ static int pex_d3d11_create_pipeline(void) {
     dsd.DepthEnable=FALSE; ID3D11Device_CreateDepthStencilState(g_d3d11.dev, &dsd, &g_d3d11.depth_off);
     D3D11_RASTERIZER_DESC rd; memset(&rd,0,sizeof(rd)); rd.FillMode=D3D11_FILL_SOLID; rd.CullMode=D3D11_CULL_NONE; rd.DepthClipEnable=TRUE;
     ID3D11Device_CreateRasterizerState(g_d3d11.dev, &rd, &g_d3d11.rast_nocull);
-    return g_d3d11.sampler_wrap && g_d3d11.sampler_clamp && g_d3d11.blend_off && g_d3d11.blend_alpha && g_d3d11.blend_multiply && g_d3d11.blend_color_off && g_d3d11.depth_on_write && g_d3d11.depth_on_nowrite && g_d3d11.depth_off && g_d3d11.rast_nocull;
+    return g_d3d11.sampler_wrap && g_d3d11.sampler_clamp && g_d3d11.blend_off && g_d3d11.blend_alpha && g_d3d11.blend_additive && g_d3d11.blend_multiply && g_d3d11.blend_color_off && g_d3d11.depth_on_write && g_d3d11.depth_on_nowrite && g_d3d11.depth_off && g_d3d11.rast_nocull;
 }
 
 static int pex_renderer_d3d11_init(HWND hwnd) {
@@ -1119,6 +1123,7 @@ static void pex_d3d11_apply_state(const PexD3DStateSnap *s) {
     ID3D11BlendState *blend = (s->color_write_mask == 0) ? g_d3d11.blend_color_off : g_d3d11.blend_off;
     if (s->color_write_mask != 0 && s->blend_enabled) {
         if (s->src_blend == D3DBLEND_DESTCOLOR && s->dst_blend == D3DBLEND_SRCCOLOR) blend = g_d3d11.blend_multiply;
+        else if (s->src_blend == D3DBLEND_SRCALPHA && s->dst_blend == D3DBLEND_ONE) blend = g_d3d11.blend_additive;
         else blend = g_d3d11.blend_alpha;
     }
     ID3D11DeviceContext_OMSetBlendState(g_d3d11.ctx, blend, NULL, 0xffffffffu);

@@ -71,21 +71,27 @@ static void normalize_sky_alpha_from_luminance(Texture *t) {
     if (!t || !t->rgba || !t->id || t->w <= 0 || t->h <= 0) return;
     size_t pixels = (size_t)t->w * (size_t)t->h;
     if (pixels == 0 || pixels > (size_t)4096 * (size_t)4096) return;
-    size_t opaque = 0, transparent = 0, dark_opaque = 0;
+
+    size_t opaque = 0, transparent = 0, dark_opaque = 0, nonblack = 0;
     for (size_t i = 0; i < pixels; ++i) {
         unsigned char *px = &t->rgba[i * 4u];
         if (px[3] >= 250) opaque++;
         if (px[3] <= 5) transparent++;
         if (px[3] >= 250 && px[0] < 12 && px[1] < 12 && px[2] < 12) dark_opaque++;
+        if (px[0] >= 12 || px[1] >= 12 || px[2] >= 12) nonblack++;
     }
-    /* Vanilla terrain/sun.png is a square glow sprite.  Some pack/conversion
-       paths preserve the RGB glow but lose its alpha, which renders the famous
-       black square around the sun.  If an opaque square sky sprite is loaded,
-       rebuild alpha from luminance and re-upload it.  Moon phases are usually
-       64x32, so the square-size rule avoids making dark moon pixels disappear. */
-    int looks_like_sun = (t->w == t->h && t->w <= 128 && opaque * 100u >= pixels * 95u);
-    int looks_like_lost_alpha = (transparent == 0 && opaque * 100u >= pixels * 95u && dark_opaque > 0);
-    if (!looks_like_sun && (!looks_like_lost_alpha || dark_opaque * 100u < pixels * 5u)) return;
+
+    /* Java Release 1.2.5 renders /terrain/sun.png and /terrain/moon_phases.png
+       with GL_SRC_ALPHA, GL_ONE.  Several of this port's MCRW/conversion paths
+       can leave those sprites as fully opaque black-background quads.  If the
+       image is essentially opaque and contains a meaningful black background,
+       rebuild alpha from luminance and re-upload the same GL/D3D texture.  With
+       additive blending, black lunar shadow pixels contribute zero light, which
+       matches the Java render path. */
+    int mostly_opaque = (opaque * 100u >= pixels * 95u && transparent == 0);
+    int has_black_bg = (dark_opaque * 100u >= pixels * 5u && nonblack > 0);
+    if (!mostly_opaque || !has_black_bg) return;
+
     for (size_t i = 0; i < pixels; ++i) {
         unsigned char *px = &t->rgba[i * 4u];
         unsigned char a = px[0];
@@ -98,6 +104,13 @@ static void normalize_sky_alpha_from_luminance(Texture *t) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t->rgba);
 }
+
+static void normalize_sky_sprite_alphas(void) {
+    normalize_sky_alpha_from_luminance(&tex_sun);
+    normalize_sky_alpha_from_luminance(&tex_moon);
+    normalize_sky_alpha_from_luminance(&tex_moon_phases);
+}
+
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static const char *pex_basename_asset(const char *path) {
@@ -904,7 +917,8 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_sun, "terrain_sun.mcrw", 0, 32, 32);
     PEX_PSP_LOAD_OPT(&tex_moon, "terrain_moon.mcrw", 0, 32, 32);
     PEX_PSP_LOAD_OPT(&tex_moon_phases, "terrain_moon_phases.mcrw", 0, 64, 32);
-    /* Source C++ RenderGlobal renders sun/moon with original texture alpha. */
+    normalize_sky_sprite_alphas();
+    /* Java RenderGlobal.renderSky uses additive alpha for sun/moon sprites. */
     PEX_PSP_LOAD_OPT(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
     PEX_PSP_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
@@ -956,7 +970,8 @@ static int load_default_textures(void) {
     load_mcrw(&tex_sun, "terrain_sun.mcrw", 0);
     load_mcrw(&tex_moon, "terrain_moon.mcrw", 0);
     load_mcrw(&tex_moon_phases, "terrain_moon_phases.mcrw", 0);
-    /* Source C++ RenderGlobal renders sun/moon with original texture alpha. */
+    normalize_sky_sprite_alphas();
+    /* Java RenderGlobal.renderSky uses additive alpha for sun/moon sprites. */
     load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
     load_mcrw(&tex_shadow, "misc_shadow.mcrw", 0);
     load_mcrw(&tex_grasscolor, "misc_grasscolor.mcrw", 0);
@@ -1027,7 +1042,8 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_sun, "terrain\\sun.png", 0);
         try_pack_texture(e, &tex_moon, "terrain\\moon.png", 0);
         try_pack_texture(e, &tex_moon_phases, "terrain\\moon_phases.png", 0);
-        /* Source C++ sky keeps original sun/moon texture alpha. */
+        normalize_sky_sprite_alphas();
+        /* Java RenderGlobal.renderSky uses additive alpha for sun/moon sprites. */
         try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
         try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
         try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
