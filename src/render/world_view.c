@@ -166,37 +166,39 @@ static void draw_sky_only(void) {
     setup_world_projection();
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
-    glDisable(GL_FOG);
     glDisable(GL_ALPHA_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     apply_sky_camera_rotation(g_frame_partial);
 
+    /* Match Java 1.2.5 RenderGlobal.renderSky(): draw a colored sky plane,
+       then sun/moon/stars with the celestial rotation, instead of drawing a
+       full skybox cube that can look washed out or create odd dark edges near
+       the sun with some backends. */
     float sr, sg, sb;
     java125_sky_color(g_frame_partial, &sr, &sg, &sb);
     glDisable(GL_TEXTURE_2D);
-    glColor3f(sr, sg, sb);
-    const float S = 384.0f;
+    glEnable(GL_FOG);
+    glColor4f(sr, sg, sb, 1.0f);
+    const float S = 256.0f;
+    const float Y = 16.0f;
     glBegin(GL_QUADS);
-    /* Java RenderGlobal sky display lists are simple large quads around the view. */
-    glVertex3f(-S,  S, -S); glVertex3f(-S,  S,  S); glVertex3f( S,  S,  S); glVertex3f( S,  S, -S);
-    glVertex3f(-S, -S,  S); glVertex3f(-S, -S, -S); glVertex3f( S, -S, -S); glVertex3f( S, -S,  S);
-    glVertex3f(-S, -S, -S); glVertex3f(-S,  S, -S); glVertex3f( S,  S, -S); glVertex3f( S, -S, -S);
-    glVertex3f( S, -S,  S); glVertex3f( S,  S,  S); glVertex3f(-S,  S,  S); glVertex3f(-S, -S,  S);
-    glVertex3f(-S, -S,  S); glVertex3f(-S,  S,  S); glVertex3f(-S,  S, -S); glVertex3f(-S, -S, -S);
-    glVertex3f( S, -S, -S); glVertex3f( S,  S, -S); glVertex3f( S,  S,  S); glVertex3f( S, -S,  S);
+    glVertex3f(-S, Y, -S); glVertex3f(-S, Y, S); glVertex3f(S, Y, S); glVertex3f(S, Y, -S);
     glEnd();
+    glDisable(GL_FOG);
 
-    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.0f);
     glPushMatrix();
     float rain_alpha = 1.0f;
     glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
     glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
     glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
 
+    glEnable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
     sky_textured_quad(&tex_sun, 30.0f, 100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFF66);
 
     int phase = java125_moon_phase();
@@ -214,32 +216,37 @@ static void draw_sky_only(void) {
         glDisable(GL_TEXTURE_2D);
         set_color_int(0xFFFFFFFF);
     }
-    float ms = 20.0f;
-    glBegin(GL_QUADS);
-    glTexCoord2f(u1, v1); glVertex3f(-ms, -100.0f,  ms);
-    glTexCoord2f(u0, v1); glVertex3f( ms, -100.0f,  ms);
-    glTexCoord2f(u0, v0); glVertex3f( ms, -100.0f, -ms);
-    glTexCoord2f(u1, v0); glVertex3f(-ms, -100.0f, -ms);
-    glEnd();
+    {
+        float ms = 20.0f;
+        glBegin(GL_QUADS);
+        glTexCoord2f(u1, v1); glVertex3f(-ms, -100.0f,  ms);
+        glTexCoord2f(u0, v1); glVertex3f( ms, -100.0f,  ms);
+        glTexCoord2f(u0, v0); glVertex3f( ms, -100.0f, -ms);
+        glTexCoord2f(u1, v0); glVertex3f(-ms, -100.0f, -ms);
+        glEnd();
+    }
 
     glDisable(GL_TEXTURE_2D);
-    float star = java125_star_brightness(g_frame_partial) * rain_alpha;
-    if (star > 0.0f) {
-        java125_generate_stars_once();
-        glColor4f(star, star, star, star);
-        glBegin(GL_QUADS);
-        for (int i = 0; i < g_sky_star_count; ++i) {
-            for (int v = 0; v < 4; ++v) {
-                glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+    {
+        float star = java125_star_brightness(g_frame_partial) * rain_alpha;
+        if (star > 0.0f) {
+            java125_generate_stars_once();
+            glColor4f(star, star, star, star);
+            glBegin(GL_QUADS);
+            for (int i = 0; i < g_sky_star_count; ++i) {
+                for (int v = 0; v < 4; ++v) {
+                    glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+                }
             }
+            glEnd();
         }
-        glEnd();
     }
     glPopMatrix();
 
     glColor4f(1,1,1,1);
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
+    glEnable(GL_FOG);
     glDepthMask(GL_TRUE);
 }
 
@@ -954,6 +961,34 @@ static void pex_world_gl_alpha_func_guard(GLenum func, GLfloat ref) { if (!g_fla
 static void pex_world_gl_depth_mask_guard(GLboolean flag) { if (!g_flat_direct_builder) glDepthMask(flag); }
 static void pex_world_gl_color4f_guard(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { if (!g_flat_direct_builder) glColor4f(r, g, b, a); }
 
+/* main_android_tv.c maps legacy GL calls to the GLES2 shim before including this
+   file.  The direct-mesh guard below intentionally wraps those already-expanded
+   calls, but redefining the same macros trips Android/Clang warnings.  Undefine
+   any platform aliases first, then install the local suppression guard. */
+#ifdef glBegin
+#undef glBegin
+#endif
+#ifdef glEnd
+#undef glEnd
+#endif
+#ifdef glEnable
+#undef glEnable
+#endif
+#ifdef glDisable
+#undef glDisable
+#endif
+#ifdef glBindTexture
+#undef glBindTexture
+#endif
+#ifdef glAlphaFunc
+#undef glAlphaFunc
+#endif
+#ifdef glDepthMask
+#undef glDepthMask
+#endif
+#ifdef glColor4f
+#undef glColor4f
+#endif
 #define glBegin(mode) pex_world_gl_begin_guard(mode)
 #define glEnd() pex_world_gl_end_guard()
 #define glEnable(cap) pex_world_gl_enable_guard(cap)
@@ -6389,8 +6424,10 @@ static void draw_first_person_hand(void) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    /* Java Beta render order: the held item/hand pass gets the same view bobbing
-       matrix as the camera before ItemRenderer renders the equipped item. */
+    /* Java 1.2.5: the first-person item/hand pass is rendered inside the same
+       hurt-camera + view-bobbing matrix pair used by EntityRenderer before
+       ItemRenderer.renderItemInFirstPerson(). */
+    apply_hurt_camera_effect(g_frame_partial);
     apply_view_bobbing(g_frame_partial);
 
     glEnable(GL_TEXTURE_2D);

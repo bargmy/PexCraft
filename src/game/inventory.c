@@ -691,6 +691,7 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
     int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
     int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
     pex_logf_trace("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
+    (void)changed_section_count;
     free(sky); free(block); free(q);
 }
 

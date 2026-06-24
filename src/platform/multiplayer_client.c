@@ -779,7 +779,11 @@ static DWORD WINAPI pex_net_connect_worker(LPVOID unused) {
                 int sr = select(0, NULL, &wfds, NULL, &tv);
                 if (sr > 0) {
                     int err = 0;
+#if defined(_WIN32) && !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_ANDROID_TV)
                     int err_len = sizeof(err);
+#else
+                    socklen_t err_len = (socklen_t)sizeof(err);
+#endif
                     getsockopt(s, SOL_SOCKET, SO_ERROR, (char *)&err, &err_len);
                     if (err == 0) break;
                 }
