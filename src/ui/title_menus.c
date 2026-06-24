@@ -218,7 +218,7 @@ static int g_release_panorama_boot_reset_done = 0;
 static void release_title_state_enter(void) {
     /* Java GuiMainMenu owns panoramaTimer and viewportTexture per screen
        instance.  Reset both when entering the title screen so startup and
-       post-world-return take the same OpenGL path. */
+       post-world-return take the same Java/OpenGL path. */
     g_release_panorama_timer = 0;
     g_release_panorama_boot_reset_done = g_boot_sequence_done ? 1 : 0;
     if (g_release_panorama_viewport_tex) {
