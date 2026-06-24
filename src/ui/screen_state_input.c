@@ -1,6 +1,7 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
 static void rebuild_screen(void);
+static void release_title_state_enter(void);
 
 #define WORLD_ROW_BUTTON_BASE 1000
 static int g_world_last_click_index = -1;
@@ -13,6 +14,7 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
     if (s == SCREEN_TITLE) {
+        if (old_screen != SCREEN_TITLE) release_title_state_enter();
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
         g_menu_music_started = 0;
     } else if (s == SCREEN_GENERATING || s == SCREEN_CONNECTING || s == SCREEN_INGAME) {

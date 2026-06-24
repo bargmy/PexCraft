@@ -1,5 +1,7 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+static int g_release_panorama_timer = 0;
+
 static void init_title_blocks(void) {
     if (title_inited) return;
     srand(12345);
@@ -14,6 +16,7 @@ static void init_title_blocks(void) {
 }
 
 static void tick_title_blocks(void) {
+    if (g_release_panorama_timer < 0x3fffffff) ++g_release_panorama_timer;
     init_title_blocks();
     for (int x = 0; x < TITLE_COLS; x++) {
         for (int y = 0; y < TITLE_ROWS; y++) {
@@ -206,6 +209,18 @@ static void draw_title_logo_3d(float partial) {
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
+
+static void release_title_state_enter(void) {
+    /* Java GuiMainMenu owns panoramaTimer and viewportTexture per screen
+       instance.  Reset both when entering the title screen so startup and
+       post-world-return take the same path on real OpenGL. */
+    g_release_panorama_timer = 0;
+    if (g_release_panorama_viewport_tex) {
+        glDeleteTextures(1, &g_release_panorama_viewport_tex);
+        g_release_panorama_viewport_tex = 0;
+    }
+    g_release_panorama_alloc_size = 0;
+}
 static int release_panorama_target_size(void) {
     /* Java GuiMainMenu.renderSkybox always renders and copies a 256x256
        viewport texture.  Do not scale this with the window size: copying a
@@ -228,7 +243,15 @@ static void ensure_release_panorama_viewport_texture(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    /* Real OpenGL leaves glTexImage2D(NULL) contents undefined until the first
+       copy.  Zero-initialize the CPU side only for real GL; D3D11 must keep
+       this texture DEFAULT-usage so glCopyTexSubImage2D can update it. */
+    unsigned char *blank = NULL;
+    if (!pex_using_d3d9() && !pex_using_d3d11()) {
+        blank = (unsigned char*)calloc((size_t)size * (size_t)size, 4u);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, blank);
+    free(blank);
 }
 
 static void draw_release_panorama_cube(float partial) {
@@ -247,7 +270,7 @@ static void draw_release_panorama_cube(float partial) {
     glDepthMask(GL_FALSE);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     const int samples = 8;
-    float timer = (float)g_ticks + partial;
+    float timer = (float)g_release_panorama_timer + partial;
     for (int pass = 0; pass < samples * samples; ++pass) {
         glPushMatrix();
         float ox = (((float)(pass % samples) / (float)samples) - 0.5f) / 64.0f;

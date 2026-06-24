@@ -5625,6 +5625,8 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
        like x-ray.  Keep depth test/write on, but render both sides. */
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.5f);
     glDepthMask(GL_TRUE);
@@ -5645,6 +5647,8 @@ static void draw_flat_section_translucent_passes_gl_cpu(const FlatRenderSectionR
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glDisable(GL_CULL_FACE);
     glDisable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
@@ -5665,6 +5669,8 @@ static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count
     if (flat_async_section_mesh_enabled()) { draw_flat_section_passes_gl_cpu(refs, count); return; }
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glDisable(GL_ALPHA_TEST);
     glDepthMask(GL_TRUE);
     for (int i = 0; i < count; i++) {
