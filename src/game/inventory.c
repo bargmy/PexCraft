@@ -185,7 +185,6 @@ static void stream_queue_add_chunk(int wcx, int wcz);
 static void stream_queue_add_chunk_directional_safety(int base_cx, int base_cz, int pcx, int pcz, int radius);
 static int stream_queue_missing_visible_chunks_near_player(void);
 static void process_stream_generation_queue(void);
-static int process_stream_generation_queue_sync(int max_chunks);
 static int stream_generation_active(void);
 static int psp_player_terrain_ready_or_hold(void);
 static void wake_neighbor_liquids(int x, int y, int z);
@@ -1475,63 +1474,6 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     if (flat_chunk_buffer_has_saved_user_light_source(buf)) flat_note_chunk_block_light_dirty(cx, cz);
 }
 
-static int stream_generate_one_chunk_sync_now(void) {
-    if (g_stream_gen_queue_index >= g_stream_gen_queue_count) return 0;
-
-    int idx = g_stream_gen_queue_index++;
-    int wcx = g_stream_gen_queue_cx[idx];
-    int wcz = g_stream_gen_queue_cz[idx];
-    if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) return 1;
-
-    int lcx = stream_world_chunk_local_x(wcx);
-    int lcz = stream_world_chunk_local_z(wcz);
-    if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) return 1;
-
-    unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
-    unsigned char *sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-    unsigned char *blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-    if (!buf || !meta || !sky || !blocklight) {
-        free(buf); free(meta); free(sky); free(blocklight);
-        return 1;
-    }
-
-#if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
-    TerrainProvider *reuse = NULL;
-#else
-    TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
-#endif
-    generate_flat_chunk_base_to_buffer_ex(wcx, wcz, buf, g_world_type, g_world_seed, reuse);
-    load_modified_flat_chunk_delta_into_buffers_for_dir(g_loaded_world_dir, wcx, wcz, buf, meta);
-    flat_compute_chunk_light_fast_from_buffers(buf, sky, blocklight);
-
-    g_copy_chunk_skip_main_light = 1;
-    copy_flat_chunk_buffers_to_world(wcx, wcz, buf, meta);
-    g_copy_chunk_skip_main_light = 0;
-    copy_flat_chunk_light_buffers_to_world(wcx, wcz, sky, blocklight);
-    stream_mark_local_chunk_generated(lcx, lcz);
-    g_stream_gen_queue_installed_count++;
-
-#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-    psp_fast_surface_mark_dirty_block(wcx * 16 + 8, wcz * 16 + 8);
-#endif
-
-    free(buf);
-    free(meta);
-    free(sky);
-    free(blocklight);
-    return 1;
-}
-
-static int process_stream_generation_queue_sync(int max_chunks) {
-    int done = 0;
-    while (max_chunks-- > 0 && g_stream_gen_queue_index < g_stream_gen_queue_count) {
-        done += stream_generate_one_chunk_sync_now();
-    }
-    if (!stream_generation_active() && !g_stream_generation_keep_completed) stream_generation_queue_clear();
-    return done;
-}
-
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     if (lcz >= 0 && lcz < FLAT_RENDER_CHUNKS && lcx >= 0 && lcx < FLAT_RENDER_CHUNKS) g_flat_world_chunk_modified[lcz][lcx] = 0;
@@ -2187,9 +2129,18 @@ static int stream_initial_load_chunk_target(void) {
 #endif
 }
 
+static volatile int g_stream_initial_light_settle_requested = 0;
+static volatile int g_stream_initial_light_settle_running = 0;
+static volatile int g_stream_initial_light_settle_done = 0;
+static volatile int g_stream_initial_light_settle_progress = 0;
+
 static void flat_world_begin_initial_generation(void) {
     stream_generation_queue_clear();
     g_stream_generation_keep_completed = 1;
+    g_stream_initial_light_settle_requested = 0;
+    g_stream_initial_light_settle_running = 0;
+    g_stream_initial_light_settle_done = 0;
+    g_stream_initial_light_settle_progress = 0;
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
@@ -2203,9 +2154,14 @@ static void flat_world_begin_initial_generation(void) {
     if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
     int target = stream_initial_load_chunk_target();
-    stream_queue_add_chunk_directional_safety(base_cx, base_cz, pcx, pcz, stream_effective_render_chunk_radius());
-    if (g_stream_gen_queue_count > target) g_stream_gen_queue_count = target;
     for (int ring = 0; ring < FLAT_RENDER_CHUNKS && g_stream_gen_queue_count < target; ring++) {
+        /* Release 1.2.5 preloads a square/ring around spawn.  Do not seed the
+           loading-screen queue with the in-game directional corridor: that can
+           create holes inside the preload bounds, and those holes make the final
+           skylight settle treat missing chunks as air.  Keep only complete rings
+           so the first visible world is a stable, contiguous spawn island. */
+        int ring_slots = (ring == 0) ? 1 : ring * 8;
+        if (ring > 0 && g_stream_gen_queue_count + ring_slots > target) break;
         for (int dz = -ring; dz <= ring && g_stream_gen_queue_count < target; dz++) {
             for (int dx = -ring; dx <= ring && g_stream_gen_queue_count < target; dx++) {
                 if (ring != 0 && abs(dx) != ring && abs(dz) != ring) continue;
@@ -2217,20 +2173,19 @@ static void flat_world_begin_initial_generation(void) {
         }
     }
 
-    /* Initial load is deliberately synchronous on the loading screen.  After
-       SCREEN_INGAME starts, desktop streaming is serviced by the background
-       world-stream thread and never by the game tick. */
-    process_stream_generation_queue_sync(target);
+    /* Java 1.2.5 preloads chunks while repeatedly updating the loading screen.
+       PexCraft keeps the same visible-progress behavior without moving terrain
+       generation onto the main/render thread: the background stream service owns
+       generation and commit while worldgen_tick only polls counters. */
+    world_stream_service_ensure();
 }
 
 static void flat_world_continue_initial_generation(void) {
-    process_stream_generation_queue_sync(stream_initial_load_chunk_target());
+    world_stream_service_ensure();
 }
 
 static int flat_world_initial_generation_active(void) {
-    /* Loading-screen generation is intentionally synchronous now.  Do not let a
-       stale async result from the previous world keep SCREEN_GENERATING alive. */
-    return g_stream_gen_queue_index < g_stream_gen_queue_count;
+    return stream_generation_active();
 }
 
 static int flat_world_initial_generation_total(void) {
@@ -2241,8 +2196,28 @@ static int flat_world_initial_generation_done(void) {
     return g_stream_gen_queue_installed_count;
 }
 
+static void flat_world_begin_initial_light_settle(void) {
+    if (g_stream_initial_light_settle_done || g_stream_initial_light_settle_running) return;
+    g_stream_initial_light_settle_requested = 1;
+}
+
+static int flat_world_initial_light_settle_done(void) {
+    return g_stream_initial_light_settle_done;
+}
+
+static int flat_world_initial_light_settle_progress(void) {
+    int p = g_stream_initial_light_settle_progress;
+    if (p < 0) p = 0;
+    if (p > 100) p = 100;
+    return p;
+}
+
 static void flat_world_finish_initial_generation(void) {
     g_stream_generation_keep_completed = 0;
+    g_stream_initial_light_settle_requested = 0;
+    g_stream_initial_light_settle_running = 0;
+    g_stream_initial_light_settle_done = 0;
+    g_stream_initial_light_settle_progress = 0;
     stream_generation_queue_clear();
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
@@ -7041,6 +7016,59 @@ static void process_stream_generation_queue(void) {
 
 
 
+
+static void flat_world_run_initial_light_settle_service(void) {
+    if (!g_stream_initial_light_settle_requested || g_stream_initial_light_settle_done) return;
+    g_stream_initial_light_settle_requested = 0;
+    g_stream_initial_light_settle_running = 1;
+    g_stream_initial_light_settle_progress = 1;
+
+    int min_lcx = FLAT_RENDER_CHUNKS, min_lcz = FLAT_RENDER_CHUNKS;
+    int max_lcx = -1, max_lcz = -1;
+    for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
+        for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
+            if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
+            if (lcx < min_lcx) min_lcx = lcx;
+            if (lcz < min_lcz) min_lcz = lcz;
+            if (lcx > max_lcx) max_lcx = lcx;
+            if (lcz > max_lcz) max_lcz = lcz;
+        }
+    }
+
+    if (max_lcx >= min_lcx && max_lcz >= min_lcz) {
+        int base_cx = floor_div16(g_flat_world_origin_x);
+        int base_cz = floor_div16(g_flat_world_origin_z);
+        int rx0 = (base_cx + min_lcx) * FLAT_RENDER_CHUNK;
+        int rz0 = (base_cz + min_lcz) * FLAT_RENDER_CHUNK;
+        int rx1 = (base_cx + max_lcx) * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1;
+        int rz1 = (base_cz + max_lcz) * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1;
+
+        /* Match the important part of Minecraft 1.2.5 preloadWorld(): do not
+           enter gameplay until the preload area has had its queued lighting
+           settled.  This runs on the stream service, not the main thread, so the
+           loading screen can keep repainting while the expensive region pass runs.
+           The margin lets skylight/block-light cross the first generated chunk
+           border and prevents the "one chunk has a different brightness until I
+           edit a block" failure. */
+        g_stream_initial_light_settle_progress = 15;
+        flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 16, 1);
+        g_stream_initial_light_settle_progress = 90;
+        for (int lcz = min_lcz; lcz <= max_lcz; ++lcz) {
+            for (int lcx = min_lcx; lcx <= max_lcx; ++lcx) {
+                if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
+                flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+                for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+                    flat_mark_section_after_generation(lcx, lcz, sy);
+                }
+            }
+        }
+    }
+
+    g_stream_initial_light_settle_progress = 100;
+    g_stream_initial_light_settle_done = 1;
+    g_stream_initial_light_settle_running = 0;
+}
+
 static CRITICAL_SECTION g_world_stream_service_cs;
 static int g_world_stream_service_initialized = 0;
 static int g_world_stream_service_stop = 0;
@@ -7058,10 +7086,20 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
         LeaveCriticalSection(&g_world_stream_service_cs);
         if (stop) break;
 
-        if (g_screen == SCREEN_INGAME && !g_mp_connected) {
-            /* Keep desktop gameplay streaming off the main tick.  The loading
-               screen intentionally generates its initial 50 chunks on the main
-               thread; this service only owns post-entry streaming. */
+        if (!g_mp_connected && g_screen == SCREEN_GENERATING && g_worldgen.active && g_stream_generation_keep_completed) {
+            /* Loading-screen preload uses the same worker-backed stream path as
+               gameplay, but worldgen_tick only polls progress.  This keeps the
+               dirt/progress screen responsive instead of blocking inside chunk
+               generation like the failed main-thread preload path did. */
+            if (stream_generation_active()) {
+                process_stream_generation_queue();
+            } else if (g_stream_initial_light_settle_requested && !g_stream_initial_light_settle_done) {
+                flat_world_run_initial_light_settle_service();
+            }
+            flat_lighting_worker_wake();
+            if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
+        } else if (g_screen == SCREEN_INGAME && !g_mp_connected) {
+            /* Keep desktop gameplay streaming off the main tick. */
             update_infinite_world_streaming();
             flat_lighting_worker_wake();
             if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
@@ -7073,7 +7111,8 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 
         /* Active streaming gets frequent service, idle mode backs off hard so
            uncapped rendering is not fighting a polling thread. */
-        Sleep((stream_generation_active() || flat_lighting_pending_dirty()) ? 1 : 20);
+        Sleep((stream_generation_active() || g_stream_initial_light_settle_requested ||
+               g_stream_initial_light_settle_running || flat_lighting_pending_dirty()) ? 1 : 20);
     }
     EnterCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_busy = 0;

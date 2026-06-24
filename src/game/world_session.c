@@ -1557,10 +1557,19 @@ static void worldgen_tick(void) {
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain %d/%d",
                  g_worldgen.terrain_done, g_worldgen.terrain_total);
         if (!flat_world_initial_generation_active()) {
+            flat_world_begin_initial_light_settle();
+            if (!flat_world_initial_light_settle_done()) {
+                int light_p = flat_world_initial_light_settle_progress();
+                g_worldgen.progress = 87 + (light_p * 5) / 100;
+                if (g_worldgen.progress > 92) g_worldgen.progress = 92;
+                snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Lighting terrain");
+                return;
+            }
+
             flat_world_finish_initial_generation();
             if (!g_worldgen.loaded_state) reset_flat_player_spawn();
             g_worldgen.phase = 2;
-            g_worldgen.progress = 88;
+            g_worldgen.progress = 92;
             snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Preparing chunks");
             worldgen_mesh_prep_reset();
         }
@@ -1572,8 +1581,8 @@ static void worldgen_tick(void) {
         int total = worldgen_mesh_prep_total();
         int done = worldgen_mesh_prep_done();
         if (total <= 0) total = 1;
-        int mesh_p = (done * 11) / total;
-        g_worldgen.progress = 88 + mesh_p;
+        int mesh_p = (done * 7) / total;
+        g_worldgen.progress = 92 + mesh_p;
         if (g_worldgen.progress > 99) g_worldgen.progress = 99;
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Preparing chunks %d/%d", done, total);
         if (complete) {
