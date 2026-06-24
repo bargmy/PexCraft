@@ -7260,7 +7260,7 @@ static int stream_initial_try_generate_beta_batch(void) {
         if (s->active) stream_initial_beta_batch_reset();
         return 0;
     }
-    if (g_stream_gen_queue_index != 0 || g_stream_gen_queue_installed_count != 0) return 0;
+    if (!s->active && (g_stream_gen_queue_index != 0 || g_stream_gen_queue_installed_count != 0)) return 0;
 
     if (!s->active) {
         int min_cx = g_stream_gen_queue_cx[0], max_cx = g_stream_gen_queue_cx[0];
@@ -7580,7 +7580,10 @@ static void world_stream_service_ensure(void) {
     InitializeCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_thread = CreateThread(NULL, 0x400000, world_stream_service_proc, NULL, 0, NULL);
     if (g_world_stream_service_thread) {
-        SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_NORMAL);
+        /* Terrain preload/generation is intentionally off the main/render thread.
+           Keep the service below normal priority so a mobile/lightweight CPU stays
+           responsive while the loading screen polls progress. */
+        SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
         pex_logf("world stream service started");
     } else {
         pex_logf("world stream service failed to start; streaming will be serviced by fallbacks only");
