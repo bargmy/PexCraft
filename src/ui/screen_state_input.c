@@ -15,6 +15,10 @@ static void set_screen(ScreenId s) {
     if (s == SCREEN_TITLE) {
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
         g_menu_music_started = 0;
+    } else if (s == SCREEN_GENERATING || s == SCREEN_CONNECTING || s == SCREEN_INGAME) {
+        /* Menu music is a title-screen-only sound.  Stop it as soon as a local
+           world load, multiplayer join, or gameplay entry starts. */
+        pex_menu_music_stop();
     }
     if (s == SCREEN_WORLD_SELECT || s == SCREEN_WORLD_DELETE) {
         g_selected_world_index = -1;

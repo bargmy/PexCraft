@@ -1402,10 +1402,13 @@ static void draw_grass_block(float x, float y, float z) {
     float y0 = y, y1 = y + 1.0f;
     float z0 = z, z1 = z + 1.0f;
     float u0,v0,u1,v1;
+    int bx = (int)floorf(x), by = (int)floorf(y), bz = (int)floorf(z);
+    world_style_set_pos(bx, by, bz);
 
     /* Beta terrain.png indices: 0=grass top, 2=dirt, 3=grass side. */
     terrain_tile_uv(0, &u0, &v0, &u1, &v1);
-    world_set_color_shade(0x6FAD3A, 1.0f);
+    world_light_set_pos_for_face(bx, by, bz, 1);
+    world_set_color_shade(java_grass_color_at(bx, bz), 1.0f);
     glBegin(GL_QUADS);
     world_tex_vertex(x0, y1, z0, u0, v0);
     world_tex_vertex(x1, y1, z0, u1, v0);
@@ -1414,6 +1417,7 @@ static void draw_grass_block(float x, float y, float z) {
     glEnd();
 
     terrain_tile_uv(3, &u0, &v0, &u1, &v1);
+    world_light_set_pos_for_face(bx, by, bz, 2);
     world_set_shade(0.80f);
     glBegin(GL_QUADS);
     world_tex_vertex(x1, y1, z0, u0, v0);
@@ -1427,6 +1431,7 @@ static void draw_grass_block(float x, float y, float z) {
     world_tex_vertex(x0, y0, z1, u0, v1);
     glEnd();
 
+    world_light_set_pos_for_face(bx, by, bz, 4);
     world_set_shade(0.60f);
     glBegin(GL_QUADS);
     world_tex_vertex(x0, y1, z0, u0, v0);
@@ -1441,6 +1446,7 @@ static void draw_grass_block(float x, float y, float z) {
     glEnd();
 
     terrain_tile_uv(2, &u0, &v0, &u1, &v1);
+    world_light_set_pos_for_face(bx, by, bz, 0);
     world_set_shade(0.50f);
     glBegin(GL_QUADS);
     world_tex_vertex(x0, y0, z1, u0, v0);
@@ -2339,10 +2345,10 @@ static int world_face_tint_rgb(int id, int face) {
 }
 
 static float world_ao_cell_brightness(int x, int y, int z) {
-    int light = flat_combined_light_value(x, y, z);
-    if (light < 0) light = 0;
-    if (light > 15) light = 15;
-    return g_java_light_brightness_table[light];
+    /* Smooth block lighting must sample the same read-time-corrected brightness
+       used by the non-AO path.  The old mesh AO used raw 0..15 cells, so open
+       no-roof terrain could still pick up stale/dark neighbor samples. */
+    return flat_light_brightness(x, y, z);
 }
 
 static int world_ao_cell_is_normal_cube(int x, int y, int z) {
@@ -2352,7 +2358,7 @@ static int world_ao_cell_is_normal_cube(int x, int y, int z) {
 static float world_ao_cell_value(int x, int y, int z, float fallback_brightness, int *normal_cube) {
     int solid = world_ao_cell_is_normal_cube(x, y, z);
     if (normal_cube) *normal_cube = solid;
-    return solid ? fallback_brightness * 0.20f : world_ao_cell_brightness(x, y, z);
+    return solid ? fallback_brightness * 0.55f : world_ao_cell_brightness(x, y, z);
 }
 
 static int world_smooth_block_lighting_enabled(int id) {
@@ -2665,6 +2671,64 @@ static void draw_snow_layer_block(float x, float y, float z) {
     for (int face = 1; face < 6; face++) emit_snow_layer_face_float(x, y, z, face);
     glEnd();
     glColor4f(1, 1, 1, 1);
+}
+
+static int grass_side_overlay_face_needed(int x, int y, int z, int face) {
+    if (!g_opts.fancy_graphics) return 0;
+    if (face < 2 || face > 5) return 0;
+    int above = flat_get_block(x, y + 1, z);
+    if (above == BLOCK_SNOW_LAYER || above == BLOCK_SNOW_BLOCK) return 0;
+    return flat_face_exposed_for_block(BLOCK_GRASS, x, y, z, face);
+}
+
+static void emit_grass_side_overlay_face(int x, int y, int z, int face) {
+    float x0 = (float)x, x1 = (float)x + 1.0f;
+    float y0 = (float)y, y1 = (float)y + 1.0f;
+    float z0 = (float)z, z1 = (float)z + 1.0f;
+    float u0, v0, u1, v1;
+    int rgb = java_grass_color_at(x, z);
+    float shade = world_face_base_shade(face);
+    terrain_tile_uv(38, &u0, &v0, &u1, &v1);
+
+    if (world_smooth_block_lighting_enabled(BLOCK_GRASS)) {
+        float light[4];
+        world_smooth_face_lights(x, y, z, face, light);
+        if (face == 2) {
+            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, light[3]);
+        } else if (face == 3) {
+            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, light[3]);
+        } else if (face == 4) {
+            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, light[3]);
+        } else if (face == 5) {
+            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, light[3]);
+        }
+        return;
+    }
+
+    world_style_set_pos(x, y, z);
+    world_light_set_pos_for_face(x, y, z, face);
+    world_set_color_shade(rgb, shade);
+    if (face == 2) {
+        world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+    } else if (face == 3) {
+        world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+    } else if (face == 4) {
+        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+    } else if (face == 5) {
+        world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+    }
 }
 
 static void emit_world_block_face_at(int id, int x, int y, int z, int face) {
@@ -3748,6 +3812,11 @@ static void rebuild_flat_world_chunk_list(int cx, int cz) {
                 if (block_uses_special_model(id)) { chunk_has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { chunk_has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && g_opts.fancy_graphics) { chunk_has_cutout = 1; continue; }
+                if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                    for (int face = 2; face <= 5; face++) {
+                        if (grass_side_overlay_face_needed(x, y, z, face)) { chunk_has_cutout = 1; break; }
+                    }
+                }
                 for (int face = 0; face < 6; face++) {
                     if (flat_face_exposed_for_block(id, x, y, z, face)) emit_world_block_face(id, x, y, z, face);
                 }
@@ -3785,6 +3854,11 @@ static void rebuild_flat_world_chunk_list(int cx, int cz) {
                     if (id == BLOCK_LEAVES && g_opts.fancy_graphics) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) emit_world_block_face(id, x, y, z, face);
+                        }
+                    }
+                    if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                        for (int face = 2; face <= 5; face++) {
+                            if (grass_side_overlay_face_needed(x, y, z, face)) emit_grass_side_overlay_face(x, y, z, face);
                         }
                     }
                 }
@@ -3978,6 +4052,11 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && g_opts.fancy_graphics) { has_cutout = 1; continue; }
+                if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                    for (int face = 2; face <= 5; face++) {
+                        if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
+                    }
+                }
                 for (int face = 0; face < 6; face++) {
                     if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
                 }
@@ -4004,6 +4083,11 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
                     if (id == BLOCK_LEAVES && g_opts.fancy_graphics) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
+                        }
+                    }
+                    if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                        for (int face = 2; face <= 5; face++) {
+                            if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }
                     }
                 }
@@ -4087,6 +4171,11 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && g_opts.fancy_graphics) { has_cutout = 1; continue; }
+                if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                    for (int face = 2; face <= 5; face++) {
+                        if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
+                    }
+                }
                 for (int face = 0; face < 6; face++) {
                     if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
                 }
@@ -4121,6 +4210,11 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
                     if (id == BLOCK_LEAVES && g_opts.fancy_graphics) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
+                        }
+                    }
+                    if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                        for (int face = 2; face <= 5; face++) {
+                            if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }
                     }
                 }
@@ -4886,6 +4980,7 @@ static void worldgen_mesh_prep_build_list(void) {
     if (pcz < 0) pcz = 0; if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
     int r = effective_generated_render_chunk_radius();
+    if (g_worldgen.active && r > 1) r = 1;
     int cx0 = pcx - r, cx1 = pcx + r;
     int cz0 = pcz - r, cz1 = pcz + r;
     if (cx0 < 0) cx0 = 0;

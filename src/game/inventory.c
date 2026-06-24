@@ -658,9 +658,9 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
 }
 
 static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
-    /* Normal block edits keep the small fast path.  Streamed/generated chunks run
-       the environment-light pass immediately after their block data is installed. */
-    flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 2, 0);
+    /* Keep real light/shadow updates after edits.  The old 2-block/no-skylight
+       fast path left visible dark seams and stale shadows around open terrain. */
+    flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 16, 1);
 }
 
 #ifndef FLAT_CHUNK_BLOCK_COUNT
@@ -1976,8 +1976,8 @@ static int stream_initial_spawn_chunk_radius(void) {
     if (r > 2) r = 2;
     if (r < 2) r = 2;
 #else
-    if (r > 3) r = 3;
-    if (r < 2) r = 2;
+    (void)r;
+    r = 1; /* 3x3 spawn area; stream the rest after the player enters. */
 #endif
     return r;
 }
@@ -6589,14 +6589,15 @@ static void process_stream_generation_queue(void) {
     }
 
     static int s_stream_install_tick = 0;
-    /* Chunk generation, delta loading, and light-column calculation now happen on
-       the worker.  The remaining main-thread commit still touches active world
-       arrays and marks render sections dirty, so throttle it hard enough that
-       walking cannot create a 4-8 ms hitch every tick. */
-    int allow_install = ((s_stream_install_tick++ & 3) == 0);
+    /* During the loading screen we care more about entering the world quickly than
+       about hiding commit hitches, so install every ready chunk.  After gameplay
+       starts, keep the old throttle to avoid frame spikes while walking. */
+    int initial_load = g_stream_generation_keep_completed ? 1 : 0;
+    int allow_install = initial_load || ((s_stream_install_tick++ & 3) == 0);
     if (allow_install) {
-        pex_logf_trace("chunk stream async install tick queue=%d/%d", g_stream_gen_queue_index, g_stream_gen_queue_count);
-        stream_async_install_ready(1);
+        int max_install = initial_load ? 4 : 1;
+        pex_logf_trace("chunk stream async install tick queue=%d/%d budget=%d", g_stream_gen_queue_index, g_stream_gen_queue_count, max_install);
+        stream_async_install_ready(max_install);
     }
     stream_async_submit_next();
 

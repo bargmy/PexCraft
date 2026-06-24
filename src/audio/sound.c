@@ -14,6 +14,9 @@ static int g_pex_sound_count = 0;
 static int g_pex_sound_scanned = 0;
 static double g_pex_last_sound_rescan = 0.0;
 static double g_pex_last_missing_sound_notice = 0.0;
+/* pex_menu_music_start_once() uses the same sound backend as effects, but the
+   menu track must be stoppable when the user enters/joins a world. */
+static int g_pex_menu_music_request = 0;
 
 static void pex_sound_make_key_from_rel(const char *rel, char *out, size_t cap) {
     char tmp[160];
@@ -164,6 +167,7 @@ typedef void (*PFN_Mix_CloseAudio)(void);
 typedef int (*PFN_Mix_AllocateChannels)(int);
 typedef Mix_Chunk *(*PFN_Mix_LoadWAV_RW)(SDL_RWops *, int);
 typedef int (*PFN_Mix_PlayChannel)(int, Mix_Chunk *, int);
+typedef int (*PFN_Mix_HaltChannel)(int);
 typedef int (*PFN_Mix_VolumeChunk)(Mix_Chunk *, int);
 typedef int (*PFN_Mix_Volume)(int, int);
 typedef void (*PFN_Mix_FreeChunk)(Mix_Chunk *);
@@ -175,10 +179,12 @@ static PFN_Mix_CloseAudio pMix_CloseAudio = NULL;
 static PFN_Mix_AllocateChannels pMix_AllocateChannels = NULL;
 static PFN_Mix_LoadWAV_RW pMix_LoadWAV_RW = NULL;
 static PFN_Mix_PlayChannel pMix_PlayChannel = NULL;
+static PFN_Mix_HaltChannel pMix_HaltChannel = NULL;
 static PFN_Mix_VolumeChunk pMix_VolumeChunk = NULL;
 static PFN_Mix_Volume pMix_Volume = NULL;
 static PFN_Mix_FreeChunk pMix_FreeChunk = NULL;
 static int g_mix_ready = 0;
+static int g_pex_menu_music_channel = -1;
 
 typedef struct PexSoundChunkCache { char path[MAX_PATHBUF]; Mix_Chunk *chunk; } PexSoundChunkCache;
 #define PEX_SOUND_CHUNK_CACHE_MAX 128
@@ -226,6 +232,7 @@ static int pex_sound_backend_init(void) {
         pMix_AllocateChannels = (PFN_Mix_AllocateChannels)pex_sdl_load_mixer_symbol("Mix_AllocateChannels");
         pMix_LoadWAV_RW = (PFN_Mix_LoadWAV_RW)pex_sdl_load_mixer_symbol("Mix_LoadWAV_RW");
         pMix_PlayChannel = (PFN_Mix_PlayChannel)pex_sdl_load_mixer_symbol("Mix_PlayChannel");
+        pMix_HaltChannel = (PFN_Mix_HaltChannel)pex_sdl_load_mixer_symbol("Mix_HaltChannel");
         pMix_VolumeChunk = (PFN_Mix_VolumeChunk)pex_sdl_load_mixer_symbol("Mix_VolumeChunk");
         pMix_Volume = (PFN_Mix_Volume)pex_sdl_load_mixer_symbol("Mix_Volume");
         pMix_FreeChunk = (PFN_Mix_FreeChunk)pex_sdl_load_mixer_symbol("Mix_FreeChunk");
@@ -305,12 +312,25 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     int v = (int)(volume * 128.0f);
     if (v < 0) v = 0; if (v > 128) v = 128;
     if (pMix_VolumeChunk) pMix_VolumeChunk(c, pMix_Volume ? 128 : v);
+    if (g_pex_menu_music_request && pMix_HaltChannel && g_pex_menu_music_channel >= 0) {
+        pMix_HaltChannel(g_pex_menu_music_channel);
+        g_pex_menu_music_channel = -1;
+    }
     int ch = pMix_PlayChannel(-1, c, 0);
     if (ch >= 0 && pMix_Volume) pMix_Volume(ch, v);
+    if (g_pex_menu_music_request) g_pex_menu_music_channel = ch;
     return ch >= 0;
 }
 
+static void pex_sound_backend_stop_menu_music(void) {
+    if (pMix_HaltChannel && g_pex_menu_music_channel >= 0) {
+        pMix_HaltChannel(g_pex_menu_music_channel);
+    }
+    g_pex_menu_music_channel = -1;
+}
+
 static void pex_sound_shutdown(void) {
+    pex_sound_backend_stop_menu_music();
     for (int i = 0; i < g_sound_pitch_cache_count; ++i) {
         free(g_sound_pitch_cache[i].chunk.abuf);
         g_sound_pitch_cache[i].chunk.abuf = NULL;
@@ -350,7 +370,11 @@ typedef struct PexWinPlayJob {
     DWORD bytes;
     WAVEFORMATEX fmt;
     float volume;
+    int is_menu_music;
+    LONG menu_generation;
 } PexWinPlayJob;
+
+static volatile LONG g_pex_menu_music_stop_generation = 0;
 
 static int pex_win_pcm_append(BYTE **data, DWORD *bytes, DWORD *cap, const char *src, long src_bytes) {
     DWORD need;
@@ -458,7 +482,8 @@ static PexWinDecodedSound *pex_win_get_decoded_sound(const char *path) {
     return &g_win_sound_cache[slot];
 }
 
-static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMATEX *fmt, float volume) {
+static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMATEX *fmt, float volume,
+                                       int is_menu_music, LONG menu_generation) {
     HWAVEOUT hwo = NULL;
     WAVEHDR hdr;
     MMRESULT mm;
@@ -475,7 +500,13 @@ static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMAT
         waveOutClose(hwo);
         return 0;
     }
-    while (!(hdr.dwFlags & WHDR_DONE)) Sleep(1);
+    while (!(hdr.dwFlags & WHDR_DONE)) {
+        if (is_menu_music && menu_generation != g_pex_menu_music_stop_generation) {
+            waveOutReset(hwo);
+            break;
+        }
+        Sleep(5);
+    }
     waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
     waveOutClose(hwo);
     return 1;
@@ -484,7 +515,8 @@ static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMAT
 static DWORD WINAPI pex_win_play_thread(LPVOID arg) {
     PexWinPlayJob *job = (PexWinPlayJob *)arg;
     if (!job) return 0;
-    if (!pex_win_waveout_play_buffer(job->data, job->bytes, &job->fmt, job->volume)) {
+    if (!pex_win_waveout_play_buffer(job->data, job->bytes, &job->fmt, job->volume,
+                                     job->is_menu_music, job->menu_generation)) {
         log_msg("Sound backend: waveOut failed to play PCM sound");
     }
     free(job->data);
@@ -514,6 +546,8 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
         job->fmt.nAvgBytesPerSec = job->fmt.nSamplesPerSec * job->fmt.nBlockAlign;
     }
     job->volume = volume;
+    job->is_menu_music = g_pex_menu_music_request ? 1 : 0;
+    job->menu_generation = g_pex_menu_music_stop_generation;
 
     HANDLE th = CreateThread(NULL, 0, pex_win_play_thread, job, 0, NULL);
     if (!th) { free(job->data); free(job); return 0; }
@@ -521,7 +555,12 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return 1;
 }
 
+static void pex_sound_backend_stop_menu_music(void) {
+    InterlockedIncrement((volatile LONG *)&g_pex_menu_music_stop_generation);
+}
+
 static void pex_sound_shutdown(void) {
+    pex_sound_backend_stop_menu_music();
     for (int i = 0; i < g_win_sound_cache_count; ++i) {
         free(g_win_sound_cache[i].data);
         g_win_sound_cache[i].data = NULL;
@@ -533,6 +572,7 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     (void)path; (void)volume; (void)pitch;
     return 0;
 }
+static void pex_sound_backend_stop_menu_music(void) { }
 static void pex_sound_shutdown(void) { }
 #endif
 
@@ -555,7 +595,15 @@ static void pex_menu_music_start_once(void) {
     float volume = g_opts.music;
     if (volume > 1.0f) volume = 1.0f;
     if (volume < 0.0f) volume = 0.0f;
+    g_pex_menu_music_request = 1;
     pex_sound_backend_play_file(menu2, volume, 1.0f);
+    g_pex_menu_music_request = 0;
+}
+
+static void pex_menu_music_stop(void) {
+    g_pex_menu_music_request = 0;
+    g_menu_music_started = 0;
+    pex_sound_backend_stop_menu_music();
 }
 
 static void pex_sound_missing_notice_once(void) {

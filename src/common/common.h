@@ -1501,6 +1501,7 @@ static void worldgen_tick(void);
 static int classic_pack_installed(void);
 static int release_resources_install_blocking(void);
 static void pex_menu_music_start_once(void);
+static void pex_menu_music_stop(void);
 static int classic_pack_missing_required_textures(void);
 static int classic_sounds_installed(void);
 static void pex_sound_rescan(void);
