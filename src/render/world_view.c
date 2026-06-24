@@ -69,10 +69,9 @@ static void java125_sky_color(float partial, float *r, float *g, float *b) {
     float f = cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.5f;
     if (f < 0.0f) f = 0.0f;
     if (f > 1.0f) f = 1.0f;
-    /* Plains/default biome sky color in Java 1.2.5 is effectively 0x78A7FF.
-       Later biome-specific sky tint can replace this, but the day/night factor
-       and celestial angle now match World.getSkyColor(). */
-    *r = (120.0f / 255.0f) * f;
+    /* BiomeGenBase.plains.getSkyColorByTemp(0.8F) -> Color.HSBtoRGB(...)
+       = 0x79A7FF in Java 1.2.5; rain/thunder/lightning are absent here. */
+    *r = (121.0f / 255.0f) * f;
     *g = (167.0f / 255.0f) * f;
     *b = (255.0f / 255.0f) * f;
 }
@@ -139,6 +138,24 @@ static void draw_java125_sky_plane(float y) {
     }
 }
 
+static void draw_java125_lower_sky_plane(float y) {
+    const int step = 64;
+    const int extent = 256 + step * 2;
+    glBegin(GL_QUADS);
+    for (int x = -extent; x <= extent; x += step) {
+        for (int z = -extent; z <= extent; z += step) {
+            /* RenderGlobal::<init>() builds glSkyList2 with the opposite
+               winding from glSkyList.  Keep that here so cull state inherited
+               from the world renderer cannot make the lower sky disappear. */
+            glVertex3f((float)(x + step), (float)y, (float)z);
+            glVertex3f((float)x, (float)y, (float)z);
+            glVertex3f((float)x, (float)y, (float)(z + step));
+            glVertex3f((float)(x + step), (float)y, (float)(z + step));
+        }
+    }
+    glEnd();
+}
+
 static void sky_textured_quad(Texture *tex, float size, float y, float u0, float v0, float u1, float v1, int fallback_color) {
     if (tex && tex->id) {
         glEnable(GL_TEXTURE_2D);
@@ -195,6 +212,54 @@ static void draw_java125_sunrise_sunset_fan(float partial) {
     glPopMatrix();
 }
 
+static float java125_world_sea_level(void) {
+    /* World.getSeaLevel(): FLAT -> 0, otherwise 63. */
+    return (g_world_type == 0) ? 0.0f : 63.0f;
+}
+
+static float java125_render_eye_y(float partial) {
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    return pr->prev_y + (pr->y - pr->prev_y) * partial;
+}
+
+static void draw_java125_black_horizon_box(float eye_minus_sea) {
+    const float s = 1.0f;
+    float y0 = -((float)(eye_minus_sea + 65.0f));
+    float y1 = -s;
+
+    glPushMatrix();
+    glTranslatef(0.0f, 12.0f, 0.0f);
+    draw_java125_lower_sky_plane(-16.0f);
+    glPopMatrix();
+
+    glBegin(GL_QUADS);
+    glVertex3f(-s, y0,  s);
+    glVertex3f( s, y0,  s);
+    glVertex3f( s, y1,  s);
+    glVertex3f(-s, y1,  s);
+
+    glVertex3f(-s, y1, -s);
+    glVertex3f( s, y1, -s);
+    glVertex3f( s, y0, -s);
+    glVertex3f(-s, y0, -s);
+
+    glVertex3f( s, y1, -s);
+    glVertex3f( s, y1,  s);
+    glVertex3f( s, y0,  s);
+    glVertex3f( s, y0, -s);
+
+    glVertex3f(-s, y0, -s);
+    glVertex3f(-s, y0,  s);
+    glVertex3f(-s, y1,  s);
+    glVertex3f(-s, y1, -s);
+
+    glVertex3f(-s, y1, -s);
+    glVertex3f(-s, y1,  s);
+    glVertex3f( s, y1,  s);
+    glVertex3f( s, y1, -s);
+    glEnd();
+}
+
 static void apply_sky_camera_rotation(float partial) {
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float dyaw = pr->yaw - pr->prev_yaw;
@@ -224,13 +289,9 @@ static void draw_sky_only(void) {
     glLoadIdentity();
     apply_sky_camera_rotation(g_frame_partial);
 
-    /* Ported from the C++ src.zip RenderGlobal::renderSky():
-       - no framebuffer skybox cube
-       - no custom sun alpha/luminance recovery
-       - top glSkyList plane
-       - sunrise/sunset fan
-       - additive sun/moon/stars
-       - lower glSkyList2 plane */
+    /* Java 1.2.5 RenderGlobal.renderSky(float): top glSkyList plane,
+       sunrise/sunset fan, additive sun/moon-phases/stars, black below-sea
+       horizon when needed, then translated glSkyList2 lower plane. */
     float sr, sg, sb;
     java125_sky_color(g_frame_partial, &sr, &sg, &sb);
 
@@ -250,7 +311,7 @@ static void draw_sky_only(void) {
         float rain_alpha = 1.0f;
         glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
         glTranslatef(0.0f, 0.0f, 0.0f);
-        glRotatef(0.0f, 0.0f, 0.0f, 1.0f);
+        glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
         glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
 
         if (tex_sun.id) {
@@ -271,20 +332,7 @@ static void draw_sky_only(void) {
             glEnd();
         }
 
-        if (tex_moon.id) {
-            glEnable(GL_TEXTURE_2D);
-            glBindTexture(GL_TEXTURE_2D, tex_moon.id);
-            glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
-            {
-                float s = 20.0f;
-                glBegin(GL_QUADS);
-                glTexCoord2f(1.0f, 1.0f); glVertex3f(-s, -100.0f,  s);
-                glTexCoord2f(0.0f, 1.0f); glVertex3f( s, -100.0f,  s);
-                glTexCoord2f(0.0f, 0.0f); glVertex3f( s, -100.0f, -s);
-                glTexCoord2f(1.0f, 0.0f); glVertex3f(-s, -100.0f, -s);
-                glEnd();
-            }
-        } else {
+        {
             int phase = java125_moon_phase();
             int mu = phase % 4;
             int mv = (phase / 4) % 2;
@@ -296,9 +344,17 @@ static void draw_sky_only(void) {
                 glEnable(GL_TEXTURE_2D);
                 glBindTexture(GL_TEXTURE_2D, tex_moon_phases.id);
                 glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
+            } else if (tex_moon.id) {
+                /* Fallback only for packs/platform assets missing the Release
+                   1.2.5 moon phase sheet.  Java 1.2.5 uses moon_phases.png. */
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, tex_moon.id);
+                glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
+                u0 = 1.0f; v0 = 0.0f; u1 = 0.0f; v1 = 1.0f;
             } else {
                 glDisable(GL_TEXTURE_2D);
                 set_color_int(0xFFFFFFFF);
+                u0 = 1.0f; v0 = 0.0f; u1 = 0.0f; v1 = 1.0f;
             }
             {
                 float s = 20.0f;
@@ -333,42 +389,26 @@ static void draw_sky_only(void) {
     glEnable(GL_FOG);
     glPopMatrix();
 
-    if (1) { /* WorldProviderSurface::hasSkyColorBlend() equivalent. */
-        glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
-    } else {
-        glColor4f(sr, sg, sb, 1.0f);
-    }
     glDisable(GL_TEXTURE_2D);
-    draw_java125_sky_plane(-16.0f);
+    {
+        float eye_minus_sea = java125_render_eye_y(g_frame_partial) - java125_world_sea_level();
+        if (eye_minus_sea < 0.0f) {
+            glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+            draw_java125_black_horizon_box(eye_minus_sea);
+        }
+
+        if (1) { /* WorldProviderSurface::isSkyColored() equivalent. */
+            glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
+        } else {
+            glColor4f(sr, sg, sb, 1.0f);
+        }
+        glPushMatrix();
+        glTranslatef(0.0f, -(eye_minus_sea - 16.0f), 0.0f);
+        draw_java125_lower_sky_plane(-16.0f);
+        glPopMatrix();
+    }
     glEnable(GL_TEXTURE_2D);
     glDepthMask(GL_TRUE);
-}
-
-static float java125_world_night_overlay_alpha(void) {
-    /* Existing chunk meshes bake their vertex colors, so changing world time
-       alone does not relight already-built terrain immediately.  This overlay
-       is the cheap lightmap-style multiplier used by this port for the current
-       renderer; keep it defined before draw_world_night_overlay() so C99 builds
-       do not create an implicit declaration. */
-    int sub = flat_current_skylight_subtracted();
-    float a = (float)sub / 11.0f;
-    if (a < 0.0f) a = 0.0f;
-    if (a > 1.0f) a = 1.0f;
-    return a * 0.38f;
-}
-
-static void draw_world_night_overlay(void) {
-    float a = java125_world_night_overlay_alpha();
-    if (a <= 0.001f) return;
-    setup_gui_projection();
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    draw_rect(0, 0, g_gui_w, g_gui_h, ((int)(a * 255.0f) << 24) | 0x000000);
-    glColor4f(1,1,1,1);
-    glEnable(GL_TEXTURE_2D);
 }
 
 static void draw_chat_lines(int force_visible) {
@@ -1354,17 +1394,24 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
 }
 
 static void world_set_shade(float shade) {
-    float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
-    shade *= light;
-    flat_direct_set_color4f(shade, shade, shade, 1.0f);
+    if (g_force_fullbright_item_model) {
+        flat_direct_set_color4f(shade, shade, shade, 1.0f);
+        return;
+    }
+    float lr, lg, lb;
+    flat_light_color(g_world_light_x, g_world_light_y, g_world_light_z, &lr, &lg, &lb);
+    flat_direct_set_color4f(lr * shade, lg * shade, lb * shade, 1.0f);
 }
 
 static void world_set_color_shade(int rgb, float shade) {
-    float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
-    shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
     float b = (rgb & 255) / 255.0f;
+    if (!g_force_fullbright_item_model) {
+        float lr, lg, lb;
+        flat_light_color(g_world_light_x, g_world_light_y, g_world_light_z, &lr, &lg, &lb);
+        r *= lr; g *= lg; b *= lb;
+    }
     flat_direct_set_color4f(r * shade, g * shade, b * shade, 1.0f);
 }
 
@@ -6679,6 +6726,5 @@ static void draw_ingame_world_view(int with_hand) {
     draw_flat_test_world();
     if (with_hand && !g_third_person_view) draw_first_person_hand();
     draw_in_block_overlay();
-    draw_world_night_overlay();
     setup_gui_projection();
 }

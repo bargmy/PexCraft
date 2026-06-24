@@ -734,12 +734,13 @@ static int pex_chat_word_equals_ci(const char *a, const char *b) {
 }
 
 static void pex_set_world_time_to_day_tick(long long day_tick) {
-    if (day_tick < 0) day_tick = 0;
     day_tick %= 24000LL;
+    if (day_tick < 0) day_tick += 24000LL;
     long long day = g_world_time / 24000LL;
     if (g_world_time < 0 && (g_world_time % 24000LL) != 0) day--;
     g_world_time = day * 24000LL + day_tick;
     if (g_world_time < 0) g_world_time = day_tick;
+    mark_flat_render_chunks_dirty_all();
     g_save_dirty = 1;
 }
 
@@ -765,7 +766,8 @@ static int handle_local_chat_command(const char *text) {
             return 1;
         }
         if (argc >= 3 && pex_chat_word_equals_ci(argv[1], "set")) {
-            long long t = -1;
+            long long t = 0;
+            int parsed_time = 1;
             if (pex_chat_word_equals_ci(argv[2], "day")) t = 1000;
             else if (pex_chat_word_equals_ci(argv[2], "night")) t = 13000;
             else if (pex_chat_word_equals_ci(argv[2], "noon")) t = 6000;
@@ -776,21 +778,22 @@ static int handle_local_chat_command(const char *text) {
                 char *endp = argv[2];
                 long long v = 0;
                 int neg = 0;
+                parsed_time = 0;
                 if (*endp == '-') { neg = 1; ++endp; }
                 while (*endp >= '0' && *endp <= '9') { v = v * 10 + (long long)(*endp - '0'); ++endp; }
-                if (*endp == 0) t = neg ? -v : v;
+                if (*endp == 0 && endp != argv[2] + neg) { t = neg ? -v : v; parsed_time = 1; }
             }
-            if (t >= 0) {
+            if (parsed_time) {
                 pex_set_world_time_to_day_tick(t);
                 char msg[96];
                 snprintf(msg, sizeof(msg), "Set time to %lld.", ((g_world_time % 24000LL) + 24000LL) % 24000LL);
                 hud_add_chat(msg);
             } else {
-                hud_add_chat("Usage: /time set <day|night|noon|midnight|sunrise|sunset|0-23999>");
+                hud_add_chat("Usage: /time set <day|night|noon|midnight|sunrise|sunset|ticks>");
             }
             return 1;
         }
-        hud_add_chat("Usage: /time or /time set <day|night|noon|midnight|sunrise|sunset|0-23999>");
+        hud_add_chat("Usage: /time or /time set <day|night|noon|midnight|sunrise|sunset|ticks>");
         return 1;
     }
     return 0;

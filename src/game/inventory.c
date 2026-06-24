@@ -525,40 +525,92 @@ static int flat_get_block_light_value_do(int x, int y, int z, int use_neighbor) 
 }
 
 static int flat_get_light_brightness_for_sky_blocks(int x, int y, int z, int min_block_light) {
+    /* Java 1.2.5 World.getLightBrightnessForSkyBlocks(): pack saved sky and
+       block light independently.  Day/night darkening belongs in the lightmap
+       (`EntityRenderer.updateLightmap`), not by destructively subtracting from
+       the packed sky channel. */
     int sky = flat_get_sky_light_value_do(x, y, z, 1);
     int block = flat_get_block_light_value_do(x, y, z, 1);
     if (block < min_block_light) block = min_block_light;
-    sky -= flat_current_skylight_subtracted();
     if (sky < 0) sky = 0; if (sky > 15) sky = 15;
     if (block < 0) block = 0; if (block > 15) block = 15;
     return (sky << 20) | (block << 4);
+}
+
+static int flat_get_daylight_adjusted_light_value(int x, int y, int z, int min_block_light) {
+    /* Java World/Chunk.getBlockLightValue(..., skylightSubtracted) path used for
+       gameplay tests such as passive-mob spawning: sky is reduced by current
+       skylightSubtracted, then compared against block light. */
+    int sky = flat_get_sky_light_value_do(x, y, z, 1) - flat_current_skylight_subtracted();
+    int block = flat_get_block_light_value_do(x, y, z, 1);
+    if (block < min_block_light) block = min_block_light;
+    if (sky < 0) sky = 0; if (sky > 15) sky = 15;
+    if (block < 0) block = 0; if (block > 15) block = 15;
+    return (sky > block) ? sky : block;
 }
 
 static int flat_mixed_brightness_for_block(int id, int x, int y, int z) {
     return flat_get_light_brightness_for_sky_blocks(x, y, z, flat_block_light_value_for_id(id));
 }
 
-static int flat_light_level_from_packed_brightness(int packed) {
-    int sky = (packed >> 20) & 15;
-    int block = (packed >> 4) & 15;
-    return (sky > block) ? sky : block;
+static int flat_combined_light_value(int x, int y, int z) {
+    return flat_get_daylight_adjusted_light_value(x, y, z, 0);
 }
 
-static int flat_combined_light_value(int x, int y, int z) {
-    return flat_light_level_from_packed_brightness(flat_get_light_brightness_for_sky_blocks(x, y, z, 0));
+static float flat_sun_brightness_for_light(float partial) {
+    /* World.func_35464_b(float), with rain/thunder/lightning omitted because this
+       port does not yet implement those weather systems. */
+    float a = flat_current_celestial_angle_for_light();
+    (void)partial;
+    float v = 1.0f - (cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.2f);
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    v = 1.0f - v;
+    return v * 0.8f + 0.2f;
+}
+
+static void flat_lightmap_color_from_packed(int packed, float *r, float *g, float *b) {
+    /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
+       overworld, gamma=0, torchFlickerX=0, no lightning.  Java applies this as
+       a 16x16 lightmap texture; this C renderer bakes equivalent colors into
+       terrain vertices. */
+    int sky = (packed >> 20) & 15;
+    int block = (packed >> 4) & 15;
+    float sun = flat_sun_brightness_for_light(1.0f);
+    float light_sky = flat_java_light_brightness_from_level(sky) * (sun * 0.95f + 0.05f);
+    float light_block = flat_java_light_brightness_from_level(block) * 1.5f;
+    float sky_rg = light_sky * (sun * 0.65f + 0.35f);
+    float torch_g = light_block * ((light_block * 0.6f + 0.4f) * 0.6f + 0.4f);
+    float torch_b = light_block * (light_block * light_block * 0.6f + 0.4f);
+    float rr = sky_rg + light_block;
+    float gg = sky_rg + torch_g;
+    float bb = light_sky + torch_b;
+    rr = rr * 0.96f + 0.03f;
+    gg = gg * 0.96f + 0.03f;
+    bb = bb * 0.96f + 0.03f;
+    if (rr > 1.0f) rr = 1.0f; if (gg > 1.0f) gg = 1.0f; if (bb > 1.0f) bb = 1.0f;
+    if (rr < 0.0f) rr = 0.0f; if (gg < 0.0f) gg = 0.0f; if (bb < 0.0f) bb = 0.0f;
+    rr = rr * 0.96f + 0.03f;
+    gg = gg * 0.96f + 0.03f;
+    bb = bb * 0.96f + 0.03f;
+    if (rr > 1.0f) rr = 1.0f; if (gg > 1.0f) gg = 1.0f; if (bb > 1.0f) bb = 1.0f;
+    *r = rr; *g = gg; *b = bb;
 }
 
 static float flat_brightness_from_packed(int packed) {
-    return flat_java_light_brightness_from_level(flat_light_level_from_packed_brightness(packed));
+    float r, g, b;
+    flat_lightmap_color_from_packed(packed, &r, &g, &b);
+    /* Scalar fallback for AO/particles where this renderer still has a single
+       brightness channel.  Weighted luminance keeps night closer to Java's blue
+       lightmap than max(sky, block) did. */
+    return r * 0.30f + g * 0.59f + b * 0.11f;
+}
+
+static void flat_light_color(int x, int y, int z, float *r, float *g, float *b) {
+    flat_lightmap_color_from_packed(flat_get_light_brightness_for_sky_blocks(x, y, z, 0), r, g, b);
 }
 
 static float flat_light_brightness(int x, int y, int z) {
-    /* Java path: World/ChunkCache.getLightBrightnessForSkyBlocks() keeps sky and
-       block light separate, then RenderBlocks/Tessellator carries the packed
-       value.  This renderer still CPU-bakes RGB, so it collapses the packed
-       value only at the final brightness-table lookup.  The old lateral-sky and
-       leaf-canopy clamps were removed because they were non-Java hacks that made
-       exposed terrain/canopies light incorrectly. */
     return flat_brightness_from_packed(flat_get_light_brightness_for_sky_blocks(x, y, z, 0));
 }
 

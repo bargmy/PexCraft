@@ -300,6 +300,19 @@ static void player_render_begin_frame(void) {
     player_render_capture_current(&g_player_render_frame);
 }
 
+static void pex_update_time_light_bucket(void) {
+    static int last_sub = -1;
+    int sub = flat_current_skylight_subtracted();
+    if (last_sub < 0) {
+        last_sub = sub;
+        return;
+    }
+    if (sub != last_sub) {
+        last_sub = sub;
+        mark_flat_render_chunks_dirty_all();
+    }
+}
+
 static void ingame_tick(void) {
     double prof_ingame_start = pex_profile_begin();
     double prof_part = 0.0;
@@ -307,6 +320,7 @@ static void ingame_tick(void) {
 
     g_ingame_ticks++;
     g_world_time++;
+    pex_update_time_light_bucket();
     if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
