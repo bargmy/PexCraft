@@ -213,16 +213,14 @@ static void draw_title_logo_3d(float partial) {
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
 static int g_release_panorama_boot_reset_done = 0;
-static int g_release_panorama_startup_gl_vflip = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
 
 static void release_title_state_enter(void) {
     /* Java GuiMainMenu owns panoramaTimer and viewportTexture per screen
        instance.  Reset both when entering the title screen so startup and
-       post-world-return take the same path on real OpenGL. */
+       post-world-return take the same OpenGL path. */
     g_release_panorama_timer = 0;
     g_release_panorama_boot_reset_done = g_boot_sequence_done ? 1 : 0;
-    g_release_panorama_startup_gl_vflip = 0;
     if (g_release_panorama_viewport_tex) {
         glDeleteTextures(1, &g_release_panorama_viewport_tex);
         g_release_panorama_viewport_tex = 0;
@@ -237,26 +235,9 @@ static int release_panorama_target_size(void) {
     return RELEASE_PANORAMA_TEX_SIZE;
 }
 
-static int release_panorama_real_win32_gl(void) {
-#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
-    return !pex_using_d3d9() && !pex_using_d3d11();
-#else
-    return 0;
-#endif
-}
-
-static int release_panorama_use_win32_gl_top_origin_fix(void) {
-    /* Java GuiMainMenu.renderSkybox uses native OpenGL's lower-left 256x256
-       target: glViewport(0,0,256,256) and glCopyTexSubImage2D(...,0,0,256,256).
-       The previous PexCraft-specific top-origin correction did not change the
-       user's startup screenshot and also diverged from Java, so keep real GL on
-       the Java path.  Direct3D keeps its own internal copy-origin conversion. */
-    return 0;
-}
 
 static int release_panorama_viewport_y(int target_size) {
     (void)target_size;
-    (void)release_panorama_use_win32_gl_top_origin_fix;
     return 0;
 }
 
@@ -441,9 +422,6 @@ static void draw_release_skybox(float partial) {
     float v = (float)g_gui_w * scale / 256.0f;
     float tv0 = 0.5f - v;
     float tv1 = 0.5f + v;
-    if (g_release_panorama_startup_gl_vflip) {
-        float t = tv0; tv0 = tv1; tv1 = t;
-    }
     glColor4f(1,1,1,1);
     glBegin(GL_QUADS);
     glTexCoord2f(0.5f - u, tv1); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
@@ -491,10 +469,9 @@ static void draw_title_screen(float partial) {
             /* First startup reaches the real menu through the separate Mojang
                boot screen, while returning from a world enters the title
                directly.  Reset the 256x256 feedback texture at the boot->menu
-               boundary so the first visible OpenGL title frame follows the
-               same lifecycle as post-world-return GuiMainMenu.initGui(). */
+               boundary so the first visible title frame follows the same
+               lifecycle as post-world-return GuiMainMenu.initGui(). */
             release_title_state_enter();
-            g_release_panorama_startup_gl_vflip = release_panorama_real_win32_gl();
             g_release_panorama_boot_reset_done = 1;
         }
     }
