@@ -156,16 +156,17 @@ static void flat_apply_chunk_environment_light_local(int lcx, int lcz);
 static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
 static void flat_flush_pending_lighting(void);
+static void flat_preview_pending_lighting(void);
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
-    /* Player block edits are interactive: Java updates light checks immediately
-       enough that torches/roof edits visually settle on the next rendered frame.
-       The previous desktop path left this to the streaming service thread, whose
-       idle sleep made torch/block-light changes visibly lag behind the placed or
-       broken block.  Batch edits still coalesce because only the outermost
-       persistent edit flushes. */
-    if (g_flat_persistent_edit_depth == 0) flat_flush_pending_lighting();
+    /* Do not run the full light repair from the gameplay tick.  A Java-sized
+       torch/skylight refresh can touch tens or hundreds of thousands of cells,
+       and doing that here showed up as 40ms+ in ingame/player logic when a block
+       was broken.  Keep a tiny local preview so the edited block reacts right
+       away, then let the stream service finish the full pending repair off the
+       gameplay path. */
+    if (g_flat_persistent_edit_depth == 0) flat_preview_pending_lighting();
 }
 static int flat_persistent_edit_active(void) { return g_flat_persistent_edit_depth > 0; }
 static int flat_block_intersects_player(int bx, int by, int bz);
@@ -689,14 +690,15 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
     }
     int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
     int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
-    pex_logf("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
+    pex_logf_trace("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
     free(sky); free(block); free(q);
 }
 
 static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
-    /* Keep real light/shadow updates after edits.  The old 2-block/no-skylight
-       fast path left visible dark seams and stale shadows around open terrain. */
-    flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 16, 1);
+    /* The caller already widens light-source/opacity edits to the Java 15-block
+       influence radius.  Do not add another 16-block compute margin here: that
+       was the main reason one block break expanded into a ~63x63xheight rebuild. */
+    flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 0, 1);
 }
 
 #ifndef FLAT_CHUNK_BLOCK_COUNT
@@ -923,11 +925,21 @@ static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id,
     }
 }
 
+static void flat_preview_pending_lighting(void) {
+    if (!g_flat_light_dirty) return;
+    int cx = (g_flat_light_x0 + g_flat_light_x1) / 2;
+    int cz = (g_flat_light_z0 + g_flat_light_z1) / 2;
+    /* Small, synchronous visual preview only.  This is intentionally much
+       smaller than the full 15-block light update; it avoids gameplay hitches
+       while making the edited area update before the async/full pass completes. */
+    flat_recalculate_lighting_region_ex(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
+}
+
 static void flat_flush_pending_lighting(void) {
     if (g_flat_light_dirty) {
         int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
         g_flat_light_dirty = 0;
-        pex_logf("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
+        pex_logf_trace("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
         flat_recalculate_lighting_region(x0, z0, x1, z1);
     }
 }
@@ -3430,10 +3442,8 @@ static void furnace_set_lit_at(FurnaceTile *ft, int lit) {
         flat_set_block(ft->x, ft->y, ft->z, want);
         flat_set_meta_raw(ft->x, ft->y, ft->z, meta);
         flat_end_persistent_edit();
-        /* Furnace on/off changes are visible light-source changes.  Flush the
-           pending block-light rebuild immediately so the furnace starts/stops
-           lighting the room as soon as smelting begins/ends. */
-        flat_flush_pending_lighting();
+        /* flat_end_persistent_edit() already did the tiny responsive preview;
+           the full light flood-fill stays pending for the stream service. */
     }
 }
 
@@ -6688,7 +6698,7 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 
         /* Active streaming gets frequent service, idle mode backs off hard so
            uncapped rendering is not fighting a polling thread. */
-        Sleep(stream_generation_active() ? 1 : 20);
+        Sleep((stream_generation_active() || g_flat_light_dirty) ? 1 : 20);
     }
     EnterCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_busy = 0;
