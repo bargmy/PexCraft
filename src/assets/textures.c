@@ -832,8 +832,9 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_mob_saddle, "mob\\saddle.png", 0);
     try_release_texture(&tex_clouds, "environment\\clouds.png", 1);
     try_release_texture(&tex_sun, "terrain\\sun.png", 0);
+    try_release_texture(&tex_moon, "terrain\\moon.png", 0);
     try_release_texture(&tex_moon_phases, "terrain\\moon_phases.png", 0);
-    /* Java 1.2.5 renders sun/moon using the original texture alpha exactly. */
+    /* Source C++ RenderGlobal renders sun/moon with original texture alpha. */
     try_release_texture(&tex_water_overlay, "misc\\water.png", 1);
     try_release_texture(&tex_shadow, "misc\\shadow.png", 0);
     try_release_texture(&tex_grasscolor, "misc\\grasscolor.png", 0);
@@ -901,8 +902,9 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_mob_saddle, "mob_saddle.mcrw", 0, 64, 32);
     PEX_PSP_LOAD_REQ(&tex_clouds, "environment_clouds.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_sun, "terrain_sun.mcrw", 0, 32, 32);
+    PEX_PSP_LOAD_OPT(&tex_moon, "terrain_moon.mcrw", 0, 32, 32);
     PEX_PSP_LOAD_OPT(&tex_moon_phases, "terrain_moon_phases.mcrw", 0, 64, 32);
-    /* Java 1.2.5 renders sun/moon using the original texture alpha exactly. */
+    /* Source C++ RenderGlobal renders sun/moon with original texture alpha. */
     PEX_PSP_LOAD_OPT(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
     PEX_PSP_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
@@ -952,8 +954,9 @@ static int load_default_textures(void) {
     load_mcrw(&tex_mob_saddle, "mob_saddle.mcrw", 0);
     load_mcrw(&tex_clouds, "environment_clouds.mcrw", 1);
     load_mcrw(&tex_sun, "terrain_sun.mcrw", 0);
+    load_mcrw(&tex_moon, "terrain_moon.mcrw", 0);
     load_mcrw(&tex_moon_phases, "terrain_moon_phases.mcrw", 0);
-    /* Java 1.2.5 renders sun/moon using the original texture alpha exactly. */
+    /* Source C++ RenderGlobal renders sun/moon with original texture alpha. */
     load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
     load_mcrw(&tex_shadow, "misc_shadow.mcrw", 0);
     load_mcrw(&tex_grasscolor, "misc_grasscolor.mcrw", 0);
@@ -1022,9 +1025,9 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_mob_saddle, "mob\\saddle.png", 0);
         try_pack_texture(e, &tex_clouds, "environment\\clouds.png", 1);
         try_pack_texture(e, &tex_sun, "terrain\\sun.png", 0);
+        try_pack_texture(e, &tex_moon, "terrain\\moon.png", 0);
         try_pack_texture(e, &tex_moon_phases, "terrain\\moon_phases.png", 0);
-        normalize_sky_alpha_from_luminance(&tex_sun);
-        normalize_sky_alpha_from_luminance(&tex_moon_phases);
+        /* Source C++ sky keeps original sun/moon texture alpha. */
         try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
         try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
         try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);

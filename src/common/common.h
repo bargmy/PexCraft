@@ -1584,7 +1584,7 @@ static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_che
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
-static Texture tex_sun, tex_moon_phases;
+static Texture tex_sun, tex_moon, tex_moon_phases;
 static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;
 static Texture tex_title_logo, tex_mojang, tex_panorama[6];
 static int font_widths[256];

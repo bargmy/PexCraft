@@ -224,9 +224,13 @@ static void draw_sky_only(void) {
     glLoadIdentity();
     apply_sky_camera_rotation(g_frame_partial);
 
-    /* Java 1.2.5 RenderGlobal.renderSky(): render the top sky plane, sunrise/
-       sunset fan, then sun, moon, stars, and finally the lower sky plane that
-       follows the player height. */
+    /* Ported from the C++ src.zip RenderGlobal::renderSky():
+       - no framebuffer skybox cube
+       - no custom sun alpha/luminance recovery
+       - top glSkyList plane
+       - sunrise/sunset fan
+       - additive sun/moon/stars
+       - lower glSkyList2 plane */
     float sr, sg, sb;
     java125_sky_color(g_frame_partial, &sr, &sg, &sb);
 
@@ -234,7 +238,7 @@ static void draw_sky_only(void) {
     glColor4f(sr, sg, sb, 1.0f);
     draw_java125_sky_plane(16.0f);
     glDisable(GL_FOG);
-
+    glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     draw_java125_sunrise_sunset_fan(g_frame_partial);
@@ -245,14 +249,42 @@ static void draw_sky_only(void) {
     {
         float rain_alpha = 1.0f;
         glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
-        glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
+        glTranslatef(0.0f, 0.0f, 0.0f);
+        glRotatef(0.0f, 0.0f, 0.0f, 1.0f);
         glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
 
-        /* Render sun and moon exactly like Java: original texture alpha,
-           additive blend, and nearest filtering/pixelated edges. */
-        sky_textured_quad(&tex_sun, 30.0f, 100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFF66);
-
+        if (tex_sun.id) {
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, tex_sun.id);
+            glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
+        } else {
+            glDisable(GL_TEXTURE_2D);
+            set_color_int(0xFFFFFFFF);
+        }
         {
+            float s = 30.0f;
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 0.0f); glVertex3f(-s, 100.0f, -s);
+            glTexCoord2f(1.0f, 0.0f); glVertex3f( s, 100.0f, -s);
+            glTexCoord2f(1.0f, 1.0f); glVertex3f( s, 100.0f,  s);
+            glTexCoord2f(0.0f, 1.0f); glVertex3f(-s, 100.0f,  s);
+            glEnd();
+        }
+
+        if (tex_moon.id) {
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, tex_moon.id);
+            glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
+            {
+                float s = 20.0f;
+                glBegin(GL_QUADS);
+                glTexCoord2f(1.0f, 1.0f); glVertex3f(-s, -100.0f,  s);
+                glTexCoord2f(0.0f, 1.0f); glVertex3f( s, -100.0f,  s);
+                glTexCoord2f(0.0f, 0.0f); glVertex3f( s, -100.0f, -s);
+                glTexCoord2f(1.0f, 0.0f); glVertex3f(-s, -100.0f, -s);
+                glEnd();
+            }
+        } else {
             int phase = java125_moon_phase();
             int mu = phase % 4;
             int mv = (phase / 4) % 2;
@@ -263,18 +295,18 @@ static void draw_sky_only(void) {
             if (tex_moon_phases.id) {
                 glEnable(GL_TEXTURE_2D);
                 glBindTexture(GL_TEXTURE_2D, tex_moon_phases.id);
-                glColor4f(1, 1, 1, rain_alpha);
+                glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
             } else {
                 glDisable(GL_TEXTURE_2D);
                 set_color_int(0xFFFFFFFF);
             }
             {
-                float ms = 20.0f;
+                float s = 20.0f;
                 glBegin(GL_QUADS);
-                glTexCoord2f(u1, v1); glVertex3f(-ms, -100.0f,  ms);
-                glTexCoord2f(u0, v1); glVertex3f( ms, -100.0f,  ms);
-                glTexCoord2f(u0, v0); glVertex3f( ms, -100.0f, -ms);
-                glTexCoord2f(u1, v0); glVertex3f(-ms, -100.0f, -ms);
+                glTexCoord2f(u1, v1); glVertex3f(-s, -100.0f,  s);
+                glTexCoord2f(u0, v1); glVertex3f( s, -100.0f,  s);
+                glTexCoord2f(u0, v0); glVertex3f( s, -100.0f, -s);
+                glTexCoord2f(u1, v0); glVertex3f(-s, -100.0f, -s);
                 glEnd();
             }
         }
@@ -295,25 +327,35 @@ static void draw_sky_only(void) {
             }
         }
     }
-    glColor4f(1,1,1,1);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     glDisable(GL_BLEND);
     glEnable(GL_ALPHA_TEST);
     glEnable(GL_FOG);
     glPopMatrix();
 
-    glDisable(GL_TEXTURE_2D);
-    {
-        const PexPlayerRenderState *pr = &g_player_render_frame;
-        float py = pr->prev_y + (pr->y - pr->prev_y) * g_frame_partial;
-        float player_vs_sea = py - 63.0f;
+    if (1) { /* WorldProviderSurface::hasSkyColorBlend() equivalent. */
         glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
-        glPushMatrix();
-        glTranslatef(0.0f, -(player_vs_sea - 16.0f), 0.0f);
-        draw_java125_sky_plane(-16.0f);
-        glPopMatrix();
+    } else {
+        glColor4f(sr, sg, sb, 1.0f);
     }
+    glDisable(GL_TEXTURE_2D);
+    draw_java125_sky_plane(-16.0f);
     glEnable(GL_TEXTURE_2D);
     glDepthMask(GL_TRUE);
+}
+
+static void draw_world_night_overlay(void) {
+    float a = java125_world_night_overlay_alpha();
+    if (a <= 0.001f) return;
+    setup_gui_projection();
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    draw_rect(0, 0, g_gui_w, g_gui_h, ((int)(a * 255.0f) << 24) | 0x000000);
+    glColor4f(1,1,1,1);
+    glEnable(GL_TEXTURE_2D);
 }
 
 static void draw_chat_lines(int force_visible) {
