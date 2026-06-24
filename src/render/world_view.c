@@ -158,6 +158,43 @@ static void sky_textured_quad(Texture *tex, float size, float y, float u0, float
     glEnable(GL_TEXTURE_2D);
 }
 
+static int java125_sunrise_sunset_colors(float partial, float out[4]) {
+    float a = java125_celestial_angle(partial);
+    float width = 0.4f;
+    float c = cosf(a * (float)M_PI * 2.0f);
+    if (c < -width || c > width) return 0;
+    float t = c / width * 0.5f + 0.5f;
+    float alpha = 1.0f - (1.0f - sinf(t * (float)M_PI)) * 0.99f;
+    alpha *= alpha;
+    out[0] = t * 0.3f + 0.7f;
+    out[1] = t * t * 0.7f + 0.2f;
+    out[2] = 0.2f;
+    out[3] = alpha;
+    return 1;
+}
+
+static void draw_java125_sunrise_sunset_fan(float partial) {
+    float col[4];
+    if (!java125_sunrise_sunset_colors(partial, col)) return;
+    glDisable(GL_TEXTURE_2D);
+    glPushMatrix();
+    glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(sinf(java125_celestial_angle(partial) * (float)M_PI * 2.0f) < 0.0f ? 180.0f : 0.0f, 0.0f, 0.0f, 1.0f);
+    glRotatef(90.0f, 0.0f, 0.0f, 1.0f);
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(col[0], col[1], col[2], col[3]);
+    glVertex3f(0.0f, 100.0f, 0.0f);
+    glColor4f(col[0], col[1], col[2], 0.0f);
+    for (int i = 0; i <= 16; ++i) {
+        float a = (float)i * (float)M_PI * 2.0f / 16.0f;
+        float sx = sinf(a);
+        float cz = cosf(a);
+        glVertex3f(sx * 120.0f, cz * 120.0f, -cz * 40.0f * col[3]);
+    }
+    glEnd();
+    glPopMatrix();
+}
+
 static void apply_sky_camera_rotation(float partial) {
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float dyaw = pr->yaw - pr->prev_yaw;
@@ -195,6 +232,10 @@ static void draw_sky_only(void) {
     glColor4f(sr, sg, sb, 1.0f);
     draw_java125_sky_plane(16.0f);
     glDisable(GL_FOG);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    draw_java125_sunrise_sunset_fan(g_frame_partial);
 
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
@@ -256,12 +297,13 @@ static void draw_sky_only(void) {
     }
     glPopMatrix();
 
-    /* Overworld lower sky tint: Java uses a dimmed sky-colored lower plane,
-       not a black empty clear region. */
+    /* Keep the lower view filled with sky color.  The earlier dim lower plane
+       looked like a black horizon band in this renderer, especially with the
+       flat terrain camera. */
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
-    glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
+    glColor4f(sr, sg, sb, 1.0f);
     draw_java125_sky_plane(-16.0f);
 
     glColor4f(1,1,1,1);

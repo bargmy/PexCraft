@@ -722,6 +722,80 @@ static void key_to_control(int vk) {
     }
 }
 
+static int pex_chat_word_equals_ci(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+        ++a; ++b;
+    }
+    return *a == 0 && *b == 0;
+}
+
+static void pex_set_world_time_to_day_tick(long long day_tick) {
+    if (day_tick < 0) day_tick = 0;
+    day_tick %= 24000LL;
+    long long day = g_world_time / 24000LL;
+    if (g_world_time < 0 && (g_world_time % 24000LL) != 0) day--;
+    g_world_time = day * 24000LL + day_tick;
+    if (g_world_time < 0) g_world_time = day_tick;
+    g_save_dirty = 1;
+}
+
+static int handle_local_chat_command(const char *text) {
+    if (!text || text[0] != '/') return 0;
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "%s", text + 1);
+    char *argv[4] = {0,0,0,0};
+    int argc = 0;
+    char *p = cmd;
+    while (*p && argc < 4) {
+        while (*p == ' ') ++p;
+        if (!*p) break;
+        argv[argc++] = p;
+        while (*p && *p != ' ') ++p;
+        if (*p) *p++ = 0;
+    }
+    if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "time")) {
+        if (argc == 1) {
+            char msg[96];
+            snprintf(msg, sizeof(msg), "Time is %lld (%lld day ticks).", g_world_time, ((g_world_time % 24000LL) + 24000LL) % 24000LL);
+            hud_add_chat(msg);
+            return 1;
+        }
+        if (argc >= 3 && pex_chat_word_equals_ci(argv[1], "set")) {
+            long long t = -1;
+            if (pex_chat_word_equals_ci(argv[2], "day")) t = 1000;
+            else if (pex_chat_word_equals_ci(argv[2], "night")) t = 13000;
+            else if (pex_chat_word_equals_ci(argv[2], "noon")) t = 6000;
+            else if (pex_chat_word_equals_ci(argv[2], "midnight")) t = 18000;
+            else if (pex_chat_word_equals_ci(argv[2], "sunrise")) t = 23000;
+            else if (pex_chat_word_equals_ci(argv[2], "sunset")) t = 12000;
+            else {
+                char *endp = argv[2];
+                long long v = 0;
+                int neg = 0;
+                if (*endp == '-') { neg = 1; ++endp; }
+                while (*endp >= '0' && *endp <= '9') { v = v * 10 + (long long)(*endp - '0'); ++endp; }
+                if (*endp == 0) t = neg ? -v : v;
+            }
+            if (t >= 0) {
+                pex_set_world_time_to_day_tick(t);
+                char msg[96];
+                snprintf(msg, sizeof(msg), "Set time to %lld.", ((g_world_time % 24000LL) + 24000LL) % 24000LL);
+                hud_add_chat(msg);
+            } else {
+                hud_add_chat("Usage: /time set <day|night|noon|midnight|sunrise|sunset|0-23999>");
+            }
+            return 1;
+        }
+        hud_add_chat("Usage: /time or /time set <day|night|noon|midnight|sunrise|sunset|0-23999>");
+        return 1;
+    }
+    return 0;
+}
+
 static void handle_keydown(WPARAM vk) {
     if (vk == VK_F11) { toggle_fullscreen(); return; }
     if (g_screen == SCREEN_CONTROLS && g_waiting_key >= 0) { key_to_control((int)vk); return; }
@@ -730,11 +804,13 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_ESCAPE) { g_chat_input[0] = 0; set_screen(SCREEN_INGAME); return; }
         if (vk == VK_RETURN) {
             if (strlen(g_chat_input) > 0) {
-                if (g_mp_connected) pex_net_send_chat(g_chat_input);
-                else {
-                    char line[180];
-                    snprintf(line, sizeof(line), "<Player> %s", g_chat_input);
-                    hud_add_chat(line);
+                if (!handle_local_chat_command(g_chat_input)) {
+                    if (g_mp_connected) pex_net_send_chat(g_chat_input);
+                    else {
+                        char line[180];
+                        snprintf(line, sizeof(line), "<Player> %s", g_chat_input);
+                        hud_add_chat(line);
+                    }
                 }
             }
             g_chat_input[0] = 0;

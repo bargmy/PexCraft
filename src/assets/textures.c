@@ -67,6 +67,29 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     return t->id != 0;
 }
 
+static void normalize_sky_alpha_from_luminance(Texture *t) {
+    if (!t || !t->rgba || !t->id || t->w <= 0 || t->h <= 0) return;
+    size_t pixels = (size_t)t->w * (size_t)t->h;
+    if (pixels == 0 || pixels > (size_t)4096 * (size_t)4096) return;
+    size_t opaque = 0, transparent = 0, dark_opaque = 0;
+    for (size_t i = 0; i < pixels; ++i) {
+        unsigned char *px = &t->rgba[i * 4u];
+        if (px[3] >= 250) opaque++;
+        if (px[3] <= 5) transparent++;
+        if (px[3] >= 250 && px[0] < 8 && px[1] < 8 && px[2] < 8) dark_opaque++;
+    }
+    if (transparent > 0 || opaque * 100u < pixels * 95u || dark_opaque * 100u < pixels * 20u) return;
+    for (size_t i = 0; i < pixels; ++i) {
+        unsigned char *px = &t->rgba[i * 4u];
+        unsigned char a = px[0];
+        if (px[1] > a) a = px[1];
+        if (px[2] > a) a = px[2];
+        px[3] = a;
+    }
+    glBindTexture(GL_TEXTURE_2D, t->id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t->rgba);
+}
+
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static const char *pex_basename_asset(const char *path) {
     const char *base = path;
@@ -801,6 +824,8 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_clouds, "environment\\clouds.png", 1);
     try_release_texture(&tex_sun, "terrain\\sun.png", 0);
     try_release_texture(&tex_moon_phases, "terrain\\moon_phases.png", 0);
+    normalize_sky_alpha_from_luminance(&tex_sun);
+    normalize_sky_alpha_from_luminance(&tex_moon_phases);
     try_release_texture(&tex_water_overlay, "misc\\water.png", 1);
     try_release_texture(&tex_shadow, "misc\\shadow.png", 0);
     try_release_texture(&tex_grasscolor, "misc\\grasscolor.png", 0);
@@ -869,6 +894,8 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_REQ(&tex_clouds, "environment_clouds.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_sun, "terrain_sun.mcrw", 0, 32, 32);
     PEX_PSP_LOAD_OPT(&tex_moon_phases, "terrain_moon_phases.mcrw", 0, 64, 32);
+    normalize_sky_alpha_from_luminance(&tex_sun);
+    normalize_sky_alpha_from_luminance(&tex_moon_phases);
     PEX_PSP_LOAD_OPT(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
     PEX_PSP_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
@@ -919,6 +946,8 @@ static int load_default_textures(void) {
     load_mcrw(&tex_clouds, "environment_clouds.mcrw", 1);
     load_mcrw(&tex_sun, "terrain_sun.mcrw", 0);
     load_mcrw(&tex_moon_phases, "terrain_moon_phases.mcrw", 0);
+    normalize_sky_alpha_from_luminance(&tex_sun);
+    normalize_sky_alpha_from_luminance(&tex_moon_phases);
     load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
     load_mcrw(&tex_shadow, "misc_shadow.mcrw", 0);
     load_mcrw(&tex_grasscolor, "misc_grasscolor.mcrw", 0);
@@ -988,6 +1017,8 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_clouds, "environment\\clouds.png", 1);
         try_pack_texture(e, &tex_sun, "terrain\\sun.png", 0);
         try_pack_texture(e, &tex_moon_phases, "terrain\\moon_phases.png", 0);
+        normalize_sky_alpha_from_luminance(&tex_sun);
+        normalize_sky_alpha_from_luminance(&tex_moon_phases);
         try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
         try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
         try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
