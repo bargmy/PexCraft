@@ -1358,7 +1358,9 @@ static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
 
 static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
     return flat_gl_cpu_mesh_drawable(sy, cz, cx, pass) &&
-           g_flat_section_gl_cpu_mesh[sy][cz][cx][pass].version == g_flat_section_mesh_version[sy][cz][cx];
+           g_flat_section_gl_cpu_mesh[sy][cz][cx][pass].version == g_flat_section_mesh_version[sy][cz][cx] &&
+           flat_chunk_light_ready_local(cx, cz) &&
+           g_flat_section_mesh_light_version[sy][cz][cx] == g_flat_chunk_light_version[cz][cx];
 }
 
 static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
@@ -4597,6 +4599,7 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
     g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && g_opts.fancy_graphics);
+    g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
 }
 
 static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
@@ -4717,6 +4720,7 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
     g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && g_opts.fancy_graphics);
+    g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
 }
 
 
@@ -4735,6 +4739,7 @@ typedef struct AsyncSectionMeshJob {
     int cx, cz, sy;
     int origin_x, origin_z;
     unsigned int version;
+    unsigned int light_version;
     unsigned char blocks[ASYNC_SECTION_MESH_BYTES];
     unsigned char meta[ASYNC_SECTION_MESH_BYTES];
     unsigned char levels[ASYNC_SECTION_MESH_BYTES];
@@ -4747,6 +4752,7 @@ typedef struct AsyncSectionMeshResult {
     int cx, cz, sy;
     int origin_x, origin_z;
     unsigned int version;
+    unsigned int light_version;
     FlatDirectMeshBuilder mb0, mb1;
     int skip0, skip1;
     /* D3D11 can pre-create terrain section GPU buffers on the worker using the
@@ -4992,6 +4998,7 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
                 r.origin_x = job.origin_x;
                 r.origin_z = job.origin_z;
                 r.version = job.version;
+                r.light_version = job.light_version;
                 r.skip0 = skip0;
                 r.skip1 = skip1;
                 r.mb0 = mb0;
@@ -5045,6 +5052,7 @@ static int async_section_mesh_pending(void) {
 static int async_section_mesh_submit_ex(int sy, int cx, int cz, int priority) {
     if (!flat_async_section_mesh_enabled()) return 0;
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
+    if (!g_flat_world_chunk_generated[cz][cx] || !flat_chunk_light_ready_local(cx, cz)) return 2;
     if (g_flat_section_mesh_building[sy][cz][cx]) return 1;
     async_section_mesh_init();
     if (!g_async_section_mesh_event || !g_async_section_mesh_thread) return 0;
@@ -5064,6 +5072,7 @@ static int async_section_mesh_submit_ex(int sy, int cx, int cz, int priority) {
     job.origin_x = g_flat_world_origin_x;
     job.origin_z = g_flat_world_origin_z;
     job.version = g_flat_section_mesh_version[sy][cz][cx];
+    job.light_version = g_flat_chunk_light_version[cz][cx];
     int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
     int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
     int sz0 = job.origin_z + cz * FLAT_RENDER_CHUNK - 1;
@@ -5149,7 +5158,9 @@ static void async_section_mesh_install_ready(int max_uploads) {
         int valid = 0;
         if (r.origin_x == g_flat_world_origin_x && r.origin_z == g_flat_world_origin_z &&
             r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS &&
-            g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version) {
+            g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version &&
+            flat_chunk_light_ready_local(r.cx, r.cz) &&
+            g_flat_chunk_light_version[r.cz][r.cx] == r.light_version) {
             valid = 1;
         }
         if (valid) {
@@ -5174,12 +5185,14 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 g_flat_section_valid[r.sy][r.cz][r.cx] = 1;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][0] = r.skip0;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][1] = r.skip1;
+                g_flat_section_mesh_light_version[r.sy][r.cz][r.cx] = r.light_version;
                 pex_logf_trace("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
             } else {
                 g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
             }
         } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS) {
             g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
+            g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
             pex_logf_trace("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
         }
         async_section_mesh_free_result(&r);
@@ -5387,6 +5400,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
         if (now_seconds() > deadline) break;
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+        if (!flat_chunk_light_ready_local(cx, cz)) continue;
         int needs = 0;
 
         if (async_mesh) {
@@ -5436,6 +5450,9 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
 
 static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx) {
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
+    if (g_flat_world_chunk_generated[cz][cx] && !flat_chunk_light_ready_local(cx, cz)) return 0;
+    if (g_flat_world_chunk_generated[cz][cx] &&
+        g_flat_section_mesh_light_version[sy][cz][cx] != g_flat_chunk_light_version[cz][cx]) return 1;
     if (g_flat_section_skip_pass[sy][cz][cx][0] &&
         (!g_opts.fancy_graphics || g_flat_section_skip_pass[sy][cz][cx][1]) &&
         !g_flat_section_dirty[sy][cz][cx]) return 0;
@@ -5486,9 +5503,16 @@ static void worldgen_mesh_prep_build_list(void) {
     if (pcz < 0) pcz = 0; if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
     int r = effective_generated_render_chunk_radius();
-    if (g_worldgen.active && r > 1) r = 1;
     int cx0 = pcx - r, cx1 = pcx + r;
     int cz0 = pcz - r, cz1 = pcz + r;
+    if (g_worldgen.active) {
+        /* During the loading screen, prepare every generated spawn-preload chunk,
+           not only the immediate 3x3.  Otherwise the first frame in-world can
+           show mixed light/mesh generations across the default spawn island. */
+        cx0 = 0; cz0 = 0;
+        cx1 = FLAT_RENDER_CHUNKS - 1;
+        cz1 = FLAT_RENDER_CHUNKS - 1;
+    }
     if (cx0 < 0) cx0 = 0;
     if (cz0 < 0) cz0 = 0;
     if (cx1 >= FLAT_RENDER_CHUNKS) cx1 = FLAT_RENDER_CHUNKS - 1;
@@ -5496,7 +5520,7 @@ static void worldgen_mesh_prep_build_list(void) {
 
     for (int cz = cz0; cz <= cz1; cz++) {
         for (int cx = cx0; cx <= cx1; cx++) {
-            if (!g_flat_world_chunk_generated[cz][cx]) continue;
+            if (!g_flat_world_chunk_generated[cz][cx] || !flat_chunk_light_ready_local(cx, cz)) continue;
             for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
                 if (!flat_section_has_any_block_local(cx, cz, sy)) {
                     flat_mark_section_after_generation(cx, cz, sy);
@@ -5521,6 +5545,15 @@ static void worldgen_mesh_prep_build_list(void) {
     qsort(g_worldgen_mesh_prep_refs, (size_t)g_worldgen_mesh_prep_count,
           sizeof(g_worldgen_mesh_prep_refs[0]), flat_section_ref_cmp_near);
     g_worldgen_mesh_prep_active = 1;
+}
+
+static int worldgen_mesh_prep_verify_complete(void) {
+    if (!g_worldgen_mesh_prep_active) return 0;
+    for (int i = 0; i < g_worldgen_mesh_prep_count; ++i) {
+        FlatRenderSectionRef *r = &g_worldgen_mesh_prep_refs[i];
+        if (flat_section_needs_mesh_rebuild(r->sy, r->cz, r->cx)) return 0;
+    }
+    return 1;
 }
 
 static int worldgen_mesh_prep_step(int max_rebuilds) {
@@ -5571,7 +5604,16 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
             g_worldgen_mesh_prep_index++;
             submitted++;
         }
-        return (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count);
+        if (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count) {
+            async_section_mesh_install_ready(max_rebuilds);
+            if (async_section_mesh_pending()) return 0;
+            if (!worldgen_mesh_prep_verify_complete()) {
+                g_worldgen_mesh_prep_index = 0;
+                return 0;
+            }
+            return 1;
+        }
+        return 0;
 #endif
     }
 
@@ -5583,7 +5625,14 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
             built++;
         }
     }
-    return g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count;
+    if (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count) {
+        if (!worldgen_mesh_prep_verify_complete()) {
+            g_worldgen_mesh_prep_index = 0;
+            return 0;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 static int worldgen_mesh_prep_total(void) {

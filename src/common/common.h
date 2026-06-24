@@ -1212,6 +1212,11 @@ static int g_flat_world_chunk_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS]
    treated as empty finished chunks or the loader can waste time warming up
    huge air-only areas at high render distance. */
 static int g_flat_world_chunk_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+/* A generated chunk may exist before its neighbor-aware skylight has settled.
+   Meshes stamp the light version they were built from so spawn/preload chunks
+   cannot keep random brightness until a player block edit happens to dirty them. */
+static int g_flat_chunk_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned int g_flat_chunk_light_version[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 
 /* Java-b1 style render sections.  A section is 16x16x16, so editing or
    generating one part of a chunk no longer rebuilds the whole 256-block-tall
@@ -1223,6 +1228,7 @@ static unsigned int g_flat_section_direct_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_REND
 static int g_flat_section_dirty[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_section_valid[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static unsigned int g_flat_section_mesh_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned int g_flat_section_mesh_light_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_section_mesh_building[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_section_skip_pass[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
 /* Minecraft stores a 16x16x16 renderer on top of section-aware chunk storage.

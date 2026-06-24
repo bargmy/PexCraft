@@ -147,10 +147,16 @@ static int armor_apply_damage_reduction(int incoming) {
 static int flat_index(int coord) { return coord - g_flat_world_origin_x; }
 static int flat_z_index(int coord) { return coord - g_flat_world_origin_z; }
 static int floor_div16(int v);
+static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int origin_z);
+static int stream_world_chunk_local_x(int wcx);
+static int stream_world_chunk_local_z(int wcz);
 static void mark_flat_render_chunks_dirty_around(int x, int z);
 static void mark_flat_render_sections_dirty_around_block(int x, int y, int z);
 static void flat_mark_section_after_generation(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy);
+static void flat_bump_chunk_light_version_local(int lcx, int lcz);
+static void flat_publish_chunk_light_ready_local(int lcx, int lcz, int ready, int dirty_sections);
+static int flat_chunk_light_ready_local(int lcx, int lcz);
 static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz);
 static void flat_apply_chunk_environment_light_local(int lcx, int lcz);
 static void mark_flat_chunk_modified_at(int x, int z);
@@ -694,7 +700,9 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
     }
 
     unsigned char changed_sections[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    unsigned char changed_chunks[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     memset(changed_sections, 0, sizeof(changed_sections));
+    memset(changed_chunks, 0, sizeof(changed_chunks));
     int changed_section_count = 0;
 
     int tail = 0;
@@ -757,11 +765,20 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
                     if (flat_section_index_valid(lsy) && flat_local_chunk_valid(lcx, lcz) &&
                         !changed_sections[lsy][lcz][lcx]) {
                         changed_sections[lsy][lcz][lcx] = 1;
+                        changed_chunks[lcz][lcx] = 1;
                         changed_section_count++;
                     }
                     g_flat_sky_light[yi][fz][fx] = new_sky;
                     g_flat_block_light[yi][fz][fx] = new_block;
                 }
+            }
+        }
+    }
+    for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
+        for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
+            if (changed_chunks[lcz][lcx]) {
+                g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
+                flat_bump_chunk_light_version_local(lcx, lcz);
             }
         }
     }
@@ -816,7 +833,7 @@ static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) {
-        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+        flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
     }
     pex_logf("lighting fast surface chunk=%d,%d local=%d,%d", cx, cz, lcx, lcz);
 }
@@ -884,7 +901,7 @@ static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigne
     int lcx = stream_world_chunk_local_x(cx);
     int lcz = stream_world_chunk_local_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) {
-        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+        flat_publish_chunk_light_ready_local(lcx, lcz, 0, 1);
     }
 }
 
@@ -892,6 +909,7 @@ static int g_flat_chunk_environment_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CH
 
 static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
+    flat_publish_chunk_light_ready_local(lcx, lcz, 0, 0);
     int x0 = lcx * FLAT_RENDER_CHUNK;
     int z0 = lcz * FLAT_RENDER_CHUNK;
     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
@@ -1623,8 +1641,48 @@ static int flat_section_has_any_block_local(int lcx, int lcz, int sy) {
     return (g_flat_chunk_section_non_empty_mask[lcz][lcx] & (unsigned short)(1u << sy)) != 0;
 }
 
+static void flat_bump_chunk_light_version_local(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    g_flat_chunk_light_version[lcz][lcx]++;
+    if (g_flat_chunk_light_version[lcz][lcx] == 0) g_flat_chunk_light_version[lcz][lcx] = 1;
+}
+
+static int flat_chunk_light_ready_local(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return 0;
+    return g_flat_world_chunk_generated[lcz][lcx] && g_flat_chunk_light_ready[lcz][lcx];
+}
+
+static void flat_publish_chunk_light_ready_local(int lcx, int lcz, int ready, int dirty_sections) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    int old_ready = g_flat_chunk_light_ready[lcz][lcx];
+    g_flat_chunk_light_ready[lcz][lcx] = ready ? 1 : 0;
+    if (dirty_sections || old_ready != g_flat_chunk_light_ready[lcz][lcx]) {
+        flat_bump_chunk_light_version_local(lcx, lcz);
+    }
+    if (!dirty_sections) return;
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        if (flat_section_has_any_block_local(lcx, lcz, sy)) {
+            g_flat_section_dirty[sy][lcz][lcx] = 1;
+            g_flat_section_valid[sy][lcz][lcx] = 0;
+            flat_note_section_mesh_changed(sy, lcz, lcx);
+            g_flat_world_chunk_dirty[lcz][lcx] = 1;
+        } else {
+            g_flat_section_mesh_building[sy][lcz][lcx] = 0;
+            g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
+        }
+    }
+    g_flat_renderer_sort_dirty = 1;
+}
+
 static void flat_mark_section_after_generation(int lcx, int lcz, int sy) {
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return;
+    if (!flat_chunk_light_ready_local(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
+        g_flat_section_dirty[sy][lcz][lcx] = 1;
+        g_flat_section_valid[sy][lcz][lcx] = 0;
+        flat_note_section_mesh_changed(sy, lcz, lcx);
+        g_flat_world_chunk_dirty[lcz][lcx] = 1;
+        return;
+    }
     if (flat_section_has_any_block_local(lcx, lcz, sy)) {
         g_flat_section_dirty[sy][lcz][lcx] = 1;
         flat_note_section_mesh_changed(sy, lcz, lcx);
@@ -1642,6 +1700,7 @@ static void flat_mark_section_after_generation(int lcx, int lcz, int sy) {
         g_flat_section_valid[sy][lcz][lcx] = 1;
         g_flat_section_skip_pass[sy][lcz][lcx][0] = 1;
         g_flat_section_skip_pass[sy][lcz][lcx][1] = 1;
+        g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
     }
 }
 
@@ -1662,6 +1721,14 @@ static void stream_mark_local_chunk_generated(int lcx, int lcz) {
        requested no-stale-shadow reset semantics without the old one-second delay. */
     flat_reset_chunk_light_no_shadows_local(lcx, lcz);
     flat_apply_chunk_environment_light_local(lcx, lcz);
+    if (g_stream_generation_keep_completed) {
+        /* Spawn preload waits for one contiguous-area lighting settle before any
+           mesh can be accepted.  This is the Java-style preload invariant the
+           old path violated: terrain-ready is not light-ready. */
+        flat_publish_chunk_light_ready_local(lcx, lcz, 0, 1);
+    } else {
+        flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
+    }
 
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
        This replaces the old 3x3x16 section scan performed for every installed
@@ -2095,6 +2162,9 @@ static void flat_world_prepare_initial_generation(void) {
     g_flat_light_dirty = 0;
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
@@ -2232,6 +2302,9 @@ static void flat_world_generate_blocks_for_current_origin(void) {
     g_flat_light_dirty = 0;
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
 
@@ -6256,66 +6329,175 @@ static void flat_lighting_worker_shutdown(void) {
 #endif
 }
 
-/* Exact seed terrain generation runs on a worker thread.  The main/game/render
+/* Exact seed terrain generation runs on worker threads.  The main/game/render
    thread never performs the expensive Beta 3x3 canvas generation while walking;
-   it only installs completed chunk buffers. */
+   it only installs completed chunk buffers.  Desktop uses a small CPU-aware pool
+   so the 49-chunk spawn preload does not crawl one chunk at a time, while PSP/Wii
+   keep their conservative cooperative/single-worker paths. */
+typedef struct StreamAsyncJob {
+    int cx, cz;
+    int type;
+    int epoch;
+    long long seed;
+    char world_dir[MAX_PATHBUF];
+} StreamAsyncJob;
+
+typedef struct StreamAsyncResult {
+    int cx, cz;
+    int epoch;
+    unsigned char *buf;
+    unsigned char *meta;
+    unsigned char *sky;
+    unsigned char *blocklight;
+} StreamAsyncResult;
+
+#define STREAM_ASYNC_MAX_WORKERS 4
+#define STREAM_ASYNC_JOB_RING 128
+#define STREAM_ASYNC_RESULT_RING 64
+
 static CRITICAL_SECTION g_stream_async_cs;
 static int g_stream_async_initialized = 0;
 static HANDLE g_stream_async_event = NULL;
-static HANDLE g_stream_async_thread = NULL;
+static HANDLE g_stream_async_threads[STREAM_ASYNC_MAX_WORKERS];
+static int g_stream_async_worker_count = 0;
 static int g_stream_async_stop = 0;
-static int g_stream_async_has_job = 0;
-static int g_stream_async_busy = 0;
-static int g_stream_async_job_cx = 0, g_stream_async_job_cz = 0, g_stream_async_job_type = 0, g_stream_async_job_epoch = 0;
-static long long g_stream_async_job_seed = 0;
-static char g_stream_async_job_world_dir[MAX_PATHBUF];
-static int g_stream_async_result_ready = 0;
-static int g_stream_async_result_cx = 0, g_stream_async_result_cz = 0, g_stream_async_result_epoch = 0;
-static unsigned char *g_stream_async_result_buf = NULL;
-static unsigned char *g_stream_async_result_meta = NULL;
-static unsigned char *g_stream_async_result_sky = NULL;
-static unsigned char *g_stream_async_result_blocklight = NULL;
+static int g_stream_async_active_count = 0;
+static StreamAsyncJob g_stream_async_jobs[STREAM_ASYNC_JOB_RING];
+static int g_stream_async_job_head = 0, g_stream_async_job_tail = 0, g_stream_async_job_count = 0;
+static StreamAsyncResult g_stream_async_results[STREAM_ASYNC_RESULT_RING];
+static int g_stream_async_result_head = 0, g_stream_async_result_tail = 0, g_stream_async_result_count = 0;
+
+static void stream_async_free_result_payload(StreamAsyncResult *r) {
+    if (!r) return;
+    free(r->buf);
+    free(r->meta);
+    free(r->sky);
+    free(r->blocklight);
+    memset(r, 0, sizeof(*r));
+}
+
+static void stream_async_reset_event(HANDLE h) {
+#if defined(_WIN32)
+    if (h) ResetEvent(h);
+#elif defined(PEX_PLATFORM_PSP)
+    if (h && h->kind == PEX_HANDLE_EVENT) {
+        SceUInt t = 0;
+        while (sceKernelWaitSema(h->uid, 1, &t) >= 0) { t = 0; }
+        h->signaled = 0;
+    }
+#else
+    if (h && h->kind == PEX_HANDLE_EVENT) {
+        pthread_mutex_lock(&h->mutex);
+        h->signaled = 0;
+        pthread_mutex_unlock(&h->mutex);
+    }
+#endif
+}
+
+static int stream_async_cpu_count(void) {
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    memset(&si, 0, sizeof(si));
+    GetSystemInfo(&si);
+    if (si.dwNumberOfProcessors > 0) return (int)si.dwNumberOfProcessors;
+#endif
+    return 2;
+}
+
+static int stream_async_choose_worker_count(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return 1;
+#else
+    int cpu = stream_async_cpu_count();
+    if (cpu <= 2) return 1;
+    if (cpu <= 4) return 2;
+    if (cpu <= 6) return 3;
+    return STREAM_ASYNC_MAX_WORKERS;
+#endif
+}
+
+static int stream_async_pop_job(StreamAsyncJob *job) {
+    int have = 0;
+    EnterCriticalSection(&g_stream_async_cs);
+    if (!g_stream_async_stop && g_stream_async_job_count > 0) {
+        if (job) *job = g_stream_async_jobs[g_stream_async_job_head];
+        memset(&g_stream_async_jobs[g_stream_async_job_head], 0, sizeof(g_stream_async_jobs[0]));
+        g_stream_async_job_head = (g_stream_async_job_head + 1) % STREAM_ASYNC_JOB_RING;
+        g_stream_async_job_count--;
+        g_stream_async_active_count++;
+        have = 1;
+    } else if (!g_stream_async_stop) {
+        stream_async_reset_event(g_stream_async_event);
+    }
+    LeaveCriticalSection(&g_stream_async_cs);
+    return have;
+}
+
+static int stream_async_push_result(StreamAsyncResult *r) {
+    for (;;) {
+        int stop = 0;
+        EnterCriticalSection(&g_stream_async_cs);
+        stop = g_stream_async_stop;
+        if (!stop && g_stream_async_result_count < STREAM_ASYNC_RESULT_RING) {
+            g_stream_async_results[g_stream_async_result_tail] = *r;
+            memset(r, 0, sizeof(*r));
+            g_stream_async_result_tail = (g_stream_async_result_tail + 1) % STREAM_ASYNC_RESULT_RING;
+            g_stream_async_result_count++;
+            g_stream_async_active_count--;
+            LeaveCriticalSection(&g_stream_async_cs);
+            return 1;
+        }
+        if (stop) {
+            if (g_stream_async_active_count > 0) g_stream_async_active_count--;
+            LeaveCriticalSection(&g_stream_async_cs);
+            return 0;
+        }
+        LeaveCriticalSection(&g_stream_async_cs);
+        Sleep(1);
+    }
+}
 
 static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
     (void)unused;
     TerrainProvider *worker_tp = NULL;
     int worker_tp_valid = 0;
     long long worker_tp_seed = 0;
-    for (;;) {
-        WaitForSingleObject(g_stream_async_event, INFINITE);
-        int cx = 0, cz = 0, type = 0, epoch = 0, stop = 0;
-        long long seed = 0;
-        char world_dir[MAX_PATHBUF];
-        world_dir[0] = 0;
-        EnterCriticalSection(&g_stream_async_cs);
-        stop = g_stream_async_stop;
-        if (!stop && g_stream_async_has_job) {
-            cx = g_stream_async_job_cx;
-            cz = g_stream_async_job_cz;
-            type = g_stream_async_job_type;
-            seed = g_stream_async_job_seed;
-            epoch = g_stream_async_job_epoch;
-            snprintf(world_dir, sizeof(world_dir), "%s", g_stream_async_job_world_dir);
-            g_stream_async_has_job = 0;
-            g_stream_async_busy = 1;
-        }
-        LeaveCriticalSection(&g_stream_async_cs);
-        if (stop) break;
-        if (!g_stream_async_busy) continue;
 
-        unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-        unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
-        unsigned char *sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-        unsigned char *blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-        if (buf && meta && sky && blocklight) {
+    for (;;) {
+        StreamAsyncJob job;
+        memset(&job, 0, sizeof(job));
+        if (!stream_async_pop_job(&job)) {
+            EnterCriticalSection(&g_stream_async_cs);
+            int stop = g_stream_async_stop;
+            LeaveCriticalSection(&g_stream_async_cs);
+            if (stop) break;
+            WaitForSingleObject(g_stream_async_event, INFINITE);
+            continue;
+        }
+
+        StreamAsyncResult r;
+        memset(&r, 0, sizeof(r));
+        r.cx = job.cx;
+        r.cz = job.cz;
+        r.epoch = job.epoch;
+        r.buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+        r.meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+        r.sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+        r.blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+
+        if (r.buf && r.meta && r.sky && r.blocklight) {
             TerrainProvider *reuse = NULL;
-            if (type == 1) {
-                if (!worker_tp_valid || worker_tp_seed != seed) {
-                    if (worker_tp_valid && worker_tp) { terrain_provider_free(worker_tp); free(worker_tp); worker_tp = NULL; }
+            if (job.type == 1) {
+                if (!worker_tp_valid || worker_tp_seed != job.seed) {
+                    if (worker_tp_valid && worker_tp) {
+                        terrain_provider_free(worker_tp);
+                        free(worker_tp);
+                        worker_tp = NULL;
+                    }
                     worker_tp = (TerrainProvider*)calloc(1, sizeof(*worker_tp));
                     if (worker_tp) {
-                        terrain_provider_init(worker_tp, (int64_t)seed);
-                        worker_tp_seed = seed;
+                        terrain_provider_init(worker_tp, (int64_t)job.seed);
+                        worker_tp_seed = job.seed;
                         worker_tp_valid = 1;
                     } else {
                         worker_tp_valid = 0;
@@ -6323,31 +6505,29 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
                 }
                 reuse = worker_tp_valid ? worker_tp : NULL;
             }
-            generate_flat_chunk_base_to_buffer_ex(cx, cz, buf, type, seed, reuse);
-            load_modified_flat_chunk_delta_into_buffers_for_dir(world_dir, cx, cz, buf, meta);
-            flat_compute_chunk_light_fast_from_buffers(buf, sky, blocklight);
+            generate_flat_chunk_base_to_buffer_ex(job.cx, job.cz, r.buf, job.type, job.seed, reuse);
+            load_modified_flat_chunk_delta_into_buffers_for_dir(job.world_dir, job.cx, job.cz, r.buf, r.meta);
+            flat_compute_chunk_light_fast_from_buffers(r.buf, r.sky, r.blocklight);
         } else {
-            free(buf); free(meta); free(sky); free(blocklight);
-            buf = NULL; meta = NULL; sky = NULL; blocklight = NULL;
+            stream_async_free_result_payload(&r);
         }
 
-        EnterCriticalSection(&g_stream_async_cs);
-        if (g_stream_async_result_buf) { free(g_stream_async_result_buf); g_stream_async_result_buf = NULL; }
-        if (g_stream_async_result_meta) { free(g_stream_async_result_meta); g_stream_async_result_meta = NULL; }
-        if (g_stream_async_result_sky) { free(g_stream_async_result_sky); g_stream_async_result_sky = NULL; }
-        if (g_stream_async_result_blocklight) { free(g_stream_async_result_blocklight); g_stream_async_result_blocklight = NULL; }
-        g_stream_async_result_buf = buf;
-        g_stream_async_result_meta = meta;
-        g_stream_async_result_sky = sky;
-        g_stream_async_result_blocklight = blocklight;
-        g_stream_async_result_cx = cx;
-        g_stream_async_result_cz = cz;
-        g_stream_async_result_epoch = epoch;
-        g_stream_async_result_ready = (buf != NULL);
-        g_stream_async_busy = 0;
-        LeaveCriticalSection(&g_stream_async_cs);
+        if (!r.buf) {
+            EnterCriticalSection(&g_stream_async_cs);
+            if (g_stream_async_active_count > 0) g_stream_async_active_count--;
+            LeaveCriticalSection(&g_stream_async_cs);
+            stream_async_free_result_payload(&r);
+            continue;
+        }
+        if (!stream_async_push_result(&r)) {
+            stream_async_free_result_payload(&r);
+        }
     }
-    if (worker_tp_valid && worker_tp) { terrain_provider_free(worker_tp); free(worker_tp); }
+
+    if (worker_tp_valid && worker_tp) {
+        terrain_provider_free(worker_tp);
+        free(worker_tp);
+    }
     return 0;
 }
 
@@ -6359,7 +6539,7 @@ static void stream_async_init(void) {
        unknown-pointer exceptions.  The cooperative fallback still generates one
        chunk per tick, just without a worker thread touching worldgen/heap data. */
     g_stream_async_event = NULL;
-    g_stream_async_thread = NULL;
+    g_stream_async_worker_count = 0;
     g_stream_async_initialized = 1;
     wii_debug_logf("stream async disabled on Wii; using cooperative generation");
     return;
@@ -6368,19 +6548,45 @@ static void stream_async_init(void) {
     /* Safe PSP terrain uses cooperative generation.  Real Beta mode keeps the
        worker path so the 3x3 canvas generator does not run inside the frame. */
     g_stream_async_event = NULL;
-    g_stream_async_thread = NULL;
+    g_stream_async_worker_count = 0;
     g_stream_async_initialized = 1;
     return;
 #endif
+
     InitializeCriticalSection(&g_stream_async_cs);
-    g_stream_async_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (g_stream_async_event) {
+    g_stream_async_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    g_stream_async_stop = 0;
+    g_stream_async_active_count = 0;
+    g_stream_async_job_head = g_stream_async_job_tail = g_stream_async_job_count = 0;
+    g_stream_async_result_head = g_stream_async_result_tail = g_stream_async_result_count = 0;
+    memset(g_stream_async_threads, 0, sizeof(g_stream_async_threads));
+
+    int desired = stream_async_choose_worker_count();
 #if defined(PEX_PLATFORM_PSP)
-        g_stream_async_thread = CreateThread(NULL, 0x40000, stream_async_worker_proc, NULL, 0, NULL);
-#else
-        g_stream_async_thread = CreateThread(NULL, 0x400000, stream_async_worker_proc, NULL, 0, NULL);
+    if (desired > 1) desired = 1;
 #endif
-        if (g_stream_async_thread) SetThreadPriority(g_stream_async_thread, THREAD_PRIORITY_NORMAL);
+    if (desired > STREAM_ASYNC_MAX_WORKERS) desired = STREAM_ASYNC_MAX_WORKERS;
+    for (int i = 0; i < desired; ++i) {
+#if defined(PEX_PLATFORM_PSP)
+        g_stream_async_threads[i] = CreateThread(NULL, 0x40000, stream_async_worker_proc, NULL, 0, NULL);
+#else
+        g_stream_async_threads[i] = CreateThread(NULL, 0x400000, stream_async_worker_proc, NULL, 0, NULL);
+#endif
+        if (g_stream_async_threads[i]) {
+#if defined(PEX_PLATFORM_PSP)
+            SetThreadPriority(g_stream_async_threads[i], THREAD_PRIORITY_NORMAL);
+#else
+            SetThreadPriority(g_stream_async_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+            g_stream_async_worker_count++;
+        }
+    }
+    if (g_stream_async_worker_count > 0) {
+        pex_logf("stream async worker pool started workers=%d", g_stream_async_worker_count);
+    } else {
+        CloseHandle(g_stream_async_event);
+        g_stream_async_event = NULL;
+        pex_logf("stream async worker pool failed to start; using cooperative streaming");
     }
     g_stream_async_initialized = 1;
 }
@@ -6391,75 +6597,76 @@ static int stream_async_pending(void) {
 #endif
     if (!g_stream_async_initialized) return 0;
 #if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
-    if (!g_stream_async_event || !g_stream_async_thread) return 0;
+    if (!g_stream_async_event || g_stream_async_worker_count <= 0) return 0;
 #endif
+    if (!g_stream_async_event || g_stream_async_worker_count <= 0) return 0;
     int pending = 0;
     EnterCriticalSection(&g_stream_async_cs);
-    pending = g_stream_async_has_job || g_stream_async_busy || g_stream_async_result_ready;
+    pending = g_stream_async_job_count || g_stream_async_active_count || g_stream_async_result_count;
     LeaveCriticalSection(&g_stream_async_cs);
     return pending;
 }
 
 static void stream_async_submit_next(void) {
     stream_async_init();
-    if (!g_stream_async_event || !g_stream_async_thread) return;
-    if (g_stream_gen_queue_index >= g_stream_gen_queue_count) return;
+    if (!g_stream_async_event || g_stream_async_worker_count <= 0) return;
+
+    int submitted = 0;
+    int job_backlog_limit = g_stream_generation_keep_completed ? STREAM_ASYNC_JOB_RING : g_stream_async_worker_count * 3;
+    if (job_backlog_limit < g_stream_async_worker_count) job_backlog_limit = g_stream_async_worker_count;
+    if (job_backlog_limit > STREAM_ASYNC_JOB_RING) job_backlog_limit = STREAM_ASYNC_JOB_RING;
     EnterCriticalSection(&g_stream_async_cs);
-    int can_submit = !g_stream_async_has_job && !g_stream_async_busy && !g_stream_async_result_ready;
-    if (can_submit) {
-        g_stream_async_job_cx = g_stream_gen_queue_cx[g_stream_gen_queue_index];
-        g_stream_async_job_cz = g_stream_gen_queue_cz[g_stream_gen_queue_index];
-        g_stream_async_job_type = g_world_type;
-        g_stream_async_job_seed = g_world_seed;
-        g_stream_async_job_epoch = g_stream_generation_epoch;
-        snprintf(g_stream_async_job_world_dir, sizeof(g_stream_async_job_world_dir), "%s", g_loaded_world_dir);
-        g_stream_async_has_job = 1;
+    while (!g_stream_async_stop &&
+           g_stream_gen_queue_index < g_stream_gen_queue_count &&
+           g_stream_async_job_count < STREAM_ASYNC_JOB_RING &&
+           g_stream_async_job_count < job_backlog_limit) {
+        StreamAsyncJob *job = &g_stream_async_jobs[g_stream_async_job_tail];
+        memset(job, 0, sizeof(*job));
+        job->cx = g_stream_gen_queue_cx[g_stream_gen_queue_index];
+        job->cz = g_stream_gen_queue_cz[g_stream_gen_queue_index];
+        job->type = g_world_type;
+        job->seed = g_world_seed;
+        job->epoch = g_stream_generation_epoch;
+        snprintf(job->world_dir, sizeof(job->world_dir), "%s", g_loaded_world_dir);
+        g_stream_async_job_tail = (g_stream_async_job_tail + 1) % STREAM_ASYNC_JOB_RING;
+        g_stream_async_job_count++;
         g_stream_gen_queue_index++;
+        submitted++;
     }
     LeaveCriticalSection(&g_stream_async_cs);
-    if (can_submit) SetEvent(g_stream_async_event);
+
+    if (submitted > 0) SetEvent(g_stream_async_event);
 }
 
 static int stream_async_install_ready(int max_install) {
     int installed = 0;
     while (installed < max_install) {
-        int cx = 0, cz = 0, epoch = 0;
-        unsigned char *buf = NULL;
-        unsigned char *meta = NULL;
-        unsigned char *sky = NULL;
-        unsigned char *blocklight = NULL;
+        StreamAsyncResult r;
+        memset(&r, 0, sizeof(r));
+
         EnterCriticalSection(&g_stream_async_cs);
-        if (g_stream_async_result_ready) {
-            cx = g_stream_async_result_cx;
-            cz = g_stream_async_result_cz;
-            epoch = g_stream_async_result_epoch;
-            buf = g_stream_async_result_buf;
-            meta = g_stream_async_result_meta;
-            sky = g_stream_async_result_sky;
-            blocklight = g_stream_async_result_blocklight;
-            g_stream_async_result_buf = NULL;
-            g_stream_async_result_meta = NULL;
-            g_stream_async_result_sky = NULL;
-            g_stream_async_result_blocklight = NULL;
-            g_stream_async_result_ready = 0;
+        if (g_stream_async_result_count > 0) {
+            r = g_stream_async_results[g_stream_async_result_head];
+            memset(&g_stream_async_results[g_stream_async_result_head], 0, sizeof(g_stream_async_results[0]));
+            g_stream_async_result_head = (g_stream_async_result_head + 1) % STREAM_ASYNC_RESULT_RING;
+            g_stream_async_result_count--;
         }
         LeaveCriticalSection(&g_stream_async_cs);
-        if (!buf) break;
 
-        if (epoch == g_stream_generation_epoch &&
-            stream_world_chunk_in_window(cx, cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
-            g_copy_chunk_skip_main_light = (sky && blocklight) ? 1 : 0;
-            copy_flat_chunk_buffers_to_world(cx, cz, buf, meta);
+        if (!r.buf) break;
+
+        if (r.epoch == g_stream_generation_epoch &&
+            stream_world_chunk_in_window(r.cx, r.cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+            g_copy_chunk_skip_main_light = (r.sky && r.blocklight) ? 1 : 0;
+            copy_flat_chunk_buffers_to_world(r.cx, r.cz, r.buf, r.meta);
             g_copy_chunk_skip_main_light = 0;
-            if (sky && blocklight) copy_flat_chunk_light_buffers_to_world(cx, cz, sky, blocklight);
-            stream_mark_local_chunk_generated(stream_world_chunk_local_x(cx), stream_world_chunk_local_z(cz));
+            if (r.sky && r.blocklight) copy_flat_chunk_light_buffers_to_world(r.cx, r.cz, r.sky, r.blocklight);
+            stream_mark_local_chunk_generated(stream_world_chunk_local_x(r.cx), stream_world_chunk_local_z(r.cz));
             g_stream_gen_queue_installed_count++;
             installed++;
         }
-        free(buf);
-        free(meta);
-        free(sky);
-        free(blocklight);
+
+        stream_async_free_result_payload(&r);
     }
     return installed;
 }
@@ -6507,12 +6714,15 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     int old_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    int old_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    unsigned int old_light_versions[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned short old_section_masks[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     GLuint old_section_lists[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
     int old_section_dirty[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned int old_section_versions[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    unsigned int old_section_light_versions[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_section_valid[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_section_skip[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
     unsigned int old_section_direct_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
@@ -6530,12 +6740,15 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memcpy(old_valid, g_flat_world_chunk_valid, sizeof(old_valid));
     memcpy(old_has_liquid, g_flat_world_chunk_has_liquid, sizeof(old_has_liquid));
     memcpy(old_generated, g_flat_world_chunk_generated, sizeof(old_generated));
+    memcpy(old_light_ready, g_flat_chunk_light_ready, sizeof(old_light_ready));
+    memcpy(old_light_versions, g_flat_chunk_light_version, sizeof(old_light_versions));
     memcpy(old_modified, g_flat_world_chunk_modified, sizeof(old_modified));
     memcpy(old_light_due, g_flat_chunk_environment_light_due, sizeof(old_light_due));
     memcpy(old_section_masks, g_flat_chunk_section_non_empty_mask, sizeof(old_section_masks));
     memcpy(old_section_lists, g_flat_section_lists, sizeof(old_section_lists));
     memcpy(old_section_dirty, g_flat_section_dirty, sizeof(old_section_dirty));
     memcpy(old_section_versions, g_flat_section_mesh_version, sizeof(old_section_versions));
+    memcpy(old_section_light_versions, g_flat_section_mesh_light_version, sizeof(old_section_light_versions));
     memcpy(old_section_valid, g_flat_section_valid, sizeof(old_section_valid));
     memcpy(old_section_skip, g_flat_section_skip_pass, sizeof(old_section_skip));
     memcpy(old_section_direct_mesh, g_flat_section_direct_mesh, sizeof(old_section_direct_mesh));
@@ -6571,6 +6784,8 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memset(g_flat_world_chunk_valid, 0, sizeof(g_flat_world_chunk_valid));
     memset(g_flat_world_chunk_has_liquid, 0, sizeof(g_flat_world_chunk_has_liquid));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -6578,6 +6793,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memset(g_flat_section_direct_mesh, 0, sizeof(g_flat_section_direct_mesh));
     memset(g_flat_section_dirty, 0, sizeof(g_flat_section_dirty));
     memset(g_flat_section_mesh_building, 0, sizeof(g_flat_section_mesh_building));
+    memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_section_valid, 0, sizeof(g_flat_section_valid));
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
         for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
@@ -6600,6 +6816,8 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                 g_flat_world_chunk_valid[ncz][ncx] = old_valid[ocz][ocx];
                 g_flat_world_chunk_has_liquid[ncz][ncx] = old_has_liquid[ocz][ocx];
                 g_flat_world_chunk_generated[ncz][ncx] = old_generated[ocz][ocx];
+                g_flat_chunk_light_ready[ncz][ncx] = old_light_ready[ocz][ocx];
+                g_flat_chunk_light_version[ncz][ncx] = old_light_versions[ocz][ocx];
                 g_flat_world_chunk_modified[ncz][ncx] = old_modified[ocz][ocx];
                 g_flat_chunk_environment_light_due[ncz][ncx] = old_light_due[ocz][ocx];
                 g_flat_chunk_section_non_empty_mask[ncz][ncx] = old_section_masks[ocz][ocx];
@@ -6616,6 +6834,8 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                 g_flat_world_chunk_valid[ncz][ncx] = 0;
                 g_flat_world_chunk_has_liquid[ncz][ncx] = 0;
                 g_flat_world_chunk_generated[ncz][ncx] = 0;
+                g_flat_chunk_light_ready[ncz][ncx] = 0;
+                g_flat_chunk_light_version[ncz][ncx] = 0;
                 g_flat_world_chunk_modified[ncz][ncx] = 0;
                 g_flat_chunk_environment_light_due[ncz][ncx] = 0;
                 g_flat_chunk_section_non_empty_mask[ncz][ncx] = 0;
@@ -6636,6 +6856,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                     g_flat_section_direct_mesh[sy][ncz][ncx][1] = old_section_direct_mesh[sy][ocz][ocx][1];
                     g_flat_section_dirty[sy][ncz][ncx] = old_section_dirty[sy][ocz][ocx];
                     g_flat_section_mesh_version[sy][ncz][ncx] = old_section_versions[sy][ocz][ocx];
+                    g_flat_section_mesh_light_version[sy][ncz][ncx] = old_section_light_versions[sy][ocz][ocx];
                     g_flat_section_mesh_building[sy][ncz][ncx] = 0;
                     g_flat_section_valid[sy][ncz][ncx] = old_section_valid[sy][ocz][ocx];
                     g_flat_section_skip_pass[sy][ncz][ncx][0] = old_section_skip[sy][ocz][ocx][0];
@@ -6974,7 +7195,7 @@ static void process_stream_generation_queue(void) {
 
     /* If thread creation fails/is disabled, keep the world functional with a
        small synchronous budget rather than leaving missing terrain forever. */
-    if (!g_stream_async_event || !g_stream_async_thread) {
+    if (!g_stream_async_event || g_stream_async_worker_count <= 0) {
         int budget = STREAM_CHUNKS_PER_TICK;
         while (budget-- > 0 && g_stream_gen_queue_index < g_stream_gen_queue_count) {
             int idx = g_stream_gen_queue_index++;
@@ -7003,7 +7224,7 @@ static void process_stream_generation_queue(void) {
     int allow_install = 1;
     (void)s_stream_install_tick;
     if (allow_install) {
-        int max_install = initial_load ? 8 : 4;
+        int max_install = initial_load ? 16 : 4;
         pex_logf_trace("chunk stream async install tick queue=%d/%d budget=%d", g_stream_gen_queue_index, g_stream_gen_queue_count, max_install);
         stream_async_install_ready(max_install);
     }
@@ -7057,6 +7278,7 @@ static void flat_world_run_initial_light_settle_service(void) {
             for (int lcx = min_lcx; lcx <= max_lcx; ++lcx) {
                 if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
                 flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+                flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
                 for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
                     flat_mark_section_after_generation(lcx, lcz, sy);
                 }
