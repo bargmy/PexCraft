@@ -35,7 +35,8 @@ static void player_die(const char *reason) {
     if (g_player_dead) return;
     g_player_dead = 1;
     g_player_death_time = 0;
-    g_player_health = 0;
+    if (g_player_health > 0) player_health_set_with_java_hearts(0);
+    else g_player_health = 0;
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_motion_x = g_player_motion_z = 0.0f;
     g_player_motion_y = 0.10f; /* EntityPlayer.onDeath sets small upward motion. */
@@ -52,29 +53,84 @@ static void player_die(const char *reason) {
     if (!g_mp_connected) save_current_world_state();
 }
 
+static float player_damage_hunger_exhaustion(const char *reason) {
+    if (!reason) return 0.0f;
+    if (strstr(reason, "lava")) return 0.3f;
+    if (strstr(reason, "mob") || strstr(reason, "slain")) return 0.3f;
+    return 0.0f;
+}
+
 static void player_take_damage(int amount, const char *reason) {
     if (amount <= 0 || g_player_dead) return;
     int raw_amount = amount;
     if (!g_mp_connected) amount = armor_apply_damage_reduction(amount);
     if (amount <= 0 && raw_amount > 0) {
-        g_hearts_life = g_ingame_ticks + 20;
+        player_health_damage_hearts_without_delta();
         g_player_hurt_time = g_player_max_hurt_time;
         pex_sound_play("random.hurt", 1.0f, 1.0f);
         g_save_dirty = 1;
         return;
     }
-    g_player_prev_health = g_player_health;
-    g_hearts_life = g_ingame_ticks + 20;
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_attacked_at_yaw = 0.0f;
-    g_player_health -= amount;
+    player_health_set_with_java_hearts(g_player_health - amount);
     pex_sound_play("random.hurt", 1.0f, 1.0f);
+    player_add_exhaustion(player_damage_hunger_exhaustion(reason));
     pex_logf("player damage amount=%d reason=%s health=%d", amount, reason ? reason : "", g_player_health);
     if (g_player_health <= 0) {
         player_die(reason);
     } else {
         g_save_dirty = 1;
     }
+}
+
+
+static int player_should_heal(void) {
+    return !g_player_dead && g_player_health > 0 && g_player_health < 20;
+}
+
+static void player_foodstats_update(void) {
+    int difficulty = g_opts.difficulty & 3; /* 0 Peaceful, 1 Easy, 2 Normal, 3 Hard. */
+    g_player_prev_food_level = player_food_clamp(g_player_food_level);
+
+    if (g_player_food_exhaustion > 4.0f) {
+        g_player_food_exhaustion -= 4.0f;
+        if (g_player_food_saturation > 0.0f) {
+            g_player_food_saturation -= 1.0f;
+            if (g_player_food_saturation < 0.0f) g_player_food_saturation = 0.0f;
+        } else if (difficulty > 0) {
+            g_player_food_level = player_food_clamp(g_player_food_level - 1);
+        }
+        g_save_dirty = 1;
+    }
+
+    if (difficulty == 0 && player_should_heal() && (g_ingame_ticks % 20) == 0) {
+        /* EntityPlayer.onLivingUpdate: peaceful heals one half-heart every 20 ticks. */
+        player_health_set_with_java_hearts(g_player_health + 1);
+        g_save_dirty = 1;
+    }
+
+    if (g_player_food_level >= 18 && player_should_heal()) {
+        g_player_food_timer++;
+        if (g_player_food_timer >= 80) {
+            player_health_set_with_java_hearts(g_player_health + 1);
+            g_player_food_timer = 0;
+            g_save_dirty = 1;
+        }
+    } else if (g_player_food_level <= 0) {
+        g_player_food_timer++;
+        if (g_player_food_timer >= 80) {
+            if (g_player_health > 10 || difficulty >= 3 || (g_player_health > 1 && difficulty >= 2)) {
+                player_take_damage(1, "starved to death");
+            }
+            g_player_food_timer = 0;
+            g_save_dirty = 1;
+        }
+    } else {
+        g_player_food_timer = 0;
+    }
+
+    player_food_sanitize();
 }
 
 
@@ -101,14 +157,10 @@ static void update_equipped_item(void) {
 static void player_respawn(void) {
     g_player_dead = 0;
     g_player_death_time = 0;
-    g_player_health = 20;
-    g_player_prev_health = 20;
-    g_player_food_level = 20;
-    g_player_prev_food_level = 20;
+    player_health_set_no_animation(20);
+    player_food_reset();
     g_player_air = 300;
-    g_player_xp_level = 0;
-    g_player_xp_total = 0;
-    g_player_xp_progress = 0.0f;
+    player_xp_reset();
     memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
     g_player_armor = 0;
     g_player_damage_remainder = 0;
@@ -250,6 +302,7 @@ static void ingame_tick(void) {
     int input_active = (g_screen == SCREEN_INGAME && !g_player_dead);
 
     g_ingame_ticks++;
+    if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
     prof_part = pex_profile_begin();
@@ -474,6 +527,7 @@ static void ingame_tick(void) {
     } else if (jumping && g_player_on_ground) {
         g_player_motion_y = 0.50f;
         g_player_on_ground = 0;
+        player_add_exhaustion(0.2f);
     }
 
     float input_len = sqrtf(strafe * strafe + forward * forward);
@@ -651,8 +705,16 @@ static void ingame_tick(void) {
     }
 
     float dx = g_player_x - g_player_prev_x;
+    float dy = g_player_y - g_player_prev_y;
     float dz = g_player_z - g_player_prev_z;
     float horizontal = sqrtf(dx * dx + dz * dz);
+    if (in_water || in_lava) {
+        int dist_cm = (int)floorf(sqrtf(dx * dx + dy * dy + dz * dz) * 100.0f + 0.5f);
+        if (dist_cm > 0) player_add_exhaustion(0.015f * (float)dist_cm * 0.01f);
+    } else if (g_player_on_ground) {
+        int dist_cm = (int)floorf(horizontal * 100.0f + 0.5f);
+        if (dist_cm > 0) player_add_exhaustion(0.01f * (float)dist_cm * 0.01f);
+    }
     g_distance_walked += horizontal * 0.6f;
     if (g_player_on_ground && horizontal > 0.015f && g_distance_walked >= g_next_footstep_distance) {
         int bx = (int)floorf(g_player_x);
@@ -680,6 +742,8 @@ static void ingame_tick(void) {
     g_camera_yaw += (target_yaw - g_camera_yaw) * 0.4f;
     g_camera_pitch += (target_pitch - g_camera_pitch) * 0.8f;
     passive_mobs_apply_riding();
+
+    if (!g_player_dead && !g_mp_connected) player_foodstats_update();
 
     if (g_loaded_world_dir[0] && g_save_dirty &&
         (g_ingame_ticks - g_last_autosave_tick) >= AUTOSAVE_INTERVAL_TICKS) {

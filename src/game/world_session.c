@@ -373,6 +373,14 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     ss->player_yaw = g_player_yaw;
     ss->player_pitch = g_player_pitch;
     ss->player_health = g_player_health;
+    ss->player_food_level = g_player_food_level;
+    ss->player_prev_food_level = g_player_prev_food_level;
+    ss->player_food_saturation = g_player_food_saturation;
+    ss->player_food_exhaustion = g_player_food_exhaustion;
+    ss->player_food_timer = g_player_food_timer;
+    ss->player_xp_level = g_player_xp_level;
+    ss->player_xp_total = g_player_xp_total;
+    ss->player_xp_progress = g_player_xp_progress;
     ss->player_armor = g_player_armor;
     ss->selected_hotbar_slot = g_selected_hotbar_slot;
     ss->player_fall_distance = g_player_fall_distance;
@@ -493,7 +501,7 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 17;
+    int version = 18;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -517,6 +525,14 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     fwrite(&ss->world_type, sizeof(ss->world_type), 1, f);
     fwrite(&ss->flat_world_origin_x, sizeof(ss->flat_world_origin_x), 1, f);
     fwrite(&ss->flat_world_origin_z, sizeof(ss->flat_world_origin_z), 1, f);
+    fwrite(&ss->player_food_level, sizeof(ss->player_food_level), 1, f);
+    fwrite(&ss->player_prev_food_level, sizeof(ss->player_prev_food_level), 1, f);
+    fwrite(&ss->player_food_saturation, sizeof(ss->player_food_saturation), 1, f);
+    fwrite(&ss->player_food_exhaustion, sizeof(ss->player_food_exhaustion), 1, f);
+    fwrite(&ss->player_food_timer, sizeof(ss->player_food_timer), 1, f);
+    fwrite(&ss->player_xp_level, sizeof(ss->player_xp_level), 1, f);
+    fwrite(&ss->player_xp_total, sizeof(ss->player_xp_total), 1, f);
+    fwrite(&ss->player_xp_progress, sizeof(ss->player_xp_progress), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&ss->inventory[i].id, sizeof(int), 1, f);
@@ -707,7 +723,7 @@ static void save_current_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 17;
+    int version = 18;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -731,6 +747,14 @@ static void save_current_world_state_sync(void) {
     fwrite(&g_world_type, sizeof(g_world_type), 1, f);
     fwrite(&g_flat_world_origin_x, sizeof(g_flat_world_origin_x), 1, f);
     fwrite(&g_flat_world_origin_z, sizeof(g_flat_world_origin_z), 1, f);
+    fwrite(&g_player_food_level, sizeof(g_player_food_level), 1, f);
+    fwrite(&g_player_prev_food_level, sizeof(g_player_prev_food_level), 1, f);
+    fwrite(&g_player_food_saturation, sizeof(g_player_food_saturation), 1, f);
+    fwrite(&g_player_food_exhaustion, sizeof(g_player_food_exhaustion), 1, f);
+    fwrite(&g_player_food_timer, sizeof(g_player_food_timer), 1, f);
+    fwrite(&g_player_xp_level, sizeof(g_player_xp_level), 1, f);
+    fwrite(&g_player_xp_total, sizeof(g_player_xp_total), 1, f);
+    fwrite(&g_player_xp_progress, sizeof(g_player_xp_progress), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&g_inventory[i].id, sizeof(int), 1, f);
@@ -853,6 +877,7 @@ static void save_current_world_state(void) {
 
 
 static void reset_player_damage_visual_state(void) {
+    g_player_health = player_health_clamp(g_player_health);
     g_player_prev_health = g_player_health;
     g_hearts_life = 0;
     g_player_hurt_time = 0;
@@ -881,7 +906,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -937,6 +962,25 @@ static int load_current_world_state(void) {
         g_player_fall_distance = 0.0f;
         g_player_dead = 0;
     }
+
+    if (version >= 18) {
+        if (fread(&g_player_food_level, sizeof(g_player_food_level), 1, f) != 1 ||
+            fread(&g_player_prev_food_level, sizeof(g_player_prev_food_level), 1, f) != 1 ||
+            fread(&g_player_food_saturation, sizeof(g_player_food_saturation), 1, f) != 1 ||
+            fread(&g_player_food_exhaustion, sizeof(g_player_food_exhaustion), 1, f) != 1 ||
+            fread(&g_player_food_timer, sizeof(g_player_food_timer), 1, f) != 1 ||
+            fread(&g_player_xp_level, sizeof(g_player_xp_level), 1, f) != 1 ||
+            fread(&g_player_xp_total, sizeof(g_player_xp_total), 1, f) != 1 ||
+            fread(&g_player_xp_progress, sizeof(g_player_xp_progress), 1, f) != 1) {
+            fclose(f);
+            return 0;
+        }
+    } else {
+        player_food_reset();
+        player_xp_reset();
+    }
+    player_food_sanitize();
+    player_xp_sanitize();
 
     for (int i = 0; i < 36; i++) {
         if (fread(&g_inventory[i].id, sizeof(int), 1, f) != 1 ||
@@ -1120,7 +1164,7 @@ static int load_current_world_state(void) {
     g_flat_section_geometry_dirty = 0;
     reset_player_damage_visual_state();
     pex_logf("world state loaded dir=%s version=%d health=%d dead=%d origin=%d,%d", g_loaded_world_dir, version, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
-    g_save_dirty = (version < 17) ? 1 : 0;
+    g_save_dirty = (version < 18) ? 1 : 0;
     return 1;
 }
 
@@ -1157,7 +1201,7 @@ static void finish_prepared_world_entry(int loaded_state) {
     hud_add_chat(loaded_state ? "Loaded saved world." : "Loaded world.");
     if (g_player_dead || g_player_health <= 0) {
         g_player_dead = 1;
-        g_player_health = 0;
+        player_health_set_no_animation(0);
         g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
         set_screen(SCREEN_DEATH);
     } else {
@@ -1181,8 +1225,9 @@ static void enter_world_from_job(void) {
     int loaded_state = load_current_world_state();
     if (!loaded_state) {
         inventory_reset();
-        g_player_health = 20;
-        g_player_prev_health = 20;
+        player_health_set_no_animation(20);
+        player_food_reset();
+        player_xp_reset();
         reset_player_damage_visual_state();
         memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
         g_player_armor = 0;
@@ -1343,8 +1388,9 @@ static void worldgen_tick(void) {
 
         if (!g_worldgen.loaded_state) {
             inventory_reset();
-            g_player_health = 20;
-            g_player_prev_health = 20;
+            player_health_set_no_animation(20);
+            player_food_reset();
+            player_xp_reset();
             reset_player_damage_visual_state();
             memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
             g_player_armor = 0;

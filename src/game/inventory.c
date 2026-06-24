@@ -4647,6 +4647,7 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
 static void break_target_block(void) {
     int id = flat_get_block(g_break_x, g_break_y, g_break_z);
     if (id == 0 || id == BLOCK_BEDROCK) return;
+    player_add_exhaustion(0.025f);
     if (id == BLOCK_GLASS) pex_sound_play_at("random.glass", (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 1.0f);
     else pex_sound_play_at(pex_block_step_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
 
@@ -4775,13 +4776,29 @@ static int held_is_hoe_item(int id) {
 static int item_food_heal_amount(int id) {
     if (id == ITEM_APPLE_RED) return 4;
     if (id == ITEM_BREAD) return 5;
-    if (id == ITEM_BOWL_SOUP) return 10;
+    if (id == ITEM_BOWL_SOUP) return 8;
     if (id == ITEM_PORK_RAW) return 3;
     if (id == ITEM_PORK_COOKED) return 8;
     if (id == ITEM_FISH_RAW) return 2;
     if (id == ITEM_FISH_COOKED) return 5;
-    if (id == ITEM_APPLE_GOLD) return 20;
+    if (id == ITEM_APPLE_GOLD) return 4;
     return 0;
+}
+
+static float item_food_saturation_modifier(int id) {
+    if (id == ITEM_APPLE_RED) return 0.3f;
+    if (id == ITEM_BREAD) return 0.6f;
+    if (id == ITEM_BOWL_SOUP) return 0.6f;
+    if (id == ITEM_PORK_RAW) return 0.3f;
+    if (id == ITEM_PORK_COOKED) return 0.8f;
+    if (id == ITEM_FISH_RAW) return 0.3f;
+    if (id == ITEM_FISH_COOKED) return 0.6f;
+    if (id == ITEM_APPLE_GOLD) return 1.2f;
+    return 0.0f;
+}
+
+static int item_food_always_edible(int id) {
+    return id == ITEM_APPLE_GOLD;
 }
 
 static void consume_held_stack_one(ItemStack *held, int replacement_id) {
@@ -4797,15 +4814,11 @@ static void consume_held_stack_one(ItemStack *held, int replacement_id) {
 
 static int try_eat_held_food(ItemStack *held) {
     if (!held || stack_empty(held) || g_player_dead || g_player_health <= 0) return 0;
-    int heal = item_food_heal_amount(held->id);
-    if (heal <= 0) return 0;
+    int food = item_food_heal_amount(held->id);
+    if (food <= 0) return 0;
+    if (!player_can_eat(item_food_always_edible(held->id))) return 0;
 
-    /* Beta 1.0 ItemFood.onItemRightClick consumes immediately and EntityLiving.heal
-       simply caps at 20; it does not require aiming at a block and it does not
-       refuse the item when already at full health. */
-    g_player_health += heal;
-    if (g_player_health > 20) g_player_health = 20;
-    g_hearts_life = 20;
+    player_food_add_stats(food, item_food_saturation_modifier(held->id));
     consume_held_stack_one(held, held->id == ITEM_BOWL_SOUP ? ITEM_BOWL_EMPTY : 0);
     g_save_dirty = 1;
     restart_hand_swing();

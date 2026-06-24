@@ -305,16 +305,17 @@ static void apply_view_bobbing(float partial) {
     if (!g_opts.view_bobbing) return;
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float walk_delta = pr->distance_walked - pr->prev_distance_walked;
-    float walk = pr->distance_walked + walk_delta * partial;
+    float walk = -(pr->distance_walked + walk_delta * partial);
     float cam_yaw = pr->prev_camera_yaw + (pr->camera_yaw - pr->prev_camera_yaw) * partial;
     float cam_pitch = pr->prev_camera_pitch + (pr->camera_pitch - pr->prev_camera_pitch) * partial;
 
-    /* kq.java::f(float): exact Beta view-bobbing transform. */
+    /* Java 1.2.5 EntityRenderer.setupViewBobbing(float): applied before
+       orientCamera(), so it affects both first person and F5 third person. */
     glTranslatef(sinf(walk * (float)M_PI) * cam_yaw * 0.5f,
                  -fabsf(cosf(walk * (float)M_PI) * cam_yaw),
                  0.0f);
     glRotatef(sinf(walk * (float)M_PI) * cam_yaw * 3.0f, 0.0f, 0.0f, 1.0f);
-    glRotatef(fabsf(cosf(walk * (float)M_PI + 0.2f) * cam_yaw) * 5.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(fabsf(cosf(walk * (float)M_PI - 0.2f) * cam_yaw) * 5.0f, 1.0f, 0.0f, 0.0f);
     glRotatef(cam_pitch, 1.0f, 0.0f, 0.0f);
 }
 
@@ -408,11 +409,14 @@ static void apply_player_camera(float partial) {
     if (g_screen == SCREEN_INGAME && key_down_vk(g_opts.keys[5])) y -= 0.18f;
 
     apply_hurt_camera_effect(partial);
+    apply_view_bobbing(partial);
 
     if (g_third_person_view) {
-        /* Source reference: B1.0.0 kq.java::g(float), toggled by F5 in
-           Minecraft.java when key 63 is pressed.  The source uses a 4 block
-           third-person distance behind the player's view direction. */
+        /* Java 1.2.5 EntityRenderer.orientCamera semantics:
+           0 = first person, 1 = camera behind player, 2 = camera in front
+           facing back at the player.  Both third-person modes use a 4 block
+           camera boom shortened by 8 small collision rays. */
+        int front_view = (g_third_person_view == 2);
         float yaw_rad = yaw * (float)M_PI / 180.0f;
         float pitch_rad = pitch * (float)M_PI / 180.0f;
         float dist = 4.0f;
@@ -420,17 +424,19 @@ static void apply_player_camera(float partial) {
         float look_x = -sinf(yaw_rad) * cosf(pitch_rad);
         float look_y = -sinf(pitch_rad);
         float look_z =  cosf(yaw_rad) * cosf(pitch_rad);
-        dist = third_person_camera_distance(x, y, z, yaw, pitch, dist);
+        float boom_pitch = front_view ? (pitch + 180.0f) : pitch;
+        dist = third_person_camera_distance(x, y, z, yaw, boom_pitch, dist);
 
-        float cam_x = x - look_x * dist;
-        float cam_y = y - look_y * dist;
-        float cam_z = z - look_z * dist;
+        float cam_x = front_view ? (x + look_x * dist) : (x - look_x * dist);
+        float cam_y = front_view ? (y + look_y * dist) : (y - look_y * dist);
+        float cam_z = front_view ? (z + look_z * dist) : (z - look_z * dist);
+        float view_yaw = front_view ? (yaw + 180.0f) : yaw;
+        float view_pitch = front_view ? -pitch : pitch;
 
-        glRotatef(pitch, 1.0f, 0.0f, 0.0f);
-        glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);
+        glRotatef(view_pitch, 1.0f, 0.0f, 0.0f);
+        glRotatef(view_yaw + 180.0f, 0.0f, 1.0f, 0.0f);
         glTranslatef(-cam_x, -cam_y, -cam_z);
     } else {
-        apply_view_bobbing(partial);
         glTranslatef(0.0f, 0.0f, -0.1f); /* first-person camera nudge from kq.java */
         glRotatef(pitch, 1.0f, 0.0f, 0.0f);
         glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);

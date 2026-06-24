@@ -81,7 +81,7 @@ static int pex_android_tv_consume_hotbar_slot(void) {
     if (g_android_tv_digit_edge[0]) {
         g_android_tv_digit_edge[0] = 0;
         /* There are nine hotbar slots.  Leave 0 as a safe extra shortcut. */
-        g_third_person_view = !g_third_person_view;
+        third_person_view_cycle();
     }
     return -1;
 }

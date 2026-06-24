@@ -46,6 +46,32 @@ static void draw_save_message(void) {
     draw_text("Saving game...", 8, g_gui_h - 16, 16777215);
 }
 
+typedef struct PexJavaRandom {
+    uint64_t seed;
+} PexJavaRandom;
+
+static void pex_java_random_set_seed(PexJavaRandom *rng, int64_t seed) {
+    rng->seed = ((uint64_t)seed ^ 0x5DEECE66DULL) & ((1ULL << 48) - 1ULL);
+}
+
+static int pex_java_random_next(PexJavaRandom *rng, int bits) {
+    rng->seed = (rng->seed * 0x5DEECE66DULL + 0xBULL) & ((1ULL << 48) - 1ULL);
+    return (int)(rng->seed >> (48 - bits));
+}
+
+static int pex_java_random_next_int(PexJavaRandom *rng, int bound) {
+    if (bound <= 0) return 0;
+    if ((bound & -bound) == bound) {
+        return (int)(((int64_t)bound * (int64_t)pex_java_random_next(rng, 31)) >> 31);
+    }
+    int bits, val;
+    do {
+        bits = pex_java_random_next(rng, 31);
+        val = bits % bound;
+    } while (bits - val + (bound - 1) < 0);
+    return val;
+}
+
 static void draw_hud(void) {
     int w = g_gui_w;
     int h = g_gui_h;
@@ -77,14 +103,10 @@ static void draw_hud(void) {
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    int hp = g_player_health;
-    if (hp < 0) hp = 0;
-    if (hp > 20) hp = 20;
-    int prev_hp = g_player_prev_health;
-    if (prev_hp < 0) prev_hp = 0;
-    if (prev_hp > 20) prev_hp = 20;
-    int heart_flash_ticks = g_hearts_life - g_ingame_ticks;
-    int flash_old = (heart_flash_ticks >= 10) && (((heart_flash_ticks / 3) & 1) != 0);
+    int hp = player_health_clamp(g_player_health);
+    int prev_hp = player_health_clamp(g_player_prev_health);
+    int flash_old = ((g_hearts_life / 3) % 2) == 1;
+    if (g_hearts_life < 10) flash_old = 0;
     int left = w / 2 - 91;
     int right = w / 2 + 91;
     int row_y = h - 39;
@@ -92,7 +114,8 @@ static void draw_hud(void) {
     int armor = g_player_armor;
     if (armor < 0) armor = 0;
     if (armor > 20) armor = 20;
-    int release_hud_icons = (strcmp(g_current_texpack, CLASSIC_PACK_NAME) == 0);
+    PexJavaRandom heart_rng;
+    pex_java_random_set_seed(&heart_rng, (int64_t)g_ingame_ticks * 312871LL);
 
     for (int i = 0; i < 10; i++) {
         if (armor > 0) {
@@ -105,12 +128,7 @@ static void draw_hud(void) {
         int x = left + i * 8;
         int y = row_y;
         if (hp <= 4 && hp > 0) {
-            /* Java seeds the HUD random from the 20 Hz update counter; using
-               rand() every rendered frame made low-health hearts jitter at
-               uncapped frame rate. */
-            unsigned int r = (unsigned int)(g_ingame_ticks * 312871 + i * 1013);
-            r ^= r << 13; r ^= r >> 17; r ^= r << 5;
-            y += (int)(r & 1u);
+            y += pex_java_random_next_int(&heart_rng, 2);
         }
         draw_textured_rect_tex(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
         if (flash_old) {
@@ -121,27 +139,29 @@ static void draw_hud(void) {
         else if (i * 2 + 1 == hp) draw_textured_rect_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
     }
 
-    if (release_hud_icons) {
-        int food = g_player_food_level;
-        if (food < 0) food = 0;
-        if (food > 20) food = 20;
-        int prev_food = g_player_prev_food_level;
-        if (prev_food < 0) prev_food = 0;
-        if (prev_food > 20) prev_food = 20;
+    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
+        int food = player_food_clamp(g_player_food_level);
+        int prev_food = player_food_clamp(g_player_prev_food_level);
+        int food_flash = 0; /* GuiIngame 1.2.5 leaves this false unless the later highlight path toggles it. */
         for (int i = 0; i < 10; i++) {
             int x = right - i * 8 - 9;
             int y = row_y;
-            draw_textured_rect_tex(&tex_icons, x, y, 16, 27, 9, 9, 0xFFFFFF);
-            if (flash_old) {
-                if (i * 2 + 1 < prev_food) draw_textured_rect_tex(&tex_icons, x, y, 70, 27, 9, 9, 0xFFFFFF);
-                else if (i * 2 + 1 == prev_food) draw_textured_rect_tex(&tex_icons, x, y, 79, 27, 9, 9, 0xFFFFFF);
+            int icon_base = 16;
+            int container_offset = food_flash ? 1 : 0;
+            if (g_player_food_saturation <= 0.0f && food > 0 && (g_ingame_ticks % (food * 3 + 1)) == 0) {
+                y += pex_java_random_next_int(&heart_rng, 3) - 1;
             }
-            if (i * 2 + 1 < food) draw_textured_rect_tex(&tex_icons, x, y, 52, 27, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == food) draw_textured_rect_tex(&tex_icons, x, y, 61, 27, 9, 9, 0xFFFFFF);
+            draw_textured_rect_tex(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
+            if (food_flash) {
+                if (i * 2 + 1 < prev_food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == prev_food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
+            }
+            if (i * 2 + 1 < food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
         }
     }
 
-    if (release_hud_icons && flat_player_head_in_water()) {
+    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0 && flat_player_head_in_water()) {
         int air = g_player_air;
         if (air < 0) air = 0;
         if (air > 300) air = 300;
@@ -154,8 +174,8 @@ static void draw_hud(void) {
         }
     }
 
-    int xp_cap = 7 + ((g_player_xp_level * 7) >> 1);
-    if (release_hud_icons && xp_cap > 0 && (g_player_xp_total > 0 || g_player_xp_level > 0 || g_player_xp_progress > 0.0f)) {
+    int xp_cap = player_xp_bar_cap();
+    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0 && xp_cap > 0) {
         int fill = (int)(g_player_xp_progress * 183.0f);
         if (fill < 0) fill = 0;
         if (fill > 183) fill = 183;
@@ -163,7 +183,7 @@ static void draw_hud(void) {
         draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
         if (fill > 0) draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
     }
-    if (release_hud_icons && g_player_xp_level > 0) {
+    if (g_player_xp_level > 0) {
         char lvl[16];
         snprintf(lvl, sizeof(lvl), "%d", g_player_xp_level);
         int lx = (w - text_width(lvl)) / 2;

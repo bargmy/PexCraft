@@ -444,6 +444,7 @@ static void passive_mob_take_damage(PassiveMob *m, int damage) {
     if (!m || !m->active || m->death_time > 0 || damage <= 0) return;
     passive_mob_shear_sheep_on_attack(m);
     m->health -= damage;
+    player_add_exhaustion(0.3f);
     m->hurt_time = 10;
     float dx = g_player_x - m->x;
     float dz = g_player_z - m->z;
@@ -457,6 +458,7 @@ static void passive_mob_take_damage(PassiveMob *m, int damage) {
         const char *s = passive_mob_death_sound(m->type);
         if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type), (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
         m->death_time = 1;
+        player_add_experience(1 + (rand() % 3));
         passive_mob_on_death(m);
     } else {
         const char *s = passive_mob_hurt_sound(m->type);

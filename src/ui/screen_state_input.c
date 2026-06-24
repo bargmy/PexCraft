@@ -752,7 +752,8 @@ static void handle_keydown(WPARAM vk) {
     if (g_screen == SCREEN_INGAME) {
         if (vk == VK_ESCAPE) { set_screen(SCREEN_PAUSE); return; }
         if (vk == VK_F3) { g_debug_menu_shown = !g_debug_menu_shown; return; }
-        if (vk == VK_F5) { g_third_person_view = !g_third_person_view; return; }
+        if (g_debug_menu_shown && vk == 'X') { player_add_experience(key_down_vk(VK_SHIFT) ? 10 : 1); g_save_dirty = 1; return; }
+        if (vk == VK_F5) { third_person_view_cycle(); return; }
         if ((int)vk == g_opts.keys[6]) { inventory_drop_selected_one(); return; }
         if ((int)vk == g_opts.keys[7]) { set_screen(SCREEN_INVENTORY); return; }
         if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 1; set_screen(SCREEN_CHAT); return; }

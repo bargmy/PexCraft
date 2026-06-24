@@ -668,12 +668,133 @@ static int g_player_armor = 0;
 static int g_player_damage_remainder = 0;
 static int g_player_food_level = 20;
 static int g_player_prev_food_level = 20;
+static float g_player_food_saturation = 5.0f;
+static float g_player_food_exhaustion = 0.0f;
+static int g_player_food_timer = 0;
 static int g_player_air = 300;
 static int g_player_xp_level = 0;
 static int g_player_xp_total = 0;
 static float g_player_xp_progress = 0.0f;
 static int g_ingame_ticks = 0;
-static int g_hearts_life = 0;
+static int g_hearts_life = 0; /* Java EntityLiving.heartsLife countdown, in 20 Hz ticks. */
+
+#define PEX_HEARTS_HALVES_LIFE 20
+
+static int player_health_clamp(int health) {
+    if (health < 0) return 0;
+    if (health > 20) return 20;
+    return health;
+}
+
+static void player_health_set_no_animation(int health) {
+    g_player_health = player_health_clamp(health);
+    g_player_prev_health = g_player_health;
+    g_hearts_life = 0;
+}
+
+static void player_health_set_with_java_hearts(int health) {
+    int old_health = player_health_clamp(g_player_health);
+    int new_health = player_health_clamp(health);
+    if (new_health < old_health) {
+        g_player_prev_health = old_health;
+        g_player_health = new_health;
+        g_hearts_life = PEX_HEARTS_HALVES_LIFE;
+    } else if (new_health > old_health) {
+        g_player_prev_health = old_health;
+        g_player_health = new_health;
+        g_hearts_life = PEX_HEARTS_HALVES_LIFE / 2;
+    } else {
+        g_player_health = new_health;
+    }
+}
+
+static void player_health_damage_hearts_without_delta(void) {
+    g_player_prev_health = player_health_clamp(g_player_health);
+    g_hearts_life = PEX_HEARTS_HALVES_LIFE;
+}
+
+
+static int player_food_clamp(int food) {
+    if (food < 0) return 0;
+    if (food > 20) return 20;
+    return food;
+}
+
+static void player_food_reset(void) {
+    g_player_food_level = 20;
+    g_player_prev_food_level = 20;
+    g_player_food_saturation = 5.0f;
+    g_player_food_exhaustion = 0.0f;
+    g_player_food_timer = 0;
+}
+
+static void player_food_sanitize(void) {
+    g_player_food_level = player_food_clamp(g_player_food_level);
+    g_player_prev_food_level = player_food_clamp(g_player_prev_food_level);
+    if (g_player_food_saturation < 0.0f) g_player_food_saturation = 0.0f;
+    if (g_player_food_saturation > (float)g_player_food_level) g_player_food_saturation = (float)g_player_food_level;
+    if (g_player_food_exhaustion < 0.0f) g_player_food_exhaustion = 0.0f;
+    if (g_player_food_exhaustion > 40.0f) g_player_food_exhaustion = 40.0f;
+    if (g_player_food_timer < 0) g_player_food_timer = 0;
+}
+
+static void player_food_add_stats(int food, float saturation_modifier) {
+    if (food <= 0) return;
+    g_player_prev_food_level = player_food_clamp(g_player_food_level);
+    g_player_food_level = player_food_clamp(g_player_food_level + food);
+    g_player_food_saturation += (float)food * saturation_modifier * 2.0f;
+    if (g_player_food_saturation > (float)g_player_food_level) g_player_food_saturation = (float)g_player_food_level;
+    if (g_player_food_saturation < 0.0f) g_player_food_saturation = 0.0f;
+}
+
+static int player_can_eat(int always_edible) {
+    return always_edible || g_player_food_level < 20;
+}
+
+static void player_add_exhaustion(float amount) {
+    if (amount <= 0.0f) return;
+    g_player_food_exhaustion += amount;
+    if (g_player_food_exhaustion > 40.0f) g_player_food_exhaustion = 40.0f;
+    if (g_player_food_exhaustion < 0.0f) g_player_food_exhaustion = 0.0f;
+}
+
+static int player_xp_bar_cap(void) {
+    if (g_player_xp_level < 0) g_player_xp_level = 0;
+    return 7 + ((g_player_xp_level * 7) >> 1);
+}
+
+static void player_xp_sanitize(void) {
+    if (g_player_xp_level < 0) g_player_xp_level = 0;
+    if (g_player_xp_total < 0) g_player_xp_total = 0;
+    if (g_player_xp_progress < 0.0f) g_player_xp_progress = 0.0f;
+    if (g_player_xp_progress >= 1.0f) g_player_xp_progress = 0.999999f;
+}
+
+static void player_add_experience(int amount) {
+    if (amount <= 0) return;
+    int space = 0x7fffffff - g_player_xp_total;
+    if (amount > space) amount = space;
+    if (amount <= 0) return;
+
+    g_player_xp_progress += (float)amount / (float)player_xp_bar_cap();
+    g_player_xp_total += amount;
+    while (g_player_xp_progress >= 1.0f) {
+        g_player_xp_progress = (g_player_xp_progress - 1.0f) * (float)player_xp_bar_cap();
+        g_player_xp_level++;
+        g_player_xp_progress /= (float)player_xp_bar_cap();
+    }
+}
+
+static void player_remove_experience(int levels) {
+    g_player_xp_level -= levels;
+    if (g_player_xp_level < 0) g_player_xp_level = 0;
+}
+
+static void player_xp_reset(void) {
+    g_player_xp_level = 0;
+    g_player_xp_total = 0;
+    g_player_xp_progress = 0.0f;
+}
 
 static PexGamepadState g_gamepads[PEX_GAMEPAD_MAX];
 static int g_gamepad_count = 0;
@@ -1206,6 +1327,14 @@ typedef struct PexSaveSnapshot {
     float player_x, player_y, player_z;
     float player_yaw, player_pitch;
     int player_health;
+    int player_food_level;
+    int player_prev_food_level;
+    float player_food_saturation;
+    float player_food_exhaustion;
+    int player_food_timer;
+    int player_xp_level;
+    int player_xp_total;
+    float player_xp_progress;
     int player_armor;
     int selected_hotbar_slot;
     float player_fall_distance;
@@ -1423,7 +1552,12 @@ static int g_prof_falling_spawns_last = 0;
 static int g_prof_falling_active_last = 0;
 static int g_prof_stream_pending_last = 0;
 
-static int g_third_person_view = 0;
+static int g_third_person_view = 0; /* Java 1.2.5 GameSettings.thirdPersonView: 0=first, 1=back, 2=front. */
+static void third_person_view_cycle(void) {
+    g_third_person_view++;
+    if (g_third_person_view > 2) g_third_person_view = 0;
+}
+
 static int g_debug_menu_shown = 0;
 static int g_mouse_grabbed = 0;
 static int g_cursor_hidden = 0;

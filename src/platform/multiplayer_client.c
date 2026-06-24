@@ -1150,12 +1150,10 @@ static void pex_net_apply_player_action(const PexNetPlayerAction *a) {
         if (attacker_r) { ax = attacker_r->x; az = attacker_r->z; }
         pex_net_apply_local_knockback(ax, az);
         if (a->z <= 0 && !g_player_dead) {
-            g_player_prev_health = g_player_health;
-            g_player_health = 0;
+            player_health_set_with_java_hearts(0);
             player_die("was slain");
         } else if (a->z > 0 && a->z < g_player_health) {
-            g_player_prev_health = g_player_health;
-            g_player_health = a->z;
+            player_health_set_with_java_hearts(a->z);
         }
         return;
     }
@@ -1297,8 +1295,8 @@ static void pex_net_apply_snapshot(const PexNetSnapshot *snap) {
                 }
             }
             g_mp_players[i].health = server_health;
-            g_player_prev_health = old_health;
-            g_player_health = server_health;
+            if (server_health != old_health) player_health_set_with_java_hearts(server_health);
+            else g_player_health = server_health;
             g_player_armor = g_mp_players[i].armor;
             if (g_mp_pending_respawn_sync && server_health > 0) {
                 g_player_x = g_player_prev_x = g_mp_players[i].x;
@@ -1602,8 +1600,7 @@ static void pex_net_apply_knockback(const PexNetKnockback *kb) {
     g_player_motion_y = kb->my;
     g_player_motion_z = kb->mz;
     if (kb->health >= 0 && kb->health <= 20) {
-        g_player_prev_health = g_player_health;
-        g_player_health = kb->health;
+        player_health_set_with_java_hearts(kb->health);
     }
     const PexNetPlayerState *attacker = pex_net_find_player_state(kb->attacker_id);
     if (attacker) {
@@ -1639,7 +1636,7 @@ static void pex_net_handle_packet(uint16_t type, const void *payload, uint32_t s
         g_player_x = g_player_prev_x = w->spawn_x;
         g_player_y = g_player_prev_y = w->spawn_y;
         g_player_z = g_player_prev_z = w->spawn_z;
-        g_player_health = g_player_prev_health = 20;
+        player_health_set_no_animation(20);
         memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
         g_player_armor = 0;
         g_player_damage_remainder = 0;
