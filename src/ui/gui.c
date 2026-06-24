@@ -77,8 +77,8 @@ static void draw_hud(void) {
     int h = g_gui_h;
     int hotbar_x = w / 2 - 91;
     int hotbar_y = h - 22;
-    draw_textured_rect_tex(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
-    draw_textured_rect_tex(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
+    draw_textured_rect_256_tex(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
+    draw_textured_rect_256_tex(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
 
 #if defined(GL_ONE_MINUS_DST_COLOR) && defined(GL_ONE_MINUS_SRC_COLOR)
     glEnable(GL_BLEND);
@@ -87,10 +87,12 @@ static void draw_hud(void) {
     if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
         glBindTexture(GL_TEXTURE_2D, tex_icons.id);
         glColor4f(1,1,1,1);
-        float u0 = 0.5f / (float)tex_icons.w;
-        float v0 = 0.5f / (float)tex_icons.h;
-        float u1 = 15.5f / (float)tex_icons.w;
-        float v1 = 15.5f / (float)tex_icons.h;
+        const float us = 1.0f / 256.0f;
+        const float vs = 1.0f / 256.0f;
+        float u0 = 0.0f * us;
+        float v0 = 0.0f * vs;
+        float u1 = 16.0f * us;
+        float v1 = 16.0f * vs;
         int cx = w / 2 - 7;
         int cy = h / 2 - 7;
         glBegin(GL_QUADS);
@@ -120,9 +122,9 @@ static void draw_hud(void) {
     for (int i = 0; i < 10; i++) {
         if (armor > 0) {
             int ax = left + i * 8;
-            if (i * 2 + 1 < armor) draw_textured_rect_tex(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == armor) draw_textured_rect_tex(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
-            else draw_textured_rect_tex(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < armor) draw_textured_rect_256_tex(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == armor) draw_textured_rect_256_tex(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
+            else draw_textured_rect_256_tex(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
         }
 
         int x = left + i * 8;
@@ -130,13 +132,13 @@ static void draw_hud(void) {
         if (hp <= 4 && hp > 0) {
             y += pex_java_random_next_int(&heart_rng, 2);
         }
-        draw_textured_rect_tex(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
+        draw_textured_rect_256_tex(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
         if (flash_old) {
-            if (i * 2 + 1 < prev_hp) draw_textured_rect_tex(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == prev_hp) draw_textured_rect_tex(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < prev_hp) draw_textured_rect_256_tex(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == prev_hp) draw_textured_rect_256_tex(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
         }
-        if (i * 2 + 1 < hp) draw_textured_rect_tex(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
-        else if (i * 2 + 1 == hp) draw_textured_rect_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
+        if (i * 2 + 1 < hp) draw_textured_rect_256_tex(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
+        else if (i * 2 + 1 == hp) draw_textured_rect_256_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
     }
 
     if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
@@ -151,13 +153,13 @@ static void draw_hud(void) {
             if (g_player_food_saturation <= 0.0f && food > 0 && (g_ingame_ticks % (food * 3 + 1)) == 0) {
                 y += pex_java_random_next_int(&heart_rng, 3) - 1;
             }
-            draw_textured_rect_tex(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
+            draw_textured_rect_256_tex(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
             if (food_flash) {
-                if (i * 2 + 1 < prev_food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
-                else if (i * 2 + 1 == prev_food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
+                if (i * 2 + 1 < prev_food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == prev_food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
             }
-            if (i * 2 + 1 < food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == food) draw_textured_rect_tex(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
         }
     }
 
@@ -170,7 +172,7 @@ static void draw_hud(void) {
         if (full < 0) full = 0;
         if (partial < 0) partial = 0;
         for (int i = 0; i < full + partial && i < 10; i++) {
-            draw_textured_rect_tex(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
+            draw_textured_rect_256_tex(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
         }
     }
 
@@ -180,8 +182,8 @@ static void draw_hud(void) {
         if (fill < 0) fill = 0;
         if (fill > 183) fill = 183;
         int xp_y = h - 32 + 3;
-        draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
-        if (fill > 0) draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
+        draw_textured_rect_256_tex(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
+        if (fill > 0) draw_textured_rect_256_tex(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
     }
     if (g_player_xp_level > 0) {
         char lvl[16];

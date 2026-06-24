@@ -112,6 +112,30 @@ static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, i
     glColor4f(1,1,1,1);
 }
 
+
+static void draw_textured_rect_256_tex(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
+    if (!tex || !tex->id || w <= 0 || h <= 0) return;
+    /* Java Gui.drawTexturedModalRect uses a fixed 1/256 atlas coordinate scale.
+       Do not divide by the uploaded texture's pixel size here: HD/converted GUI
+       sheets keep the same 256x256 logical coordinate space, and using the
+       physical size samples the wrong heart/hunger/XP pixels. */
+    const float us = 1.0f / 256.0f;
+    const float vs = 1.0f / 256.0f;
+    glBindTexture(GL_TEXTURE_2D, tex->id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
+    set_color_int(color);
+    glBegin(GL_QUADS);
+    glTexCoord2f((float)sx * us, (float)(sy + h) * vs); glVertex3f((float)x, (float)(y + h), 0.0f);
+    glTexCoord2f((float)(sx + w) * us, (float)(sy + h) * vs); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
+    glTexCoord2f((float)(sx + w) * us, (float)sy * vs); glVertex3f((float)(x + w), (float)y, 0.0f);
+    glTexCoord2f((float)sx * us, (float)sy * vs); glVertex3f((float)x, (float)y, 0.0f);
+    glEnd();
+    glColor4f(1,1,1,1);
+}
+
 static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
     if (!tex || !tex->id || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
     float us = 1.0f / (float)tex->w;
