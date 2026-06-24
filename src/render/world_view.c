@@ -344,6 +344,19 @@ static void draw_sky_only(void) {
     glDepthMask(GL_TRUE);
 }
 
+static float java125_world_night_overlay_alpha(void) {
+    /* Existing chunk meshes bake their vertex colors, so changing world time
+       alone does not relight already-built terrain immediately.  This overlay
+       is the cheap lightmap-style multiplier used by this port for the current
+       renderer; keep it defined before draw_world_night_overlay() so C99 builds
+       do not create an implicit declaration. */
+    int sub = flat_current_skylight_subtracted();
+    float a = (float)sub / 11.0f;
+    if (a < 0.0f) a = 0.0f;
+    if (a > 1.0f) a = 1.0f;
+    return a * 0.38f;
+}
+
 static void draw_world_night_overlay(void) {
     float a = java125_world_night_overlay_alpha();
     if (a <= 0.001f) return;
