@@ -1716,18 +1716,22 @@ static void stream_mark_local_chunk_generated(int lcx, int lcz) {
     pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
 
-    /* New chunks install bright first, then immediately run the environment light
-       pass before section meshes are marked for rebuild.  This keeps the user's
-       requested no-stale-shadow reset semantics without the old one-second delay. */
-    flat_reset_chunk_light_no_shadows_local(lcx, lcz);
-    flat_apply_chunk_environment_light_local(lcx, lcz);
     if (g_stream_generation_keep_completed) {
-        /* Spawn preload waits for one contiguous-area lighting settle before any
-           mesh can be accepted.  This is the Java-style preload invariant the
-           old path violated: terrain-ready is not light-ready. */
+        /* Spawn preload must not run one full 48x48xheight light pass per chunk.
+           Java 1.2.5 preloads the terrain area, drains lighting, then lets renderers
+           rebuild from the settled world.  Running per-chunk light here was both
+           slow and the source of mixed-brightness spawn chunks. */
         flat_publish_chunk_light_ready_local(lcx, lcz, 0, 1);
     } else {
+        /* Runtime streaming may show a fast local light preview, but the expensive
+           neighbor-aware pass is queued/batched for the lighting worker instead of
+           blocking the stream commit thread for every chunk. */
         flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
+        {
+            int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+            int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+            flat_note_lighting_dirty_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15);
+        }
     }
 
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
@@ -2203,6 +2207,11 @@ static volatile int g_stream_initial_light_settle_requested = 0;
 static volatile int g_stream_initial_light_settle_running = 0;
 static volatile int g_stream_initial_light_settle_done = 0;
 static volatile int g_stream_initial_light_settle_progress = 0;
+/* Loading-screen terrain generation may run as one Beta canvas batch on the
+   stream service thread.  Keep it visible to worldgen_tick/stream_generation_active
+   so the progress screen does not advance to lighting while the batch is still
+   extracting/publishing chunks. */
+static volatile int g_stream_initial_batch_running = 0;
 
 static void flat_world_begin_initial_generation(void) {
     stream_generation_queue_clear();
@@ -2211,6 +2220,7 @@ static void flat_world_begin_initial_generation(void) {
     g_stream_initial_light_settle_running = 0;
     g_stream_initial_light_settle_done = 0;
     g_stream_initial_light_settle_progress = 0;
+    g_stream_initial_batch_running = 0;
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
@@ -2288,6 +2298,7 @@ static void flat_world_finish_initial_generation(void) {
     g_stream_initial_light_settle_running = 0;
     g_stream_initial_light_settle_done = 0;
     g_stream_initial_light_settle_progress = 0;
+    g_stream_initial_batch_running = 0;
     stream_generation_queue_clear();
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
@@ -6675,8 +6686,9 @@ static int stream_generation_active(void) {
     int queued = g_stream_gen_queue_count - g_stream_gen_queue_index;
     if (queued < 0) queued = 0;
     int async = stream_async_pending() ? 1 : 0;
-    g_prof_stream_pending_last = queued + async;
-    return queued > 0 || async;
+    int batching = g_stream_initial_batch_running ? 1 : 0;
+    g_prof_stream_pending_last = queued + async + batching;
+    return queued > 0 || async || batching;
 }
 
 static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int origin_z) {
@@ -7189,7 +7201,119 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
     }
 }
 
+static int stream_initial_try_generate_beta_batch(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return 0;
+#else
+    if (!g_stream_generation_keep_completed) return 0;
+    if (g_world_type != 1) return 0;
+    if (g_stream_gen_queue_count <= 0) return 0;
+    if (g_stream_gen_queue_index != 0 || g_stream_gen_queue_installed_count != 0) return 0;
+
+    int min_cx = g_stream_gen_queue_cx[0], max_cx = g_stream_gen_queue_cx[0];
+    int min_cz = g_stream_gen_queue_cz[0], max_cz = g_stream_gen_queue_cz[0];
+    for (int i = 1; i < g_stream_gen_queue_count; ++i) {
+        if (g_stream_gen_queue_cx[i] < min_cx) min_cx = g_stream_gen_queue_cx[i];
+        if (g_stream_gen_queue_cx[i] > max_cx) max_cx = g_stream_gen_queue_cx[i];
+        if (g_stream_gen_queue_cz[i] < min_cz) min_cz = g_stream_gen_queue_cz[i];
+        if (g_stream_gen_queue_cz[i] > max_cz) max_cz = g_stream_gen_queue_cz[i];
+    }
+
+    int chunks_x = max_cx - min_cx + 1;
+    int chunks_z = max_cz - min_cz + 1;
+    int canvas_chunks = (chunks_x > chunks_z ? chunks_x : chunks_z) + 2;
+    if (canvas_chunks < 3 || canvas_chunks > FLAT_RENDER_CHUNKS + 2) return 0;
+
+    TerrainProvider *tp = (TerrainProvider*)calloc(1, sizeof(*tp));
+    unsigned char *beta_blocks = (unsigned char*)calloc(32768u, 1);
+    unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+    GenCanvas cv;
+    memset(&cv, 0, sizeof(cv));
+    cv.minCx = min_cx - 1;
+    cv.minCz = min_cz - 1;
+    cv.chunks = canvas_chunks;
+    cv.blocks = (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1);
+
+    if (!tp || !beta_blocks || !buf || !meta || !cv.blocks) {
+        free(cv.blocks);
+        free(beta_blocks);
+        free(buf);
+        free(meta);
+        if (tp) free(tp);
+        return 0;
+    }
+
+    g_stream_initial_batch_running = 1;
+    terrain_provider_init(tp, (int64_t)g_world_seed);
+
+    for (int cz = cv.minCz; cz < cv.minCz + cv.chunks; ++cz) {
+        for (int cx = cv.minCx; cx < cv.minCx + cv.chunks; ++cx) {
+            generate_canvas_chunk(tp, &cv, cx, cz);
+        }
+    }
+    for (int cz = min_cz - 1; cz <= max_cz; ++cz) {
+        for (int cx = min_cx - 1; cx <= max_cx; ++cx) {
+            qm_populate_canvas(tp, &cv, cx, cz);
+        }
+    }
+
+    for (int i = 0; i < g_stream_gen_queue_count; ++i) {
+        int wcx = g_stream_gen_queue_cx[i];
+        int wcz = g_stream_gen_queue_cz[i];
+        if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+            g_stream_gen_queue_index = i + 1;
+            continue;
+        }
+        int lcx = stream_world_chunk_local_x(wcx);
+        int lcz = stream_world_chunk_local_z(wcz);
+        if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
+            g_stream_gen_queue_index = i + 1;
+            g_stream_gen_queue_installed_count++;
+            continue;
+        }
+
+        memset(beta_blocks, 0, 32768u);
+        memset(buf, 0, FLAT_CHUNK_BLOCK_COUNT);
+        memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+        extract_canvas_chunk(&cv, wcx, wcz, beta_blocks);
+        for (int lx = 0; lx < 16; ++lx) {
+            for (int lz = 0; lz < 16; ++lz) {
+                for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
+                    int id = (y < 128) ? get_block_local(beta_blocks, lx, y, lz) : 0;
+                    buf[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
+                }
+                if (buf[flat_chunk_buf_index(lx, 0, lz)] == 0) {
+                    buf[flat_chunk_buf_index(lx, 0, lz)] = BLOCK_BEDROCK;
+                }
+            }
+        }
+        load_modified_flat_chunk_delta_into_buffers_for_dir(g_loaded_world_dir, wcx, wcz, buf, meta);
+
+        g_copy_chunk_skip_main_light = 1;
+        copy_flat_chunk_buffers_to_world(wcx, wcz, buf, meta);
+        g_copy_chunk_skip_main_light = 0;
+        stream_mark_local_chunk_generated(lcx, lcz);
+
+        g_stream_gen_queue_index = i + 1;
+        g_stream_gen_queue_installed_count++;
+        Sleep(0);
+    }
+
+    terrain_provider_free(tp);
+    free(tp);
+    free(cv.blocks);
+    free(beta_blocks);
+    free(buf);
+    free(meta);
+    g_stream_initial_batch_running = 0;
+    return 1;
+#endif
+}
+
 static void process_stream_generation_queue(void) {
+    if (stream_initial_try_generate_beta_batch()) return;
+
     stream_async_init();
     stream_reprioritize_queue_for_player();
 

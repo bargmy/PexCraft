@@ -5008,6 +5008,16 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
 
                 if (pex_using_d3d11()) async_section_mesh_push_upload_job_blocking(&r);
                 else async_section_mesh_push_result_blocking(&r);
+            } else {
+                /* A failed capture used to leave g_flat_section_mesh_building set
+                   forever.  The loading screen then reached N/N "Preparing chunks",
+                   verify_complete failed, reset to zero, and repeated forever. */
+                if (job.sy >= 0 && job.sy < FLAT_RENDER_SECTIONS_Y &&
+                    job.cz >= 0 && job.cz < FLAT_RENDER_CHUNKS &&
+                    job.cx >= 0 && job.cx < FLAT_RENDER_CHUNKS) {
+                    g_flat_section_mesh_building[job.sy][job.cz][job.cx] = 0;
+                    g_flat_section_dirty[job.sy][job.cz][job.cx] = 1;
+                }
             }
 
             flat_direct_free_builder(&mb0);
@@ -5566,6 +5576,19 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
 #endif
     if (!g_worldgen_mesh_prep_active) worldgen_mesh_prep_build_list();
     if (max_rebuilds < 1) max_rebuilds = 1;
+
+    if (g_worldgen.active) {
+        /* Java 1.2.5 preloadWorld() loads/generates chunks and drains lighting;
+           RenderGlobal.loadRenderers() only creates dirty renderers.  It does not
+           block world entry until every 16x16x16 terrain mesh has been built.
+           PexCraft's previous loading phase tried to prebuild all spawn meshes and
+           could loop forever if one async mesh result was stale/failed.  After the
+           spawn chunks are light-ready, enter the world and let the normal async
+           renderer rebuild visible sections from the settled light versions. */
+        if (flat_async_section_mesh_enabled()) async_section_mesh_install_ready(max_rebuilds);
+        g_worldgen_mesh_prep_index = g_worldgen_mesh_prep_count;
+        return 1;
+    }
 
     if (flat_async_section_mesh_enabled()) {
 #if defined(PEX_PLATFORM_WII)
