@@ -979,6 +979,7 @@ typedef struct FlatGLCpuMesh {
     PexVertex *v;
     uint32_t *i;
     uint32_t vcount, icount;
+    GLuint list;
     unsigned int version;
     int origin_x, origin_z;
     int valid;
@@ -1248,8 +1249,44 @@ static int flat_async_section_mesh_enabled(void) {
 #endif
 }
 
+static int flat_gl_display_list_mesh_supported(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    return 0;
+#else
+    return !flat_direct_backend();
+#endif
+}
+
+static GLuint flat_gl_compile_mesh_display_list(const FlatDirectMeshBuilder *b) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    (void)b;
+    return 0;
+#else
+    if (!b || !b->v || !b->i || b->vcount == 0 || b->icount < 3 || !flat_gl_display_list_mesh_supported()) return 0;
+    GLuint list = glGenLists(1);
+    if (!list) return 0;
+    glNewList(list, GL_COMPILE);
+    glBegin(GL_TRIANGLES);
+    for (uint32_t n = 0; n < b->icount; ++n) {
+        uint32_t vi = b->i[n];
+        if (vi >= b->vcount) continue;
+        const PexVertex *v = &b->v[vi];
+        const unsigned char *c = (const unsigned char*)&v->color;
+        glColor4ub(c[0], c[1], c[2], c[3]);
+        glTexCoord2f(v->u, v->v);
+        glVertex3f(v->x, v->y, v->z);
+    }
+    glEnd();
+    glEndList();
+    return list;
+#endif
+}
+
 static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
     if (!m) return;
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII) && !defined(PEX_PLATFORM_ANDROID) && !defined(PEX_PLATFORM_ANDROID_TV) && !defined(PEX_PLATFORM_LGWEBOS)
+    if (m->list && flat_gl_display_list_mesh_supported()) glDeleteLists(m->list, 1);
+#endif
     free(m->v);
     free(m->i);
     memset(m, 0, sizeof(*m));
@@ -1339,8 +1376,16 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
     flat_gl_cpu_mesh_free(m);
     if (skip || !b || b->vcount == 0 || b->icount == 0) return;
-    m->v = b->v;
-    m->i = b->i;
+    m->list = flat_gl_compile_mesh_display_list(b);
+    if (m->list) {
+        free(b->v);
+        free(b->i);
+        m->v = NULL;
+        m->i = NULL;
+    } else {
+        m->v = b->v;
+        m->i = b->i;
+    }
     m->vcount = b->vcount;
     m->icount = b->icount;
     m->version = version;
@@ -1352,7 +1397,7 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
 
 static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
-    return m->valid && m->v && m->i && m->vcount > 0 && m->icount > 0 &&
+    return m->valid && ((m->list != 0) || (m->v && m->i)) && m->vcount > 0 && m->icount > 0 &&
            m->origin_x == g_flat_world_origin_x && m->origin_z == g_flat_world_origin_z;
 }
 
@@ -1369,7 +1414,12 @@ static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
     /* PSP uses the direct PexRendererBackend mesh path.  The OpenGL client-array
        fallback is desktop-only and pspsdk does not define GL client-array APIs. */
 #else
-    if (!m || !m->valid || !m->v || !m->i || m->icount < 3) return;
+    if (!m || !m->valid || m->icount < 3) return;
+    if (m->list && flat_gl_display_list_mesh_supported()) {
+        glCallList(m->list);
+        return;
+    }
+    if (!m->v || !m->i) return;
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
@@ -5516,12 +5566,13 @@ static void worldgen_mesh_prep_build_list(void) {
     int cx0 = pcx - r, cx1 = pcx + r;
     int cz0 = pcz - r, cz1 = pcz + r;
     if (g_worldgen.active) {
-        /* During the loading screen, prepare every generated spawn-preload chunk,
-           not only the immediate 3x3.  Otherwise the first frame in-world can
-           show mixed light/mesh generations across the default spawn island. */
-        cx0 = 0; cz0 = 0;
-        cx1 = FLAT_RENDER_CHUNKS - 1;
-        cz1 = FLAT_RENDER_CHUNKS - 1;
+        /* Java 1.2.5 preloadWorld() drains lighting before entering, but
+           RenderGlobal.updateRenderers() only rebuilds a small prioritized set per
+           frame.  Prepare only the near spawn view here: enough to stop first-frame
+           brightness popping, not every generated section in the 49-chunk island. */
+        int prep_r = 2;
+        cx0 = pcx - prep_r; cx1 = pcx + prep_r;
+        cz0 = pcz - prep_r; cz1 = pcz + prep_r;
     }
     if (cx0 < 0) cx0 = 0;
     if (cz0 < 0) cz0 = 0;
@@ -5578,16 +5629,49 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
     if (max_rebuilds < 1) max_rebuilds = 1;
 
     if (g_worldgen.active) {
-        /* Java 1.2.5 preloadWorld() loads/generates chunks and drains lighting;
-           RenderGlobal.loadRenderers() only creates dirty renderers.  It does not
-           block world entry until every 16x16x16 terrain mesh has been built.
-           PexCraft's previous loading phase tried to prebuild all spawn meshes and
-           could loop forever if one async mesh result was stale/failed.  After the
-           spawn chunks are light-ready, enter the world and let the normal async
-           renderer rebuild visible sections from the settled light versions. */
-        if (flat_async_section_mesh_enabled()) async_section_mesh_install_ready(max_rebuilds);
-        g_worldgen_mesh_prep_index = g_worldgen_mesh_prep_count;
-        return 1;
+        /* Do not block on the whole preload island, but do require the near spawn
+           renderers to be built from the final light version.  This is the missing
+           light->mesh synchronization that made default spawn chunks brighten only
+           after entering the world or after a block edit. */
+        if (flat_async_section_mesh_enabled()) {
+#if defined(PEX_PLATFORM_WII)
+            int built = 0;
+            while (g_worldgen_mesh_prep_index < g_worldgen_mesh_prep_count && built < max_rebuilds) {
+                FlatRenderSectionRef *r = &g_worldgen_mesh_prep_refs[g_worldgen_mesh_prep_index++];
+                if (flat_section_needs_mesh_rebuild(r->sy, r->cz, r->cx)) {
+                    rebuild_flat_world_section_list(r->sy, r->cx, r->cz);
+                    built++;
+                }
+            }
+            return (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count);
+#else
+            async_section_mesh_install_ready(max_rebuilds);
+            int submitted = 0;
+            while (g_worldgen_mesh_prep_index < g_worldgen_mesh_prep_count && submitted < max_rebuilds) {
+                FlatRenderSectionRef *r = &g_worldgen_mesh_prep_refs[g_worldgen_mesh_prep_index];
+                if (!flat_section_needs_mesh_rebuild(r->sy, r->cz, r->cx)) {
+                    g_worldgen_mesh_prep_index++;
+                    continue;
+                }
+                if (g_flat_section_mesh_building[r->sy][r->cz][r->cx]) break;
+                int submit_result = async_section_mesh_submit_priority(r->sy, r->cx, r->cz);
+                if (submit_result == 2) break;
+                if (submit_result == 0) rebuild_flat_world_section_list(r->sy, r->cx, r->cz);
+                g_worldgen_mesh_prep_index++;
+                submitted++;
+            }
+            if (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count) {
+                async_section_mesh_install_ready(max_rebuilds);
+                if (async_section_mesh_pending()) return 0;
+                if (!worldgen_mesh_prep_verify_complete()) {
+                    g_worldgen_mesh_prep_index = 0;
+                    return 0;
+                }
+                return 1;
+            }
+            return 0;
+#endif
+        }
     }
 
     if (flat_async_section_mesh_enabled()) {

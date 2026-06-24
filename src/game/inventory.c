@@ -2212,6 +2212,45 @@ static volatile int g_stream_initial_light_settle_progress = 0;
    so the progress screen does not advance to lighting while the batch is still
    extracting/publishing chunks. */
 static volatile int g_stream_initial_batch_running = 0;
+static volatile int g_stream_initial_batch_done_units = 0;
+static volatile int g_stream_initial_batch_total_units = 0;
+
+typedef struct StreamInitialBetaBatchState {
+    int active;
+    int phase;
+    int min_cx, min_cz, max_cx, max_cz;
+    int chunks_x, chunks_z, canvas_chunks;
+    int gen_index;
+    int populate_index;
+    int extract_index;
+    TerrainProvider *tp;
+    unsigned char *beta_blocks;
+    unsigned char *buf;
+    unsigned char *meta;
+    GenCanvas cv;
+} StreamInitialBetaBatchState;
+
+static StreamInitialBetaBatchState g_stream_initial_beta_batch;
+
+static void stream_initial_beta_batch_free(void) {
+    StreamInitialBetaBatchState *s = &g_stream_initial_beta_batch;
+    if (s->tp) {
+        terrain_provider_free(s->tp);
+        free(s->tp);
+    }
+    free(s->cv.blocks);
+    free(s->beta_blocks);
+    free(s->buf);
+    free(s->meta);
+    memset(s, 0, sizeof(*s));
+    g_stream_initial_batch_running = 0;
+}
+
+static void stream_initial_beta_batch_reset(void) {
+    stream_initial_beta_batch_free();
+    g_stream_initial_batch_done_units = 0;
+    g_stream_initial_batch_total_units = 0;
+}
 
 static void flat_world_begin_initial_generation(void) {
     stream_generation_queue_clear();
@@ -2220,7 +2259,7 @@ static void flat_world_begin_initial_generation(void) {
     g_stream_initial_light_settle_running = 0;
     g_stream_initial_light_settle_done = 0;
     g_stream_initial_light_settle_progress = 0;
-    g_stream_initial_batch_running = 0;
+    stream_initial_beta_batch_reset();
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
@@ -2269,10 +2308,20 @@ static int flat_world_initial_generation_active(void) {
 }
 
 static int flat_world_initial_generation_total(void) {
+    if (g_stream_generation_keep_completed && g_world_type == 1 && g_stream_initial_batch_total_units > 0) {
+        return g_stream_initial_batch_total_units;
+    }
     return g_stream_gen_queue_count;
 }
 
 static int flat_world_initial_generation_done(void) {
+    if (g_stream_generation_keep_completed && g_world_type == 1 && g_stream_initial_batch_total_units > 0) {
+        int done = g_stream_initial_batch_done_units;
+        int total = g_stream_initial_batch_total_units;
+        if (done < 0) done = 0;
+        if (done > total) done = total;
+        return done;
+    }
     return g_stream_gen_queue_installed_count;
 }
 
@@ -2298,7 +2347,7 @@ static void flat_world_finish_initial_generation(void) {
     g_stream_initial_light_settle_running = 0;
     g_stream_initial_light_settle_done = 0;
     g_stream_initial_light_settle_progress = 0;
-    g_stream_initial_batch_running = 0;
+    stream_initial_beta_batch_reset();
     stream_generation_queue_clear();
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
@@ -7205,109 +7254,162 @@ static int stream_initial_try_generate_beta_batch(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #else
-    if (!g_stream_generation_keep_completed) return 0;
-    if (g_world_type != 1) return 0;
-    if (g_stream_gen_queue_count <= 0) return 0;
-    if (g_stream_gen_queue_index != 0 || g_stream_gen_queue_installed_count != 0) return 0;
+    StreamInitialBetaBatchState *s = &g_stream_initial_beta_batch;
 
-    int min_cx = g_stream_gen_queue_cx[0], max_cx = g_stream_gen_queue_cx[0];
-    int min_cz = g_stream_gen_queue_cz[0], max_cz = g_stream_gen_queue_cz[0];
-    for (int i = 1; i < g_stream_gen_queue_count; ++i) {
-        if (g_stream_gen_queue_cx[i] < min_cx) min_cx = g_stream_gen_queue_cx[i];
-        if (g_stream_gen_queue_cx[i] > max_cx) max_cx = g_stream_gen_queue_cx[i];
-        if (g_stream_gen_queue_cz[i] < min_cz) min_cz = g_stream_gen_queue_cz[i];
-        if (g_stream_gen_queue_cz[i] > max_cz) max_cz = g_stream_gen_queue_cz[i];
-    }
-
-    int chunks_x = max_cx - min_cx + 1;
-    int chunks_z = max_cz - min_cz + 1;
-    int canvas_chunks = (chunks_x > chunks_z ? chunks_x : chunks_z) + 2;
-    if (canvas_chunks < 3 || canvas_chunks > FLAT_RENDER_CHUNKS + 2) return 0;
-
-    TerrainProvider *tp = (TerrainProvider*)calloc(1, sizeof(*tp));
-    unsigned char *beta_blocks = (unsigned char*)calloc(32768u, 1);
-    unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
-    GenCanvas cv;
-    memset(&cv, 0, sizeof(cv));
-    cv.minCx = min_cx - 1;
-    cv.minCz = min_cz - 1;
-    cv.chunks = canvas_chunks;
-    cv.blocks = (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1);
-
-    if (!tp || !beta_blocks || !buf || !meta || !cv.blocks) {
-        free(cv.blocks);
-        free(beta_blocks);
-        free(buf);
-        free(meta);
-        if (tp) free(tp);
+    if (!g_stream_generation_keep_completed || g_world_type != 1 || g_stream_gen_queue_count <= 0) {
+        if (s->active) stream_initial_beta_batch_reset();
         return 0;
     }
+    if (g_stream_gen_queue_index != 0 || g_stream_gen_queue_installed_count != 0) return 0;
 
-    g_stream_initial_batch_running = 1;
-    terrain_provider_init(tp, (int64_t)g_world_seed);
-
-    for (int cz = cv.minCz; cz < cv.minCz + cv.chunks; ++cz) {
-        for (int cx = cv.minCx; cx < cv.minCx + cv.chunks; ++cx) {
-            generate_canvas_chunk(tp, &cv, cx, cz);
+    if (!s->active) {
+        int min_cx = g_stream_gen_queue_cx[0], max_cx = g_stream_gen_queue_cx[0];
+        int min_cz = g_stream_gen_queue_cz[0], max_cz = g_stream_gen_queue_cz[0];
+        for (int i = 1; i < g_stream_gen_queue_count; ++i) {
+            if (g_stream_gen_queue_cx[i] < min_cx) min_cx = g_stream_gen_queue_cx[i];
+            if (g_stream_gen_queue_cx[i] > max_cx) max_cx = g_stream_gen_queue_cx[i];
+            if (g_stream_gen_queue_cz[i] < min_cz) min_cz = g_stream_gen_queue_cz[i];
+            if (g_stream_gen_queue_cz[i] > max_cz) max_cz = g_stream_gen_queue_cz[i];
         }
+
+        int chunks_x = max_cx - min_cx + 1;
+        int chunks_z = max_cz - min_cz + 1;
+        int canvas_chunks = (chunks_x > chunks_z ? chunks_x : chunks_z) + 2;
+        if (canvas_chunks < 3 || canvas_chunks > FLAT_RENDER_CHUNKS + 2) return 0;
+
+        memset(s, 0, sizeof(*s));
+        s->min_cx = min_cx; s->min_cz = min_cz;
+        s->max_cx = max_cx; s->max_cz = max_cz;
+        s->chunks_x = chunks_x; s->chunks_z = chunks_z;
+        s->canvas_chunks = canvas_chunks;
+        s->tp = (TerrainProvider*)calloc(1, sizeof(*s->tp));
+        s->beta_blocks = (unsigned char*)calloc(32768u, 1);
+        s->buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+        s->meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+        s->cv.minCx = min_cx - 1;
+        s->cv.minCz = min_cz - 1;
+        s->cv.chunks = canvas_chunks;
+        s->cv.blocks = (unsigned char*)calloc((size_t)s->cv.chunks * (size_t)s->cv.chunks * 32768u, 1);
+
+        if (!s->tp || !s->beta_blocks || !s->buf || !s->meta || !s->cv.blocks) {
+            stream_initial_beta_batch_reset();
+            return 0;
+        }
+
+        terrain_provider_init(s->tp, (int64_t)g_world_seed);
+        s->active = 1;
+        s->phase = 0;
+        g_stream_initial_batch_running = 1;
+        g_stream_initial_batch_done_units = 0;
+        g_stream_initial_batch_total_units =
+            s->canvas_chunks * s->canvas_chunks +
+            (s->chunks_x + 1) * (s->chunks_z + 1) +
+            g_stream_gen_queue_count;
+        if (g_stream_initial_batch_total_units <= 0) g_stream_initial_batch_total_units = g_stream_gen_queue_count;
     }
-    for (int cz = min_cz - 1; cz <= max_cz; ++cz) {
-        for (int cx = min_cx - 1; cx <= max_cx; ++cx) {
-            qm_populate_canvas(tp, &cv, cx, cz);
-        }
-    }
 
-    for (int i = 0; i < g_stream_gen_queue_count; ++i) {
-        int wcx = g_stream_gen_queue_cx[i];
-        int wcz = g_stream_gen_queue_cz[i];
-        if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) {
-            g_stream_gen_queue_index = i + 1;
-            continue;
-        }
-        int lcx = stream_world_chunk_local_x(wcx);
-        int lcz = stream_world_chunk_local_z(wcz);
-        if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
-            g_stream_gen_queue_index = i + 1;
-            g_stream_gen_queue_installed_count++;
-            continue;
-        }
+    /* Keep this service thread cooperative.  Java 1.2.5 repaints the loading
+       screen inside preloadWorld(); here the work is off the render thread, but a
+       single unbroken Beta canvas build still made 0/N sit for seconds and heated
+       small laptops.  Do a small time-sliced amount of canvas/populate/extract
+       work per service wake. */
+    const double deadline = now_seconds() + 0.0040;
+    int did_work = 0;
 
-        memset(beta_blocks, 0, 32768u);
-        memset(buf, 0, FLAT_CHUNK_BLOCK_COUNT);
-        memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
-        extract_canvas_chunk(&cv, wcx, wcz, beta_blocks);
-        for (int lx = 0; lx < 16; ++lx) {
-            for (int lz = 0; lz < 16; ++lz) {
-                for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
-                    int id = (y < 128) ? get_block_local(beta_blocks, lx, y, lz) : 0;
-                    buf[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
-                }
-                if (buf[flat_chunk_buf_index(lx, 0, lz)] == 0) {
-                    buf[flat_chunk_buf_index(lx, 0, lz)] = BLOCK_BEDROCK;
+    while (now_seconds() < deadline) {
+        if (s->phase == 0) {
+            int total = s->canvas_chunks * s->canvas_chunks;
+            if (s->gen_index >= total) {
+                s->phase = 1;
+                continue;
+            }
+            int lx = s->gen_index % s->canvas_chunks;
+            int lz = s->gen_index / s->canvas_chunks;
+            generate_canvas_chunk(s->tp, &s->cv, s->cv.minCx + lx, s->cv.minCz + lz);
+            s->gen_index++;
+            g_stream_initial_batch_done_units++;
+            did_work = 1;
+        } else if (s->phase == 1) {
+            int pop_w = s->chunks_x + 1;
+            int pop_h = s->chunks_z + 1;
+            int total = pop_w * pop_h;
+            if (s->populate_index >= total) {
+                s->phase = 2;
+                continue;
+            }
+            int lx = s->populate_index % pop_w;
+            int lz = s->populate_index / pop_w;
+            qm_populate_canvas(s->tp, &s->cv, s->min_cx - 1 + lx, s->min_cz - 1 + lz);
+            s->populate_index++;
+            g_stream_initial_batch_done_units++;
+            did_work = 1;
+        } else if (s->phase == 2) {
+            if (s->extract_index >= g_stream_gen_queue_count) {
+                g_stream_gen_queue_index = g_stream_gen_queue_count;
+                g_stream_gen_queue_installed_count = g_stream_gen_queue_count;
+                g_stream_initial_batch_done_units = g_stream_initial_batch_total_units;
+                stream_initial_beta_batch_free();
+                return 1;
+            }
+
+            int i = s->extract_index++;
+            int wcx = g_stream_gen_queue_cx[i];
+            int wcz = g_stream_gen_queue_cz[i];
+            if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+                g_stream_gen_queue_index = i + 1;
+                g_stream_initial_batch_done_units++;
+                did_work = 1;
+                continue;
+            }
+
+            int lcx = stream_world_chunk_local_x(wcx);
+            int lcz = stream_world_chunk_local_z(wcz);
+            if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
+                g_stream_gen_queue_index = i + 1;
+                g_stream_gen_queue_installed_count++;
+                g_stream_initial_batch_done_units++;
+                did_work = 1;
+                continue;
+            }
+
+            memset(s->beta_blocks, 0, 32768u);
+            memset(s->buf, 0, FLAT_CHUNK_BLOCK_COUNT);
+            memset(s->meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+            extract_canvas_chunk(&s->cv, wcx, wcz, s->beta_blocks);
+            for (int lx = 0; lx < 16; ++lx) {
+                for (int lz = 0; lz < 16; ++lz) {
+                    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
+                        int id = (y < 128) ? get_block_local(s->beta_blocks, lx, y, lz) : 0;
+                        s->buf[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
+                    }
+                    if (s->buf[flat_chunk_buf_index(lx, 0, lz)] == 0) {
+                        s->buf[flat_chunk_buf_index(lx, 0, lz)] = BLOCK_BEDROCK;
+                    }
                 }
             }
+            load_modified_flat_chunk_delta_into_buffers_for_dir(g_loaded_world_dir, wcx, wcz, s->buf, s->meta);
+
+            g_copy_chunk_skip_main_light = 1;
+            copy_flat_chunk_buffers_to_world(wcx, wcz, s->buf, s->meta);
+            g_copy_chunk_skip_main_light = 0;
+            stream_mark_local_chunk_generated(lcx, lcz);
+
+            g_stream_gen_queue_index = i + 1;
+            g_stream_gen_queue_installed_count++;
+            g_stream_initial_batch_done_units++;
+            did_work = 1;
+        } else {
+            stream_initial_beta_batch_reset();
+            return 0;
         }
-        load_modified_flat_chunk_delta_into_buffers_for_dir(g_loaded_world_dir, wcx, wcz, buf, meta);
 
-        g_copy_chunk_skip_main_light = 1;
-        copy_flat_chunk_buffers_to_world(wcx, wcz, buf, meta);
-        g_copy_chunk_skip_main_light = 0;
-        stream_mark_local_chunk_generated(lcx, lcz);
-
-        g_stream_gen_queue_index = i + 1;
-        g_stream_gen_queue_installed_count++;
-        Sleep(0);
+        /* Generation and population are the hot part.  Limit them to one unit per
+           wake on light CPUs; extraction is cheaper and can continue until the
+           deadline. */
+        if (did_work && (s->phase == 0 || s->phase == 1)) break;
     }
 
-    terrain_provider_free(tp);
-    free(tp);
-    free(cv.blocks);
-    free(beta_blocks);
-    free(buf);
-    free(meta);
-    g_stream_initial_batch_running = 0;
-    return 1;
+    return did_work ? 1 : 0;
 #endif
 }
 
