@@ -213,6 +213,7 @@ static void draw_title_logo_3d(float partial) {
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
 static int g_release_panorama_boot_reset_done = 0;
+static int g_release_panorama_startup_gl_vflip = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
 
 static void release_title_state_enter(void) {
@@ -221,6 +222,7 @@ static void release_title_state_enter(void) {
        post-world-return take the same path on real OpenGL. */
     g_release_panorama_timer = 0;
     g_release_panorama_boot_reset_done = g_boot_sequence_done ? 1 : 0;
+    g_release_panorama_startup_gl_vflip = 0;
     if (g_release_panorama_viewport_tex) {
         glDeleteTextures(1, &g_release_panorama_viewport_tex);
         g_release_panorama_viewport_tex = 0;
@@ -235,26 +237,52 @@ static int release_panorama_target_size(void) {
     return RELEASE_PANORAMA_TEX_SIZE;
 }
 
-static int release_panorama_use_win32_gl_top_origin_fix(void) {
+static int release_panorama_real_win32_gl(void) {
 #if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
-    /* PexCraft's D3D backends already convert glViewport/glCopyTexSubImage2D
-       through a top-left render-target origin.  The Win32 desktop OpenGL path
-       uses native lower-left framebuffer coordinates, which made the title
-       feedback texture enter a different orientation/state on first startup.
-       Keep this correction limited to real Win32 OpenGL; Direct3D is the known
-       good reference and SDL/GLES ports have their own coordinate shims. */
     return !pex_using_d3d9() && !pex_using_d3d11();
 #else
     return 0;
 #endif
 }
 
-static int release_panorama_viewport_y(int target_size) {
-    if (release_panorama_use_win32_gl_top_origin_fix()) {
-        int y = g_render_h - target_size;
-        return y > 0 ? y : 0;
-    }
+static int release_panorama_use_win32_gl_top_origin_fix(void) {
+    /* Java GuiMainMenu.renderSkybox uses native OpenGL's lower-left 256x256
+       target: glViewport(0,0,256,256) and glCopyTexSubImage2D(...,0,0,256,256).
+       The previous PexCraft-specific top-origin correction did not change the
+       user's startup screenshot and also diverged from Java, so keep real GL on
+       the Java path.  Direct3D keeps its own internal copy-origin conversion. */
     return 0;
+}
+
+static int release_panorama_viewport_y(int target_size) {
+    (void)target_size;
+    (void)release_panorama_use_win32_gl_top_origin_fix;
+    return 0;
+}
+
+static void release_panorama_reset_gl_state(void) {
+#if defined(GL_SCISSOR_TEST)
+    glDisable(GL_SCISSOR_TEST);
+#endif
+#if defined(GL_LIGHTING)
+    glDisable(GL_LIGHTING);
+#endif
+    glDisable(GL_FOG);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#if defined(GL_TEXTURE)
+    if (!pex_using_d3d9() && !pex_using_d3d11()) {
+        glMatrixMode(GL_TEXTURE);
+        glLoadIdentity();
+    }
+#endif
+    glMatrixMode(GL_MODELVIEW);
 }
 
 static void ensure_release_panorama_viewport_texture(void) {
@@ -315,6 +343,10 @@ static void draw_release_panorama_cube(float partial) {
             if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
             if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
             glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
+            /* Java's title panorama is heavily blurred; force linear sampling on
+               real OpenGL so first startup does not show nearest/blocky faces. */
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(pass + 1));
             glBegin(GL_QUADS);
             glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
@@ -384,6 +416,7 @@ static void release_panorama_blur_pass(void) {
 }
 
 static void draw_release_skybox(float partial) {
+    release_panorama_reset_gl_state();
     ensure_release_panorama_viewport_texture();
 
     /* Java GuiMainMenu.renderSkybox: fixed 256x256 panorama target first. */
@@ -406,12 +439,17 @@ static void draw_release_skybox(float partial) {
     float scale = g_gui_w > g_gui_h ? 120.0f / (float)g_gui_w : 120.0f / (float)g_gui_h;
     float u = (float)g_gui_h * scale / 256.0f;
     float v = (float)g_gui_w * scale / 256.0f;
+    float tv0 = 0.5f - v;
+    float tv1 = 0.5f + v;
+    if (g_release_panorama_startup_gl_vflip) {
+        float t = tv0; tv0 = tv1; tv1 = t;
+    }
     glColor4f(1,1,1,1);
     glBegin(GL_QUADS);
-    glTexCoord2f(0.5f - u, 0.5f + v); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
-    glTexCoord2f(0.5f - u, 0.5f - v); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-    glTexCoord2f(0.5f + u, 0.5f - v); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
-    glTexCoord2f(0.5f + u, 0.5f + v); glVertex3f(0.0f,          0.0f,          0.0f);
+    glTexCoord2f(0.5f - u, tv1); glVertex3f(0.0f,          (float)g_gui_h, 0.0f);
+    glTexCoord2f(0.5f - u, tv0); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+    glTexCoord2f(0.5f + u, tv0); glVertex3f((float)g_gui_w, 0.0f,          0.0f);
+    glTexCoord2f(0.5f + u, tv1); glVertex3f(0.0f,          0.0f,          0.0f);
     glEnd();
 }
 
@@ -456,6 +494,7 @@ static void draw_title_screen(float partial) {
                boundary so the first visible OpenGL title frame follows the
                same lifecycle as post-world-return GuiMainMenu.initGui(). */
             release_title_state_enter();
+            g_release_panorama_startup_gl_vflip = release_panorama_real_win32_gl();
             g_release_panorama_boot_reset_done = 1;
         }
     }

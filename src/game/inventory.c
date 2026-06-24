@@ -157,6 +157,11 @@ static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
 static void flat_flush_pending_lighting(void);
 static void flat_preview_pending_lighting(void);
+static void flat_lighting_worker_ensure(void);
+static void flat_lighting_worker_wake(void);
+static void flat_lighting_worker_shutdown(void);
+static int flat_lighting_pending_dirty(void);
+static volatile int g_stream_remap_in_progress = 0;
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
@@ -966,8 +971,27 @@ static void flat_recalculate_lighting_chunk(int cx, int cz) {
 
 static int g_flat_light_dirty = 0;
 static int g_flat_light_x0 = 0, g_flat_light_z0 = 0, g_flat_light_x1 = 0, g_flat_light_z1 = 0;
+static CRITICAL_SECTION g_flat_light_dirty_cs;
+static int g_flat_light_dirty_cs_initialized = 0;
+
+static void flat_light_dirty_lock_ensure(void) {
+    if (g_flat_light_dirty_cs_initialized) return;
+    InitializeCriticalSection(&g_flat_light_dirty_cs);
+    g_flat_light_dirty_cs_initialized = 1;
+}
+
+static int flat_lighting_pending_dirty(void) {
+    int pending = 0;
+    flat_light_dirty_lock_ensure();
+    EnterCriticalSection(&g_flat_light_dirty_cs);
+    pending = g_flat_light_dirty ? 1 : 0;
+    LeaveCriticalSection(&g_flat_light_dirty_cs);
+    return pending;
+}
 
 static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1) {
+    flat_light_dirty_lock_ensure();
+    EnterCriticalSection(&g_flat_light_dirty_cs);
     if (!g_flat_light_dirty) {
         g_flat_light_dirty = 1;
         g_flat_light_x0 = x0; g_flat_light_z0 = z0; g_flat_light_x1 = x1; g_flat_light_z1 = z1;
@@ -977,6 +1001,8 @@ static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1) {
         if (x1 > g_flat_light_x1) g_flat_light_x1 = x1;
         if (z1 > g_flat_light_z1) g_flat_light_z1 = z1;
     }
+    LeaveCriticalSection(&g_flat_light_dirty_cs);
+    flat_lighting_worker_wake();
 }
 
 static void flat_note_lighting_dirty_around_block(int x, int y, int z) {
@@ -1005,22 +1031,41 @@ static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id,
 }
 
 static void flat_preview_pending_lighting(void) {
-    if (!g_flat_light_dirty) return;
-    int cx = (g_flat_light_x0 + g_flat_light_x1) / 2;
-    int cz = (g_flat_light_z0 + g_flat_light_z1) / 2;
+    int dirty = 0, x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    flat_light_dirty_lock_ensure();
+    EnterCriticalSection(&g_flat_light_dirty_cs);
+    dirty = g_flat_light_dirty;
+    x0 = g_flat_light_x0; z0 = g_flat_light_z0; x1 = g_flat_light_x1; z1 = g_flat_light_z1;
+    LeaveCriticalSection(&g_flat_light_dirty_cs);
+    if (!dirty) return;
+    int cx = (x0 + x1) / 2;
+    int cz = (z0 + z1) / 2;
     /* Small, synchronous visual preview only.  This is intentionally much
        smaller than the full 15-block light update; it avoids gameplay hitches
        while making the edited area update before the async/full pass completes. */
     flat_recalculate_lighting_region_ex(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
 }
 
-static void flat_flush_pending_lighting(void) {
-    if (g_flat_light_dirty) {
-        int x0 = g_flat_light_x0, z0 = g_flat_light_z0, x1 = g_flat_light_x1, z1 = g_flat_light_z1;
-        g_flat_light_dirty = 0;
-        pex_logf_trace("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
-        flat_recalculate_lighting_region(x0, z0, x1, z1);
+static int flat_take_pending_lighting_region(int *x0, int *z0, int *x1, int *z1) {
+    if (g_stream_remap_in_progress) return 0;
+    flat_light_dirty_lock_ensure();
+    EnterCriticalSection(&g_flat_light_dirty_cs);
+    if (!g_flat_light_dirty || g_stream_remap_in_progress) {
+        LeaveCriticalSection(&g_flat_light_dirty_cs);
+        return 0;
     }
+    *x0 = g_flat_light_x0; *z0 = g_flat_light_z0;
+    *x1 = g_flat_light_x1; *z1 = g_flat_light_z1;
+    g_flat_light_dirty = 0;
+    LeaveCriticalSection(&g_flat_light_dirty_cs);
+    return 1;
+}
+
+static void flat_flush_pending_lighting(void) {
+    int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    if (!flat_take_pending_lighting_region(&x0, &z0, &x1, &z1)) return;
+    pex_logf_trace("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
+    flat_recalculate_lighting_region(x0, z0, x1, z1);
 }
 
 static void flat_set_level_raw(int x, int y, int z, int level) {
@@ -6097,6 +6142,113 @@ static void stream_generation_queue_clear(void) {
     if (g_stream_generation_epoch <= 0) g_stream_generation_epoch = 1;
 }
 
+/* Dedicated Java-style light propagation service.  Java 1.2.5 keeps light
+   propagation out of renderer rebuild logic (World.updateLightByType marks and
+   fixes light, RenderGlobal/WorldRenderer rebuilds geometry afterward).  The C
+   port used to run full pending propagation from the same streaming service that
+   feeds chunk generation; that could block visible chunk installs and left the
+   user seeing holes while a torch/skylight region was being repaired. */
+static CRITICAL_SECTION g_flat_lighting_worker_cs;
+static int g_flat_lighting_worker_initialized = 0;
+static int g_flat_lighting_worker_stop = 0;
+static int g_flat_lighting_worker_busy = 0;
+static HANDLE g_flat_lighting_worker_event = NULL;
+static HANDLE g_flat_lighting_worker_thread = NULL;
+
+static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
+    (void)unused;
+    g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_STREAM;
+    for (;;) {
+        WaitForSingleObject(g_flat_lighting_worker_event, INFINITE);
+        for (;;) {
+            int stop = 0;
+            EnterCriticalSection(&g_flat_lighting_worker_cs);
+            stop = g_flat_lighting_worker_stop;
+            if (!stop) g_flat_lighting_worker_busy = 1;
+            LeaveCriticalSection(&g_flat_lighting_worker_cs);
+            if (stop) break;
+
+            if (g_stream_remap_in_progress) {
+                Sleep(1);
+                if (!flat_lighting_pending_dirty()) break;
+                continue;
+            }
+
+            int before_pending = flat_lighting_pending_dirty();
+            flat_flush_pending_lighting();
+            if (!before_pending || !flat_lighting_pending_dirty()) break;
+        }
+        EnterCriticalSection(&g_flat_lighting_worker_cs);
+        if (!g_flat_lighting_worker_stop) g_flat_lighting_worker_busy = 0;
+        LeaveCriticalSection(&g_flat_lighting_worker_cs);
+
+        EnterCriticalSection(&g_flat_lighting_worker_cs);
+        int stop = g_flat_lighting_worker_stop;
+        LeaveCriticalSection(&g_flat_lighting_worker_cs);
+        if (stop) break;
+    }
+    EnterCriticalSection(&g_flat_lighting_worker_cs);
+    g_flat_lighting_worker_busy = 0;
+    LeaveCriticalSection(&g_flat_lighting_worker_cs);
+    return 0;
+}
+
+static void flat_lighting_worker_ensure(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return;
+#else
+    if (g_flat_lighting_worker_initialized) return;
+    flat_light_dirty_lock_ensure();
+    InitializeCriticalSection(&g_flat_lighting_worker_cs);
+    g_flat_lighting_worker_stop = 0;
+    g_flat_lighting_worker_busy = 0;
+    g_flat_lighting_worker_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (g_flat_lighting_worker_event) {
+        g_flat_lighting_worker_thread = CreateThread(NULL, 0x200000, flat_lighting_worker_proc, NULL, 0, NULL);
+        if (g_flat_lighting_worker_thread) {
+            SetThreadPriority(g_flat_lighting_worker_thread, THREAD_PRIORITY_NORMAL);
+            pex_logf("lighting worker started");
+        }
+    }
+    g_flat_lighting_worker_initialized = 1;
+#endif
+}
+
+static void flat_lighting_worker_wake(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return;
+#else
+    flat_lighting_worker_ensure();
+    if (g_flat_lighting_worker_event && g_flat_lighting_worker_thread) SetEvent(g_flat_lighting_worker_event);
+#endif
+}
+
+static void flat_lighting_worker_shutdown(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return;
+#else
+    if (!g_flat_lighting_worker_initialized) return;
+    EnterCriticalSection(&g_flat_lighting_worker_cs);
+    g_flat_lighting_worker_stop = 1;
+    LeaveCriticalSection(&g_flat_lighting_worker_cs);
+    if (g_flat_lighting_worker_event) SetEvent(g_flat_lighting_worker_event);
+    if (g_flat_lighting_worker_thread) {
+        WaitForSingleObject(g_flat_lighting_worker_thread, INFINITE);
+        CloseHandle(g_flat_lighting_worker_thread);
+        g_flat_lighting_worker_thread = NULL;
+    }
+    if (g_flat_lighting_worker_event) {
+        CloseHandle(g_flat_lighting_worker_event);
+        g_flat_lighting_worker_event = NULL;
+    }
+    DeleteCriticalSection(&g_flat_lighting_worker_cs);
+    g_flat_lighting_worker_initialized = 0;
+    g_flat_lighting_worker_stop = 0;
+    g_flat_lighting_worker_busy = 0;
+    pex_logf("lighting worker stopped");
+#endif
+}
+
 /* Exact seed terrain generation runs on a worker thread.  The main/game/render
    thread never performs the expensive Beta 3x3 canvas generation while walking;
    it only installs completed chunk buffers. */
@@ -6636,7 +6788,6 @@ static void stream_queue_add_chunk(int wcx, int wcz) {
 }
 
 static int stream_queue_missing_visible_chunks_near_player(void) {
-    if (stream_generation_active()) return 0;
     stream_generation_queue_clear();
 
     int base_cx = floor_div16(g_flat_world_origin_x);
@@ -6661,10 +6812,11 @@ static int stream_queue_missing_visible_chunks_near_player(void) {
                 stream_queue_add_chunk(base_cx + lcx, base_cz + lcz);
             }
         }
-        /* Do not enqueue the entire render distance in one burst.  Filling one
-           visible ring at a time keeps Stream pending small and prevents the
-           background generator from cooking the CPU after join. */
-        if (g_stream_gen_queue_count > before) break;
+        /* Queue every missing visible ring now that chunk generation, full
+           light propagation, and section meshing have independent workers.
+           The old one-ring queue left high render-distance worlds with visible
+           holes until the whole previous ring completed. */
+        (void)before;
     }
     return g_stream_gen_queue_count > 0;
 }
@@ -6736,7 +6888,7 @@ static void process_stream_generation_queue(void) {
     int allow_install = 1;
     (void)s_stream_install_tick;
     if (allow_install) {
-        int max_install = initial_load ? 4 : 2;
+        int max_install = initial_load ? 8 : 4;
         pex_logf_trace("chunk stream async install tick queue=%d/%d budget=%d", g_stream_gen_queue_index, g_stream_gen_queue_count, max_install);
         stream_async_install_ready(max_install);
     }
@@ -6771,7 +6923,8 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
                Android builds do not start this service, so they keep their
                render-safe synchronous path in ingame_tick(). */
             update_infinite_world_streaming();
-            flat_flush_pending_lighting();
+            flat_lighting_worker_wake();
+            if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
         }
 
         EnterCriticalSection(&g_world_stream_service_cs);
@@ -6780,7 +6933,7 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 
         /* Active streaming gets frequent service, idle mode backs off hard so
            uncapped rendering is not fighting a polling thread. */
-        Sleep((stream_generation_active() || g_flat_light_dirty) ? 1 : 20);
+        Sleep((stream_generation_active() || flat_lighting_pending_dirty()) ? 1 : 20);
     }
     EnterCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_busy = 0;
@@ -6793,6 +6946,7 @@ static void world_stream_service_ensure(void) {
     return;
 #else
     if (g_world_stream_service_initialized) return;
+    flat_lighting_worker_ensure();
     g_world_stream_service_initialized = 1;
     g_world_stream_service_stop = 0;
     g_world_stream_service_busy = 0;
@@ -6824,6 +6978,7 @@ static void world_stream_service_shutdown(void) {
     g_world_stream_service_initialized = 0;
     g_world_stream_service_stop = 0;
     g_world_stream_service_busy = 0;
+    flat_lighting_worker_shutdown();
     pex_logf("world stream service stopped");
 #endif
 }
@@ -6902,6 +7057,7 @@ static void update_infinite_world_streaming(void) {
     int old_origin_x = g_flat_world_origin_x;
     int old_origin_z = g_flat_world_origin_z;
 
+    g_stream_remap_in_progress = 1;
     g_flat_world_origin_x = new_origin_x;
     g_flat_world_origin_z = new_origin_z;
     stream_remap_render_chunks_after_shift(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
@@ -6912,6 +7068,8 @@ static void update_infinite_world_streaming(void) {
        The row-copy remap keeps only a small 2D scratch plane and leaves exposed
        strips as air for the async generator to fill. */
     stream_remap_flat_block_storage_after_shift(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    g_stream_remap_in_progress = 0;
+    flat_lighting_worker_wake();
 
     stream_queue_missing_chunks_near_player(old_origin_x, old_origin_z);
     process_stream_generation_queue();
