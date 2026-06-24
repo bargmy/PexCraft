@@ -16,7 +16,11 @@ static void init_title_blocks(void) {
 }
 
 static void tick_title_blocks(void) {
-    if (g_release_panorama_timer < 0x3fffffff) ++g_release_panorama_timer;
+    /* Java GuiMainMenu::updateScreen increments panoramaTimer while the menu
+       screen is active, not while the separate boot/Mojang screen is still
+       covering it.  Keeping the timer at zero until the first real title frame
+       makes first startup and post-world-return enter the same panorama state. */
+    if (g_boot_sequence_done && g_release_panorama_timer < 0x3fffffff) ++g_release_panorama_timer;
     init_title_blocks();
     for (int x = 0; x < TITLE_COLS; x++) {
         for (int y = 0; y < TITLE_ROWS; y++) {

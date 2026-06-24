@@ -607,7 +607,9 @@ static void draw_source_fast_clouds(float partial) {
 
 static void draw_source_fancy_clouds(float partial) {
     if (!tex_clouds.id) return;
-    if (!pex_using_d3d9() && !pex_using_d3d11()) { draw_source_fast_clouds(partial); return; }
+    /* Java RenderGlobal.renderCloudsFancy is plain fixed-function OpenGL.
+       The old C guard forced real OpenGL through the flat cloud path while D3D
+       used the 3D slab path, which made clouds visibly 2D only on OpenGL. */
     if (!cloud_texture_has_cutout_alpha()) { draw_source_fast_clouds(partial); return; }
     float cr, cg, cb;
     cloud_color(&cr, &cg, &cb);
@@ -623,7 +625,7 @@ static void draw_source_fancy_clouds(float partial) {
     const float scale = 12.0f;
     const float thickness = 4.0f;
     const int cell = 8;
-    const int radius_cells = 3;
+    const int radius_cells = 4;
     const float eps = 1.0f / 1024.0f;
     const float uv_scale = 1.0f / 256.0f;
     double sx = ((double)px + (double)(((float)pr->ingame_ticks + partial) * 0.03f)) / (double)scale;
@@ -2331,6 +2333,11 @@ static void draw_java_entity_shadow(float x, float y, float z, float shadow_size
     glBindTexture(GL_TEXTURE_2D, tex_shadow.id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    /* Render.java/RenderManager shadow quads rely on texture alpha and normal
+       alpha blending.  Real OpenGL still had the terrain/mob alpha-test state
+       live here, so dim shadow pixels were clipped; D3D backends did not expose
+       the same failure. */
+    glDisable(GL_ALPHA_TEST);
     glDepthMask(GL_FALSE);
     glColor4f(1, 1, 1, 1);
 
@@ -2367,6 +2374,8 @@ static void draw_java_entity_shadow(float x, float y, float z, float shadow_size
 
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
     glColor4f(1,1,1,1);
 }
 
