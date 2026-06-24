@@ -2325,11 +2325,131 @@ static int liquid_face_exposed(int x, int y, int z, int face) {
     return !block_occludes_render_face(n);
 }
 
+static float world_face_base_shade(int face) {
+    if (face == 0) return 0.50f;
+    if (face == 2 || face == 3) return 0.80f;
+    if (face == 4 || face == 5) return 0.60f;
+    return 1.0f;
+}
+
+static int world_face_tint_rgb(int id, int face) {
+    if (id == BLOCK_GRASS && face == 1) return java_grass_color_at(g_world_style_x, g_world_style_z);
+    if (id == BLOCK_LEAVES) return java_foliage_color_at(g_world_style_x, g_world_style_z);
+    return 0xFFFFFF;
+}
+
+static float world_ao_cell_brightness(int x, int y, int z) {
+    int light = flat_combined_light_value(x, y, z);
+    if (light < 0) light = 0;
+    if (light > 15) light = 15;
+    return g_java_light_brightness_table[light];
+}
+
+static int world_ao_cell_is_normal_cube(int x, int y, int z) {
+    return block_occludes_render_face(flat_get_block(x, y, z));
+}
+
+static float world_ao_cell_value(int x, int y, int z, float fallback_brightness, int *normal_cube) {
+    int solid = world_ao_cell_is_normal_cube(x, y, z);
+    if (normal_cube) *normal_cube = solid;
+    return solid ? fallback_brightness * 0.20f : world_ao_cell_brightness(x, y, z);
+}
+
+static int world_smooth_block_lighting_enabled(int id) {
+    return g_opts.fancy_graphics &&
+           !g_force_fullbright_item_model &&
+           flat_block_light_value_for_id(id) == 0;
+}
+
+static void world_face_sample_frame(int face,
+                                    int *nx, int *ny, int *nz,
+                                    int *ax, int *ay, int *az,
+                                    int *bx, int *by, int *bz,
+                                    int corner_a[4], int corner_b[4]) {
+    *nx = *ny = *nz = 0;
+    *ax = *ay = *az = 0;
+    *bx = *by = *bz = 0;
+    if (face == 1) {
+        *ny = 1; *ax = 1; *bz = 1;
+        corner_a[0] = -1; corner_b[0] = -1;
+        corner_a[1] =  1; corner_b[1] = -1;
+        corner_a[2] =  1; corner_b[2] =  1;
+        corner_a[3] = -1; corner_b[3] =  1;
+    } else if (face == 0) {
+        *ny = -1; *ax = 1; *bz = 1;
+        corner_a[0] = -1; corner_b[0] =  1;
+        corner_a[1] =  1; corner_b[1] =  1;
+        corner_a[2] =  1; corner_b[2] = -1;
+        corner_a[3] = -1; corner_b[3] = -1;
+    } else if (face == 2) {
+        *nz = -1; *ax = 1; *by = 1;
+        corner_a[0] =  1; corner_b[0] =  1;
+        corner_a[1] = -1; corner_b[1] =  1;
+        corner_a[2] = -1; corner_b[2] = -1;
+        corner_a[3] =  1; corner_b[3] = -1;
+    } else if (face == 3) {
+        *nz = 1; *ax = 1; *by = 1;
+        corner_a[0] = -1; corner_b[0] =  1;
+        corner_a[1] =  1; corner_b[1] =  1;
+        corner_a[2] =  1; corner_b[2] = -1;
+        corner_a[3] = -1; corner_b[3] = -1;
+    } else if (face == 4) {
+        *nx = -1; *az = 1; *by = 1;
+        corner_a[0] = -1; corner_b[0] =  1;
+        corner_a[1] =  1; corner_b[1] =  1;
+        corner_a[2] =  1; corner_b[2] = -1;
+        corner_a[3] = -1; corner_b[3] = -1;
+    } else {
+        *nx = 1; *az = 1; *by = 1;
+        corner_a[0] =  1; corner_b[0] =  1;
+        corner_a[1] = -1; corner_b[1] =  1;
+        corner_a[2] = -1; corner_b[2] = -1;
+        corner_a[3] =  1; corner_b[3] = -1;
+    }
+}
+
+static void world_smooth_face_lights(int x, int y, int z, int face, float out[4]) {
+    int nx, ny, nz, ax, ay, az, bx, by, bz;
+    int corner_a[4], corner_b[4];
+    float samples[3][3];
+    int normal[3][3];
+    world_face_sample_frame(face, &nx, &ny, &nz, &ax, &ay, &az, &bx, &by, &bz, corner_a, corner_b);
+
+    int base_x = x + nx;
+    int base_y = y + ny;
+    int base_z = z + nz;
+    float fallback_brightness = world_ao_cell_brightness(base_x, base_y, base_z);
+    for (int ia = 0; ia < 3; ++ia) {
+        for (int ib = 0; ib < 3; ++ib) {
+            int da = ia - 1;
+            int db = ib - 1;
+            int sx = base_x + da * ax + db * bx;
+            int sy = base_y + da * ay + db * by;
+            int sz = base_z + da * az + db * bz;
+            samples[ia][ib] = world_ao_cell_value(sx, sy, sz, fallback_brightness, &normal[ia][ib]);
+        }
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        int ia = corner_a[i] > 0 ? 2 : 0;
+        int ib = corner_b[i] > 0 ? 2 : 0;
+        float diag = (normal[ia][1] && normal[1][ib]) ? samples[ia][1] : samples[ia][ib];
+        out[i] = (samples[1][1] + samples[ia][1] + samples[1][ib] + diag) * 0.25f;
+    }
+}
+
+static void world_tex_vertex_lit(float x, float y, float z, float u, float v,
+                                 int rgb, float face_shade, float light) {
+    float r = ((rgb >> 16) & 255) / 255.0f;
+    float g = ((rgb >> 8) & 255) / 255.0f;
+    float b = (rgb & 255) / 255.0f;
+    float shade = face_shade * light;
+    flat_direct_set_color4f(r * shade, g * shade, b * shade, 1.0f);
+    world_tex_vertex(x, y, z, u, v);
+}
+
 static void world_face_style(int id, int face, int *tile) {
-    float shade = 1.0f;
-    if (face == 0) shade = 0.50f;
-    else if (face == 2 || face == 3) shade = 0.80f;
-    else if (face == 4 || face == 5) shade = 0.60f;
+    float shade = world_face_base_shade(face);
 
     if (id == BLOCK_GRASS) {
         if (face == 1) { *tile = 0; world_set_color_shade(java_grass_color_at(g_world_style_x, g_world_style_z), shade); return; }
@@ -2562,6 +2682,44 @@ static void emit_world_block_face_at(int id, int x, int y, int z, int face) {
     }
     world_face_style_at(id, x, y, z, face, &tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+    if (world_smooth_block_lighting_enabled(id)) {
+        float light[4];
+        int rgb = world_face_tint_rgb(id, face);
+        float shade = world_face_base_shade(face);
+        world_smooth_face_lights(x, y, z, face, light);
+        if (face == 1) {
+            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x1, y1, z1, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x0, y1, z1, u0, v1, rgb, shade, light[3]);
+        } else if (face == 0) {
+            world_tex_vertex_lit(x0, y0, z1, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x1, y0, z1, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, light[3]);
+        } else if (face == 2) {
+            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, light[3]);
+        } else if (face == 3) {
+            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, light[3]);
+        } else if (face == 4) {
+            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, light[3]);
+        } else if (face == 5) {
+            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, light[0]);
+            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, light[1]);
+            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, light[2]);
+            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, light[3]);
+        }
+        return;
+    }
     if (face == 1) {
         world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
     } else if (face == 0) {

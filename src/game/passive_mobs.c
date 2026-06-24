@@ -982,7 +982,7 @@ static void passive_render_quad_model(int type, int fur_layer, int detail, float
     (void)chicken_wing;
 
     if (type == PASSIVE_MOB_PIG) {
-        steve_part(0, 0, 0, 12, -6, -4, -4, -8, 8, 8, 8, fur_layer ? 0.5f : 0.0f, 0, -head_pitch, head_yaw, 0);
+        steve_part(0, 0, 0, 12, -6, -4, -4, -8, 8, 8, 8, fur_layer ? 0.5f : 0.0f, 0, head_pitch, head_yaw, 0);
         steve_part(28, 8, 0, 11, 2, -5, -10, -7, 10, 16, 8, 0.0f, 0, body_pitch, 0, 0);
         if (!detail) return;
         steve_part(0, 16, -3, 18, 7, -2, 0, -2, 4, 6, 4, 0.0f, 0, leg1, 0, 0);
@@ -991,7 +991,7 @@ static void passive_render_quad_model(int type, int fur_layer, int detail, float
         steve_part(0, 16,  3, 18, -5, -2, 0, -2, 4, 6, 4, 0.0f, 0, leg1, 0, 0);
     } else if (type == PASSIVE_MOB_SHEEP) {
         if (fur_layer) {
-            steve_part(0, 0, 0, 6, -8, -3, -4, -4, 6, 6, 6, 0.6f, 0, -head_pitch, head_yaw, 0);
+            steve_part(0, 0, 0, 6, -8, -3, -4, -4, 6, 6, 6, 0.6f, 0, head_pitch, head_yaw, 0);
             steve_part(28, 8, 0, 5, 2, -4, -10, -7, 8, 16, 6, 1.75f, 0, body_pitch, 0, 0);
             if (!detail) return;
             steve_part(0, 16, -3, 12, 7, -2, 0, -2, 4, 6, 4, 0.5f, 0, leg1, 0, 0);
@@ -999,7 +999,7 @@ static void passive_render_quad_model(int type, int fur_layer, int detail, float
             steve_part(0, 16, -3, 12, -5, -2, 0, -2, 4, 6, 4, 0.5f, 0, leg2, 0, 0);
             steve_part(0, 16,  3, 12, -5, -2, 0, -2, 4, 6, 4, 0.5f, 0, leg1, 0, 0);
         } else {
-            steve_part(0, 0, 0, 6, -8, -3, -4, -6, 6, 6, 8, 0.0f, 0, -head_pitch, head_yaw, 0);
+            steve_part(0, 0, 0, 6, -8, -3, -4, -6, 6, 6, 8, 0.0f, 0, head_pitch, head_yaw, 0);
             steve_part(28, 8, 0, 5, 2, -4, -10, -7, 8, 16, 6, 0.0f, 0, body_pitch, 0, 0);
             if (!detail) return;
             steve_part(0, 16, -3, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg1, 0, 0);
@@ -1008,11 +1008,11 @@ static void passive_render_quad_model(int type, int fur_layer, int detail, float
             steve_part(0, 16,  3, 12, -5, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg1, 0, 0);
         }
     } else if (type == PASSIVE_MOB_COW) {
-        steve_part(0, 0, 0, 4, -8, -4, -4, -6, 8, 8, 6, 0.0f, 0, -head_pitch, head_yaw, 0);
+        steve_part(0, 0, 0, 4, -8, -4, -4, -6, 8, 8, 6, 0.0f, 0, head_pitch, head_yaw, 0);
         steve_part(18, 4, 0, 5, 2, -6, -10, -7, 12, 18, 10, 0.0f, 0, body_pitch, 0, 0);
         if (!detail) return;
-        steve_part(22, 0, 0, 3, -7, -4, -5, -4, 1, 3, 1, 0.0f, 0, -head_pitch, head_yaw, 0);
-        steve_part(22, 0, 0, 3, -7,  4, -5, -4, 1, 3, 1, 0.0f, 0, -head_pitch, head_yaw, 0);
+        steve_part(22, 0, 0, 3, -7, -4, -5, -4, 1, 3, 1, 0.0f, 0, head_pitch, head_yaw, 0);
+        steve_part(22, 0, 0, 3, -7,  4, -5, -4, 1, 3, 1, 0.0f, 0, head_pitch, head_yaw, 0);
         steve_part(52, 0, 0, 14, 6, -2, -3, 0, 4, 6, 2, 0.0f, 0, 90.0f, 0, 0);
         steve_part(0, 16, -4, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg1, 0, 0);
         steve_part(0, 16,  4, 12, 7, -2, 0, -2, 4, 12, 4, 0.0f, 0, leg2, 0, 0);
@@ -1024,11 +1024,11 @@ static void passive_render_quad_model(int type, int fur_layer, int detail, float
 static void passive_render_chicken(int detail, float limb, float move, float head_yaw, float head_pitch, float wing) {
     float leg1 = cosf(limb * 0.6662f) * 1.4f * move * 57.29578f;
     float leg2 = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move * 57.29578f;
-    steve_part(0, 0, 0, 15, -4, -2, -6, -2, 4, 6, 3, 0.0f, 0, -head_pitch, head_yaw, 0);
+    steve_part(0, 0, 0, 15, -4, -2, -6, -2, 4, 6, 3, 0.0f, 0, head_pitch, head_yaw, 0);
     steve_part(0, 9, 0, 16, 0, -3, -4, -3, 6, 8, 6, 0.0f, 0, 90.0f, 0, 0);
     if (!detail) return;
-    steve_part(14, 0, 0, 15, -4, -2, -4, -4, 4, 2, 2, 0.0f, 0, -head_pitch, head_yaw, 0);
-    steve_part(14, 4, 0, 15, -4, -1, -2, -3, 2, 2, 2, 0.0f, 0, -head_pitch, head_yaw, 0);
+    steve_part(14, 0, 0, 15, -4, -2, -4, -4, 4, 2, 2, 0.0f, 0, head_pitch, head_yaw, 0);
+    steve_part(14, 4, 0, 15, -4, -1, -2, -3, 2, 2, 2, 0.0f, 0, head_pitch, head_yaw, 0);
     steve_part(26, 0, -2, 19, 1, -1, 0, -3, 3, 5, 3, 0.0f, 0, leg1, 0, 0);
     steve_part(26, 0,  1, 19, 1, -1, 0, -3, 3, 5, 3, 0.0f, 0, leg2, 0, 0);
     steve_part(24, 13, -4, 13, 0, 0, 0, -3, 1, 4, 6, 0.0f, 0, 0, 0, wing * 57.29578f);
@@ -1057,6 +1057,10 @@ static void draw_passive_mobs(float partial) {
         if (!e->active) continue;
         Texture *t = passive_mob_texture_for_type(e->type);
         if (!t || !t->id) continue;
+
+        float shadow_size = 0.7f;
+        if (e->type == PASSIVE_MOB_CHICKEN) shadow_size = 0.3f;
+        draw_java_entity_shadow(e->x, e->y, e->z, shadow_size, 1.0f);
 
         glPushMatrix();
         glBindTexture(GL_TEXTURE_2D, t->id);

@@ -1609,6 +1609,7 @@ static void update_passive_mobs(void);
 static void passive_mobs_apply_riding(void);
 static int passive_mobs_attack_from_player(void);
 static int passive_mobs_interact_from_player(void);
+static void draw_java_entity_shadow(float x, float y, float z, float shadow_size, float shadow_alpha);
 static void draw_passive_mobs(float partial);
 static void passive_mobs_read_from_file(FILE *f, int version);
 static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs);

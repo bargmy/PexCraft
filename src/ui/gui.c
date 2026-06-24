@@ -92,6 +92,7 @@ static void draw_hud(void) {
     int armor = g_player_armor;
     if (armor < 0) armor = 0;
     if (armor > 20) armor = 20;
+    int release_hud_icons = (strcmp(g_current_texpack, CLASSIC_PACK_NAME) == 0);
 
     for (int i = 0; i < 10; i++) {
         if (armor > 0) {
@@ -120,25 +121,27 @@ static void draw_hud(void) {
         else if (i * 2 + 1 == hp) draw_textured_rect_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
     }
 
-    int food = g_player_food_level;
-    if (food < 0) food = 0;
-    if (food > 20) food = 20;
-    int prev_food = g_player_prev_food_level;
-    if (prev_food < 0) prev_food = 0;
-    if (prev_food > 20) prev_food = 20;
-    for (int i = 0; i < 10; i++) {
-        int x = right - i * 8 - 9;
-        int y = row_y;
-        draw_textured_rect_tex(&tex_icons, x, y, 16, 27, 9, 9, 0xFFFFFF);
-        if (flash_old) {
-            if (i * 2 + 1 < prev_food) draw_textured_rect_tex(&tex_icons, x, y, 70, 27, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == prev_food) draw_textured_rect_tex(&tex_icons, x, y, 79, 27, 9, 9, 0xFFFFFF);
+    if (release_hud_icons) {
+        int food = g_player_food_level;
+        if (food < 0) food = 0;
+        if (food > 20) food = 20;
+        int prev_food = g_player_prev_food_level;
+        if (prev_food < 0) prev_food = 0;
+        if (prev_food > 20) prev_food = 20;
+        for (int i = 0; i < 10; i++) {
+            int x = right - i * 8 - 9;
+            int y = row_y;
+            draw_textured_rect_tex(&tex_icons, x, y, 16, 27, 9, 9, 0xFFFFFF);
+            if (flash_old) {
+                if (i * 2 + 1 < prev_food) draw_textured_rect_tex(&tex_icons, x, y, 70, 27, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == prev_food) draw_textured_rect_tex(&tex_icons, x, y, 79, 27, 9, 9, 0xFFFFFF);
+            }
+            if (i * 2 + 1 < food) draw_textured_rect_tex(&tex_icons, x, y, 52, 27, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == food) draw_textured_rect_tex(&tex_icons, x, y, 61, 27, 9, 9, 0xFFFFFF);
         }
-        if (i * 2 + 1 < food) draw_textured_rect_tex(&tex_icons, x, y, 52, 27, 9, 9, 0xFFFFFF);
-        else if (i * 2 + 1 == food) draw_textured_rect_tex(&tex_icons, x, y, 61, 27, 9, 9, 0xFFFFFF);
     }
 
-    if (flat_player_head_in_water()) {
+    if (release_hud_icons && flat_player_head_in_water()) {
         int air = g_player_air;
         if (air < 0) air = 0;
         if (air > 300) air = 300;
@@ -152,7 +155,7 @@ static void draw_hud(void) {
     }
 
     int xp_cap = 7 + ((g_player_xp_level * 7) >> 1);
-    if (xp_cap > 0) {
+    if (release_hud_icons && xp_cap > 0 && (g_player_xp_total > 0 || g_player_xp_level > 0 || g_player_xp_progress > 0.0f)) {
         int fill = (int)(g_player_xp_progress * 183.0f);
         if (fill < 0) fill = 0;
         if (fill > 183) fill = 183;
@@ -160,7 +163,7 @@ static void draw_hud(void) {
         draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
         if (fill > 0) draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
     }
-    if (g_player_xp_level > 0) {
+    if (release_hud_icons && g_player_xp_level > 0) {
         char lvl[16];
         snprintf(lvl, sizeof(lvl), "%d", g_player_xp_level);
         int lx = (w - text_width(lvl)) / 2;
