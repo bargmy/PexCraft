@@ -1,5 +1,12 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+#include <zlib.h>
+#define PEX_SAVE_ZLIB_CHUNK_DELTAS 1
+#else
+#define PEX_SAVE_ZLIB_CHUNK_DELTAS 0
+#endif
+
 static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp);
 #ifndef FLAT_CHUNK_BLOCK_COUNT
 #define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
@@ -447,6 +454,121 @@ static void pex_snapshot_chunk_delta_path(const PexSaveSnapshot *ss, int cx, int
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
 
+static int pex_chunk_delta_magic_is_raw(const char magic[8]) {
+    return memcmp(magic, "CHNKDLT1", 8) == 0 ||
+           memcmp(magic, "CHNKDLT2", 8) == 0 ||
+           memcmp(magic, "PXCDLT12", 8) == 0;
+}
+
+static int pex_chunk_delta_read_payload_from_open_file(FILE *f, const char magic[8],
+                                                       int rcx, int rcz, int count,
+                                                       int cx, int cz,
+                                                       unsigned char *blocks,
+                                                       unsigned char *meta) {
+    if (!f || !blocks || !meta) return 0;
+    if (rcx != cx || rcz != cz || count != FLAT_CHUNK_BLOCK_COUNT) return 0;
+
+    if (pex_chunk_delta_magic_is_raw(magic)) {
+        int ok = fread(blocks, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
+        int has_meta = (memcmp(magic, "CHNKDLT2", 8) == 0);
+        if (ok && has_meta) ok = fread(meta, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
+        if (ok && !has_meta) memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+        return ok;
+    }
+
+#if PEX_SAVE_ZLIB_CHUNK_DELTAS
+    if (memcmp(magic, "PXCDLTZ1", 8) == 0) {
+        uint32_t blocks_len = 0;
+        uint32_t meta_len = 0;
+        if (fread(&blocks_len, sizeof(blocks_len), 1, f) != 1 ||
+            fread(&meta_len, sizeof(meta_len), 1, f) != 1) return 0;
+        if (blocks_len == 0 || meta_len == 0 ||
+            blocks_len > 1024u * 1024u || meta_len > 1024u * 1024u) return 0;
+
+        unsigned char *blocks_comp = (unsigned char*)malloc((size_t)blocks_len);
+        unsigned char *meta_comp = (unsigned char*)malloc((size_t)meta_len);
+        if (!blocks_comp || !meta_comp) {
+            free(blocks_comp);
+            free(meta_comp);
+            return 0;
+        }
+
+        int ok = fread(blocks_comp, 1, (size_t)blocks_len, f) == (size_t)blocks_len &&
+                 fread(meta_comp, 1, (size_t)meta_len, f) == (size_t)meta_len;
+        if (ok) {
+            uLongf out_blocks = (uLongf)FLAT_CHUNK_BLOCK_COUNT;
+            uLongf out_meta = (uLongf)FLAT_CHUNK_BLOCK_COUNT;
+            ok = uncompress(blocks, &out_blocks, blocks_comp, (uLong)blocks_len) == Z_OK &&
+                 out_blocks == (uLongf)FLAT_CHUNK_BLOCK_COUNT &&
+                 uncompress(meta, &out_meta, meta_comp, (uLong)meta_len) == Z_OK &&
+                 out_meta == (uLongf)FLAT_CHUNK_BLOCK_COUNT;
+        }
+
+        free(blocks_comp);
+        free(meta_comp);
+        return ok;
+    }
+#endif
+
+    return 0;
+}
+
+static int pex_chunk_delta_write_payload_to_path(const char *path, int cx, int cz,
+                                                 const unsigned char *blocks,
+                                                 const unsigned char *meta) {
+    if (!path || !path[0] || !blocks || !meta) return 0;
+
+#if PEX_SAVE_ZLIB_CHUNK_DELTAS
+    {
+        uLongf blocks_len = compressBound((uLong)FLAT_CHUNK_BLOCK_COUNT);
+        uLongf meta_len = compressBound((uLong)FLAT_CHUNK_BLOCK_COUNT);
+        unsigned char *blocks_comp = (unsigned char*)malloc((size_t)blocks_len);
+        unsigned char *meta_comp = (unsigned char*)malloc((size_t)meta_len);
+        if (blocks_comp && meta_comp &&
+            compress2(blocks_comp, &blocks_len, blocks, (uLong)FLAT_CHUNK_BLOCK_COUNT, Z_BEST_COMPRESSION) == Z_OK &&
+            compress2(meta_comp, &meta_len, meta, (uLong)FLAT_CHUNK_BLOCK_COUNT, Z_BEST_COMPRESSION) == Z_OK &&
+            blocks_len <= 0x7fffffffu && meta_len <= 0x7fffffffu) {
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                char magic[8] = {'P','X','C','D','L','T','Z','1'};
+                int count = FLAT_CHUNK_BLOCK_COUNT;
+                uint32_t blocks_len32 = (uint32_t)blocks_len;
+                uint32_t meta_len32 = (uint32_t)meta_len;
+                int ok = fwrite(magic, 1, 8, f) == 8 &&
+                         fwrite(&cx, sizeof(cx), 1, f) == 1 &&
+                         fwrite(&cz, sizeof(cz), 1, f) == 1 &&
+                         fwrite(&count, sizeof(count), 1, f) == 1 &&
+                         fwrite(&blocks_len32, sizeof(blocks_len32), 1, f) == 1 &&
+                         fwrite(&meta_len32, sizeof(meta_len32), 1, f) == 1 &&
+                         fwrite(blocks_comp, 1, (size_t)blocks_len, f) == (size_t)blocks_len &&
+                         fwrite(meta_comp, 1, (size_t)meta_len, f) == (size_t)meta_len;
+                fclose(f);
+                free(blocks_comp);
+                free(meta_comp);
+                return ok ? 1 : 0;
+            }
+        }
+        free(blocks_comp);
+        free(meta_comp);
+    }
+#endif
+
+    {
+        FILE *f = fopen(path, "wb");
+        if (!f) return 0;
+        char magic[8] = {'C','H','N','K','D','L','T','2'};
+        int count = FLAT_CHUNK_BLOCK_COUNT;
+        int ok = fwrite(magic, 1, 8, f) == 8 &&
+                 fwrite(&cx, sizeof(cx), 1, f) == 1 &&
+                 fwrite(&cz, sizeof(cz), 1, f) == 1 &&
+                 fwrite(&count, sizeof(count), 1, f) == 1 &&
+                 fwrite(blocks, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT &&
+                 fwrite(meta, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
+        fclose(f);
+        return ok ? 1 : 0;
+    }
+}
+
 static void pex_save_snapshot_one_modified_flat_chunk(PexSaveSnapshot *ss, PexSaveChunkSnapshot *cs) {
     if (!ss || !cs || !ss->loaded_world_dir[0] || !cs->blocks || !cs->meta) return;
 
@@ -464,18 +586,7 @@ static void pex_save_snapshot_one_modified_flat_chunk(PexSaveSnapshot *ss, PexSa
     if (memcmp(base, cs->blocks, FLAT_CHUNK_BLOCK_COUNT) == 0 && !meta_nonzero) {
         DeleteFileA(path);
     } else {
-        FILE *f = fopen(path, "wb");
-        if (f) {
-            char magic[8] = {'C','H','N','K','D','L','T','2'};
-            int count = FLAT_CHUNK_BLOCK_COUNT;
-            fwrite(magic, 1, 8, f);
-            fwrite(&cx, sizeof(cx), 1, f);
-            fwrite(&cz, sizeof(cz), 1, f);
-            fwrite(&count, sizeof(count), 1, f);
-            fwrite(cs->blocks, 1, FLAT_CHUNK_BLOCK_COUNT, f);
-            fwrite(cs->meta, 1, FLAT_CHUNK_BLOCK_COUNT, f);
-            fclose(f);
-        }
+        pex_chunk_delta_write_payload_to_path(path, cx, cz, cs->blocks, cs->meta);
     }
 
     free(base);

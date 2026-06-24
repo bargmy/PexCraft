@@ -182,8 +182,10 @@ static int stream_world_chunk_local_z(int wcz);
 static void stream_mark_local_chunk_dirty(int lcx, int lcz);
 static void stream_mark_local_chunk_generated(int lcx, int lcz);
 static void stream_queue_add_chunk(int wcx, int wcz);
+static void stream_queue_add_chunk_directional_safety(int base_cx, int base_cz, int pcx, int pcz, int radius);
 static int stream_queue_missing_visible_chunks_near_player(void);
 static void process_stream_generation_queue(void);
+static int process_stream_generation_queue_sync(int max_chunks);
 static int stream_generation_active(void);
 static int psp_player_terrain_ready_or_hold(void);
 static void wake_neighbor_liquids(int x, int y, int z);
@@ -1355,22 +1357,18 @@ static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
     if (fread(magic, 1, 8, f) != 8 ||
         fread(&rcx, sizeof(rcx), 1, f) != 1 ||
         fread(&rcz, sizeof(rcz), 1, f) != 1 ||
-        fread(&count, sizeof(count), 1, f) != 1 ||
-        (memcmp(magic, "CHNKDLT1", 8) != 0 && memcmp(magic, "CHNKDLT2", 8) != 0 && memcmp(magic, "PXCDLT12", 8) != 0) ||
-        rcx != cx || rcz != cz || count != FLAT_CHUNK_BLOCK_COUNT) {
+        fread(&count, sizeof(count), 1, f) != 1) {
         fclose(f);
         return;
     }
     unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
     unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
     if (!buf || !meta) { free(buf); free(meta); fclose(f); return; }
-    int ok = fread(buf, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
-    int has_meta = (memcmp(magic, "CHNKDLT2", 8) == 0);
-    if (ok && has_meta) ok = fread(meta, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
+    int ok = pex_chunk_delta_read_payload_from_open_file(f, magic, rcx, rcz, count, cx, cz, buf, meta);
     fclose(f);
     if (ok) {
         copy_flat_chunk_buffer_to_world(cx, cz, buf);
-        if (has_meta) {
+        {
             for (int lx = 0; lx < 16; lx++) {
                 int wx = cx * 16 + lx;
                 if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
@@ -1439,16 +1437,13 @@ static void load_modified_flat_chunk_delta_into_buffers_for_dir(const char *worl
     if (fread(magic, 1, 8, f) != 8 ||
         fread(&rcx, sizeof(rcx), 1, f) != 1 ||
         fread(&rcz, sizeof(rcz), 1, f) != 1 ||
-        fread(&count, sizeof(count), 1, f) != 1 ||
-        (memcmp(magic, "CHNKDLT1", 8) != 0 && memcmp(magic, "CHNKDLT2", 8) != 0 && memcmp(magic, "PXCDLT12", 8) != 0) ||
-        rcx != cx || rcz != cz || count != FLAT_CHUNK_BLOCK_COUNT) {
+        fread(&count, sizeof(count), 1, f) != 1) {
         fclose(f);
         return;
     }
-    int ok = fread(buf, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
-    int has_meta = (memcmp(magic, "CHNKDLT2", 8) == 0);
-    if (ok && has_meta) ok = fread(meta, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
-    if (ok && !has_meta) memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+    if (!pex_chunk_delta_read_payload_from_open_file(f, magic, rcx, rcz, count, cx, cz, buf, meta)) {
+        memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+    }
     fclose(f);
 }
 
@@ -1478,6 +1473,63 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
     if (!g_copy_chunk_skip_main_light) flat_recalculate_lighting_chunk_fast_surface(cx, cz);
     if (flat_chunk_buffer_has_saved_user_light_source(buf)) flat_note_chunk_block_light_dirty(cx, cz);
+}
+
+static int stream_generate_one_chunk_sync_now(void) {
+    if (g_stream_gen_queue_index >= g_stream_gen_queue_count) return 0;
+
+    int idx = g_stream_gen_queue_index++;
+    int wcx = g_stream_gen_queue_cx[idx];
+    int wcz = g_stream_gen_queue_cz[idx];
+    if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) return 1;
+
+    int lcx = stream_world_chunk_local_x(wcx);
+    int lcz = stream_world_chunk_local_z(wcz);
+    if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) return 1;
+
+    unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+    unsigned char *sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+    unsigned char *blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+    if (!buf || !meta || !sky || !blocklight) {
+        free(buf); free(meta); free(sky); free(blocklight);
+        return 1;
+    }
+
+#if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
+    TerrainProvider *reuse = NULL;
+#else
+    TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
+#endif
+    generate_flat_chunk_base_to_buffer_ex(wcx, wcz, buf, g_world_type, g_world_seed, reuse);
+    load_modified_flat_chunk_delta_into_buffers_for_dir(g_loaded_world_dir, wcx, wcz, buf, meta);
+    flat_compute_chunk_light_fast_from_buffers(buf, sky, blocklight);
+
+    g_copy_chunk_skip_main_light = 1;
+    copy_flat_chunk_buffers_to_world(wcx, wcz, buf, meta);
+    g_copy_chunk_skip_main_light = 0;
+    copy_flat_chunk_light_buffers_to_world(wcx, wcz, sky, blocklight);
+    stream_mark_local_chunk_generated(lcx, lcz);
+    g_stream_gen_queue_installed_count++;
+
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
+    psp_fast_surface_mark_dirty_block(wcx * 16 + 8, wcz * 16 + 8);
+#endif
+
+    free(buf);
+    free(meta);
+    free(sky);
+    free(blocklight);
+    return 1;
+}
+
+static int process_stream_generation_queue_sync(int max_chunks) {
+    int done = 0;
+    while (max_chunks-- > 0 && g_stream_gen_queue_index < g_stream_gen_queue_count) {
+        done += stream_generate_one_chunk_sync_now();
+    }
+    if (!stream_generation_active() && !g_stream_generation_keep_completed) stream_generation_queue_clear();
+    return done;
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
@@ -1521,18 +1573,7 @@ static void save_one_modified_flat_chunk(int lcx, int lcz) {
     if (memcmp(base, cur, FLAT_CHUNK_BLOCK_COUNT) == 0 && !meta_nonzero) {
         DeleteFileA(path);
     } else {
-        FILE *f = fopen(path, "wb");
-        if (f) {
-            char magic[8] = {'C','H','N','K','D','L','T','2'};
-            int count = FLAT_CHUNK_BLOCK_COUNT;
-            fwrite(magic, 1, 8, f);
-            fwrite(&cx, sizeof(cx), 1, f);
-            fwrite(&cz, sizeof(cz), 1, f);
-            fwrite(&count, sizeof(count), 1, f);
-            fwrite(cur, 1, FLAT_CHUNK_BLOCK_COUNT, f);
-            fwrite(cur_meta, 1, FLAT_CHUNK_BLOCK_COUNT, f);
-            fclose(f);
-        }
+        pex_chunk_delta_write_payload_to_path(path, cx, cz, cur, cur_meta);
     }
     g_flat_world_chunk_modified[lcz][lcx] = 0;
     free(base);
@@ -2133,25 +2174,17 @@ static void flat_world_prepare_initial_generation(void) {
     g_flat_section_geometry_dirty = 0;
 }
 
-static int stream_initial_spawn_chunk_radius(void) {
-    /* Keep first-load fast.  Render distance 12+ used to force the loader to
-       generate the entire 512x512 active window before entering the world.
-       A small spawn island is enough to stand/walk safely; the normal
-       streaming worker/fallback fills the rest after gameplay starts. */
-    int r = stream_effective_render_chunk_radius();
+static int stream_initial_load_chunk_target(void) {
 #if defined(PEX_PLATFORM_WII)
-    /* Wii is currently cooperative/single-threaded here, so use a 3x3 spawn
-       island.  This lowers first-load risk and keeps Dolphin responsive. */
-    if (r > 1) r = 1;
-    if (r < 1) r = 1;
+    return 9;
 #elif defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
-    if (r > 2) r = 2;
-    if (r < 2) r = 2;
+    return 25;
 #else
-    (void)r;
-    r = 1; /* 3x3 spawn area; stream the rest after the player enters. */
+    /* Desktop/Android loading screen target requested by the user: publish up
+       to 50 missing chunks before entering gameplay.  Only missing chunks are
+       queued; already-loaded/generated chunks are skipped by stream_queue_add. */
+    return 50;
 #endif
-    return r;
 }
 
 static void flat_world_begin_initial_generation(void) {
@@ -2169,10 +2202,12 @@ static void flat_world_begin_initial_generation(void) {
     if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
     if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
-    int initial_radius = stream_initial_spawn_chunk_radius();
-    for (int ring = 0; ring <= initial_radius; ring++) {
-        for (int dz = -ring; dz <= ring; dz++) {
-            for (int dx = -ring; dx <= ring; dx++) {
+    int target = stream_initial_load_chunk_target();
+    stream_queue_add_chunk_directional_safety(base_cx, base_cz, pcx, pcz, stream_effective_render_chunk_radius());
+    if (g_stream_gen_queue_count > target) g_stream_gen_queue_count = target;
+    for (int ring = 0; ring < FLAT_RENDER_CHUNKS && g_stream_gen_queue_count < target; ring++) {
+        for (int dz = -ring; dz <= ring && g_stream_gen_queue_count < target; dz++) {
+            for (int dx = -ring; dx <= ring && g_stream_gen_queue_count < target; dx++) {
                 if (ring != 0 && abs(dx) != ring && abs(dz) != ring) continue;
                 int lcx = pcx + dx;
                 int lcz = pcz + dz;
@@ -2181,23 +2216,21 @@ static void flat_world_begin_initial_generation(void) {
             }
         }
     }
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    process_stream_generation_queue();
-#else
-    world_stream_service_ensure();
-#endif
+
+    /* Initial load is deliberately synchronous on the loading screen.  After
+       SCREEN_INGAME starts, desktop streaming is serviced by the background
+       world-stream thread and never by the game tick. */
+    process_stream_generation_queue_sync(target);
 }
 
 static void flat_world_continue_initial_generation(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    process_stream_generation_queue();
-#else
-    world_stream_service_ensure();
-#endif
+    process_stream_generation_queue_sync(stream_initial_load_chunk_target());
 }
 
 static int flat_world_initial_generation_active(void) {
-    return stream_generation_active();
+    /* Loading-screen generation is intentionally synchronous now.  Do not let a
+       stale async result from the previous world keep SCREEN_GENERATING alive. */
+    return g_stream_gen_queue_index < g_stream_gen_queue_count;
 }
 
 static int flat_world_initial_generation_total(void) {
@@ -2893,14 +2926,15 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
     for (int y = y0 - 1; y <= y1; y++) {
         for (int z = z0; z <= z1; z++) {
             for (int x = x0; x <= x1; x++) {
-#if defined(PEX_PLATFORM_PSP)
                 /* Do not let the player step/fall into an async chunk that has
-                   not been installed yet.  Treat the unloaded column under the
-                   feet as a temporary collision plane; the real chunk replaces
-                   it a few frames later. */
+                   not been installed yet.  Treat only the column under/at the
+                   feet as a temporary collision plane; head/body space stays
+                   non-solid so this cannot trap the player inside invisible
+                   chunk walls. */
                 if (!flat_world_chunk_generated_at_block(x, z) && y <= (int)floorf(feet)) {
                     return 1;
                 }
+#if defined(PEX_PLATFORM_PSP)
                 if (psp_spawn_surface_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
 #endif
                 int bid = flat_get_block(x, y, z);
@@ -5399,9 +5433,7 @@ static int flat_spawn_has_open_sky(int x, int z, int foot_y) {
 
 static int flat_column_spawn_y_ex(int x, int z, int require_sky) {
     if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE || z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return -9999;
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     if (!flat_world_chunk_generated_at_block(x, z)) return -9999;
-#endif
     for (int y = FLAT_WORLD_Y_MAX - 3; y >= FLAT_WORLD_Y_MIN; y--) {
         int id = flat_get_block(x, y, z);
         if (!flat_solid_for_spawn(id)) continue;
@@ -6787,6 +6819,111 @@ static void stream_queue_add_chunk(int wcx, int wcz) {
     g_stream_gen_queue_count++;
 }
 
+static int stream_round_nearest_int(float v) {
+    return (int)(v >= 0.0f ? floorf(v + 0.5f) : ceilf(v - 0.5f));
+}
+
+static void stream_player_chunk_direction(float *out_dx, float *out_dz) {
+    float dx = g_player_motion_x;
+    float dz = g_player_motion_z;
+    float len = sqrtf(dx * dx + dz * dz);
+    if (len < 0.002f) {
+        float yaw_rad = g_player_yaw * (float)M_PI / 180.0f;
+        dx = -sinf(yaw_rad);
+        dz = cosf(yaw_rad);
+        len = sqrtf(dx * dx + dz * dz);
+    }
+    if (len < 0.0001f) {
+        dx = 0.0f;
+        dz = 1.0f;
+        len = 1.0f;
+    }
+    *out_dx = dx / len;
+    *out_dz = dz / len;
+}
+
+static void stream_queue_add_chunk_directional_safety(int base_cx, int base_cz, int pcx, int pcz, int radius) {
+    if (radius < 2) radius = 2;
+    int ahead = radius;
+    if (ahead > 8) ahead = 8;
+    int width = 2;
+    if (radius <= 2) width = 1;
+
+    float dir_x = 0.0f, dir_z = 1.0f;
+    stream_player_chunk_direction(&dir_x, &dir_z);
+    float side_x = -dir_z;
+    float side_z = dir_x;
+
+    /* Queue a small forward corridor before the normal ring fill.  This does not
+       block gameplay; it only changes async priority so walking forward consumes
+       generated terrain instead of arriving at empty chunks. */
+    for (int step = 0; step <= ahead; step++) {
+        for (int side = -width; side <= width; side++) {
+            int lcx = pcx + stream_round_nearest_int(dir_x * (float)step + side_x * (float)side);
+            int lcz = pcz + stream_round_nearest_int(dir_z * (float)step + side_z * (float)side);
+            if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) continue;
+            stream_queue_add_chunk(base_cx + lcx, base_cz + lcz);
+        }
+    }
+
+    /* The immediate 3x3 footprint is always queued as a safety net even if the
+       direction estimate changes suddenly due to keyboard input or knockback. */
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int lcx = pcx + dx;
+            int lcz = pcz + dz;
+            if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) continue;
+            stream_queue_add_chunk(base_cx + lcx, base_cz + lcz);
+        }
+    }
+}
+
+static int stream_chunk_priority_score(int wcx, int wcz) {
+    int base_cx = floor_div16(g_flat_world_origin_x);
+    int base_cz = floor_div16(g_flat_world_origin_z);
+    int pcx = stream_world_chunk_local_x(floor_div16((int)floorf(g_player_x)));
+    int pcz = stream_world_chunk_local_z(floor_div16((int)floorf(g_player_z)));
+    if (pcx < 0) pcx = 0;
+    if (pcz < 0) pcz = 0;
+    if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
+    if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
+
+    float dir_x = 0.0f, dir_z = 1.0f;
+    stream_player_chunk_direction(&dir_x, &dir_z);
+    float side_x = -dir_z;
+    float side_z = dir_x;
+
+    float vx = (float)((wcx - base_cx) - pcx);
+    float vz = (float)((wcz - base_cz) - pcz);
+    float ahead = vx * dir_x + vz * dir_z;
+    float side = fabsf(vx * side_x + vz * side_z);
+    float dist2 = vx * vx + vz * vz;
+
+    int score = (int)(dist2 * 32.0f + side * 10.0f - ahead * 24.0f);
+    if (ahead < -0.25f) score += 512;
+    return score;
+}
+
+static void stream_reprioritize_queue_for_player(void) {
+    int begin = g_stream_gen_queue_index;
+    if (begin < 0) begin = 0;
+    if (begin + 1 >= g_stream_gen_queue_count) return;
+
+    for (int i = begin + 1; i < g_stream_gen_queue_count; i++) {
+        int cx = g_stream_gen_queue_cx[i];
+        int cz = g_stream_gen_queue_cz[i];
+        int score = stream_chunk_priority_score(cx, cz);
+        int j = i - 1;
+        while (j >= begin && stream_chunk_priority_score(g_stream_gen_queue_cx[j], g_stream_gen_queue_cz[j]) > score) {
+            g_stream_gen_queue_cx[j + 1] = g_stream_gen_queue_cx[j];
+            g_stream_gen_queue_cz[j + 1] = g_stream_gen_queue_cz[j];
+            j--;
+        }
+        g_stream_gen_queue_cx[j + 1] = cx;
+        g_stream_gen_queue_cz[j + 1] = cz;
+    }
+}
+
 static int stream_queue_missing_visible_chunks_near_player(void) {
     stream_generation_queue_clear();
 
@@ -6800,6 +6937,7 @@ static int stream_queue_missing_visible_chunks_near_player(void) {
     if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
     int radius = stream_effective_render_chunk_radius();
+    stream_queue_add_chunk_directional_safety(base_cx, base_cz, pcx, pcz, radius);
     for (int ring = 0; ring <= radius; ring++) {
         int before = g_stream_gen_queue_count;
         for (int dz = -ring; dz <= ring; dz++) {
@@ -6833,6 +6971,7 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
+    stream_queue_add_chunk_directional_safety(base_cx, base_cz, pcx, pcz, stream_effective_render_chunk_radius());
 
     /* Queue only chunks that are newly exposed by the window shift.  The old
        version regenerated the entire 256x256 window synchronously here, which
@@ -6856,6 +6995,7 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
 
 static void process_stream_generation_queue(void) {
     stream_async_init();
+    stream_reprioritize_queue_for_player();
 
     /* If thread creation fails/is disabled, keep the world functional with a
        small synchronous budget rather than leaving missing terrain forever. */
@@ -6918,10 +7058,10 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
         LeaveCriticalSection(&g_world_stream_service_cs);
         if (stop) break;
 
-        if ((g_screen == SCREEN_GENERATING || g_screen == SCREEN_INGAME) && !g_mp_connected) {
-            /* Keep desktop gameplay streaming off the main tick.  Console and
-               Android builds do not start this service, so they keep their
-               render-safe synchronous path in ingame_tick(). */
+        if (g_screen == SCREEN_INGAME && !g_mp_connected) {
+            /* Keep desktop gameplay streaming off the main tick.  The loading
+               screen intentionally generates its initial 50 chunks on the main
+               thread; this service only owns post-entry streaming. */
             update_infinite_world_streaming();
             flat_lighting_worker_wake();
             if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
