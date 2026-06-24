@@ -124,6 +124,21 @@ static void java125_generate_stars_once(void) {
     }
 }
 
+static void draw_java125_sky_plane(float y) {
+    const int step = 64;
+    const int extent = 256 + step * 2;
+    for (int x = -extent; x <= extent; x += step) {
+        for (int z = -extent; z <= extent; z += step) {
+            glBegin(GL_QUADS);
+            glVertex3f((float)x, (float)y, (float)z);
+            glVertex3f((float)(x + step), (float)y, (float)z);
+            glVertex3f((float)(x + step), (float)y, (float)(z + step));
+            glVertex3f((float)x, (float)y, (float)(z + step));
+            glEnd();
+        }
+    }
+}
+
 static void sky_textured_quad(Texture *tex, float size, float y, float u0, float v0, float u1, float v1, int fallback_color) {
     if (tex && tex->id) {
         glEnable(GL_TEXTURE_2D);
@@ -171,81 +186,86 @@ static void draw_sky_only(void) {
     glLoadIdentity();
     apply_sky_camera_rotation(g_frame_partial);
 
-    /* Match Java 1.2.5 RenderGlobal.renderSky(): draw a colored sky plane,
-       then sun/moon/stars with the celestial rotation, instead of drawing a
-       full skybox cube that can look washed out or create odd dark edges near
-       the sun with some backends. */
+    /* Match Java 1.2.5 RenderGlobal.renderSky() more closely: draw a tiled top
+       sky plane, then sun/moon/stars, then the lower sky plane tint. */
     float sr, sg, sb;
     java125_sky_color(g_frame_partial, &sr, &sg, &sb);
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_FOG);
     glColor4f(sr, sg, sb, 1.0f);
-    const float S = 256.0f;
-    const float Y = 16.0f;
-    glBegin(GL_QUADS);
-    glVertex3f(-S, Y, -S); glVertex3f(-S, Y, S); glVertex3f(S, Y, S); glVertex3f(S, Y, -S);
-    glEnd();
+    draw_java125_sky_plane(16.0f);
     glDisable(GL_FOG);
 
+    glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.0f);
     glPushMatrix();
-    float rain_alpha = 1.0f;
-    glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
-    glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
-    glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
+    {
+        float rain_alpha = 1.0f;
+        glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
+        glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
+        glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
 
-    glEnable(GL_TEXTURE_2D);
-    glDisable(GL_CULL_FACE);
-    sky_textured_quad(&tex_sun, 30.0f, 100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFF66);
-
-    int phase = java125_moon_phase();
-    int mu = phase % 4;
-    int mv = (phase / 4) % 2;
-    float u0 = (float)mu / 4.0f;
-    float v0 = (float)mv / 2.0f;
-    float u1 = (float)(mu + 1) / 4.0f;
-    float v1 = (float)(mv + 1) / 2.0f;
-    if (tex_moon_phases.id) {
         glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, tex_moon_phases.id);
-        glColor4f(1, 1, 1, rain_alpha);
-    } else {
-        glDisable(GL_TEXTURE_2D);
-        set_color_int(0xFFFFFFFF);
-    }
-    {
-        float ms = 20.0f;
-        glBegin(GL_QUADS);
-        glTexCoord2f(u1, v1); glVertex3f(-ms, -100.0f,  ms);
-        glTexCoord2f(u0, v1); glVertex3f( ms, -100.0f,  ms);
-        glTexCoord2f(u0, v0); glVertex3f( ms, -100.0f, -ms);
-        glTexCoord2f(u1, v0); glVertex3f(-ms, -100.0f, -ms);
-        glEnd();
-    }
+        sky_textured_quad(&tex_sun, 30.0f, 100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFF66);
 
-    glDisable(GL_TEXTURE_2D);
-    {
-        float star = java125_star_brightness(g_frame_partial) * rain_alpha;
-        if (star > 0.0f) {
-            java125_generate_stars_once();
-            glColor4f(star, star, star, star);
-            glBegin(GL_QUADS);
-            for (int i = 0; i < g_sky_star_count; ++i) {
-                for (int v = 0; v < 4; ++v) {
-                    glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
-                }
+        {
+            int phase = java125_moon_phase();
+            int mu = phase % 4;
+            int mv = (phase / 4) % 2;
+            float u0 = (float)mu / 4.0f;
+            float v0 = (float)mv / 2.0f;
+            float u1 = (float)(mu + 1) / 4.0f;
+            float v1 = (float)(mv + 1) / 2.0f;
+            if (tex_moon_phases.id) {
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, tex_moon_phases.id);
+                glColor4f(1, 1, 1, rain_alpha);
+            } else {
+                glDisable(GL_TEXTURE_2D);
+                set_color_int(0xFFFFFFFF);
             }
-            glEnd();
+            {
+                float ms = 20.0f;
+                glBegin(GL_QUADS);
+                glTexCoord2f(u1, v1); glVertex3f(-ms, -100.0f,  ms);
+                glTexCoord2f(u0, v1); glVertex3f( ms, -100.0f,  ms);
+                glTexCoord2f(u0, v0); glVertex3f( ms, -100.0f, -ms);
+                glTexCoord2f(u1, v0); glVertex3f(-ms, -100.0f, -ms);
+                glEnd();
+            }
+        }
+
+        glDisable(GL_TEXTURE_2D);
+        {
+            float star = java125_star_brightness(g_frame_partial) * rain_alpha;
+            if (star > 0.0f) {
+                java125_generate_stars_once();
+                glColor4f(star, star, star, star);
+                glBegin(GL_QUADS);
+                for (int i = 0; i < g_sky_star_count; ++i) {
+                    for (int v = 0; v < 4; ++v) {
+                        glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+                    }
+                }
+                glEnd();
+            }
         }
     }
     glPopMatrix();
 
+    /* Overworld lower sky tint: Java uses a dimmed sky-colored lower plane,
+       not a black empty clear region. */
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
+    draw_java125_sky_plane(-16.0f);
+
     glColor4f(1,1,1,1);
     glEnable(GL_TEXTURE_2D);
-    glDisable(GL_BLEND);
     glEnable(GL_FOG);
     glDepthMask(GL_TRUE);
 }
@@ -6429,6 +6449,17 @@ static void draw_first_person_hand(void) {
        ItemRenderer.renderItemInFirstPerson(). */
     apply_hurt_camera_effect(g_frame_partial);
     apply_view_bobbing(g_frame_partial);
+
+    /* Java 1.2.5 ItemRenderer.renderItemInFirstPerson(): add the smoothed arm
+       yaw/pitch sway so the held hand/item responds when the player looks
+       around, not only while walking. */
+    {
+        const PexPlayerRenderState *pr = &g_player_render_frame;
+        float arm_pitch = pr->prev_render_arm_pitch + (pr->render_arm_pitch - pr->prev_render_arm_pitch) * g_frame_partial;
+        float arm_yaw = pr->prev_render_arm_yaw + (pr->render_arm_yaw - pr->prev_render_arm_yaw) * g_frame_partial;
+        glRotatef((pr->pitch - arm_pitch) * 0.1f, 1.0f, 0.0f, 0.0f);
+        glRotatef((pr->yaw - arm_yaw) * 0.1f, 0.0f, 1.0f, 0.0f);
+    }
 
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_DEPTH_TEST);

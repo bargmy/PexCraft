@@ -1432,6 +1432,8 @@ static float g_limb_swing = 0.0f, g_prev_limb_swing = 0.0f;
 static float g_limb_swing_amount = 0.0f, g_prev_limb_swing_amount = 0.0f;
 static float g_camera_yaw = 0.0f, g_prev_camera_yaw = 0.0f;
 static float g_camera_pitch = 0.0f, g_prev_camera_pitch = 0.0f;
+static float g_render_arm_yaw = 0.0f, g_prev_render_arm_yaw = 0.0f;
+static float g_render_arm_pitch = 0.0f, g_prev_render_arm_pitch = 0.0f;
 static float g_frame_partial = 0.0f;
 
 typedef struct PexPlayerRenderState {
@@ -1444,6 +1446,8 @@ typedef struct PexPlayerRenderState {
     float limb_swing_amount, prev_limb_swing_amount;
     float camera_yaw, prev_camera_yaw;
     float camera_pitch, prev_camera_pitch;
+    float render_arm_yaw, prev_render_arm_yaw;
+    float render_arm_pitch, prev_render_arm_pitch;
     int dead;
     int death_time;
     int hurt_time;

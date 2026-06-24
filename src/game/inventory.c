@@ -5651,6 +5651,8 @@ static void reset_flat_player_spawn(void) {
     g_limb_swing_amount = g_prev_limb_swing_amount = 0.0f;
     g_camera_yaw = g_prev_camera_yaw = 0.0f;
     g_camera_pitch = g_prev_camera_pitch = 0.0f;
+    g_render_arm_yaw = g_prev_render_arm_yaw = 0.0f;
+    g_render_arm_pitch = g_prev_render_arm_pitch = 0.0f;
     g_hand_swing = g_prev_hand_swing = 0.0f;
     g_hand_swing_ticks = 0;
     g_hand_swing_progress = 0.0f;

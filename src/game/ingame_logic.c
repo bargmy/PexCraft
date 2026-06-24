@@ -240,6 +240,10 @@ static void player_render_capture_current(PexPlayerRenderState *s) {
     s->prev_camera_yaw = g_prev_camera_yaw;
     s->camera_pitch = g_camera_pitch;
     s->prev_camera_pitch = g_prev_camera_pitch;
+    s->render_arm_yaw = g_render_arm_yaw;
+    s->prev_render_arm_yaw = g_prev_render_arm_yaw;
+    s->render_arm_pitch = g_render_arm_pitch;
+    s->prev_render_arm_pitch = g_prev_render_arm_pitch;
     s->dead = g_player_dead;
     s->death_time = g_player_death_time;
     s->hurt_time = g_player_hurt_time;
@@ -445,6 +449,8 @@ static void ingame_tick(void) {
     g_prev_limb_swing_amount = g_limb_swing_amount;
     g_prev_camera_yaw = g_camera_yaw;
     g_prev_camera_pitch = g_camera_pitch;
+    g_prev_render_arm_yaw = g_render_arm_yaw;
+    g_prev_render_arm_pitch = g_render_arm_pitch;
 
     int in_water = flat_player_in_water();
     int in_lava = flat_player_in_lava();
@@ -742,6 +748,12 @@ static void ingame_tick(void) {
     if (g_player_on_ground) target_pitch = 0.0f;
     g_camera_yaw += (target_yaw - g_camera_yaw) * 0.4f;
     g_camera_pitch += (target_pitch - g_camera_pitch) * 0.8f;
+    /* Java 1.2.5 EntityPlayerSP.updateEntityActionState(): the first-person
+       hand/item uses smoothed renderArmYaw/renderArmPitch, which lag half-way
+       toward the real rotation and create the familiar item sway when looking
+       around. */
+    g_render_arm_pitch += (g_player_pitch - g_render_arm_pitch) * 0.5f;
+    g_render_arm_yaw += (g_player_yaw - g_render_arm_yaw) * 0.5f;
     passive_mobs_apply_riding();
 
     if (!g_player_dead && !g_mp_connected) player_foodstats_update();
