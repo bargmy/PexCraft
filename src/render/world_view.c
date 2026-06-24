@@ -218,24 +218,19 @@ static void draw_sky_only(void) {
     setup_world_projection();
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
+    glEnable(GL_FOG);
     glDisable(GL_ALPHA_TEST);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     apply_sky_camera_rotation(g_frame_partial);
 
-    /* Match Java 1.2.5 RenderGlobal.renderSky() more closely: draw a tiled top
-       sky plane, then sun/moon/stars, then the lower sky plane tint. */
+    /* Java 1.2.5 RenderGlobal.renderSky(): render the top sky plane, sunrise/
+       sunset fan, then sun, moon, stars, and finally the lower sky plane that
+       follows the player height. */
     float sr, sg, sb;
     java125_sky_color(g_frame_partial, &sr, &sg, &sb);
-    /* Fill the whole framebuffer before drawing the Java sky planes.  The old
-       port relied on the lower sky plane to cover every pitch/FOV, but at tower
-       heights and sunrise/night angles it left black clear-color bands behind
-       missing chunks and below the horizon. */
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glClearColor(sr, sg, sb, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
     glDisable(GL_TEXTURE_2D);
-    glEnable(GL_FOG);
     glColor4f(sr, sg, sb, 1.0f);
     draw_java125_sky_plane(16.0f);
     glDisable(GL_FOG);
@@ -244,11 +239,8 @@ static void draw_sky_only(void) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     draw_java125_sunrise_sunset_fan(g_frame_partial);
 
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_BLEND);
+    glEnable(GL_TEXTURE_2D);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.0f);
     glPushMatrix();
     {
         float rain_alpha = 1.0f;
@@ -256,7 +248,8 @@ static void draw_sky_only(void) {
         glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
         glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
 
-        glEnable(GL_TEXTURE_2D);
+        /* Render sun and moon exactly like Java: original texture alpha,
+           additive blend, and nearest filtering/pixelated edges. */
         sky_textured_quad(&tex_sun, 30.0f, 100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFF66);
 
         {
@@ -302,47 +295,25 @@ static void draw_sky_only(void) {
             }
         }
     }
+    glColor4f(1,1,1,1);
+    glDisable(GL_BLEND);
+    glEnable(GL_ALPHA_TEST);
+    glEnable(GL_FOG);
     glPopMatrix();
 
-    /* Keep the lower view filled with sky color.  The earlier dim lower plane
-       looked like a black horizon band in this renderer, especially with the
-       flat terrain camera. */
     glDisable(GL_TEXTURE_2D);
-    glDisable(GL_BLEND);
-    glDisable(GL_ALPHA_TEST);
-    glColor4f(sr, sg, sb, 1.0f);
-    draw_java125_sky_plane(-16.0f);
-
-    glColor4f(1,1,1,1);
+    {
+        const PexPlayerRenderState *pr = &g_player_render_frame;
+        float py = pr->prev_y + (pr->y - pr->prev_y) * g_frame_partial;
+        float player_vs_sea = py - 63.0f;
+        glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
+        glPushMatrix();
+        glTranslatef(0.0f, -(player_vs_sea - 16.0f), 0.0f);
+        draw_java125_sky_plane(-16.0f);
+        glPopMatrix();
+    }
     glEnable(GL_TEXTURE_2D);
-    glEnable(GL_FOG);
     glDepthMask(GL_TRUE);
-}
-
-static float java125_world_night_overlay_alpha(void) {
-    /* The renderer still bakes block colors into chunk meshes, so changing time
-       alone would not immediately relight already-built chunks.  This overlay is
-       a cheap lightmap-like multiplier that follows Java's skylight subtraction
-       and makes existing terrain darken at night without rebuilding every mesh. */
-    int sub = flat_current_skylight_subtracted();
-    float a = (float)sub / 11.0f;
-    if (a < 0.0f) a = 0.0f;
-    if (a > 1.0f) a = 1.0f;
-    return a * 0.38f;
-}
-
-static void draw_world_night_overlay(void) {
-    float a = java125_world_night_overlay_alpha();
-    if (a <= 0.001f) return;
-    setup_gui_projection();
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    draw_rect(0, 0, g_gui_w, g_gui_h, ((int)(a * 255.0f) << 24) | 0x000000);
-    glColor4f(1,1,1,1);
-    glEnable(GL_TEXTURE_2D);
 }
 
 static void draw_chat_lines(int force_visible) {
