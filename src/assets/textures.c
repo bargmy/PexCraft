@@ -76,9 +76,16 @@ static void normalize_sky_alpha_from_luminance(Texture *t) {
         unsigned char *px = &t->rgba[i * 4u];
         if (px[3] >= 250) opaque++;
         if (px[3] <= 5) transparent++;
-        if (px[3] >= 250 && px[0] < 8 && px[1] < 8 && px[2] < 8) dark_opaque++;
+        if (px[3] >= 250 && px[0] < 12 && px[1] < 12 && px[2] < 12) dark_opaque++;
     }
-    if (transparent > 0 || opaque * 100u < pixels * 95u || dark_opaque * 100u < pixels * 20u) return;
+    /* Vanilla terrain/sun.png is a square glow sprite.  Some pack/conversion
+       paths preserve the RGB glow but lose its alpha, which renders the famous
+       black square around the sun.  If an opaque square sky sprite is loaded,
+       rebuild alpha from luminance and re-upload it.  Moon phases are usually
+       64x32, so the square-size rule avoids making dark moon pixels disappear. */
+    int looks_like_sun = (t->w == t->h && t->w <= 128 && opaque * 100u >= pixels * 95u);
+    int looks_like_lost_alpha = (transparent == 0 && opaque * 100u >= pixels * 95u && dark_opaque > 0);
+    if (!looks_like_sun && (!looks_like_lost_alpha || dark_opaque * 100u < pixels * 5u)) return;
     for (size_t i = 0; i < pixels; ++i) {
         unsigned char *px = &t->rgba[i * 4u];
         unsigned char a = px[0];
@@ -87,6 +94,8 @@ static void normalize_sky_alpha_from_luminance(Texture *t) {
         px[3] = a;
     }
     glBindTexture(GL_TEXTURE_2D, t->id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t->rgba);
 }
 

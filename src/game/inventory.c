@@ -441,6 +441,31 @@ static float flat_java_light_table_base(void) {
 static float flat_java_light_brightness_from_level(int level) {
     return flat_java_light_brightness_from_level_base(level, flat_java_light_table_base());
 }
+static float flat_current_celestial_angle_for_light(void) {
+    int t = (int)(g_world_time % 24000LL);
+    if (t < 0) t += 24000;
+    float a = ((float)t + 1.0f) / 24000.0f - 0.25f;
+    if (a < 0.0f) a += 1.0f;
+    if (a > 1.0f) a -= 1.0f;
+    {
+        float raw = a;
+        a = 1.0f - (float)((cos((double)a * M_PI) + 1.0) / 2.0);
+        a = raw + (a - raw) / 3.0f;
+    }
+    return a;
+}
+
+static int flat_current_skylight_subtracted(void) {
+    /* Java 1.2.5 World.calculateSkylightSubtracted(), with rain/thunder = 0. */
+    float a = flat_current_celestial_angle_for_light();
+    float v = 1.0f - (cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.5f);
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    v = 1.0f - v;
+    v = 1.0f - v;
+    return (int)(v * 11.0f);
+}
+
 
 static int flat_block_can_block_grass_java(int id) {
     /* Java Block.canBlockGrass[] is true for blocks whose Material does NOT block
@@ -503,6 +528,7 @@ static int flat_get_light_brightness_for_sky_blocks(int x, int y, int z, int min
     int sky = flat_get_sky_light_value_do(x, y, z, 1);
     int block = flat_get_block_light_value_do(x, y, z, 1);
     if (block < min_block_light) block = min_block_light;
+    sky -= flat_current_skylight_subtracted();
     if (sky < 0) sky = 0; if (sky > 15) sky = 15;
     if (block < 0) block = 0; if (block > 15) block = 15;
     return (sky << 20) | (block << 4);
@@ -6143,7 +6169,7 @@ static void stream_async_init(void) {
 #else
         g_stream_async_thread = CreateThread(NULL, 0x400000, stream_async_worker_proc, NULL, 0, NULL);
 #endif
-        if (g_stream_async_thread) SetThreadPriority(g_stream_async_thread, THREAD_PRIORITY_BELOW_NORMAL);
+        if (g_stream_async_thread) SetThreadPriority(g_stream_async_thread, THREAD_PRIORITY_NORMAL);
     }
     g_stream_async_initialized = 1;
 }
@@ -6655,9 +6681,10 @@ static void process_stream_generation_queue(void) {
        about hiding commit hitches, so install every ready chunk.  After gameplay
        starts, keep the old throttle to avoid frame spikes while walking. */
     int initial_load = g_stream_generation_keep_completed ? 1 : 0;
-    int allow_install = initial_load || ((s_stream_install_tick++ & 3) == 0);
+    int allow_install = 1;
+    (void)s_stream_install_tick;
     if (allow_install) {
-        int max_install = initial_load ? 4 : 1;
+        int max_install = initial_load ? 4 : 2;
         pex_logf_trace("chunk stream async install tick queue=%d/%d budget=%d", g_stream_gen_queue_index, g_stream_gen_queue_count, max_install);
         stream_async_install_ready(max_install);
     }
@@ -6720,7 +6747,7 @@ static void world_stream_service_ensure(void) {
     InitializeCriticalSection(&g_world_stream_service_cs);
     g_world_stream_service_thread = CreateThread(NULL, 0x400000, world_stream_service_proc, NULL, 0, NULL);
     if (g_world_stream_service_thread) {
-        SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
+        SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_NORMAL);
         pex_logf("world stream service started");
     } else {
         pex_logf("world stream service failed to start; streaming will be serviced by fallbacks only");

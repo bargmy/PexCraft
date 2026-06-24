@@ -227,6 +227,13 @@ static void draw_sky_only(void) {
        sky plane, then sun/moon/stars, then the lower sky plane tint. */
     float sr, sg, sb;
     java125_sky_color(g_frame_partial, &sr, &sg, &sb);
+    /* Fill the whole framebuffer before drawing the Java sky planes.  The old
+       port relied on the lower sky plane to cover every pitch/FOV, but at tower
+       heights and sunrise/night angles it left black clear-color bands behind
+       missing chunks and below the horizon. */
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(sr, sg, sb, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_FOG);
     glColor4f(sr, sg, sb, 1.0f);
@@ -310,6 +317,32 @@ static void draw_sky_only(void) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_FOG);
     glDepthMask(GL_TRUE);
+}
+
+static float java125_world_night_overlay_alpha(void) {
+    /* The renderer still bakes block colors into chunk meshes, so changing time
+       alone would not immediately relight already-built chunks.  This overlay is
+       a cheap lightmap-like multiplier that follows Java's skylight subtraction
+       and makes existing terrain darken at night without rebuilding every mesh. */
+    int sub = flat_current_skylight_subtracted();
+    float a = (float)sub / 11.0f;
+    if (a < 0.0f) a = 0.0f;
+    if (a > 1.0f) a = 1.0f;
+    return a * 0.38f;
+}
+
+static void draw_world_night_overlay(void) {
+    float a = java125_world_night_overlay_alpha();
+    if (a <= 0.001f) return;
+    setup_gui_projection();
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    draw_rect(0, 0, g_gui_w, g_gui_h, ((int)(a * 255.0f) << 24) | 0x000000);
+    glColor4f(1,1,1,1);
+    glEnable(GL_TEXTURE_2D);
 }
 
 static void draw_chat_lines(int force_visible) {
@@ -6620,5 +6653,6 @@ static void draw_ingame_world_view(int with_hand) {
     draw_flat_test_world();
     if (with_hand && !g_third_person_view) draw_first_person_hand();
     draw_in_block_overlay();
+    draw_world_night_overlay();
     setup_gui_projection();
 }
