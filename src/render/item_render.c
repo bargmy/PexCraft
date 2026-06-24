@@ -105,6 +105,30 @@ static int item_is_block_id(int id) {
     return (id >= 1 && id <= 91);
 }
 
+static int item_max_damage(int id) {
+    if (id == ITEM_WOODEN_SHOVEL || id == ITEM_SHOVEL_GOLD) return 33;
+    if (id == ITEM_STONE_SHOVEL) return 65;
+    if (id == ITEM_SHOVEL_IRON) return 251;
+    if (id == ITEM_SHOVEL_DIAMOND) return 1562;
+
+    if (id == ITEM_WOODEN_PICKAXE || id == ITEM_WOODEN_AXE ||
+        id == ITEM_WOODEN_SWORD || id == ITEM_HOE_WOOD) return 60;
+    if (id == ITEM_STONE_PICKAXE || id == ITEM_STONE_AXE ||
+        id == ITEM_STONE_SWORD || id == ITEM_HOE_STONE) return 132;
+    if (id == ITEM_PICKAXE_IRON || id == ITEM_AXE_IRON ||
+        id == ITEM_SWORD_IRON || id == ITEM_HOE_IRON) return 251;
+    if (id == ITEM_PICKAXE_DIAMOND || id == ITEM_AXE_DIAMOND ||
+        id == ITEM_SWORD_DIAMOND || id == ITEM_HOE_DIAMOND) return 1562;
+    if (id == ITEM_PICKAXE_GOLD || id == ITEM_AXE_GOLD ||
+        id == ITEM_SWORD_GOLD || id == ITEM_HOE_GOLD) return 33;
+
+    if (id == ITEM_BOW || id == ITEM_FISHING_ROD) return 385;
+    if (id == ITEM_FLINT_AND_IRON) return 65;
+
+    int armor_max = armor_stack_max_damage(id);
+    return armor_max > 0 ? armor_max : 0;
+}
+
 static int block_item_should_render_3d(int id) {
     if (!item_is_block_id(id)) return 0;
     /* Keep the Java 3-D inventory path for normal cube-like blocks, but also
@@ -700,6 +724,27 @@ static void draw_item_stack_gui_ex(const ItemStack *st, int x, int y, int animat
         glColor4f(1,1,1,1);
         draw_text(num, x + 19 - 2 - text_width(num), y + 6 + 3, 16777215);
     }
+    int max_damage = item_max_damage(st->id);
+    if (max_damage > 0 && st->damage > 0) {
+        int dmg = st->damage;
+        if (dmg < 0) dmg = 0;
+        if (dmg > max_damage) dmg = max_damage;
+        int bar = (int)round(13.0 - (double)dmg * 13.0 / (double)max_damage);
+        int green = (int)round(255.0 - (double)dmg * 255.0 / (double)max_damage);
+        if (bar < 0) bar = 0;
+        if (bar > 13) bar = 13;
+        if (green < 0) green = 0;
+        if (green > 255) green = 255;
+        int fg = ((255 - green) << 16) | (green << 8);
+        int bg = (((255 - green) / 4) << 16) | 0x3F00;
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_TEXTURE_2D);
+        draw_rect(x + 2, y + 13, x + 15, y + 15, 0xFF000000);
+        draw_rect(x + 2, y + 13, x + 14, y + 14, 0xFF000000 | bg);
+        if (bar > 0) draw_rect(x + 2, y + 13, x + 2 + bar, y + 14, 0xFF000000 | fg);
+        glEnable(GL_TEXTURE_2D);
+        glColor4f(1,1,1,1);
+    }
 }
 
 static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
@@ -713,4 +758,3 @@ static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y) {
 static void draw_carried_stack(void) {
     if (!stack_empty(&g_carried_stack)) draw_item_stack_gui(&g_carried_stack, g_mouse_x - 8, g_mouse_y - 8);
 }
-

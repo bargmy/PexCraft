@@ -336,6 +336,66 @@ static void apply_hurt_camera_effect(float partial) {
     glRotatef(pr->attacked_at_yaw, 0.0f, 1.0f, 0.0f);
 }
 
+static int third_person_camera_blocking_cell(int bx, int by, int bz) {
+    int id = flat_get_block(bx, by, bz);
+    if (id == 0 || block_is_liquid(id)) return 0;
+    if (id == BLOCK_SNOW_LAYER || id == BLOCK_TORCH || id == BLOCK_FIRE ||
+        id == BLOCK_REDSTONE_WIRE || id == BLOCK_REEDS ||
+        id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+        id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM) return 0;
+    return 1;
+}
+
+static int third_person_trace_blocks(float ax, float ay, float az,
+                                     float bx, float by, float bz,
+                                     float *out_dist) {
+    float dx = bx - ax;
+    float dy = by - ay;
+    float dz = bz - az;
+    float len = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (len <= 0.0001f) return 0;
+    int steps = (int)(len / 0.05f) + 1;
+    for (int i = 1; i <= steps; ++i) {
+        float t = (float)i / (float)steps;
+        float x = ax + dx * t;
+        float y = ay + dy * t;
+        float z = az + dz * t;
+        if (third_person_camera_blocking_cell((int)floorf(x), (int)floorf(y), (int)floorf(z))) {
+            if (out_dist) *out_dist = len * t;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static float third_person_camera_distance(float x, float y, float z,
+                                          float yaw, float pitch,
+                                          float wanted_dist) {
+    float yaw_rad = yaw * (float)M_PI / 180.0f;
+    float pitch_rad = pitch * (float)M_PI / 180.0f;
+    float back_x = sinf(yaw_rad) * cosf(pitch_rad);
+    float back_y = sinf(pitch_rad);
+    float back_z = -cosf(yaw_rad) * cosf(pitch_rad);
+    float dist = wanted_dist;
+
+    for (int i = 0; i < 8; ++i) {
+        float ox = (float)(((i & 1) * 2) - 1) * 0.1f;
+        float oy = (float)((((i >> 1) & 1) * 2) - 1) * 0.1f;
+        float oz = (float)((((i >> 2) & 1) * 2) - 1) * 0.1f;
+        float hit_dist = wanted_dist;
+        if (third_person_trace_blocks(x + ox, y + oy, z + oz,
+                                      x + back_x * wanted_dist + ox,
+                                      y + back_y * wanted_dist + oy,
+                                      z + back_z * wanted_dist + oz,
+                                      &hit_dist) && hit_dist < dist) {
+            dist = hit_dist;
+        }
+    }
+
+    if (dist < 0.15f) dist = 0.15f;
+    return dist;
+}
+
 static void apply_player_camera(float partial) {
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float x = pr->prev_x + (pr->x - pr->prev_x) * partial;
@@ -360,6 +420,7 @@ static void apply_player_camera(float partial) {
         float look_x = -sinf(yaw_rad) * cosf(pitch_rad);
         float look_y = -sinf(pitch_rad);
         float look_z =  cosf(yaw_rad) * cosf(pitch_rad);
+        dist = third_person_camera_distance(x, y, z, yaw, pitch, dist);
 
         float cam_x = x - look_x * dist;
         float cam_y = y - look_y * dist;

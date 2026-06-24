@@ -53,8 +53,29 @@ static void draw_hud(void) {
     int hotbar_y = h - 22;
     draw_textured_rect_tex(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
     draw_textured_rect_tex(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
-    for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
-    draw_textured_rect_tex(&tex_icons, w / 2 - 7, h / 2 - 7, 0, 0, 16, 16, 0xFFFFFF);
+
+#if defined(GL_ONE_MINUS_DST_COLOR) && defined(GL_ONE_MINUS_SRC_COLOR)
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_COLOR);
+#endif
+    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
+        glBindTexture(GL_TEXTURE_2D, tex_icons.id);
+        glColor4f(1,1,1,1);
+        float u0 = 0.5f / (float)tex_icons.w;
+        float v0 = 0.5f / (float)tex_icons.h;
+        float u1 = 15.5f / (float)tex_icons.w;
+        float v1 = 15.5f / (float)tex_icons.h;
+        int cx = w / 2 - 7;
+        int cy = h / 2 - 7;
+        glBegin(GL_QUADS);
+        glTexCoord2f(u0, v1); glVertex3f((float)cx, (float)(cy + 16), 0.0f);
+        glTexCoord2f(u1, v1); glVertex3f((float)(cx + 16), (float)(cy + 16), 0.0f);
+        glTexCoord2f(u1, v0); glVertex3f((float)(cx + 16), (float)cy, 0.0f);
+        glTexCoord2f(u0, v0); glVertex3f((float)cx, (float)cy, 0.0f);
+        glEnd();
+    }
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     int hp = g_player_health;
     if (hp < 0) hp = 0;
@@ -64,9 +85,24 @@ static void draw_hud(void) {
     if (prev_hp > 20) prev_hp = 20;
     int heart_flash_ticks = g_hearts_life - g_ingame_ticks;
     int flash_old = (heart_flash_ticks >= 10) && (((heart_flash_ticks / 3) & 1) != 0);
+    int left = w / 2 - 91;
+    int right = w / 2 + 91;
+    int row_y = h - 39;
+    int upper_y = row_y - 10;
+    int armor = g_player_armor;
+    if (armor < 0) armor = 0;
+    if (armor > 20) armor = 20;
+
     for (int i = 0; i < 10; i++) {
-        int x = w / 2 - 91 + i * 8;
-        int y = h - 32;
+        if (armor > 0) {
+            int ax = left + i * 8;
+            if (i * 2 + 1 < armor) draw_textured_rect_tex(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == armor) draw_textured_rect_tex(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
+            else draw_textured_rect_tex(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
+        }
+
+        int x = left + i * 8;
+        int y = row_y;
         if (hp <= 4 && hp > 0) {
             /* Java seeds the HUD random from the 20 Hz update counter; using
                rand() every rendered frame made low-health hearts jitter at
@@ -83,17 +119,61 @@ static void draw_hud(void) {
         if (i * 2 + 1 < hp) draw_textured_rect_tex(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
         else if (i * 2 + 1 == hp) draw_textured_rect_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
     }
-    if (g_player_armor > 0) {
-        int armor = g_player_armor;
-        if (armor > 20) armor = 20;
-        for (int i = 0; i < 10; i++) {
-            int x = w / 2 + 91 - i * 8 - 9;
-            int y = h - 32;
-            if (i * 2 + 1 < armor) draw_textured_rect_tex(&tex_icons, x, y, 34, 9, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == armor) draw_textured_rect_tex(&tex_icons, x, y, 25, 9, 9, 9, 0xFFFFFF);
-            else draw_textured_rect_tex(&tex_icons, x, y, 16, 9, 9, 9, 0xFFFFFF);
+
+    int food = g_player_food_level;
+    if (food < 0) food = 0;
+    if (food > 20) food = 20;
+    int prev_food = g_player_prev_food_level;
+    if (prev_food < 0) prev_food = 0;
+    if (prev_food > 20) prev_food = 20;
+    for (int i = 0; i < 10; i++) {
+        int x = right - i * 8 - 9;
+        int y = row_y;
+        draw_textured_rect_tex(&tex_icons, x, y, 16, 27, 9, 9, 0xFFFFFF);
+        if (flash_old) {
+            if (i * 2 + 1 < prev_food) draw_textured_rect_tex(&tex_icons, x, y, 70, 27, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == prev_food) draw_textured_rect_tex(&tex_icons, x, y, 79, 27, 9, 9, 0xFFFFFF);
+        }
+        if (i * 2 + 1 < food) draw_textured_rect_tex(&tex_icons, x, y, 52, 27, 9, 9, 0xFFFFFF);
+        else if (i * 2 + 1 == food) draw_textured_rect_tex(&tex_icons, x, y, 61, 27, 9, 9, 0xFFFFFF);
+    }
+
+    if (flat_player_head_in_water()) {
+        int air = g_player_air;
+        if (air < 0) air = 0;
+        if (air > 300) air = 300;
+        int full = (int)ceil((double)(air - 2) * 10.0 / 300.0);
+        int partial = (int)ceil((double)air * 10.0 / 300.0) - full;
+        if (full < 0) full = 0;
+        if (partial < 0) partial = 0;
+        for (int i = 0; i < full + partial && i < 10; i++) {
+            draw_textured_rect_tex(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
         }
     }
+
+    int xp_cap = 7 + ((g_player_xp_level * 7) >> 1);
+    if (xp_cap > 0) {
+        int fill = (int)(g_player_xp_progress * 183.0f);
+        if (fill < 0) fill = 0;
+        if (fill > 183) fill = 183;
+        int xp_y = h - 32 + 3;
+        draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
+        if (fill > 0) draw_textured_rect_tex(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
+    }
+    if (g_player_xp_level > 0) {
+        char lvl[16];
+        snprintf(lvl, sizeof(lvl), "%d", g_player_xp_level);
+        int lx = (w - text_width(lvl)) / 2;
+        int ly = h - 31 - 4;
+        draw_text_no_shadow(lvl, lx + 1, ly, 0);
+        draw_text_no_shadow(lvl, lx - 1, ly, 0);
+        draw_text_no_shadow(lvl, lx, ly + 1, 0);
+        draw_text_no_shadow(lvl, lx, ly - 1, 0);
+        draw_text_no_shadow(lvl, lx, ly, 0x80FF20);
+    }
+
+    for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
+
     draw_text(VERSION_TEXT, 2, 2, 16777215);
     if (g_debug_menu_shown) {
         char line[160];

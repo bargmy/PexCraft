@@ -103,6 +103,12 @@ static void player_respawn(void) {
     g_player_death_time = 0;
     g_player_health = 20;
     g_player_prev_health = 20;
+    g_player_food_level = 20;
+    g_player_prev_food_level = 20;
+    g_player_air = 300;
+    g_player_xp_level = 0;
+    g_player_xp_total = 0;
+    g_player_xp_progress = 0.0f;
     memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
     g_player_armor = 0;
     g_player_damage_remainder = 0;
@@ -388,6 +394,12 @@ static void ingame_tick(void) {
 
     int in_water = flat_player_in_water();
     int in_lava = flat_player_in_lava();
+    if (flat_player_head_in_water()) {
+        if (g_player_air > 0) g_player_air--;
+    } else {
+        g_player_air += 4;
+        if (g_player_air > 300) g_player_air = 300;
+    }
     if (in_water && !g_player_was_in_water) {
         spawn_water_entry_particles(g_player_x, g_player_y - 1.0f, g_player_z, g_player_motion_x, g_player_motion_z);
         pex_sound_play("random.splash", 1.0f, 1.0f);

@@ -666,6 +666,12 @@ static int g_player_health = 20;
 static int g_player_prev_health = 20;
 static int g_player_armor = 0;
 static int g_player_damage_remainder = 0;
+static int g_player_food_level = 20;
+static int g_player_prev_food_level = 20;
+static int g_player_air = 300;
+static int g_player_xp_level = 0;
+static int g_player_xp_total = 0;
+static float g_player_xp_progress = 0.0f;
 static int g_ingame_ticks = 0;
 static int g_hearts_life = 0;
 
