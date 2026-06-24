@@ -302,6 +302,7 @@ static void ingame_tick(void) {
     int input_active = (g_screen == SCREEN_INGAME && !g_player_dead);
 
     g_ingame_ticks++;
+    g_world_time++;
     if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;

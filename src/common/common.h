@@ -1323,6 +1323,7 @@ typedef struct PexSaveSnapshot {
     int flat_world_origin_x;
     int flat_world_origin_z;
     long long world_seed;
+    long long world_time;
     int world_type;
     float player_x, player_y, player_z;
     float player_yaw, player_pitch;
@@ -1572,12 +1573,14 @@ static unsigned int g_crc_table[256];
 static int g_crc_table_ready = 0;
 static char g_splash[MAX_LABEL] = "Finally beta!";
 static double g_last_time = 0.0;
+static long long g_world_time = 0;
 
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
 static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
+static Texture tex_sun, tex_moon_phases;
 static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;
 static Texture tex_title_logo, tex_mojang, tex_panorama[6];
 static int font_widths[256];

@@ -485,6 +485,44 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
 }
 
 
+static void draw_java125_hovering_text(const char *lines[], int line_count, int mx, int my) {
+    if (!lines || line_count <= 0) return;
+    int width = 0;
+    for (int i = 0; i < line_count; ++i) {
+        int w = text_width(lines[i]);
+        if (w > width) width = w;
+    }
+
+    int x = mx + 12;
+    int y = my - 12;
+    int h = 8;
+    if (line_count > 1) h += 2 + (line_count - 1) * 10;
+
+    /* Java 1.2.5 GuiContainer tooltip: same offsets, background, purple border,
+       z-order intent, and first-line/extra-line spacing.  It intentionally does
+       not clamp to the screen edges in this version. */
+    int bg = (int)0xF0100010u;
+    draw_gradient(x - 3, y - 4, x + width + 3, y - 3, bg, bg);
+    draw_gradient(x - 3, y + h + 3, x + width + 3, y + h + 4, bg, bg);
+    draw_gradient(x - 3, y - 3, x + width + 3, y + h + 3, bg, bg);
+    draw_gradient(x - 4, y - 3, x - 3, y + h + 3, bg, bg);
+    draw_gradient(x + width + 3, y - 3, x + width + 4, y + h + 3, bg, bg);
+
+    int border1 = 0x505000FF;
+    int border2 = ((border1 & 0x00FEFEFE) >> 1) | (border1 & (int)0xFF000000u);
+    draw_gradient(x - 3, y - 2, x - 2, y + h + 2, border1, border2);
+    draw_gradient(x + width + 2, y - 2, x + width + 3, y + h + 2, border1, border2);
+    draw_gradient(x - 3, y - 3, x + width + 3, y - 2, border1, border1);
+    draw_gradient(x - 3, y + h + 2, x + width + 3, y + h + 3, border2, border2);
+
+    for (int i = 0; i < line_count; ++i) {
+        int color = (i == 0) ? 0xFFFFFF : 0xA0A0A0;
+        draw_text(lines[i], x, y, color);
+        if (i == 0) y += 2;
+        y += 10;
+    }
+}
+
 static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
     if (!stack_empty(&g_carried_stack) || slot < 0) return;
     ItemStack *st = NULL;
@@ -498,13 +536,21 @@ static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
     if (!st || stack_empty(st)) return;
     const char *name = item_display_name(st->id);
     if (!name || !name[0]) return;
-    int tw = text_width(name);
-    int x = mx + 12;
-    int y = my - 12;
-    if (x + tw + 6 > g_gui_w) x = g_gui_w - tw - 6;
-    if (y < 4) y = my + 12;
-    draw_rect(x - 3, y - 3, x + tw + 3, y + 8 + 3, (int)0xC0000000u);
-    draw_text(name, x, y, 0xFFFFFF);
+
+    const char *lines[3];
+    int line_count = 0;
+    lines[line_count++] = name;
+
+    int max_damage = item_max_damage(st->id);
+    char durability[64];
+    if (max_damage > 0 && st->damage > 0) {
+        int remaining = max_damage - st->damage;
+        if (remaining < 0) remaining = 0;
+        snprintf(durability, sizeof(durability), "Durability: %d / %d", remaining, max_damage);
+        lines[line_count++] = durability;
+    }
+
+    draw_java125_hovering_text(lines, line_count, mx, my);
 }
 
 static void draw_hovered_item_tooltip(void) {

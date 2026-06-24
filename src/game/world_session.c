@@ -366,6 +366,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     ss->flat_world_origin_x = g_flat_world_origin_x;
     ss->flat_world_origin_z = g_flat_world_origin_z;
     ss->world_seed = g_world_seed;
+    ss->world_time = g_world_time;
     ss->world_type = g_world_type;
     ss->player_x = g_player_x;
     ss->player_y = g_player_y;
@@ -501,7 +502,7 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 18;
+    int version = 19;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -533,6 +534,7 @@ static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
     fwrite(&ss->player_xp_level, sizeof(ss->player_xp_level), 1, f);
     fwrite(&ss->player_xp_total, sizeof(ss->player_xp_total), 1, f);
     fwrite(&ss->player_xp_progress, sizeof(ss->player_xp_progress), 1, f);
+    fwrite(&ss->world_time, sizeof(ss->world_time), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&ss->inventory[i].id, sizeof(int), 1, f);
@@ -723,7 +725,7 @@ static void save_current_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 18;
+    int version = 19;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -755,6 +757,7 @@ static void save_current_world_state_sync(void) {
     fwrite(&g_player_xp_level, sizeof(g_player_xp_level), 1, f);
     fwrite(&g_player_xp_total, sizeof(g_player_xp_total), 1, f);
     fwrite(&g_player_xp_progress, sizeof(g_player_xp_progress), 1, f);
+    fwrite(&g_world_time, sizeof(g_world_time), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&g_inventory[i].id, sizeof(int), 1, f);
@@ -906,7 +909,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -975,9 +978,18 @@ static int load_current_world_state(void) {
             fclose(f);
             return 0;
         }
+        if (version >= 19) {
+            if (fread(&g_world_time, sizeof(g_world_time), 1, f) != 1) {
+                fclose(f);
+                return 0;
+            }
+        } else {
+            g_world_time = 0;
+        }
     } else {
         player_food_reset();
         player_xp_reset();
+        g_world_time = 0;
     }
     player_food_sanitize();
     player_xp_sanitize();
@@ -1233,6 +1245,7 @@ static void enter_world_from_job(void) {
         g_player_armor = 0;
         g_player_damage_remainder = 0;
         g_ingame_ticks = 0;
+        g_world_time = 0;
         flat_world_center_origin_near(g_player_x, g_player_z);
         flat_world_generate_blocks_for_current_origin();
     }
@@ -1398,6 +1411,7 @@ static void worldgen_tick(void) {
             g_player_dead = 0;
             g_player_fall_distance = 0.0f;
             g_ingame_ticks = 0;
+        g_world_time = 0;
             g_player_x = g_player_prev_x = 0.5f;
             g_player_y = g_player_prev_y = 5.62f;
             g_player_z = g_player_prev_z = 0.5f;

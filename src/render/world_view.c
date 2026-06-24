@@ -2,14 +2,245 @@
 
 static void draw_source_item_3d_from_atlas(int tile);
 static void draw_source_item_3d_from_texture(Texture *atlas, int tile);
+static void setup_world_projection(void);
+static void apply_view_bobbing(float partial);
+static void apply_hurt_camera_effect(float partial);
+
+typedef struct PexSkyJavaRandom {
+    uint64_t seed;
+} PexSkyJavaRandom;
+
+typedef struct PexStarQuad {
+    float v[4][3];
+} PexStarQuad;
+
+static PexStarQuad g_sky_stars[1500];
+static int g_sky_star_count = 0;
+static int g_sky_stars_ready = 0;
+
+static void pex_sky_java_random_set_seed(PexSkyJavaRandom *rng, int64_t seed) {
+    rng->seed = ((uint64_t)seed ^ 0x5DEECE66DULL) & ((1ULL << 48) - 1ULL);
+}
+
+static int pex_sky_java_random_next(PexSkyJavaRandom *rng, int bits) {
+    rng->seed = (rng->seed * 0x5DEECE66DULL + 0xBULL) & ((1ULL << 48) - 1ULL);
+    return (int)(rng->seed >> (48 - bits));
+}
+
+static float pex_sky_java_random_next_float(PexSkyJavaRandom *rng) {
+    return (float)pex_sky_java_random_next(rng, 24) / 16777216.0f;
+}
+
+static double pex_sky_java_random_next_double(PexSkyJavaRandom *rng) {
+    uint64_t hi = (uint64_t)pex_sky_java_random_next(rng, 26);
+    uint64_t lo = (uint64_t)pex_sky_java_random_next(rng, 27);
+    return (double)((hi << 27) + lo) / (double)(1ULL << 53);
+}
+
+static float java125_celestial_angle(float partial) {
+    int t = (int)(g_world_time % 24000LL);
+    if (t < 0) t += 24000;
+    float a = ((float)t + partial) / 24000.0f - 0.25f;
+    if (a < 0.0f) a += 1.0f;
+    if (a > 1.0f) a -= 1.0f;
+    float raw = a;
+    a = 1.0f - (float)((cos((double)a * M_PI) + 1.0) / 2.0);
+    a = raw + (a - raw) / 3.0f;
+    return a;
+}
+
+static int java125_moon_phase(void) {
+    long long day = g_world_time / 24000LL;
+    int phase = (int)(day % 8LL);
+    if (phase < 0) phase += 8;
+    return phase;
+}
+
+static float java125_star_brightness(float partial) {
+    float a = java125_celestial_angle(partial);
+    float f = 1.0f - (cosf(a * (float)M_PI * 2.0f) * 2.0f + 12.0f / 16.0f);
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    return f * f * 0.5f;
+}
+
+static void java125_sky_color(float partial, float *r, float *g, float *b) {
+    float a = java125_celestial_angle(partial);
+    float f = cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.5f;
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    /* Plains/default biome sky color in Java 1.2.5 is effectively 0x78A7FF.
+       Later biome-specific sky tint can replace this, but the day/night factor
+       and celestial angle now match World.getSkyColor(). */
+    *r = (120.0f / 255.0f) * f;
+    *g = (167.0f / 255.0f) * f;
+    *b = (255.0f / 255.0f) * f;
+}
+
+static void java125_generate_stars_once(void) {
+    if (g_sky_stars_ready) return;
+    g_sky_stars_ready = 1;
+    g_sky_star_count = 0;
+    PexSkyJavaRandom rng;
+    pex_sky_java_random_set_seed(&rng, 10842LL);
+
+    for (int i = 0; i < 1500; ++i) {
+        double x = (double)(pex_sky_java_random_next_float(&rng) * 2.0f - 1.0f);
+        double y = (double)(pex_sky_java_random_next_float(&rng) * 2.0f - 1.0f);
+        double z = (double)(pex_sky_java_random_next_float(&rng) * 2.0f - 1.0f);
+        double s = (double)(0.25f + pex_sky_java_random_next_float(&rng) * 0.25f);
+        double d = x * x + y * y + z * z;
+        if (d >= 1.0 || d <= 0.01) continue;
+        d = 1.0 / sqrt(d);
+        x *= d; y *= d; z *= d;
+        double bx = x * 100.0;
+        double by = y * 100.0;
+        double bz = z * 100.0;
+        double yaw = atan2(x, z);
+        double sy = sin(yaw);
+        double cy = cos(yaw);
+        double pitch = atan2(sqrt(x * x + z * z), y);
+        double sp = sin(pitch);
+        double cp = cos(pitch);
+        double roll = pex_sky_java_random_next_double(&rng) * M_PI * 2.0;
+        double sr = sin(roll);
+        double cr = cos(roll);
+        if (g_sky_star_count >= (int)(sizeof(g_sky_stars) / sizeof(g_sky_stars[0]))) break;
+        PexStarQuad *q = &g_sky_stars[g_sky_star_count++];
+        for (int v = 0; v < 4; ++v) {
+            double qx = 0.0;
+            double qy = (double)((v & 2) - 1) * s;
+            double qz = (double)(((v + 1) & 2) - 1) * s;
+            double rx = qy * cr - qz * sr;
+            double rz = qz * cr + qy * sr;
+            double px = rx * sp + qx * cp;
+            double py = qx * sp - rx * cp;
+            double vx = py * sy - rz * cy;
+            double vz = rz * sy + py * cy;
+            q->v[v][0] = (float)(bx + vx);
+            q->v[v][1] = (float)(by + px);
+            q->v[v][2] = (float)(bz + vz);
+        }
+    }
+}
+
+static void sky_textured_quad(Texture *tex, float size, float y, float u0, float v0, float u1, float v1, int fallback_color) {
+    if (tex && tex->id) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex->id);
+        glColor4f(1, 1, 1, 1);
+    } else {
+        glDisable(GL_TEXTURE_2D);
+        set_color_int(fallback_color);
+    }
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v0); glVertex3f(-size, y, -size);
+    glTexCoord2f(u1, v0); glVertex3f( size, y, -size);
+    glTexCoord2f(u1, v1); glVertex3f( size, y,  size);
+    glTexCoord2f(u0, v1); glVertex3f(-size, y,  size);
+    glEnd();
+    glColor4f(1,1,1,1);
+    glEnable(GL_TEXTURE_2D);
+}
+
+static void apply_sky_camera_rotation(float partial) {
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float dyaw = pr->yaw - pr->prev_yaw;
+    while (dyaw < -180.0f) dyaw += 360.0f;
+    while (dyaw >= 180.0f) dyaw -= 360.0f;
+    float yaw = pr->prev_yaw + dyaw * partial;
+    float pitch = pr->prev_pitch + (pr->pitch - pr->prev_pitch) * partial;
+    if (g_third_person_view == 2) {
+        yaw += 180.0f;
+        pitch = -pitch;
+    }
+    /* Java sky is drawn after setupCameraTransform(), so it inherits the same
+       hurt and bob matrix.  The sky itself must not translate with player XYZ. */
+    apply_hurt_camera_effect(partial);
+    apply_view_bobbing(partial);
+    glRotatef(pitch, 1.0f, 0.0f, 0.0f);
+    glRotatef(yaw + 180.0f, 0.0f, 1.0f, 0.0f);
+}
 
 static void draw_sky_only(void) {
-    /* Keep the sky blue all the way down.  The extra translucent white pass made
-       a huge washed-out band at the horizon, especially when looking upward
-       through clouds or water. */
-    glDisable(GL_BLEND);
-    draw_gradient(0, 0, g_gui_w, g_gui_h, 0xFF78A7FF, 0xFF8FBEFF);
+    setup_world_projection();
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_FOG);
+    glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    apply_sky_camera_rotation(g_frame_partial);
+
+    float sr, sg, sb;
+    java125_sky_color(g_frame_partial, &sr, &sg, &sb);
+    glDisable(GL_TEXTURE_2D);
+    glColor3f(sr, sg, sb);
+    const float S = 384.0f;
+    glBegin(GL_QUADS);
+    /* Java RenderGlobal sky display lists are simple large quads around the view. */
+    glVertex3f(-S,  S, -S); glVertex3f(-S,  S,  S); glVertex3f( S,  S,  S); glVertex3f( S,  S, -S);
+    glVertex3f(-S, -S,  S); glVertex3f(-S, -S, -S); glVertex3f( S, -S, -S); glVertex3f( S, -S,  S);
+    glVertex3f(-S, -S, -S); glVertex3f(-S,  S, -S); glVertex3f( S,  S, -S); glVertex3f( S, -S, -S);
+    glVertex3f( S, -S,  S); glVertex3f( S,  S,  S); glVertex3f(-S,  S,  S); glVertex3f(-S, -S,  S);
+    glVertex3f(-S, -S,  S); glVertex3f(-S,  S,  S); glVertex3f(-S,  S, -S); glVertex3f(-S, -S, -S);
+    glVertex3f( S, -S, -S); glVertex3f( S,  S, -S); glVertex3f( S,  S,  S); glVertex3f( S, -S,  S);
+    glEnd();
+
+    glEnable(GL_TEXTURE_2D);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glPushMatrix();
+    float rain_alpha = 1.0f;
+    glColor4f(1.0f, 1.0f, 1.0f, rain_alpha);
+    glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
+    glRotatef(java125_celestial_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
+
+    sky_textured_quad(&tex_sun, 30.0f, 100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFF66);
+
+    int phase = java125_moon_phase();
+    int mu = phase % 4;
+    int mv = (phase / 4) % 2;
+    float u0 = (float)mu / 4.0f;
+    float v0 = (float)mv / 2.0f;
+    float u1 = (float)(mu + 1) / 4.0f;
+    float v1 = (float)(mv + 1) / 2.0f;
+    if (tex_moon_phases.id) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex_moon_phases.id);
+        glColor4f(1, 1, 1, rain_alpha);
+    } else {
+        glDisable(GL_TEXTURE_2D);
+        set_color_int(0xFFFFFFFF);
+    }
+    float ms = 20.0f;
+    glBegin(GL_QUADS);
+    glTexCoord2f(u1, v1); glVertex3f(-ms, -100.0f,  ms);
+    glTexCoord2f(u0, v1); glVertex3f( ms, -100.0f,  ms);
+    glTexCoord2f(u0, v0); glVertex3f( ms, -100.0f, -ms);
+    glTexCoord2f(u1, v0); glVertex3f(-ms, -100.0f, -ms);
+    glEnd();
+
+    glDisable(GL_TEXTURE_2D);
+    float star = java125_star_brightness(g_frame_partial) * rain_alpha;
+    if (star > 0.0f) {
+        java125_generate_stars_once();
+        glColor4f(star, star, star, star);
+        glBegin(GL_QUADS);
+        for (int i = 0; i < g_sky_star_count; ++i) {
+            for (int v = 0; v < 4; ++v) {
+                glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+            }
+        }
+        glEnd();
+    }
+    glPopMatrix();
+
+    glColor4f(1,1,1,1);
+    glEnable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
 }
 
 static void draw_chat_lines(int force_visible) {
