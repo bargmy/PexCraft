@@ -155,8 +155,18 @@ static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz);
 static void flat_apply_chunk_environment_light_local(int lcx, int lcz);
 static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
+static void flat_flush_pending_lighting(void);
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
-static void flat_end_persistent_edit(void) { if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--; }
+static void flat_end_persistent_edit(void) {
+    if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
+    /* Player block edits are interactive: Java updates light checks immediately
+       enough that torches/roof edits visually settle on the next rendered frame.
+       The previous desktop path left this to the streaming service thread, whose
+       idle sleep made torch/block-light changes visibly lag behind the placed or
+       broken block.  Batch edits still coalesce because only the outermost
+       persistent edit flushes. */
+    if (g_flat_persistent_edit_depth == 0) flat_flush_pending_lighting();
+}
 static int flat_persistent_edit_active(void) { return g_flat_persistent_edit_depth > 0; }
 static int flat_block_intersects_player(int bx, int by, int bz);
 static void spawn_item_stack(float x, float y, float z, ItemStack st, int random_spread);
@@ -598,6 +608,10 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
         free(sky); free(block); free(q); return;
     }
 
+    unsigned char changed_sections[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    memset(changed_sections, 0, sizeof(changed_sections));
+    int changed_section_count = 0;
+
     int tail = 0;
     for (int z = z0; z <= z1; ++z) {
         for (int x = x0; x <= x1; ++x) {
@@ -643,27 +657,39 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
 
     for (int z = z0; z <= z1; ++z) {
         int fz = flat_z_index(z);
+        int lcz = fz / FLAT_RENDER_CHUNK;
         for (int x = x0; x <= x1; ++x) {
             int fx = flat_index(x);
+            int lcx = fx / FLAT_RENDER_CHUNK;
             for (int y = y0; y <= y1; ++y) {
+                int yi = flat_y_index(y);
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
-                g_flat_sky_light[flat_y_index(y)][fz][fx] = sky[idx] & 15;
-                g_flat_block_light[flat_y_index(y)][fz][fx] = block[idx] & 15;
+                unsigned char new_sky = (unsigned char)(sky[idx] & 15);
+                unsigned char new_block = (unsigned char)(block[idx] & 15);
+                if ((g_flat_sky_light[yi][fz][fx] & 15) != new_sky ||
+                    (g_flat_block_light[yi][fz][fx] & 15) != new_block) {
+                    int lsy = yi / FLAT_RENDER_SECTION;
+                    if (flat_section_index_valid(lsy) && flat_local_chunk_valid(lcx, lcz) &&
+                        !changed_sections[lsy][lcz][lcx]) {
+                        changed_sections[lsy][lcz][lcx] = 1;
+                        changed_section_count++;
+                    }
+                    g_flat_sky_light[yi][fz][fx] = new_sky;
+                    g_flat_block_light[yi][fz][fx] = new_block;
+                }
+            }
+        }
+    }
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
+            for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
+                if (changed_sections[sy][lcz][lcx]) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
             }
         }
     }
     int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
     int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
-    for (int cz = cz0; cz <= cz1; ++cz) {
-        for (int cx = cx0; cx <= cx1; ++cx) {
-            int lcx = stream_world_chunk_local_x(cx);
-            int lcz = stream_world_chunk_local_z(cz);
-            if (flat_local_chunk_valid(lcx, lcz)) {
-                for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
-            }
-        }
-    }
-    pex_logf("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky);
+    pex_logf("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
     free(sky); free(block); free(q);
 }
 

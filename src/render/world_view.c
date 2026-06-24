@@ -4546,7 +4546,7 @@ static int async_section_mesh_pending(void) {
     return pending;
 }
 
-static int async_section_mesh_submit(int sy, int cx, int cz) {
+static int async_section_mesh_submit_ex(int sy, int cx, int cz, int priority) {
     if (!flat_async_section_mesh_enabled()) return 0;
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
     if (g_flat_section_mesh_building[sy][cz][cx]) return 1;
@@ -4556,7 +4556,7 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
 
     int can_submit = 0;
     EnterCriticalSection(&g_async_section_mesh_cs);
-    if (!g_async_section_mesh_stop && g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX) can_submit = 1;
+    if (!g_async_section_mesh_stop && (g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX || priority)) can_submit = 1;
     LeaveCriticalSection(&g_async_section_mesh_cs);
     if (!can_submit) return 2;
 
@@ -4588,19 +4588,51 @@ static int async_section_mesh_submit(int sy, int cx, int cz) {
     }
 
     EnterCriticalSection(&g_async_section_mesh_cs);
-    if (!g_async_section_mesh_stop && g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX &&
-        !g_flat_section_mesh_building[sy][cz][cx]) {
-        g_async_section_mesh_jobs[g_async_section_mesh_job_tail] = job;
-        g_async_section_mesh_job_tail = (g_async_section_mesh_job_tail + 1) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
-        g_async_section_mesh_job_count++;
-        g_flat_section_mesh_building[sy][cz][cx] = 1;
-        can_submit = 1;
+    if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx]) {
+        if (g_async_section_mesh_job_count >= ASYNC_SECTION_MESH_JOB_QUEUE_MAX && priority) {
+            /* Player-near block/light edits must not wait behind a full streaming
+               backlog.  Drop the newest queued background rebuild, clear its
+               building flag, then push this edit at the queue head so the worker
+               consumes it next.  A stale/dropped stream section remains dirty and
+               will be resubmitted later. */
+            int drop = (g_async_section_mesh_job_tail - 1 + ASYNC_SECTION_MESH_JOB_QUEUE_MAX) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
+            AsyncSectionMeshJob dropped = g_async_section_mesh_jobs[drop];
+            if (dropped.sy >= 0 && dropped.sy < FLAT_RENDER_SECTIONS_Y &&
+                dropped.cz >= 0 && dropped.cz < FLAT_RENDER_CHUNKS && dropped.cx >= 0 && dropped.cx < FLAT_RENDER_CHUNKS) {
+                g_flat_section_mesh_building[dropped.sy][dropped.cz][dropped.cx] = 0;
+            }
+            memset(&g_async_section_mesh_jobs[drop], 0, sizeof(g_async_section_mesh_jobs[0]));
+            g_async_section_mesh_job_tail = drop;
+            g_async_section_mesh_job_count--;
+        }
+        if (g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX) {
+            if (priority) {
+                g_async_section_mesh_job_head = (g_async_section_mesh_job_head - 1 + ASYNC_SECTION_MESH_JOB_QUEUE_MAX) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
+                g_async_section_mesh_jobs[g_async_section_mesh_job_head] = job;
+            } else {
+                g_async_section_mesh_jobs[g_async_section_mesh_job_tail] = job;
+                g_async_section_mesh_job_tail = (g_async_section_mesh_job_tail + 1) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
+            }
+            g_async_section_mesh_job_count++;
+            g_flat_section_mesh_building[sy][cz][cx] = 1;
+            can_submit = 1;
+        } else {
+            can_submit = 0;
+        }
     } else {
         can_submit = 0;
     }
     LeaveCriticalSection(&g_async_section_mesh_cs);
     if (can_submit) { SetEvent(g_async_section_mesh_event); return 1; }
-    return 2;
+    return priority ? 2 : 2;
+}
+
+static int async_section_mesh_submit(int sy, int cx, int cz) {
+    return async_section_mesh_submit_ex(sy, cx, cz, 0);
+}
+
+static int async_section_mesh_submit_priority(int sy, int cx, int cz) {
+    return async_section_mesh_submit_ex(sy, cx, cz, 1);
 }
 
 static void async_section_mesh_install_ready(int max_uploads) {
@@ -4850,7 +4882,10 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
 #if defined(PEX_PLATFORM_PSP)
     if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
 #else
-    if (async_mesh) async_section_mesh_install_ready(2);
+    /* One completed section install per frame keeps the F3 "Mesh install" slice
+       from turning two ~2 ms GPU/CPU adopts into a 4 ms hitch.  Priority submit
+       below keeps nearby block/light edits at the front of the build queue. */
+    if (async_mesh) async_section_mesh_install_ready(1);
 #endif
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
@@ -4891,7 +4926,9 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                    Leaving the section dirty for the next frame is cheaper than
                    doing the heavy meshing work on the main thread during chunk
                    streaming. */
-                (void)async_section_mesh_submit(sy, cx, cz);
+                int near_player_edit = (refs[i].dist2 < (48.0f * 48.0f));
+                if (near_player_edit) (void)async_section_mesh_submit_priority(sy, cx, cz);
+                else (void)async_section_mesh_submit(sy, cx, cz);
             } else {
                 pex_logf_trace("chunk mesh sync rebuild sy=%d local=%d,%d", sy, cx, cz);
                 rebuild_flat_world_section_list(sy, cx, cz);
