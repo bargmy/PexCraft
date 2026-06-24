@@ -212,14 +212,15 @@ static void draw_title_logo_3d(float partial) {
 
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
+static int g_release_panorama_boot_reset_done = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
 
 static void release_title_state_enter(void) {
     /* Java GuiMainMenu owns panoramaTimer and viewportTexture per screen
-       instance.  Reset both only when a title screen instance is entered.
-       The first real title frame after the Mojang boot screen has not rendered
-       the skybox yet, so it must not get a second startup-only orientation path. */
+       instance.  Reset both when entering the title screen so startup and
+       post-world-return take the same path on real OpenGL. */
     g_release_panorama_timer = 0;
+    g_release_panorama_boot_reset_done = g_boot_sequence_done ? 1 : 0;
     if (g_release_panorama_viewport_tex) {
         glDeleteTextures(1, &g_release_panorama_viewport_tex);
         g_release_panorama_viewport_tex = 0;
@@ -240,17 +241,6 @@ static int release_panorama_viewport_y(int target_size) {
     return 0;
 }
 
-static void release_panorama_select_back_read_buffer(void) {
-#if defined(GL_BACK)
-    if (!pex_using_d3d9() && !pex_using_d3d11()) {
-        /* rotateAndBlurSkybox copies from the back buffer immediately after
-           drawing into the 256x256 viewport.  Reassert the source buffer so the
-           feedback blur does not depend on stale read-buffer state. */
-        glReadBuffer(GL_BACK);
-    }
-#endif
-}
-
 static void release_panorama_reset_gl_state(void) {
 #if defined(GL_SCISSOR_TEST)
     glDisable(GL_SCISSOR_TEST);
@@ -263,6 +253,12 @@ static void release_panorama_reset_gl_state(void) {
     glDisable(GL_ALPHA_TEST);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
+    /* Java/Minecraft leaves the depth compare as LEQUAL before GuiMainMenu
+       renders its 256x256 feedback blur.  Fresh Windows OpenGL starts at LESS,
+       which lets only the first feedback quad write depth and rejects the later
+       blur passes.  Returning from a world happened to work because world
+       rendering had already set GL_LEQUAL. */
+    glDepthFunc(GL_LEQUAL);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
@@ -368,7 +364,6 @@ static void release_panorama_blur_pass(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     int target_size = release_panorama_target_size();
-    release_panorama_select_back_read_buffer();
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0,
                         release_panorama_viewport_y(target_size), target_size, target_size);
     glEnable(GL_BLEND);
@@ -476,6 +471,15 @@ static void draw_title_screen(float partial) {
             return;
         }
         g_boot_sequence_done = 1;
+        if (!g_release_panorama_boot_reset_done) {
+            /* First startup reaches the real menu through the separate Mojang
+               boot screen, while returning from a world enters the title
+               directly.  Reset the 256x256 feedback texture at the boot->menu
+               boundary so the first visible OpenGL title frame follows the
+               same lifecycle as post-world-return GuiMainMenu.initGui(). */
+            release_title_state_enter();
+            g_release_panorama_boot_reset_done = 1;
+        }
     }
 
     draw_release_skybox(partial);
