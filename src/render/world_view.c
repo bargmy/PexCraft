@@ -633,42 +633,9 @@ static void world_light_set_pos_for_face(int x, int y, int z, int face) {
     world_light_set_pos(lx, ly, lz);
 }
 
-static int java_light_blocks_sky(int id) {
-    if (id == 0) return 0;
-    if (block_is_liquid(id)) return 0;
-    if (id == BLOCK_GLASS || id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
-        id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
-        id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_FIRE ||
-        id == BLOCK_SNOW_LAYER || id == BLOCK_RAILS || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REEDS ||
-        id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN || id == BLOCK_LADDER) return 0;
-    /* Java-style tree shade is not a projected shadow; leaves reduce skylight.
-       Fancy leaves are not opaque for face culling, but still darken the ground
-       under trees enough to match the Beta visual target. */
-    if (id == BLOCK_LEAVES) return 1;
-    return 1;
-}
-
-static float java_world_brightness_at(int x, int y, int z) {
-    if (y < FLAT_WORLD_Y_MIN) y = FLAT_WORLD_Y_MIN;
-    if (y > FLAT_WORLD_Y_MAX) y = FLAT_WORLD_Y_MAX;
-    int id_here = flat_get_block(x, y, z);
-    if (id_here == BLOCK_LAVA || id_here == BLOCK_STILL_LAVA || id_here == BLOCK_FIRE ||
-        id_here == BLOCK_TORCH || id_here == BLOCK_REDSTONE_TORCH_ON || id_here == BLOCK_FURNACE_LIT) return 1.0f;
-    int blocked = 0, leaf_canopy = 0;
-    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
-        int id = flat_get_block(x, yy, z);
-        if (id == BLOCK_LEAVES) { leaf_canopy = 1; continue; }
-        if (java_light_blocks_sky(id)) { blocked = 1; break; }
-    }
-    float b = leaf_canopy ? 0.55f : (blocked ? 0.25f : 1.0f);
-    if (y < 64) {
-        float cave = 0.35f + ((float)y / 64.0f) * 0.25f;
-        if (b > cave) b = cave;
-    }
-    if (b < 0.25f) b = 0.25f;
-    if (b > 1.0f) b = 1.0f;
-    return b;
-}
+/* World brightness now comes from the Java-style sky/block light helpers in
+   inventory.c.  Do not add roof/canopy hacks here; propagate sky/block light
+   into g_flat_*_light instead. */
 
 static int colorizer_lookup(Texture *tex, float temp, float humid, int fallback_rgb) {
     if (!tex || !tex->rgba || tex->w <= 0 || tex->h <= 0) return fallback_rgb;
@@ -1001,21 +968,12 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
 
 static void world_set_shade(float shade) {
     float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
-    /* During streaming, some edge columns can temporarily have no populated light
-       value.  Do not let that become pure black on exposed faces; Java's brightness
-       table bottoms out above black and the next light rebuild will refine it. */
-    if (!g_force_fullbright_item_model) {
-        if (light < 0.05f) light = 0.05f;
-    }
     shade *= light;
     flat_direct_set_color4f(shade, shade, shade, 1.0f);
 }
 
 static void world_set_color_shade(int rgb, float shade) {
     float light = g_force_fullbright_item_model ? 1.0f : flat_light_brightness(g_world_light_x, g_world_light_y, g_world_light_z);
-    if (!g_force_fullbright_item_model) {
-        if (light < 0.05f) light = 0.05f;
-    }
     shade *= light;
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
@@ -2351,9 +2309,9 @@ static int world_face_tint_rgb(int id, int face) {
 }
 
 static float world_ao_cell_brightness(int x, int y, int z) {
-    /* Smooth block lighting must sample the same read-time-corrected brightness
-       used by the non-AO path.  The old mesh AO used raw 0..15 cells, so open
-       no-roof terrain could still pick up stale/dark neighbor samples. */
+    /* Smooth block lighting now follows the Java mixed-light path in
+       flat_light_brightness(): Sky and Block are kept separate until the final
+       CPU-baked brightness lookup. */
     return flat_light_brightness(x, y, z);
 }
 
@@ -2361,10 +2319,15 @@ static int world_ao_cell_is_normal_cube(int x, int y, int z) {
     return block_occludes_render_face(flat_get_block(x, y, z));
 }
 
-static float world_ao_cell_value(int x, int y, int z, float fallback_brightness, int *normal_cube) {
-    int solid = world_ao_cell_is_normal_cube(x, y, z);
-    if (normal_cube) *normal_cube = solid;
-    return solid ? fallback_brightness * 0.55f : world_ao_cell_brightness(x, y, z);
+static float world_ao_cell_value(int x, int y, int z, float fallback_brightness, int *blocks_grass) {
+    int id = flat_get_block(x, y, z);
+    int can_block_grass = flat_block_can_block_grass_java(id);
+    if (blocks_grass) *blocks_grass = !can_block_grass;
+    /* Java Block.getAmbientOcclusionLightValue(): normal cube = 0.2F,
+       non-normal cube = 1.0F.  Because this renderer does not yet carry both
+       separate AO value and packed light per vertex, multiply that AO factor by
+       the Java-derived brightness sample as the closest CPU-baked equivalent. */
+    return world_ao_cell_brightness(x, y, z) * (world_ao_cell_is_normal_cube(x, y, z) ? 0.2f : 1.0f);
 }
 
 static int world_smooth_block_lighting_enabled(int id) {
@@ -2424,7 +2387,7 @@ static void world_smooth_face_lights(int x, int y, int z, int face, float out[4]
     int nx, ny, nz, ax, ay, az, bx, by, bz;
     int corner_a[4], corner_b[4];
     float samples[3][3];
-    int normal[3][3];
+    int blocks_grass[3][3];
     world_face_sample_frame(face, &nx, &ny, &nz, &ax, &ay, &az, &bx, &by, &bz, corner_a, corner_b);
 
     int base_x = x + nx;
@@ -2438,14 +2401,18 @@ static void world_smooth_face_lights(int x, int y, int z, int face, float out[4]
             int sx = base_x + da * ax + db * bx;
             int sy = base_y + da * ay + db * by;
             int sz = base_z + da * az + db * bz;
-            samples[ia][ib] = world_ao_cell_value(sx, sy, sz, fallback_brightness, &normal[ia][ib]);
+            samples[ia][ib] = world_ao_cell_value(sx, sy, sz, fallback_brightness, &blocks_grass[ia][ib]);
         }
     }
 
     for (int i = 0; i < 4; ++i) {
         int ia = corner_a[i] > 0 ? 2 : 0;
         int ib = corner_b[i] > 0 ? 2 : 0;
-        float diag = (normal[ia][1] && normal[1][ib]) ? samples[ia][1] : samples[ia][ib];
+        /* RenderBlocks: only use the diagonal corner sample when at least one of
+           the two side cells is passable-to-grass.  If both side cells block
+           grass, reuse the side sample to avoid diagonal light leaking through
+           a solid corner. */
+        float diag = (blocks_grass[ia][1] && blocks_grass[1][ib]) ? samples[ia][1] : samples[ia][ib];
         out[i] = (samples[1][1] + samples[ia][1] + samples[1][ib] + diag) * 0.25f;
     }
 }

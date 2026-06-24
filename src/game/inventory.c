@@ -354,6 +354,9 @@ static int flat_get_block_light(int x, int y, int z) {
 }
 
 static int flat_light_opacity_for_id(int id) {
+    /* Mirrors Java 1.2.5 Block.lightOpacity[] for the block ids this C port has.
+       This is intentionally separate from collision/render occlusion: glass does
+       not block light, leaves block one level, and water/ice block three levels. */
     if (id == 0) return 0;
     if (id == BLOCK_WATER || id == BLOCK_STILL_WATER || id == BLOCK_ICE) return 3;
     if (id == BLOCK_LEAVES) return 1;
@@ -364,13 +367,16 @@ static int flat_light_opacity_for_id(int id) {
         id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_REEDS || id == BLOCK_LADDER ||
         id == BLOCK_RAILS || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
         id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_WOOD_DOOR ||
-        id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL) return 0;
-    if (id == BLOCK_SLAB || id == BLOCK_FARMLAND || id == BLOCK_WOOD_STAIRS ||
-        id == BLOCK_COBBLE_STAIRS || id == BLOCK_FENCE || id == BLOCK_CACTUS) return 0;
+        id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL || id == BLOCK_CROPS ||
+        id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE ||
+        id == BLOCK_CHEST || id == BLOCK_FENCE || id == BLOCK_CACTUS) return 0;
+    /* Java slabs/stairs/farmland still have lightOpacity 255; they get smooth
+       visible light from Block.useNeighborBrightness instead of opacity hacks. */
     return 255;
 }
 
 static int flat_block_light_value_for_id(int id) {
+    /* Mirrors Java 1.2.5 Block.lightValue[] = (int)(15.0F * setLightValue()). */
     switch (id) {
         case BLOCK_LAVA:
         case BLOCK_STILL_LAVA:
@@ -378,16 +384,18 @@ static int flat_block_light_value_for_id(int id) {
         case BLOCK_GLOWSTONE:
         case BLOCK_JACK_O_LANTERN:
             return 15;
-        case BLOCK_FURNACE_LIT:
-            return 13;
         case BLOCK_TORCH:
-            return 14;
+            return 14; /* 15/16 */
+        case BLOCK_FURNACE_LIT:
+            return 13; /* 14/16 */
         case BLOCK_REDSTONE_TORCH_ON:
-            return 7;
+            return 7;  /* 1/2 */
         case BLOCK_REDSTONE_ORE_GLOWING:
-            return 9;
+            return 9;  /* 10/16 */
         case BLOCK_PORTAL:
-            return 11;
+            return 11; /* 12/16 */
+        case BLOCK_BROWN_MUSHROOM:
+            return 1;  /* 2/16 */
         default:
             return 0;
     }
@@ -404,115 +412,117 @@ static int flat_sky_light_after_block(int incoming, int id) {
     return incoming;
 }
 
-static const float g_java_light_brightness_table[16] = {
-    0.050000f, 0.066667f, 0.085714f, 0.107692f,
-    0.133333f, 0.163636f, 0.200000f, 0.244444f,
-    0.300000f, 0.371429f, 0.466667f, 0.600000f,
-    0.800000f, 0.942857f, 0.971429f, 1.000000f
-};
-
-static int flat_combined_light_value(int x, int y, int z) {
-    int sky = flat_get_sky_light(x, y, z); /* skylightSubtracted is zero in this client. */
-    int block = flat_get_block_light(x, y, z);
-    return (sky > block) ? sky : block;
+static float flat_java_light_brightness_from_level_base(int level, float base) {
+    if (level < 0) level = 0;
+    if (level > 15) level = 15;
+    /* WorldProvider.generateLightBrightnessTable(); base=0.0 overworld, 0.1 nether. */
+    float inv = 1.0f - (float)level / 15.0f;
+    return (1.0f - inv) / (inv * 3.0f + 1.0f) * (1.0f - base) + base;
 }
 
-static int flat_has_leaf_canopy_above(int x, int y, int z) {
-    int saw_leaf = 0;
-    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
-        int id = flat_get_block(x, yy, z);
-        if (id == 0 || block_is_liquid(id) || id == BLOCK_GLASS || id == BLOCK_SNOW_LAYER ||
-            id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
-            id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
-            id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REDSTONE_TORCH_OFF ||
-            id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_REEDS || id == BLOCK_LADDER ||
-            id == BLOCK_RAILS || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
-            id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_WOOD_DOOR ||
-            id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL) continue;
-        if (id == BLOCK_LEAVES) { saw_leaf = 1; continue; }
-        /* A real solid block above the leaves means this is an overhang/cave,
-           not just tree canopy.  Do not let the leaf fallback brighten caves or
-           create odd mixed shadow columns under terrain. */
-        return 0;
-    }
-    return saw_leaf;
+static float flat_java_light_table_base(void) {
+    /* This client only has an overworld-like provider today.  Keeping the base
+       as a function makes the Nether 0.1F table a one-line change if dimensions
+       are added later. */
+    return 0.0f;
 }
 
-static int flat_air_cell_has_lateral_sky(int x, int y, int z) {
-    if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) return 0;
-    int id = flat_get_block(x, y, z);
-    if (id != 0 && flat_light_opacity_for_id(id) >= 255) return 0;
-    const int radius = 4;
-    for (int dz = -radius; dz <= radius; ++dz) {
-        for (int dx = -radius; dx <= radius; ++dx) {
-            if (dx == 0 && dz == 0) continue;
-            if (abs(dx) + abs(dz) > radius) continue;
-            int sx = x + dx, sz = z + dz;
-            if (flat_get_sky_light(sx, y, sz) >= 15 || flat_get_sky_light(sx, y + 1, sz) >= 15) {
-                return 1;
-            }
-        }
-    }
+static float flat_java_light_brightness_from_level(int level) {
+    return flat_java_light_brightness_from_level_base(level, flat_java_light_table_base());
+}
+
+static int flat_block_can_block_grass_java(int id) {
+    /* Java Block.canBlockGrass[] is true for blocks whose Material does NOT block
+       grass (air/plants/circuits/snow/fire/portal), and false for normal solids,
+       glass, water, leaves, cactus, doors, etc.  RenderBlocks uses it to decide
+       whether diagonal AO corner samples are valid. */
+    if (id == 0) return 1;
+    if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+        id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
+        id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REDSTONE_TORCH_OFF ||
+        id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_REEDS || id == BLOCK_LADDER ||
+        id == BLOCK_RAILS || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
+        id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_SNOW_LAYER ||
+        id == BLOCK_PORTAL || id == BLOCK_CROPS || id == BLOCK_STONE_PRESSURE_PLATE ||
+        id == BLOCK_WOOD_PRESSURE_PLATE) return 1;
     return 0;
 }
 
-static int flat_cell_has_clear_vertical_sky(int x, int y, int z) {
-    if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) return 0;
-    int id = flat_get_block(x, y, z);
-    if (id != 0 && flat_light_opacity_for_id(id) >= 255) return 0;
-    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
-        int bid = flat_get_block(x, yy, z);
-        int opacity = flat_light_opacity_for_id(bid);
-        if (opacity >= 255) return 0;
-    }
-    return 1;
+static int flat_block_uses_neighbor_brightness(int id) {
+    if (id == 0) return 0; /* Java Block.useNeighborBrightness[0] remains false. */
+    if (id == BLOCK_SLAB || id == BLOCK_FARMLAND ||
+        id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) return 1;
+    if (flat_block_can_block_grass_java(id)) return 1;
+    return 0;
 }
 
-static int flat_neighbor_smoothed_combined_light(int x, int y, int z) {
-    int best = flat_combined_light_value(x, y, z);
-    const int dx[6] = { 1, -1, 0, 0, 0, 0 };
-    const int dy[6] = { 0, 0, 1, -1, 0, 0 };
-    const int dz[6] = { 0, 0, 0, 0, 1, -1 };
-    for (int i = 0; i < 6; ++i) {
-        int v = flat_combined_light_value(x + dx[i], y + dy[i], z + dz[i]) - 1;
-        if (v > best) best = v;
+static int flat_get_saved_sky_light_value(int x, int y, int z) {
+    return flat_get_sky_light(x, y, z);
+}
+
+static int flat_get_saved_block_light_value(int x, int y, int z) {
+    return flat_get_block_light(x, y, z);
+}
+
+static int flat_get_sky_light_value_do(int x, int y, int z, int use_neighbor) {
+    if (!use_neighbor || !flat_block_uses_neighbor_brightness(flat_get_block(x, y, z))) {
+        return flat_get_saved_sky_light_value(x, y, z);
     }
+    int best = flat_get_saved_sky_light_value(x, y + 1, z);
+    int v = flat_get_saved_sky_light_value(x + 1, y, z); if (v > best) best = v;
+    v = flat_get_saved_sky_light_value(x - 1, y, z); if (v > best) best = v;
+    v = flat_get_saved_sky_light_value(x, y, z + 1); if (v > best) best = v;
+    v = flat_get_saved_sky_light_value(x, y, z - 1); if (v > best) best = v;
     return best;
 }
 
-static int flat_leaf_canopy_smoothed_light(int x, int y, int z, int base) {
-    int best = base;
-    /* Beta skylight bleeds sideways under leaves.  Per-column leaf opacity makes
-       checkerboard/dark-square tree shadows, especially while neighboring chunks
-       stream in.  Take a tiny Manhattan neighborhood max so tree shade is a soft
-       canopy dimming instead of random black patches. */
-    for (int dz = -3; dz <= 3; ++dz) {
-        for (int dx = -3; dx <= 3; ++dx) {
-            int dist = abs(dx) + abs(dz);
-            if (dist > 3) continue;
-            int v0 = flat_combined_light_value(x + dx, y, z + dz) - dist;
-            int v1 = flat_combined_light_value(x + dx, y + 1, z + dz) - dist - 1;
-            if (v0 > best) best = v0;
-            if (v1 > best) best = v1;
-        }
+static int flat_get_block_light_value_do(int x, int y, int z, int use_neighbor) {
+    if (!use_neighbor || !flat_block_uses_neighbor_brightness(flat_get_block(x, y, z))) {
+        return flat_get_saved_block_light_value(x, y, z);
     }
-    if (best < 11) best = 11;
-    if (best > 13) best = 13;
+    int best = flat_get_saved_block_light_value(x, y + 1, z);
+    int v = flat_get_saved_block_light_value(x + 1, y, z); if (v > best) best = v;
+    v = flat_get_saved_block_light_value(x - 1, y, z); if (v > best) best = v;
+    v = flat_get_saved_block_light_value(x, y, z + 1); if (v > best) best = v;
+    v = flat_get_saved_block_light_value(x, y, z - 1); if (v > best) best = v;
     return best;
+}
+
+static int flat_get_light_brightness_for_sky_blocks(int x, int y, int z, int min_block_light) {
+    int sky = flat_get_sky_light_value_do(x, y, z, 1);
+    int block = flat_get_block_light_value_do(x, y, z, 1);
+    if (block < min_block_light) block = min_block_light;
+    if (sky < 0) sky = 0; if (sky > 15) sky = 15;
+    if (block < 0) block = 0; if (block > 15) block = 15;
+    return (sky << 20) | (block << 4);
+}
+
+static int flat_mixed_brightness_for_block(int id, int x, int y, int z) {
+    return flat_get_light_brightness_for_sky_blocks(x, y, z, flat_block_light_value_for_id(id));
+}
+
+static int flat_light_level_from_packed_brightness(int packed) {
+    int sky = (packed >> 20) & 15;
+    int block = (packed >> 4) & 15;
+    return (sky > block) ? sky : block;
+}
+
+static int flat_combined_light_value(int x, int y, int z) {
+    return flat_light_level_from_packed_brightness(flat_get_light_brightness_for_sky_blocks(x, y, z, 0));
+}
+
+static float flat_brightness_from_packed(int packed) {
+    return flat_java_light_brightness_from_level(flat_light_level_from_packed_brightness(packed));
 }
 
 static float flat_light_brightness(int x, int y, int z) {
-    int l = flat_neighbor_smoothed_combined_light(x, y, z);
-    /* The fast column skylight pass intentionally avoids a full Java metadata
-       queue while streaming.  These read-time clamps only affect exposed air
-       sample cells, so sealed caves stay dark while cliffs and tree canopies do
-       not get one-cell black glitches. */
-    if (l < 12 && y >= 50 && flat_cell_has_clear_vertical_sky(x, y, z)) l = 15;
-    if (flat_has_leaf_canopy_above(x, y, z)) l = flat_leaf_canopy_smoothed_light(x, y, z, l);
-    else if (l < 8 && flat_air_cell_has_lateral_sky(x, y, z)) l = 8;
-    if (l < 0) l = 0;
-    if (l > 15) l = 15;
-    return g_java_light_brightness_table[l];
+    /* Java path: World/ChunkCache.getLightBrightnessForSkyBlocks() keeps sky and
+       block light separate, then RenderBlocks/Tessellator carries the packed
+       value.  This renderer still CPU-bakes RGB, so it collapses the packed
+       value only at the final brightness-table lookup.  The old lateral-sky and
+       leaf-canopy clamps were removed because they were non-Java hacks that made
+       exposed terrain/canopies light incorrectly. */
+    return flat_brightness_from_packed(flat_get_light_brightness_for_sky_blocks(x, y, z, 0));
 }
 
 typedef struct FlatLightQueueCell { short x, y, z; } FlatLightQueueCell;
