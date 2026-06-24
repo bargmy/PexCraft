@@ -212,6 +212,7 @@ static void draw_title_logo_3d(float partial) {
 
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
+static int g_release_panorama_boot_reset_done = 0;
 #define RELEASE_PANORAMA_TEX_SIZE 256
 
 static void release_title_state_enter(void) {
@@ -219,6 +220,7 @@ static void release_title_state_enter(void) {
        instance.  Reset both when entering the title screen so startup and
        post-world-return take the same path on real OpenGL. */
     g_release_panorama_timer = 0;
+    g_release_panorama_boot_reset_done = g_boot_sequence_done ? 1 : 0;
     if (g_release_panorama_viewport_tex) {
         glDeleteTextures(1, &g_release_panorama_viewport_tex);
         g_release_panorama_viewport_tex = 0;
@@ -231,6 +233,28 @@ static int release_panorama_target_size(void) {
        larger region than the real framebuffer breaks native OpenGL on
        resizable windows and causes quadrant/split artifacts. */
     return RELEASE_PANORAMA_TEX_SIZE;
+}
+
+static int release_panorama_use_win32_gl_top_origin_fix(void) {
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+    /* PexCraft's D3D backends already convert glViewport/glCopyTexSubImage2D
+       through a top-left render-target origin.  The Win32 desktop OpenGL path
+       uses native lower-left framebuffer coordinates, which made the title
+       feedback texture enter a different orientation/state on first startup.
+       Keep this correction limited to real Win32 OpenGL; Direct3D is the known
+       good reference and SDL/GLES ports have their own coordinate shims. */
+    return !pex_using_d3d9() && !pex_using_d3d11();
+#else
+    return 0;
+#endif
+}
+
+static int release_panorama_viewport_y(int target_size) {
+    if (release_panorama_use_win32_gl_top_origin_fix()) {
+        int y = g_render_h - target_size;
+        return y > 0 ? y : 0;
+    }
+    return 0;
 }
 
 static void ensure_release_panorama_viewport_texture(void) {
@@ -321,7 +345,8 @@ static void release_panorama_blur_pass(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     int target_size = release_panorama_target_size();
-    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, target_size, target_size);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0,
+                        release_panorama_viewport_y(target_size), target_size, target_size);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
@@ -363,7 +388,7 @@ static void draw_release_skybox(float partial) {
 
     /* Java GuiMainMenu.renderSkybox: fixed 256x256 panorama target first. */
     int target_size = release_panorama_target_size();
-    glViewport(0, 0, target_size, target_size);
+    glViewport(0, release_panorama_viewport_y(target_size), target_size, target_size);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     draw_release_panorama_cube(partial);
     glDisable(GL_TEXTURE_2D);
@@ -424,6 +449,15 @@ static void draw_title_screen(float partial) {
             return;
         }
         g_boot_sequence_done = 1;
+        if (!g_release_panorama_boot_reset_done) {
+            /* First startup reaches the real menu through the separate Mojang
+               boot screen, while returning from a world enters the title
+               directly.  Reset the 256x256 feedback texture at the boot->menu
+               boundary so the first visible OpenGL title frame follows the
+               same lifecycle as post-world-return GuiMainMenu.initGui(). */
+            release_title_state_enter();
+            g_release_panorama_boot_reset_done = 1;
+        }
     }
 
     draw_release_skybox(partial);

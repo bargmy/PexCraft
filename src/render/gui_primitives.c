@@ -64,24 +64,45 @@ static void gradient_color_from_int(int color, float *r, float *g, float *b, flo
     *b = (c & 255) / 255.0f;
 }
 
+static GLint pex_gl_save_shade_model(void) {
+#if defined(GL_SHADE_MODEL) && (defined(GL_SMOOTH) || defined(GL_FLAT))
+    GLint old_mode = 0;
+    glGetIntegerv(GL_SHADE_MODEL, &old_mode);
+    return old_mode;
+#else
+    return 0;
+#endif
+}
+
+static void pex_gl_restore_shade_model(GLint old_mode) {
+#if defined(GL_SMOOTH) && defined(GL_FLAT)
+    if (old_mode == GL_SMOOTH || old_mode == GL_FLAT) glShadeModel((GLenum)old_mode);
+#else
+    (void)old_mode;
+#endif
+}
+
+static void pex_gl_shade_model_smooth(void) {
+#ifdef GL_SMOOTH
+    glShadeModel(GL_SMOOTH);
+#endif
+}
+
 static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     float r1,g1,b1,a1,r2,g2,b2,a2;
+    GLint old_shade_model = pex_gl_save_shade_model();
     color_from_int_alpha(c1, &r1,&g1,&b1,&a1, 0);
     color_from_int_alpha(c2, &r2,&g2,&b2,&a2, 0);
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-#ifdef GL_SMOOTH
-    glShadeModel(GL_SMOOTH);
-#endif
+    pex_gl_shade_model_smooth();
     glBegin(GL_QUADS);
     glColor4f(r1,g1,b1,a1); glVertex3f((float)x2, (float)y1, 0.0f); glVertex3f((float)x1, (float)y1, 0.0f);
     glColor4f(r2,g2,b2,a2); glVertex3f((float)x1, (float)y2, 0.0f); glVertex3f((float)x2, (float)y2, 0.0f);
     glEnd();
-#ifdef GL_FLAT
-    glShadeModel(GL_FLAT);
-#endif
+    pex_gl_restore_shade_model(old_shade_model);
     glDisable(GL_BLEND);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);

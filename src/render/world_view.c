@@ -3423,11 +3423,13 @@ static void draw_cuboid_model_tile(float x, float y, float z,
 
 static void draw_held_or_dropped_block_item_model(int id, float x, float y, float z) {
     int pushed_fullbright = 0;
+    GLint old_shade_model = pex_gl_save_shade_model();
     if (g_force_fullbright_item_model <= 0) { g_force_fullbright_item_model++; pushed_fullbright = 1; }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glColor4f(1,1,1,1);
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
+    pex_gl_shade_model_smooth();
     /* Disable culling here too: the same legacy cuboid emitter is used for
        held/dropped block items, and OpenGL culling makes their faces disappear
        or appear inverted while D3D looks fine. */
@@ -3479,6 +3481,7 @@ static void draw_held_or_dropped_block_item_model(int id, float x, float y, floa
     goto done;
 done:
     if (pushed_fullbright) g_force_fullbright_item_model--;
+    pex_gl_restore_shade_model(old_shade_model);
     glDisable(GL_CULL_FACE);
     glColor4f(1,1,1,1);
 }
@@ -5625,8 +5628,15 @@ static void draw_flat_section_translucent_passes_direct(const FlatRenderSectionR
 }
 
 static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
+    GLint old_shade_model = pex_gl_save_shade_model();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    /* Java EntityRenderer.renderWorld() switches terrain to GL_SMOOTH when
+       ambient occlusion/smooth lighting is active.  The C mesh stores block
+       light/AO as per-vertex colors; real OpenGL must interpolate those colors
+       or block faces collapse into the diagonal dark triangles seen in the
+       OpenGL screenshots. */
+    pex_gl_shade_model_smooth();
     /* The captured terrain mesh reuses the old immediate-mode face emitters.
        Their quad winding is not consistent enough for OpenGL back-face culling,
        even though the D3D backends draw the same mesh fine without culling.
@@ -5646,14 +5656,17 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
         }
     }
+    pex_gl_restore_shade_model(old_shade_model);
     glDisable(GL_ALPHA_TEST);
     glColor4f(1,1,1,1);
 }
 
 static void draw_flat_section_translucent_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
     if (!g_opts.fancy_graphics) return;
+    GLint old_shade_model = pex_gl_save_shade_model();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    pex_gl_shade_model_smooth();
     glDisable(GL_CULL_FACE);
     glDisable(GL_ALPHA_TEST);
     glEnable(GL_DEPTH_TEST);
@@ -5668,6 +5681,7 @@ static void draw_flat_section_translucent_passes_gl_cpu(const FlatRenderSectionR
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
         }
     }
+    pex_gl_restore_shade_model(old_shade_model);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
@@ -5676,6 +5690,8 @@ static void draw_flat_section_translucent_passes_gl_cpu(const FlatRenderSectionR
 static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count) {
     if (flat_direct_backend()) { draw_flat_section_passes_direct(refs, count); return; }
     if (flat_async_section_mesh_enabled()) { draw_flat_section_passes_gl_cpu(refs, count); return; }
+    GLint old_shade_model = pex_gl_save_shade_model();
+    pex_gl_shade_model_smooth();
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
@@ -5689,6 +5705,7 @@ static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count
             glCallList(g_flat_section_lists[sy][cz][cx][0]);
         }
     }
+    pex_gl_restore_shade_model(old_shade_model);
     glColor4f(1,1,1,1);
 }
 
@@ -5696,6 +5713,8 @@ static void draw_flat_section_translucent_passes(const FlatRenderSectionRef *ref
     if (!g_opts.fancy_graphics) return;
     if (flat_direct_backend()) { draw_flat_section_translucent_passes_direct(refs, count); return; }
     if (flat_async_section_mesh_enabled()) { draw_flat_section_translucent_passes_gl_cpu(refs, count); return; }
+    GLint old_shade_model = pex_gl_save_shade_model();
+    pex_gl_shade_model_smooth();
     glDisable(GL_CULL_FACE);
     glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
@@ -5708,6 +5727,7 @@ static void draw_flat_section_translucent_passes(const FlatRenderSectionRef *ref
             glCallList(g_flat_section_lists[sy][cz][cx][1]);
         }
     }
+    pex_gl_restore_shade_model(old_shade_model);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
