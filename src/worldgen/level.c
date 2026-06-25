@@ -466,21 +466,21 @@ static void world_biomes_init(void) {
 }
 
 typedef enum GenLayerType {
-    GL_ISLAND,
-    GL_FUZZY_ZOOM,
-    GL_ZOOM,
-    GL_ADD_ISLAND,
-    GL_ADD_SNOW,
-    GL_BIOME,
-    GL_HILLS,
-    GL_RIVER_INIT,
-    GL_RIVER,
-    GL_RIVER_MIX,
-    GL_SHORE,
-    GL_SMOOTH,
-    GL_SWAMP_RIVERS,
-    GL_VORONOI_ZOOM,
-    GL_ADD_MUSHROOM_ISLAND
+    GENLAYER_ISLAND,
+    GENLAYER_FUZZY_ZOOM,
+    GENLAYER_ZOOM,
+    GENLAYER_ADD_ISLAND,
+    GENLAYER_ADD_SNOW,
+    GENLAYER_BIOME,
+    GENLAYER_HILLS,
+    GENLAYER_RIVER_INIT,
+    GENLAYER_RIVER,
+    GENLAYER_RIVER_MIX,
+    GENLAYER_SHORE,
+    GENLAYER_SMOOTH,
+    GENLAYER_SWAMP_RIVERS,
+    GENLAYER_VORONOI_ZOOM,
+    GENLAYER_ADD_MUSHROOM_ISLAND
 } GenLayerType;
 
 typedef struct GenLayer GenLayer;
@@ -515,7 +515,7 @@ static void genlayer_ctor(GenLayer *g, GenLayerType type, int64_t seed, GenLayer
 }
 static void genlayer_init_world_seed(GenLayer *g, int64_t seed) {
     if(!g) return;
-    if(g->type == GL_RIVER_MIX) {
+    if(g->type == GENLAYER_RIVER_MIX) {
         genlayer_init_world_seed(g->parent, seed);
         genlayer_init_world_seed(g->parent2, seed);
     } else if(g->parent) {
@@ -818,21 +818,21 @@ static int *genlayer_add_mushroom(GenLayer *g, int x, int z, int w, int h) {
 }
 static int *genlayer_get_ints(GenLayer *g, int x, int z, int w, int h) {
     switch(g->type) {
-        case GL_ISLAND: return genlayer_island(g,x,z,w,h);
-        case GL_FUZZY_ZOOM: return genlayer_zoom_common(g,x,z,w,h,1);
-        case GL_ZOOM: return genlayer_zoom_common(g,x,z,w,h,0);
-        case GL_ADD_ISLAND: return genlayer_add_island(g,x,z,w,h);
-        case GL_ADD_SNOW: return genlayer_add_snow(g,x,z,w,h);
-        case GL_BIOME: return genlayer_biome_layer(g,x,z,w,h);
-        case GL_HILLS: return genlayer_hills(g,x,z,w,h);
-        case GL_RIVER_INIT: return genlayer_river_init(g,x,z,w,h);
-        case GL_RIVER: return genlayer_river(g,x,z,w,h);
-        case GL_RIVER_MIX: return genlayer_river_mix(g,x,z,w,h);
-        case GL_SHORE: return genlayer_shore(g,x,z,w,h);
-        case GL_SMOOTH: return genlayer_smooth(g,x,z,w,h);
-        case GL_SWAMP_RIVERS: return genlayer_swamp_rivers(g,x,z,w,h);
-        case GL_VORONOI_ZOOM: return genlayer_voronoi(g,x,z,w,h);
-        case GL_ADD_MUSHROOM_ISLAND: return genlayer_add_mushroom(g,x,z,w,h);
+        case GENLAYER_ISLAND: return genlayer_island(g,x,z,w,h);
+        case GENLAYER_FUZZY_ZOOM: return genlayer_zoom_common(g,x,z,w,h,1);
+        case GENLAYER_ZOOM: return genlayer_zoom_common(g,x,z,w,h,0);
+        case GENLAYER_ADD_ISLAND: return genlayer_add_island(g,x,z,w,h);
+        case GENLAYER_ADD_SNOW: return genlayer_add_snow(g,x,z,w,h);
+        case GENLAYER_BIOME: return genlayer_biome_layer(g,x,z,w,h);
+        case GENLAYER_HILLS: return genlayer_hills(g,x,z,w,h);
+        case GENLAYER_RIVER_INIT: return genlayer_river_init(g,x,z,w,h);
+        case GENLAYER_RIVER: return genlayer_river(g,x,z,w,h);
+        case GENLAYER_RIVER_MIX: return genlayer_river_mix(g,x,z,w,h);
+        case GENLAYER_SHORE: return genlayer_shore(g,x,z,w,h);
+        case GENLAYER_SMOOTH: return genlayer_smooth(g,x,z,w,h);
+        case GENLAYER_SWAMP_RIVERS: return genlayer_swamp_rivers(g,x,z,w,h);
+        case GENLAYER_VORONOI_ZOOM: return genlayer_voronoi(g,x,z,w,h);
+        case GENLAYER_ADD_MUSHROOM_ISLAND: return genlayer_add_mushroom(g,x,z,w,h);
     }
     return genlayer_alloc(w*h);
 }
@@ -856,42 +856,42 @@ static GenLayer *biome_manager_new_layer(BiomeManager *bm, GenLayerType type, in
 }
 static GenLayer *biome_manager_zoom_many(BiomeManager *bm, int64_t seed, GenLayer *parent, int count) {
     GenLayer *g = parent;
-    for(int i=0; i<count; i++) g = biome_manager_new_layer(bm, GL_ZOOM, seed + (int64_t)i, g, NULL);
+    for(int i=0; i<count; i++) g = biome_manager_new_layer(bm, GENLAYER_ZOOM, seed + (int64_t)i, g, NULL);
     return g;
 }
 static void biome_manager_init(BiomeManager *bm, int64_t worldSeed) {
     world_biomes_init();
     memset(bm, 0, sizeof(*bm));
-    GenLayer *var3 = biome_manager_new_layer(bm, GL_ISLAND, 1, NULL, NULL);
-    GenLayer *var9 = biome_manager_new_layer(bm, GL_FUZZY_ZOOM, 2000, var3, NULL);
-    GenLayer *var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 1, var9, NULL);
-    GenLayer *var11 = biome_manager_new_layer(bm, GL_ZOOM, 2001, var10, NULL);
-    var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 2, var11, NULL);
-    GenLayer *var12 = biome_manager_new_layer(bm, GL_ADD_SNOW, 2, var10, NULL);
-    var11 = biome_manager_new_layer(bm, GL_ZOOM, 2002, var12, NULL);
-    var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 3, var11, NULL);
-    var11 = biome_manager_new_layer(bm, GL_ZOOM, 2003, var10, NULL);
-    var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 4, var11, NULL);
-    GenLayer *var15 = biome_manager_new_layer(bm, GL_ADD_MUSHROOM_ISLAND, 5, var10, NULL);
+    GenLayer *var3 = biome_manager_new_layer(bm, GENLAYER_ISLAND, 1, NULL, NULL);
+    GenLayer *var9 = biome_manager_new_layer(bm, GENLAYER_FUZZY_ZOOM, 2000, var3, NULL);
+    GenLayer *var10 = biome_manager_new_layer(bm, GENLAYER_ADD_ISLAND, 1, var9, NULL);
+    GenLayer *var11 = biome_manager_new_layer(bm, GENLAYER_ZOOM, 2001, var10, NULL);
+    var10 = biome_manager_new_layer(bm, GENLAYER_ADD_ISLAND, 2, var11, NULL);
+    GenLayer *var12 = biome_manager_new_layer(bm, GENLAYER_ADD_SNOW, 2, var10, NULL);
+    var11 = biome_manager_new_layer(bm, GENLAYER_ZOOM, 2002, var12, NULL);
+    var10 = biome_manager_new_layer(bm, GENLAYER_ADD_ISLAND, 3, var11, NULL);
+    var11 = biome_manager_new_layer(bm, GENLAYER_ZOOM, 2003, var10, NULL);
+    var10 = biome_manager_new_layer(bm, GENLAYER_ADD_ISLAND, 4, var11, NULL);
+    GenLayer *var15 = biome_manager_new_layer(bm, GENLAYER_ADD_MUSHROOM_ISLAND, 5, var10, NULL);
     int var4 = 4;
     GenLayer *var5 = biome_manager_zoom_many(bm, 1000, var15, 0);
-    GenLayer *var13 = biome_manager_new_layer(bm, GL_RIVER_INIT, 100, var5, NULL);
+    GenLayer *var13 = biome_manager_new_layer(bm, GENLAYER_RIVER_INIT, 100, var5, NULL);
     var5 = biome_manager_zoom_many(bm, 1000, var13, var4 + 2);
-    GenLayer *var14 = biome_manager_new_layer(bm, GL_RIVER, 1, var5, NULL);
-    GenLayer *var16 = biome_manager_new_layer(bm, GL_SMOOTH, 1000, var14, NULL);
+    GenLayer *var14 = biome_manager_new_layer(bm, GENLAYER_RIVER, 1, var5, NULL);
+    GenLayer *var16 = biome_manager_new_layer(bm, GENLAYER_SMOOTH, 1000, var14, NULL);
     GenLayer *var6 = biome_manager_zoom_many(bm, 1000, var15, 0);
-    GenLayer *var17 = biome_manager_new_layer(bm, GL_BIOME, 200, var6, NULL);
+    GenLayer *var17 = biome_manager_new_layer(bm, GENLAYER_BIOME, 200, var6, NULL);
     var6 = biome_manager_zoom_many(bm, 1000, var17, 2);
-    GenLayer *var18 = biome_manager_new_layer(bm, GL_HILLS, 1000, var6, NULL);
+    GenLayer *var18 = biome_manager_new_layer(bm, GENLAYER_HILLS, 1000, var6, NULL);
     for(int var7=0; var7<var4; var7++) {
-        var18 = biome_manager_new_layer(bm, GL_ZOOM, 1000 + var7, var18, NULL);
-        if(var7 == 0) var18 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 3, var18, NULL);
-        if(var7 == 1) var18 = biome_manager_new_layer(bm, GL_SHORE, 1000, var18, NULL);
-        if(var7 == 1) var18 = biome_manager_new_layer(bm, GL_SWAMP_RIVERS, 1000, var18, NULL);
+        var18 = biome_manager_new_layer(bm, GENLAYER_ZOOM, 1000 + var7, var18, NULL);
+        if(var7 == 0) var18 = biome_manager_new_layer(bm, GENLAYER_ADD_ISLAND, 3, var18, NULL);
+        if(var7 == 1) var18 = biome_manager_new_layer(bm, GENLAYER_SHORE, 1000, var18, NULL);
+        if(var7 == 1) var18 = biome_manager_new_layer(bm, GENLAYER_SWAMP_RIVERS, 1000, var18, NULL);
     }
-    GenLayer *var19 = biome_manager_new_layer(bm, GL_SMOOTH, 1000, var18, NULL);
-    GenLayer *var20 = biome_manager_new_layer(bm, GL_RIVER_MIX, 100, var19, var16);
-    GenLayer *var8 = biome_manager_new_layer(bm, GL_VORONOI_ZOOM, 10, var20, NULL);
+    GenLayer *var19 = biome_manager_new_layer(bm, GENLAYER_SMOOTH, 1000, var18, NULL);
+    GenLayer *var20 = biome_manager_new_layer(bm, GENLAYER_RIVER_MIX, 100, var19, var16);
+    GenLayer *var8 = biome_manager_new_layer(bm, GENLAYER_VORONOI_ZOOM, 10, var20, NULL);
     genlayer_init_world_seed(var20, worldSeed);
     genlayer_init_world_seed(var8, worldSeed);
     bm->gen_biomes = var20;
