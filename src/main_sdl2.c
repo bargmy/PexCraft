@@ -70,4 +70,5 @@ static void steve_set_tint(float r, float g, float b);
 #include "ui/gui.c"
 #include "platform/gamepad.c"
 #include "render/render_dispatch.c"
+#include "platform/loggy_window.c"
 #include "platform/sdl2_app.c"

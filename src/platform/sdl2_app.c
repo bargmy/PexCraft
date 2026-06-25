@@ -100,6 +100,21 @@ static void sdl2_handle_text_input(const SDL_TextInputEvent *txt) {
 }
 
 static void sdl2_handle_event(SDL_Event *e) {
+    if (loggy_handle_event(e)) return;
+    if (e && e->type != SDL_QUIT && g_hwnd) {
+        Uint32 main_id = SDL_GetWindowID(g_hwnd);
+        Uint32 event_id = 0;
+        switch (e->type) {
+            case SDL_WINDOWEVENT: event_id = e->window.windowID; break;
+            case SDL_MOUSEMOTION: event_id = e->motion.windowID; break;
+            case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: event_id = e->button.windowID; break;
+            case SDL_MOUSEWHEEL: event_id = e->wheel.windowID; break;
+            case SDL_KEYDOWN: case SDL_KEYUP: event_id = e->key.windowID; break;
+            case SDL_TEXTINPUT: event_id = e->text.windowID; break;
+            default: break;
+        }
+        if (event_id && event_id != main_id) return;
+    }
     switch (e->type) {
         case SDL_QUIT:
             save_world_state_for_exit();
@@ -274,12 +289,16 @@ static void main_loop(void) {
         render(partial);
         sleep_for_max_fps(frame_start_time);
         profile_end_frame();
+        loggy_draw();
+        if (g_loggy_enabled && g_glrc) SDL_GL_MakeCurrent(g_hwnd, g_glrc);
     }
     SDL_StopTextInput();
 }
 
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] && !strcmp(argv[i], "--loggy")) g_loggy_enabled = 1;
+    }
     pex_log_init();
     pex_install_crash_handlers();
     pex_logf("app main enter: %s", APP_TITLE);
@@ -325,6 +344,10 @@ int main(int argc, char **argv) {
         return 3;
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
+    if (g_loggy_enabled) {
+        loggy_init();
+        if (g_glrc) SDL_GL_MakeCurrent(g_hwnd, g_glrc);
+    }
     if (should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else set_screen(SCREEN_TITLE);
@@ -340,6 +363,7 @@ int main(int argc, char **argv) {
     free_texture(&tex_chest_entity); free_texture(&tex_large_chest_entity); free_texture(&tex_title_logo); free_texture(&tex_mojang); for (int i = 0; i < 6; ++i) free_texture(&tex_panorama[i]); free_texture_pack_icons();
     pex_gamepad_shutdown();
     pex_sound_shutdown();
+    loggy_shutdown();
     pex_renderer_shutdown();
     if (g_glrc) { SDL_GL_DeleteContext(g_glrc); g_glrc = NULL; }
     pex_join_save_thread_for_exit();

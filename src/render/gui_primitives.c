@@ -47,6 +47,7 @@ static void set_color_int(int color) {
 static void draw_rect(int x1, int y1, int x2, int y2, int color) {
     glDisable(GL_TEXTURE_2D);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glVertex3f((float)x1, (float)y2, 0.0f);
     glVertex3f((float)x2, (float)y2, 0.0f);
@@ -98,6 +99,7 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     glDisable(GL_ALPHA_TEST);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     pex_gl_shade_model_smooth();
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glColor4f(r1,g1,b1,a1); glVertex3f((float)x2, (float)y1, 0.0f); glVertex3f((float)x1, (float)y1, 0.0f);
     glColor4f(r2,g2,b2,a2); glVertex3f((float)x1, (float)y2, 0.0f); glVertex3f((float)x2, (float)y2, 0.0f);
@@ -124,6 +126,7 @@ static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, i
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + h), 0.0f);
     glTexCoord2f(u1, v1); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
@@ -148,6 +151,7 @@ static void draw_textured_rect_256(Texture *tex, int x, int y, int sx, int sy, i
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f((float)sx * us, (float)(sy + h) * vs); glVertex3f((float)x, (float)(y + h), 0.0f);
     glTexCoord2f((float)(sx + w) * us, (float)(sy + h) * vs); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
@@ -167,6 +171,7 @@ static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy,
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f((float)(sx + 0) * us, (float)(sy + h) * vs); glVertex3f((float)(x + 0), (float)(y + h), 0.0f);
     glTexCoord2f((float)(sx + w) * us, (float)(sy + h) * vs); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
@@ -190,6 +195,7 @@ static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, i
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + dh), 0.0f);
     glTexCoord2f(u1, v1); glVertex3f((float)(x + dw), (float)(y + dh), 0.0f);
@@ -209,6 +215,7 @@ static void draw_texture_scaled_full(Texture *tex, int x, int y, int w, int h, i
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f(inset_u, 1.0f - inset_v); glVertex3f((float)x, (float)(y + h), 0.0f);
     glTexCoord2f(1.0f - inset_u, 1.0f - inset_v); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
@@ -222,6 +229,7 @@ static void draw_tiled_rect_tint(int x1, int y1, int x2, int y2, int color, int 
     if (x2 <= x1 || y2 <= y1) return;
     glBindTexture(GL_TEXTURE_2D, tex_bg.id);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f((float)x1 / 32.0f, (float)(y2 + scroll) / 32.0f); glVertex3f((float)x1, (float)y2, 0.0f);
     glTexCoord2f((float)x2 / 32.0f, (float)(y2 + scroll) / 32.0f); glVertex3f((float)x2, (float)y2, 0.0f);
@@ -234,6 +242,7 @@ static void draw_tiled_rect_tint(int x1, int y1, int x2, int y2, int color, int 
 static void draw_tiled_background_tint(int color, int scroll) {
     glBindTexture(GL_TEXTURE_2D, tex_bg.id);
     set_color_int(color);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
     glTexCoord2f(0.0f, (float)(g_gui_h + scroll) / 32.0f); glVertex3f(0.0f, (float)g_gui_h, 0.0f);
     glTexCoord2f((float)g_gui_w / 32.0f, (float)(g_gui_h + scroll) / 32.0f); glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
@@ -293,6 +302,13 @@ static int shadow_color(int color) {
 
 static void draw_text_raw(const char *s, int x, int y, int color) {
     if (!s) return;
+    if (g_loggy_enabled) {
+        g_loggy_gui_text_calls++;
+        for (const unsigned char *lp = (const unsigned char*)s; *lp; ++lp) {
+            if (*lp == 0xA7 && lp[1]) { lp++; continue; }
+            if (font_index(*lp) >= 0) g_loggy_gui_text_chars++;
+        }
+    }
     glBindTexture(GL_TEXTURE_2D, tex_font.id);
     set_color_int(color);
     int cx = x;
@@ -357,6 +373,7 @@ static int button_hover(Button *b, int mx, int my) {
 
 static void draw_button(Button *b) {
     if (!b->visible) return;
+    if (g_loggy_enabled) g_loggy_gui_buttons++;
     if (b->kind == BUTTON_HITBOX) return;
     int hover = button_hover(b, g_mouse_x, g_mouse_y);
     int state = 1;

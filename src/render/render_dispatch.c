@@ -131,13 +131,21 @@ static void render(float partial) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     setup_gui_projection();
     double render_start_time = now_seconds();
+    double part_start = profile_begin();
     draw_current_screen(partial);
+    profile_add_time(PROF_SCREEN_DRAW, part_start);
 #ifdef PEX_PLATFORM_ANDROID
     draw_android_touch_controls();
 #endif
+    part_start = profile_begin();
     draw_gamepad_virtual_cursor();
+    profile_add_time(PROF_GAMEPAD_CURSOR, part_start);
+    part_start = profile_begin();
     draw_fps_counter();
+    profile_add_time(PROF_FPS_COUNTER, part_start);
+    part_start = profile_begin();
     pex_renderer_present();
+    profile_add_time(PROF_PRESENT, part_start);
     g_render_ms_last = (now_seconds() - render_start_time) * 1000.0;
     record_frame_time_sample(render_entry_time);
     profile_add_time(PROF_RENDER_TOTAL, render_profile_time);

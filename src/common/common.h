@@ -1673,6 +1673,13 @@ typedef enum PexMainThreadProfileId {
     PROF_CULL_SORT,
     PROF_WORLD_DRAW,
     PROF_HUD_GUI,
+    PROF_SCREEN_DRAW,
+    PROF_FPS_COUNTER,
+    PROF_GAMEPAD_CURSOR,
+    PROF_PRESENT,
+    PROF_MESH_SELF_HEAL,
+    PROF_MESH_RESULT_INSTALL,
+    PROF_MESH_SUBMIT_SNAPSHOT,
     PROF_RENDER_TOTAL,
     PROF_COUNT
 } PexMainThreadProfileId;
@@ -1696,6 +1703,13 @@ static const char *g_prof_names[PROF_COUNT] = {
     "Cull/sort",
     "World draw",
     "HUD/GUI",
+    "Screen draw",
+    "FPS counter",
+    "Gamepad cursor",
+    "Present/swap",
+    "Mesh self-heal",
+    "Mesh result install",
+    "Mesh submit snapshot",
     "Render total"
 };
 
@@ -1746,6 +1760,34 @@ static int g_prof_falling_cells_last = 0;
 static int g_prof_falling_spawns_last = 0;
 static int g_prof_falling_active_last = 0;
 static int g_prof_stream_pending_last = 0;
+
+/* --loggy diagnostic counters.  They are intentionally lightweight and are
+   only displayed by the SDL2 diagnostic window when requested. */
+static int g_loggy_enabled = 0;
+static int g_loggy_frame_no = 0;
+static int g_loggy_profile_calls[PROF_COUNT];
+static int g_loggy_gui_text_calls = 0;
+static int g_loggy_gui_text_chars = 0;
+static int g_loggy_gui_quads = 0;
+static int g_loggy_gui_buttons = 0;
+static int g_loggy_mesh_submit_calls = 0;
+static int g_loggy_mesh_submit_snapshot_cells = 0;
+static int g_loggy_mesh_installs = 0;
+static int g_loggy_mesh_install_vertices = 0;
+static int g_loggy_mesh_install_indices = 0;
+static int g_loggy_mesh_stale_results = 0;
+static int g_loggy_mesh_self_heal_refs = 0;
+static int g_loggy_mesh_self_heal_missing = 0;
+static int g_loggy_stream_async_jobs = 0;
+static int g_loggy_stream_async_active = 0;
+static int g_loggy_stream_async_results = 0;
+static int g_loggy_stream_queue_remaining = 0;
+static int g_loggy_stream_queue_total = 0;
+static int g_loggy_stream_queue_index = 0;
+static int g_loggy_stream_installed_total = 0;
+static int g_loggy_stream_remap_active = 0;
+static int g_loggy_visible_sections = 0;
+static int g_loggy_visible_chunks = 0;
 
 static int g_third_person_view = 0; /* Java 1.2.5 GameSettings.thirdPersonView: 0=first, 1=back, 2=front. */
 static void third_person_view_cycle(void) {

@@ -14,10 +14,27 @@ static void profile_add_time(PexMainThreadProfileId id, double start_time) {
     double ms = (now_seconds() - start_time) * 1000.0;
     if (ms < 0.0) ms = 0.0;
     g_prof_frame_ms[id] += ms;
+    if (g_loggy_enabled) g_loggy_profile_calls[id]++;
 }
 
 static void profile_begin_frame(void) {
     memset(g_prof_frame_ms, 0, sizeof(g_prof_frame_ms));
+    if (g_loggy_enabled) {
+        memset(g_loggy_profile_calls, 0, sizeof(g_loggy_profile_calls));
+        g_loggy_gui_text_calls = 0;
+        g_loggy_gui_text_chars = 0;
+        g_loggy_gui_quads = 0;
+        g_loggy_gui_buttons = 0;
+        g_loggy_mesh_submit_calls = 0;
+        g_loggy_mesh_submit_snapshot_cells = 0;
+        g_loggy_mesh_installs = 0;
+        g_loggy_mesh_install_vertices = 0;
+        g_loggy_mesh_install_indices = 0;
+        g_loggy_mesh_stale_results = 0;
+        g_loggy_mesh_self_heal_refs = 0;
+        g_loggy_mesh_self_heal_missing = 0;
+        g_loggy_frame_no++;
+    }
     g_prof_frame_start_time = now_seconds();
     if (g_prof_accum_start_time <= 0.0) g_prof_accum_start_time = g_prof_frame_start_time;
 }

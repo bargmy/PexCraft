@@ -1460,6 +1460,11 @@ static void flat_gl_cpu_mesh_check_origin(void) {
 
 static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirectMeshBuilder *b, int skip, unsigned int version, int origin_x, int origin_z) {
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
+    if (g_loggy_enabled && !skip && b) {
+        g_loggy_mesh_installs++;
+        g_loggy_mesh_install_vertices += (int)b->vcount;
+        g_loggy_mesh_install_indices += (int)b->icount;
+    }
     flat_gl_cpu_mesh_free(m);
     if (skip || !b || b->vcount == 0 || b->icount == 0) return;
     m->list = gl_compile_flat_mesh_list(b);
@@ -5444,6 +5449,11 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
     int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
     int sz0 = job.origin_z + cz * FLAT_RENDER_CHUNK - 1;
+    double snapshot_start = profile_begin();
+    if (g_loggy_enabled) {
+        g_loggy_mesh_submit_calls++;
+        g_loggy_mesh_submit_snapshot_cells += ASYNC_SECTION_MESH_W * ASYNC_SECTION_MESH_H * ASYNC_SECTION_MESH_D;
+    }
     for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
         int wy = sy0 + iy;
         for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
@@ -5459,6 +5469,7 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
             }
         }
     }
+    profile_add_time(PROF_MESH_SUBMIT_SNAPSHOT, snapshot_start);
 
     EnterCriticalSection(&g_async_section_mesh_cs);
     if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx]) {
@@ -5523,6 +5534,7 @@ static void async_section_mesh_install_ready(int max_uploads) {
         LeaveCriticalSection(&g_async_section_mesh_cs);
         if (!r.ready) break;
 
+        double install_start = profile_begin();
         int valid = 0;
         if (r.origin_x == g_flat_world_origin_x && r.origin_z == g_flat_world_origin_z &&
             r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS &&
@@ -5561,9 +5573,11 @@ static void async_section_mesh_install_ready(int max_uploads) {
         } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS) {
             g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
             g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
+            if (g_loggy_enabled) g_loggy_mesh_stale_results++;
             pex_logf_trace("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
         }
         async_section_mesh_free_result(&r);
+        profile_add_time(PROF_MESH_RESULT_INSTALL, install_start);
     }
 }
 
@@ -5668,6 +5682,8 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
 }
 
 static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
+    double self_heal_start = profile_begin();
+    if (g_loggy_enabled) g_loggy_mesh_self_heal_refs += count;
     int direct = flat_direct_backend() ? 1 : 0;
     int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
     /* The lighting safety net used to rescan every visible chunk once per game
@@ -5725,6 +5741,7 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
             g_flat_section_dirty[sy][cz][cx] = 1;
             g_flat_world_chunk_dirty[cz][cx] = 1;
             g_flat_renderer_sort_dirty = 1;
+            if (g_loggy_enabled) g_loggy_mesh_self_heal_missing++;
             pex_logf_trace("chunk render self-heal missing mesh local=%d,%d sy=%d valid=%d direct=%d async=%d", cx, cz, sy, g_flat_section_valid[sy][cz][cx], direct, async_mesh);
         }
         if (missing && g_flat_section_mesh_building[sy][cz][cx] && (g_ingame_ticks % 100) == 0) {
@@ -5732,6 +5749,7 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
             pex_logf_trace("chunk render self-heal cleared stuck build flag local=%d,%d sy=%d", cx, cz, sy);
         }
     }
+    profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
 }
 
 static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int count) {
@@ -7040,6 +7058,15 @@ static void draw_flat_test_world(void) {
     int visible_count = build_flat_visible_sections(&fr, g_flat_visible_sections, FLAT_MAX_VISIBLE_SECTIONS);
     profile_add_time(PROF_CULL_SORT, prof_part);
     prof_part = profile_begin();
+    if (g_loggy_enabled) {
+        g_loggy_visible_sections = visible_count;
+        g_loggy_visible_chunks = 0;
+        for (int vc_z = 0; vc_z < FLAT_RENDER_CHUNKS; ++vc_z) {
+            for (int vc_x = 0; vc_x < FLAT_RENDER_CHUNKS; ++vc_x) {
+                if (g_flat_world_chunk_generated[vc_z][vc_x]) g_loggy_visible_chunks++;
+            }
+        }
+    }
     rebuild_visible_flat_sections(g_flat_visible_sections, visible_count);
     profile_add_time(PROF_MESH_MAIN, prof_part);
     prof_part = profile_begin();
