@@ -1117,6 +1117,126 @@ static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
 }
 #endif
 
+
+/* Fast passive-mob model emission.
+   The old path reused steve_part(), which does glPush/glRotate/glBegin/glEnd for
+   every cube part.  On the D3D11 GL-compat backend every matrix change flushes
+   the immediate stream, so 10 animals could turn into 70+ tiny draw batches and
+   cost 3ms+.  Keep the same Beta-style cuboid UV layout, but apply each part's
+   local rotation on the CPU and emit all parts for one texture in a single
+   glBegin(GL_QUADS) block. */
+typedef struct PassiveFastVec3 { float x, y, z; } PassiveFastVec3;
+
+static void passive_fast_rotate_xyz(float *x, float *y, float *z,
+                                    float rx_deg, float ry_deg, float rz_deg) {
+    if (rx_deg != 0.0f) {
+        float a = rx_deg * (float)M_PI / 180.0f;
+        float c = cosf(a), sn = sinf(a);
+        float yy = *y * c - *z * sn;
+        float zz = *y * sn + *z * c;
+        *y = yy; *z = zz;
+    }
+    if (ry_deg != 0.0f) {
+        float a = ry_deg * (float)M_PI / 180.0f;
+        float c = cosf(a), sn = sinf(a);
+        float xx = *x * c + *z * sn;
+        float zz = -*x * sn + *z * c;
+        *x = xx; *z = zz;
+    }
+    if (rz_deg != 0.0f) {
+        float a = rz_deg * (float)M_PI / 180.0f;
+        float c = cosf(a), sn = sinf(a);
+        float xx = *x * c - *y * sn;
+        float yy = *x * sn + *y * c;
+        *x = xx; *y = yy;
+    }
+}
+
+static PassiveFastVec3 passive_fast_part_vertex(float x, float y, float z,
+                                                float pivot_x, float pivot_y, float pivot_z,
+                                                float rx_deg, float ry_deg, float rz_deg) {
+    passive_fast_rotate_xyz(&x, &y, &z, rx_deg, ry_deg, rz_deg);
+    PassiveFastVec3 r;
+    r.x = x + pivot_x;
+    r.y = y + pivot_y;
+    r.z = z + pivot_z;
+    return r;
+}
+
+static void passive_fast_vertex(const PassiveFastVec3 *p, float u, float v) {
+    glTexCoord2f(u / g_steve_uv_w, v / g_steve_uv_h);
+    glVertex3f(p->x * 0.0625f, p->y * 0.0625f, p->z * 0.0625f);
+}
+
+static void passive_fast_quad(PassiveFastVec3 a, PassiveFastVec3 b, PassiveFastVec3 c, PassiveFastVec3 d,
+                              float u0, float v0, float u1, float v1,
+                              float nx, float ny, float nz) {
+    steve_color_for_normal(nx, ny, nz);
+    passive_fast_vertex(&a, u1, v0);
+    passive_fast_vertex(&b, u0, v0);
+    passive_fast_vertex(&c, u0, v1);
+    passive_fast_vertex(&d, u1, v1);
+}
+
+static void passive_fast_box(int tex_x, int tex_y, float x, float y, float z,
+                             int w, int h, int d, float inflate, int mirror,
+                             float pivot_x, float pivot_y, float pivot_z,
+                             float rx_deg, float ry_deg, float rz_deg) {
+    float x0 = x - inflate;
+    float y0 = y - inflate;
+    float z0 = z - inflate;
+    float x1 = x + (float)w + inflate;
+    float y1 = y + (float)h + inflate;
+    float z1 = z + (float)d + inflate;
+    if (mirror) { float t = x1; x1 = x0; x0 = t; }
+
+    float u_right0 = (float)(tex_x + d + w);
+    float v_right0 = (float)(tex_y + d);
+    float u_right1 = (float)(tex_x + d + w + d);
+    float v_right1 = (float)(tex_y + d + h);
+    float u_left0 = (float)(tex_x + 0);
+    float v_left0 = (float)(tex_y + d);
+    float u_left1 = (float)(tex_x + d);
+    float v_left1 = (float)(tex_y + d + h);
+    float u_top0 = (float)(tex_x + d);
+    float v_top0 = (float)(tex_y + 0);
+    float u_top1 = (float)(tex_x + d + w);
+    float v_top1 = (float)(tex_y + d);
+    float u_bottom0 = (float)(tex_x + d + w);
+    float v_bottom0 = (float)(tex_y + 0);
+    float u_bottom1 = (float)(tex_x + d + w + w);
+    float v_bottom1 = (float)(tex_y + d);
+    float u_front0 = (float)(tex_x + d);
+    float v_front0 = (float)(tex_y + d);
+    float u_front1 = (float)(tex_x + d + w);
+    float v_front1 = (float)(tex_y + d + h);
+    float u_back0 = (float)(tex_x + d + w + d);
+    float v_back0 = (float)(tex_y + d);
+    float u_back1 = (float)(tex_x + d + w + d + w);
+    float v_back1 = (float)(tex_y + d + h);
+
+#define PFV(A,B,C) passive_fast_part_vertex((A),(B),(C), pivot_x,pivot_y,pivot_z, rx_deg,ry_deg,rz_deg)
+    passive_fast_quad(PFV(x1,y0,z1), PFV(x1,y0,z0), PFV(x1,y1,z0), PFV(x1,y1,z1), u_right0,v_right0,u_right1,v_right1, 1,0,0);
+    passive_fast_quad(PFV(x0,y0,z0), PFV(x0,y0,z1), PFV(x0,y1,z1), PFV(x0,y1,z0), u_left0,v_left0,u_left1,v_left1, -1,0,0);
+    passive_fast_quad(PFV(x1,y0,z1), PFV(x0,y0,z1), PFV(x0,y0,z0), PFV(x1,y0,z0), u_top0,v_top0,u_top1,v_top1, 0,-1,0);
+    passive_fast_quad(PFV(x1,y1,z0), PFV(x0,y1,z0), PFV(x0,y1,z1), PFV(x1,y1,z1), u_bottom0,v_bottom0,u_bottom1,v_bottom1, 0,1,0);
+    passive_fast_quad(PFV(x1,y0,z0), PFV(x0,y0,z0), PFV(x0,y1,z0), PFV(x1,y1,z0), u_front0,v_front0,u_front1,v_front1, 0,0,-1);
+    passive_fast_quad(PFV(x0,y0,z1), PFV(x1,y0,z1), PFV(x1,y1,z1), PFV(x0,y1,z1), u_back0,v_back0,u_back1,v_back1, 0,0,1);
+#undef PFV
+}
+
+static void passive_fast_part(int tex_x, int tex_y,
+                              float pivot_x, float pivot_y, float pivot_z,
+                              float box_x, float box_y, float box_z,
+                              int box_w, int box_h, int box_d,
+                              float inflate, int mirror,
+                              float rot_x_deg, float rot_y_deg, float rot_z_deg) {
+    passive_fast_box(tex_x, tex_y, box_x, box_y, box_z, box_w, box_h, box_d, inflate, mirror,
+                     pivot_x, pivot_y, pivot_z, rot_x_deg, rot_y_deg, rot_z_deg);
+}
+
+#define steve_part passive_fast_part
+
 static void passive_render_quad_model(int type, int fur_layer, int detail, float limb, float move, float head_yaw, float head_pitch, float chicken_wing) {
     float leg1 = cosf(limb * 0.6662f) * 1.4f * move * 57.29578f;
     float leg2 = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move * 57.29578f;
@@ -1177,6 +1297,8 @@ static void passive_render_chicken(int detail, float limb, float move, float hea
     steve_part(24, 13,  4, 13, 0, -1, 0, -3, 1, 4, 6, 0.0f, 0, 0, 0, -wing * 57.29578f);
 }
 
+#undef steve_part
+
 static void draw_passive_mobs(float partial) {
     /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
     if (g_mp_connected) return;
@@ -1224,18 +1346,26 @@ static void draw_passive_mobs(float partial) {
         glTranslatef(0.0f, -24.0f * 0.0625f - 0.0078125f, 0.0f);
 
         if (e->type == PASSIVE_MOB_CHICKEN) {
+            glBegin(GL_QUADS);
             passive_render_chicken(e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->wing);
+            glEnd();
         } else {
+            glBegin(GL_QUADS);
             passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+            glEnd();
             if (e->detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_sheep_fur.id);
                 steve_set_texture_dims(&tex_mob_sheep_fur);
+                glBegin(GL_QUADS);
                 passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+                glEnd();
             }
             if (e->detail && e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
                 steve_set_texture_dims(&tex_mob_saddle);
+                glBegin(GL_QUADS);
                 passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
+                glEnd();
             }
         }
         glPopMatrix();
