@@ -72,6 +72,154 @@ static int pex_java_random_next_int(PexJavaRandom *rng, int bound) {
     return val;
 }
 
+static void draw_debug_chunk_info_line(int x, int *y, const char *line, int color) {
+    if (!y || !line) return;
+    if (*y <= g_gui_h - 10) draw_text(line, x, *y, color);
+    *y += 10;
+}
+
+static int debug_stream_queue_slot(int wcx, int wcz) {
+    for (int i = 0; i < g_stream_gen_queue_count; ++i) {
+        if (g_stream_gen_queue_cx[i] == wcx && g_stream_gen_queue_cz[i] == wcz) return i;
+    }
+    return -1;
+}
+
+static void draw_debug_chunk_info_panel(int x, int *y) {
+    char line[256];
+
+    int bx = (int)floorf(g_player_x);
+    int by = (int)floorf(g_player_y);
+    int bz = (int)floorf(g_player_z);
+    int head_y = (int)floorf(g_player_y + 1.62f);
+    int under_y = by - 1;
+
+    int wcx = floor_div16(bx);
+    int wcz = floor_div16(bz);
+    int base_cx = floor_div16(g_flat_world_origin_x);
+    int base_cz = floor_div16(g_flat_world_origin_z);
+    int lcx = wcx - base_cx;
+    int lcz = wcz - base_cz;
+    int lx = bx - wcx * FLAT_RENDER_CHUNK;
+    int lz = bz - wcz * FLAT_RENDER_CHUNK;
+    int sy = flat_section_y_for_world(by);
+
+    int local_ok = flat_local_chunk_valid(lcx, lcz);
+    int section_ok = flat_section_index_valid(sy);
+    int generated = local_ok ? g_flat_world_chunk_generated[lcz][lcx] : 0;
+    int light_ready = local_ok ? g_flat_chunk_light_ready[lcz][lcx] : 0;
+    unsigned int light_version = local_ok ? g_flat_chunk_light_version[lcz][lcx] : 0;
+    unsigned short mask = local_ok ? g_flat_chunk_section_non_empty_mask[lcz][lcx] : 0;
+    int qslot = debug_stream_queue_slot(wcx, wcz);
+    int queue_state = (qslot < 0) ? 0 : ((qslot < g_stream_gen_queue_index) ? 2 : 1);
+
+    int nonempty_sections = 0;
+    int dirty_sections = 0;
+    int valid_sections = 0;
+    int building_sections = 0;
+    int stale_light_sections = 0;
+    if (local_ok) {
+        for (int s = 0; s < FLAT_RENDER_SECTIONS_Y; ++s) {
+            int nonempty = (mask & (unsigned short)(1u << s)) != 0;
+            if (nonempty) nonempty_sections++;
+            if (g_flat_section_dirty[s][lcz][lcx]) dirty_sections++;
+            if (g_flat_section_valid[s][lcz][lcx]) valid_sections++;
+            if (g_flat_section_mesh_building[s][lcz][lcx]) building_sections++;
+            if (nonempty && g_flat_section_mesh_light_version[s][lcz][lcx] != light_version) stale_light_sections++;
+        }
+    }
+
+    int top_y = -999;
+    if (generated && lx >= 0 && lx < FLAT_RENDER_CHUNK && lz >= 0 && lz < FLAT_RENDER_CHUNK) {
+        for (int ty = FLAT_WORLD_Y_MAX; ty >= FLAT_WORLD_Y_MIN; --ty) {
+            if (flat_get_block(bx, ty, bz) != 0) {
+                top_y = ty;
+                break;
+            }
+        }
+    }
+
+    draw_debug_chunk_info_line(x, y, "Chunk under player (F3+V):", 0xE0E0E0);
+
+    snprintf(line, sizeof(line), "world chunk %d,%d  local %d,%d  block %d,%d,%d", wcx, wcz, lcx, lcz, bx, by, bz);
+    draw_debug_chunk_info_line(x, y, line, 14737632);
+
+    snprintf(line, sizeof(line), "local block %d,%d  section %d  in window %d  generated %d", lx, lz, sy, local_ok, generated);
+    draw_debug_chunk_info_line(x, y, line, local_ok && generated ? 14737632 : 0xFF8080);
+
+    if (!local_ok) {
+        snprintf(line, sizeof(line), "active origin %d,%d  base chunk %d,%d", g_flat_world_origin_x, g_flat_world_origin_z, base_cx, base_cz);
+        draw_debug_chunk_info_line(x, y, line, 0xFF8080);
+        return;
+    }
+
+    snprintf(line, sizeof(line), "spawn preload %d  modified %d  lightReady %d  lightVer %u",
+             g_flat_chunk_initial_preload[lcz][lcx], g_flat_world_chunk_modified[lcz][lcx],
+             light_ready, light_version);
+    draw_debug_chunk_info_line(x, y, line, light_ready ? 14737632 : 0xFFFF80);
+
+    snprintf(line, sizeof(line), "chunk dirty %d valid %d hasLiquid %d envDue %d occ %04x",
+             g_flat_world_chunk_dirty[lcz][lcx], g_flat_world_chunk_valid[lcz][lcx],
+             g_flat_world_chunk_has_liquid[lcz][lcx], g_flat_chunk_environment_light_due[lcz][lcx],
+             (unsigned)mask);
+    draw_debug_chunk_info_line(x, y, line, 14737632);
+
+    snprintf(line, sizeof(line), "sections nonempty %d dirty %d valid %d building %d staleLight %d",
+             nonempty_sections, dirty_sections, valid_sections, building_sections, stale_light_sections);
+    draw_debug_chunk_info_line(x, y, line, stale_light_sections ? 0xFF8080 : 14737632);
+
+    if (section_ok) {
+        int sec_nonempty = (mask & (unsigned short)(1u << sy)) != 0;
+        int sec_stale = (sec_nonempty && g_flat_section_mesh_light_version[sy][lcz][lcx] != light_version) ? 1 : 0;
+        snprintf(line, sizeof(line), "current section: nonempty %d dirty %d valid %d building %d stale %d",
+                 sec_nonempty, g_flat_section_dirty[sy][lcz][lcx], g_flat_section_valid[sy][lcz][lcx],
+                 g_flat_section_mesh_building[sy][lcz][lcx], sec_stale);
+        draw_debug_chunk_info_line(x, y, line, sec_stale ? 0xFF8080 : 14737632);
+
+        snprintf(line, sizeof(line), "meshVer %u meshLight %u skip %d/%d list %u/%u dmesh %u/%u",
+                 g_flat_section_mesh_version[sy][lcz][lcx],
+                 g_flat_section_mesh_light_version[sy][lcz][lcx],
+                 g_flat_section_skip_pass[sy][lcz][lcx][0],
+                 g_flat_section_skip_pass[sy][lcz][lcx][1],
+                 (unsigned)g_flat_section_lists[sy][lcz][lcx][0],
+                 (unsigned)g_flat_section_lists[sy][lcz][lcx][1],
+                 g_flat_section_direct_mesh[sy][lcz][lcx][0],
+                 g_flat_section_direct_mesh[sy][lcz][lcx][1]);
+        draw_debug_chunk_info_line(x, y, line, sec_stale ? 0xFF8080 : 14737632);
+    }
+
+    snprintf(line, sizeof(line), "blocks under/feet/head %d/%d/%d  topY %d",
+             flat_get_block(bx, under_y, bz), flat_get_block(bx, by, bz),
+             flat_get_block(bx, head_y, bz), top_y);
+    draw_debug_chunk_info_line(x, y, line, 14737632);
+
+    snprintf(line, sizeof(line), "sky under/feet/head %d/%d/%d  blockLight %d/%d/%d",
+             flat_get_sky_light(bx, under_y, bz), flat_get_sky_light(bx, by, bz),
+             flat_get_sky_light(bx, head_y, bz), flat_get_block_light(bx, under_y, bz),
+             flat_get_block_light(bx, by, bz), flat_get_block_light(bx, head_y, bz));
+    draw_debug_chunk_info_line(x, y, line, light_ready ? 14737632 : 0xFFFF80);
+
+    snprintf(line, sizeof(line), "queue %s slot %d/%d index %d installed %d keepInit %d",
+             queue_state == 0 ? "no" : (queue_state == 1 ? "queued" : "passed"),
+             qslot, g_stream_gen_queue_count, g_stream_gen_queue_index,
+             g_stream_gen_queue_installed_count, g_stream_generation_keep_completed);
+    draw_debug_chunk_info_line(x, y, line, 14737632);
+
+    snprintf(line, sizeof(line), "async workers %d jobs %d active %d results %d streamBusy %d lightDirty %d lightBusy %d",
+             g_stream_async_worker_count, g_stream_async_job_count, g_stream_async_active_count,
+             g_stream_async_result_count, g_world_stream_service_busy,
+             flat_lighting_pending_dirty(), g_flat_lighting_worker_busy);
+    draw_debug_chunk_info_line(x, y, line, 14737632);
+
+    snprintf(line, sizeof(line), "initial batch run %d %d/%d  lightSettle req/run/done %d/%d/%d p%d",
+             g_stream_initial_batch_running, g_stream_initial_batch_done_units,
+             g_stream_initial_batch_total_units, g_stream_initial_light_settle_requested,
+             g_stream_initial_light_settle_running, g_stream_initial_light_settle_done,
+             g_stream_initial_light_settle_progress);
+    draw_debug_chunk_info_line(x, y, line, 14737632);
+}
+
+
 static void draw_hud(void) {
     int w = g_gui_w;
     int h = g_gui_h;
@@ -248,7 +396,7 @@ static void draw_hud(void) {
             if (y > g_gui_h - 70) break;
         }
 
-        int right_x = g_gui_w - 210;
+        int right_x = g_gui_w - (g_debug_chunk_info_shown ? 380 : 210);
         int ry = g_opts.show_fps ? 22 : 12;
         if (right_x < 220) right_x = 220;
         draw_text("Queues / async state:", right_x, ry, 0xE0E0E0); ry += 10;
@@ -265,7 +413,13 @@ static void draw_hud(void) {
         draw_text(line, right_x, ry, 14737632); ry += 10;
         snprintf(line, sizeof(line), "Async tick %.2fms avg %.2fms",
                  ingame_tick_async_last_ms(), ingame_tick_async_avg_ms());
-        draw_text(line, right_x, ry, 14737632);
+        draw_text(line, right_x, ry, 14737632); ry += 12;
+
+        if (g_debug_chunk_info_shown) {
+            draw_debug_chunk_info_panel(right_x, &ry);
+        } else {
+            draw_text("F3+V: chunk info off", right_x, ry, 0xA0A0A0);
+        }
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);
     draw_save_message();

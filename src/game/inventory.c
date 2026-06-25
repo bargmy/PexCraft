@@ -1715,6 +1715,7 @@ static void stream_mark_local_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
+    g_flat_chunk_initial_preload[lcz][lcx] = g_stream_generation_keep_completed ? 1 : 0;
 
     if (g_stream_generation_keep_completed) {
         /* Spawn preload must not run one full 48x48xheight light pass per chunk.
@@ -2168,6 +2169,7 @@ static void flat_world_prepare_initial_generation(void) {
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
@@ -2364,6 +2366,7 @@ static void flat_world_generate_blocks_for_current_origin(void) {
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
@@ -6777,6 +6780,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     int old_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned int old_light_versions[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    int old_initial_preload[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned short old_section_masks[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -6803,6 +6807,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memcpy(old_generated, g_flat_world_chunk_generated, sizeof(old_generated));
     memcpy(old_light_ready, g_flat_chunk_light_ready, sizeof(old_light_ready));
     memcpy(old_light_versions, g_flat_chunk_light_version, sizeof(old_light_versions));
+    memcpy(old_initial_preload, g_flat_chunk_initial_preload, sizeof(old_initial_preload));
     memcpy(old_modified, g_flat_world_chunk_modified, sizeof(old_modified));
     memcpy(old_light_due, g_flat_chunk_environment_light_due, sizeof(old_light_due));
     memcpy(old_section_masks, g_flat_chunk_section_non_empty_mask, sizeof(old_section_masks));
@@ -6847,6 +6852,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -6879,6 +6885,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                 g_flat_world_chunk_generated[ncz][ncx] = old_generated[ocz][ocx];
                 g_flat_chunk_light_ready[ncz][ncx] = old_light_ready[ocz][ocx];
                 g_flat_chunk_light_version[ncz][ncx] = old_light_versions[ocz][ocx];
+                g_flat_chunk_initial_preload[ncz][ncx] = old_initial_preload[ocz][ocx];
                 g_flat_world_chunk_modified[ncz][ncx] = old_modified[ocz][ocx];
                 g_flat_chunk_environment_light_due[ncz][ncx] = old_light_due[ocz][ocx];
                 g_flat_chunk_section_non_empty_mask[ncz][ncx] = old_section_masks[ocz][ocx];
@@ -6897,6 +6904,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                 g_flat_world_chunk_generated[ncz][ncx] = 0;
                 g_flat_chunk_light_ready[ncz][ncx] = 0;
                 g_flat_chunk_light_version[ncz][ncx] = 0;
+                g_flat_chunk_initial_preload[ncz][ncx] = 0;
                 g_flat_world_chunk_modified[ncz][ncx] = 0;
                 g_flat_chunk_environment_light_due[ncz][ncx] = 0;
                 g_flat_chunk_section_non_empty_mask[ncz][ncx] = 0;

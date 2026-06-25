@@ -840,6 +840,11 @@ static void handle_keydown(WPARAM vk) {
 
     if (g_screen == SCREEN_INGAME) {
         if (vk == VK_ESCAPE) { set_screen(SCREEN_PAUSE); return; }
+        if (vk == 'V' && key_down_vk(VK_F3)) {
+            g_debug_menu_shown = 1;
+            g_debug_chunk_info_shown = !g_debug_chunk_info_shown;
+            return;
+        }
         if (vk == VK_F3) { g_debug_menu_shown = !g_debug_menu_shown; return; }
         if (g_debug_menu_shown && vk == 'X') { player_add_experience(key_down_vk(VK_SHIFT) ? 10 : 1); g_save_dirty = 1; return; }
         if (vk == VK_F5) { third_person_view_cycle(); return; }

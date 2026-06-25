@@ -1217,6 +1217,11 @@ static int g_flat_world_chunk_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
    cannot keep random brightness until a player block edit happens to dirty them. */
 static int g_flat_chunk_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static unsigned int g_flat_chunk_light_version[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+/* Diagnostic tag for chunks published by the loading-screen spawn preload.
+   This is not gameplay logic; it lets F3+V distinguish the chunks that should
+   have been lit during initial world load from chunks streamed later while
+   walking. */
+static int g_flat_chunk_initial_preload[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 
 /* Java-b1 style render sections.  A section is 16x16x16, so editing or
    generating one part of a chunk no longer rebuilds the whole 256-block-tall
@@ -1570,6 +1575,7 @@ static void third_person_view_cycle(void) {
 }
 
 static int g_debug_menu_shown = 0;
+static int g_debug_chunk_info_shown = 0;
 static int g_mouse_grabbed = 0;
 static int g_cursor_hidden = 0;
 static int g_recentering_mouse = 0;
