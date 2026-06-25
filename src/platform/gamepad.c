@@ -489,11 +489,52 @@ static void pex_gamepad_nav_move(int dir) {
     }
 }
 
+static int pex_gamepad_world_screen_update(PexGamepadState *p, double now) {
+    if (!p || (g_screen != SCREEN_WORLD_SELECT && g_screen != SCREEN_WORLD_DELETE)) return 0;
+
+    if (g_world_save_count <= 0) scan_world_saves();
+    if (g_world_save_count > 0 && (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count)) {
+        world_save_select_index(0);
+        rebuild_screen();
+    }
+
+    int nav_down = p->dpad_down || p->ly > 0.55f;
+    int nav_up = p->dpad_up || p->ly < -0.55f;
+    if ((nav_down || nav_up) && now - g_gamepad_nav_last_time > 0.16) {
+        world_save_select_relative(nav_down ? 1 : -1);
+        g_gamepad_nav_last_time = now;
+    }
+
+    int cx, cy;
+    if (world_save_selected_row_center(&cx, &cy)) {
+        g_mouse_x = cx;
+        g_mouse_y = cy;
+    }
+
+    if (p->a && !p->prev_a && now - g_gamepad_click_last_time > 0.10) {
+        if (g_screen == SCREEN_WORLD_SELECT) start_selected_world_save();
+        else confirm_delete_world_save();
+        g_gamepad_click_last_time = now;
+    }
+    if (p->x && !p->prev_x && g_screen == SCREEN_WORLD_SELECT) {
+        create_world_prepare_defaults();
+        set_screen(SCREEN_CREATE_WORLD);
+    }
+    if (p->y && !p->prev_y && g_screen == SCREEN_WORLD_SELECT && g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
+        WorldSaveEntry *e = &g_world_saves[g_selected_world_index];
+        snprintf(g_rename_world_text, sizeof(g_rename_world_text), "%s", e->display_name[0] ? e->display_name : e->dir_name);
+        set_screen(SCREEN_RENAME_WORLD);
+    }
+    if ((p->b && !p->prev_b) || (p->back && !p->prev_back)) pex_gamepad_back_action();
+    return 1;
+}
+
 static void pex_gamepad_menu_update(PexGamepadState *p) {
     if (!p || !pex_gamepad_menu_screen()) return;
+    double now = now_seconds();
+    if (pex_gamepad_world_screen_update(p, now)) return;
     Button *sel = pex_gamepad_selected_button();
     if (sel) { g_mouse_x = sel->x + sel->w / 2; g_mouse_y = sel->y + sel->h / 2; }
-    double now = now_seconds();
     int nav_down = p->dpad_down || p->ly > 0.55f;
     int nav_up = p->dpad_up || p->ly < -0.55f;
     if ((nav_down || nav_up) && now - g_gamepad_nav_last_time > 0.18) {

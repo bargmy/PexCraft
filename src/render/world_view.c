@@ -2796,7 +2796,13 @@ static void emit_cross_plant_block_float(int id, float x, float y, float z) {
     float y0 = y,       y1 = y + 1.00f;
     float z0 = z + 0.10f, z1 = z + 0.90f;
 
-    world_set_shade(1.0f);
+    /* Grass/fern textures in terrain.png are grayscale masks in this era;
+       Java tints them with the biome grass color at render time.  Without this
+       pass they show up as the gray "paper" plants visible in snowy/tundra
+       screenshots. */
+    if (id == BLOCK_TALL_GRASS) world_set_color_shade(java_grass_color_at(bx, bz), 1.0f);
+    else if (id == BLOCK_REEDS || id == BLOCK_SAPLING) world_set_color_shade(java_foliage_color_at(bx, bz), 1.0f);
+    else world_set_shade(1.0f);
     world_tex_vertex(x0, y1, z0, u0, v0);
     world_tex_vertex(x1, y1, z1, u1, v0);
     world_tex_vertex(x1, y0, z1, u1, v1);

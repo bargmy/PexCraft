@@ -211,6 +211,44 @@ static void world_save_scroll_by(int rows) {
     rebuild_screen();
 }
 
+static void world_save_ensure_selected_visible(void) {
+    if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) return;
+    int visible = world_save_visible_rows();
+    if (g_selected_world_index < g_world_save_scroll) g_world_save_scroll = g_selected_world_index;
+    if (g_selected_world_index >= g_world_save_scroll + visible) g_world_save_scroll = g_selected_world_index - visible + 1;
+    clamp_world_save_scroll();
+}
+
+static void world_save_select_index(int idx) {
+    if (g_world_save_count <= 0) {
+        g_selected_world_index = -1;
+        return;
+    }
+    if (idx < 0) idx = 0;
+    if (idx >= g_world_save_count) idx = g_world_save_count - 1;
+    g_selected_world_index = idx;
+    world_save_ensure_selected_visible();
+}
+
+static void world_save_select_relative(int delta) {
+    if (g_screen != SCREEN_WORLD_SELECT && g_screen != SCREEN_WORLD_DELETE) return;
+    scan_world_saves();
+    if (g_world_save_count <= 0) return;
+    if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) world_save_select_index(0);
+    else world_save_select_index(g_selected_world_index + delta);
+    rebuild_screen();
+}
+
+static int world_save_selected_row_center(int *out_x, int *out_y) {
+    if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) return 0;
+    world_save_ensure_selected_visible();
+    int row = g_selected_world_index - g_world_save_scroll;
+    if (row < 0 || row >= world_save_visible_rows()) return 0;
+    if (out_x) *out_x = g_gui_w / 2;
+    if (out_y) *out_y = world_save_list_top() + 4 + row * 36 + 16;
+    return 1;
+}
+
 static void start_selected_world_save(void) {
     if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) return;
     scan_world_saves();

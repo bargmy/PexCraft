@@ -650,6 +650,10 @@ static void draw_world_slot_rows(void) {
 static void draw_world_screen(void) {
     draw_world_slot_rows();
     draw_centered_text(g_screen == SCREEN_WORLD_DELETE ? "Delete World" : "Select World", g_gui_w / 2, 20, 16777215);
+    if (g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD) {
+        if (g_screen == SCREEN_WORLD_SELECT) draw_centered_text("A: Play   X: Create   Y: Rename   B: Back", g_gui_w / 2, g_gui_h - 72, 10526880);
+        else draw_centered_text("A: Delete   B: Back", g_gui_w / 2, g_gui_h - 72, 10526880);
+    }
     draw_all_buttons();
 }
 
