@@ -329,51 +329,112 @@ static void main_loop(void) {
         profile_begin_frame();
         double prof_start = profile_begin();
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) { g_running = 0; break; }
+            if (g_loggy_enabled) {
+                g_loggy_win_msg_count++;
+                g_loggy_win_last_msg = (unsigned int)msg.message;
+                g_loggy_win_last_msg_time = (unsigned long)msg.time;
+            }
+            if (msg.message == WM_QUIT) {
+                if (g_loggy_enabled) g_loggy_win_quit_seen = 1;
+                g_running = 0;
+                break;
+            }
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
         profile_add_time(PROF_PUMP, prof_start);
+
+        prof_start = profile_begin();
         pex_gamepad_update();
+        profile_add_time(PROF_GAMEPAD_POLL, prof_start);
+        if (g_loggy_enabled) {
+            g_loggy_gamepad_connected = g_gamepad_count;
+            g_loggy_gamepad_primary = g_gamepad_primary;
+            g_loggy_gamepad_focus = g_input_focus_mode;
+        }
+
         if (g_mp_connected || pex_net_is_connecting()) {
             prof_start = profile_begin();
             pex_net_poll();
             profile_add_time(PROF_NET_POLL, prof_start);
         }
+
         double frame_start_time = now_seconds();
+        prof_start = profile_begin();
         double t = frame_start_time;
         double dt = t - g_last_time;
         if (dt < 0) dt = 0;
         if (dt > 0.25) dt = 0.25;
         g_last_time = t;
         tick_accum += dt * 20.0;
+        if (g_loggy_enabled) {
+            g_loggy_dt_ms = dt * 1000.0;
+            g_loggy_tick_accum = tick_accum;
+        }
+        profile_add_time(PROF_CLOCK_DT, prof_start);
+
         int ticks_this_frame = 0;
         while (tick_accum >= 1.0 && ticks_this_frame < 3) {
             double tick_start = profile_begin();
             g_ticks++;
-            if (g_screen == SCREEN_TITLE) tick_title_blocks();
+            if (g_screen == SCREEN_TITLE) {
+                double t_title = profile_begin();
+                tick_title_blocks();
+                profile_add_time(PROF_TICK_TITLE, t_title);
+            }
             if (g_screen == SCREEN_GENERATING) {
                 double t_worldgen = profile_begin();
                 worldgen_tick();
                 profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
-            if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
+            if (g_screen == SCREEN_TEXPACK_INSTALL) {
+                double t_pack = profile_begin();
+                pack_install_tick();
+                profile_add_time(PROF_TICK_PACK_INSTALL, t_pack);
+            }
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
-                g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) ingame_tick_async_queue();
+                g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) {
+                double t_ingame_enqueue = profile_begin();
+                ingame_tick_async_queue();
+                profile_add_time(PROF_TICK_INGAME_ENQUEUE, t_ingame_enqueue);
+            }
             profile_add_time(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
         }
         if (ticks_this_frame >= 3 && tick_accum > 1.0) tick_accum = 1.0;
+        if (g_loggy_enabled) {
+            g_loggy_ticks_this_frame = ticks_this_frame;
+            g_loggy_tick_accum = tick_accum;
+        }
+
+        prof_start = profile_begin();
         float partial = ingame_tick_async_render_partial((float)tick_accum);
-        if (g_mp_connected) pex_net_update_smoothing();
+        profile_add_time(PROF_ASYNC_RENDER_PARTIAL, prof_start);
+        if (g_loggy_enabled) g_loggy_partial = partial;
+
+        if (g_mp_connected) {
+            prof_start = profile_begin();
+            pex_net_update_smoothing();
+            profile_add_time(PROF_NET_SMOOTHING, prof_start);
+        }
+
+        prof_start = profile_begin();
         ingame_pump_async_tick();
+        profile_add_time(PROF_ASYNC_TICK_PUMP, prof_start);
+
         render(partial);
+
+        prof_start = profile_begin();
         sleep_for_max_fps(frame_start_time);
-        profile_end_frame();
+        profile_add_time(PROF_SLEEP_LIMIT, prof_start);
+
+        prof_start = profile_begin();
         loggy_draw();
+        profile_add_time(PROF_LOGGY_REFRESH, prof_start);
+        profile_end_frame();
     }
 }
 

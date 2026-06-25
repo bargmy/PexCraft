@@ -331,6 +331,14 @@ static float joy_axis(DWORD v, DWORD minv, DWORD maxv) {
 }
 
 static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    static double xinput_retry_after[4] = {0, 0, 0, 0};
+    static int xinput_connected[4] = {0, 0, 0, 0};
+    static double winmm_retry_after = 0.0;
+    static UINT winmm_last_device_count = 0;
+    static double winmm_slot_retry_after[16];
+    static int winmm_slot_connected[16];
+    double now = now_seconds();
+
     pex_gamepad_load_xinput();
     g_gamepad_count = 0;
     g_gamepad_primary = -1;
@@ -338,8 +346,27 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
     if (g_xinput_get_state) {
         for (DWORD i = 0; i < 4 && g_gamepad_count < PEX_GAMEPAD_MAX; i++) {
             PexXInputState st;
+            DWORD xr;
+            /* XInputGetState can be surprisingly expensive for empty slots on
+               some Windows machines/drivers.  Poll connected pads every frame,
+               but only re-probe known-empty slots once per second. */
+            if (!xinput_connected[i] && now < xinput_retry_after[i]) {
+                if (g_loggy_enabled) g_loggy_xinput_skipped++;
+                continue;
+            }
             memset(&st, 0, sizeof(st));
-            if (g_xinput_get_state(i, &st) == 0) {
+            if (g_loggy_enabled) g_loggy_xinput_calls++;
+            xr = g_xinput_get_state(i, &st);
+            if (xr != 0) {
+                if (g_loggy_enabled) g_loggy_xinput_fail++;
+                xinput_connected[i] = 0;
+                xinput_retry_after[i] = now + 1.0;
+                continue;
+            }
+            if (g_loggy_enabled) g_loggy_xinput_ok++;
+            xinput_connected[i] = 1;
+            xinput_retry_after[i] = now;
+            {
                 int slot = g_gamepad_count;
                 PexGamepadState *p = &g_gamepads[slot];
                 pex_gamepad_copy_edges(p, &oldpads[slot]);
@@ -365,12 +392,40 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
             }
         }
     }
-    /* WinMM joystick fallback for DirectInput-like pads, DualShock adapters, and old USB converters. */
-    UINT n = joyGetNumDevs();
+    /* WinMM joystick fallback for DirectInput-like pads, DualShock adapters, and old USB converters.
+       When no fallback pad is present, scanning every frame can cost several ms. */
+    UINT n = winmm_last_device_count;
+    if (now >= winmm_retry_after) {
+        if (g_loggy_enabled) g_loggy_winmm_numdev_calls++;
+        n = joyGetNumDevs();
+        winmm_last_device_count = n;
+        winmm_retry_after = now + 1.0;
+    }
     for (UINT i = 0; i < n && g_gamepad_count < PEX_GAMEPAD_MAX; i++) {
-        JOYINFOEX ji; memset(&ji, 0, sizeof(ji)); ji.dwSize = sizeof(ji); ji.dwFlags = JOY_RETURNALL;
-        if (joyGetPosEx(i, &ji) != JOYERR_NOERROR) continue;
+        JOYINFOEX ji;
+        MMRESULT jr;
+        if (i < 16 && !winmm_slot_connected[i] && now < winmm_slot_retry_after[i]) {
+            if (g_loggy_enabled) g_loggy_winmm_slots_skipped++;
+            continue;
+        }
+        memset(&ji, 0, sizeof(ji)); ji.dwSize = sizeof(ji); ji.dwFlags = JOY_RETURNALL;
+        if (g_loggy_enabled) g_loggy_winmm_pos_calls++;
+        jr = joyGetPosEx(i, &ji);
+        if (jr != JOYERR_NOERROR) {
+            if (g_loggy_enabled) g_loggy_winmm_pos_fail++;
+            if (i < 16) {
+                winmm_slot_connected[i] = 0;
+                winmm_slot_retry_after[i] = now + 1.0;
+            }
+            continue;
+        }
+        if (g_loggy_enabled) g_loggy_winmm_pos_ok++;
+        if (i < 16) {
+            winmm_slot_connected[i] = 1;
+            winmm_slot_retry_after[i] = now;
+        }
         JOYCAPSA jc; memset(&jc, 0, sizeof(jc));
+        if (g_loggy_enabled) g_loggy_winmm_caps_calls++;
         joyGetDevCapsA(i, &jc, sizeof(jc));
         int slot = g_gamepad_count;
         PexGamepadState *p = &g_gamepads[slot];

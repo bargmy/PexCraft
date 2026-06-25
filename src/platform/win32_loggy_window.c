@@ -3,8 +3,8 @@
    so the Windows build gets a real separate diagnostics window. */
 
 #define PEX_WIN32_LOGGY_UPDATE_SECONDS 0.10
-#define PEX_WIN32_LOGGY_TEXT_CAP 65536
-#define PEX_WIN32_LOGGY_EDIT_CAP 131072
+#define PEX_WIN32_LOGGY_TEXT_CAP 196608
+#define PEX_WIN32_LOGGY_EDIT_CAP 262144
 #define PEX_WIN32_LOGGY_TIMER 9401
 #define PEX_WIN32_LOGGY_COPY_BUTTON 9402
 
@@ -68,6 +68,158 @@ static void loggy_count_lines(void) {
     g_loggy.line_count = lines;
 }
 
+
+static const char *loggy_screen_name(int screen) {
+    switch (screen) {
+        case SCREEN_TITLE: return "TITLE/main menu";
+        case SCREEN_OPTIONS: return "OPTIONS";
+        case SCREEN_OPTIONS_MORE: return "OPTIONS_MORE";
+        case SCREEN_SYSTEM_INFO: return "SYSTEM_INFO";
+        case SCREEN_SKINS: return "SKINS";
+        case SCREEN_CONTROLS: return "CONTROLS";
+        case SCREEN_WORLD_SELECT: return "WORLD_SELECT";
+        case SCREEN_CREATE_WORLD: return "CREATE_WORLD";
+        case SCREEN_WORLD_TYPE: return "WORLD_TYPE";
+        case SCREEN_WORLD_DELETE: return "WORLD_DELETE";
+        case SCREEN_RENAME_WORLD: return "RENAME_WORLD";
+        case SCREEN_CONFIRM_DELETE: return "CONFIRM_DELETE";
+        case SCREEN_MULTIPLAYER: return "MULTIPLAYER";
+        case SCREEN_CONNECTING: return "CONNECTING";
+        case SCREEN_TEXPACK: return "TEXPACK";
+        case SCREEN_TEXPACK_INSTALL: return "TEXPACK_INSTALL";
+        case SCREEN_GENERATING: return "GENERATING";
+        case SCREEN_INGAME: return "INGAME";
+        case SCREEN_PAUSE: return "PAUSE";
+        case SCREEN_INVENTORY: return "INVENTORY";
+        case SCREEN_WORKBENCH: return "WORKBENCH";
+        case SCREEN_FURNACE: return "FURNACE";
+        case SCREEN_CHEST: return "CHEST";
+        case SCREEN_DEATH: return "DEATH";
+        case SCREEN_CHAT: return "CHAT";
+        case SCREEN_NOTICE: return "NOTICE";
+        case SCREEN_RENDERER_RESTART_PROMPT: return "RENDERER_RESTART_PROMPT";
+        case SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT: return "CLASSIC_PACK_DOWNLOAD_PROMPT";
+        case SCREEN_CLASSIC_PACK_WARNING: return "CLASSIC_PACK_WARNING";
+        default: return "UNKNOWN_SCREEN";
+    }
+}
+
+static const char *loggy_focus_name(int focus) {
+    switch (focus) {
+        case PEX_INPUT_FOCUS_MOUSE: return "mouse";
+        case PEX_INPUT_FOCUS_GAMEPAD: return "gamepad";
+        case PEX_INPUT_FOCUS_TOUCH: return "touch";
+        default: return "unknown";
+    }
+}
+
+static double loggy_top_level_accounted_ms(void) {
+    double ms = 0.0;
+    ms += g_prof_display_ms[PROF_PUMP];
+    ms += g_prof_display_ms[PROF_GAMEPAD_POLL];
+    ms += g_prof_display_ms[PROF_NET_POLL];
+    ms += g_prof_display_ms[PROF_CLOCK_DT];
+    ms += g_prof_display_ms[PROF_TICK_TOTAL];
+    ms += g_prof_display_ms[PROF_ASYNC_RENDER_PARTIAL];
+    ms += g_prof_display_ms[PROF_NET_SMOOTHING];
+    ms += g_prof_display_ms[PROF_ASYNC_TICK_PUMP];
+    ms += g_prof_display_ms[PROF_RENDER_TOTAL];
+    ms += g_prof_display_ms[PROF_SLEEP_LIMIT];
+    ms += g_prof_display_ms[PROF_LOGGY_REFRESH];
+    return ms;
+}
+
+static double loggy_sum_all_profile_ms(void) {
+    double ms = 0.0;
+    for (int i = 0; i < PROF_COUNT; ++i) ms += g_prof_display_ms[i];
+    return ms;
+}
+
+static void loggy_append_phase(char **out, size_t *left, const char *name, PexMainThreadProfileId id) {
+    loggy_appendf(out, left, "  %-24s avg=%8.3fms now=%8.3fms calls=%3d pct=%6.1f%%\n",
+                  name, g_prof_display_ms[id], g_prof_frame_ms[id], g_loggy_profile_calls[id], profile_percent(g_prof_display_ms[id]));
+}
+
+static void loggy_append_hot_buckets(char **out, size_t *left) {
+    int used[PROF_COUNT];
+    memset(used, 0, sizeof(used));
+    loggy_appendf(out, left, "\nHOTTEST PROFILE BUCKETS, SORTED BY AVERAGE:\n");
+    for (int rank = 0; rank < 12; ++rank) {
+        int best = -1;
+        double best_ms = 0.0;
+        for (int i = 0; i < PROF_COUNT; ++i) {
+            if (used[i]) continue;
+            if (g_prof_display_ms[i] > best_ms) { best_ms = g_prof_display_ms[i]; best = i; }
+        }
+        if (best < 0 || best_ms <= 0.0005) break;
+        used[best] = 1;
+        loggy_appendf(out, left, "  #%02d %-24s avg=%8.3fms now=%8.3fms calls=%3d pct=%6.1f%%\n",
+                      rank + 1, g_prof_names[best], g_prof_display_ms[best], g_prof_frame_ms[best],
+                      g_loggy_profile_calls[best], profile_percent(g_prof_display_ms[best]));
+    }
+}
+
+static void loggy_append_root_hints(char **out, size_t *left, double top_accounted_ms, double unknown_ms) {
+    int hints = 0;
+    loggy_appendf(out, left, "\nROOT-CAUSE HINTS / WARNINGS:\n");
+    if (g_opts.max_fps > 0) {
+        double target = 1000.0 / (double)g_opts.max_fps;
+        if (g_prof_display_frame_ms >= target * 0.85 || g_sleep_ms_last > 0.5 || g_prof_display_ms[PROF_SLEEP_LIMIT] > 0.5) {
+            loggy_appendf(out, left, "  [CAP] Max FPS is %d. For 1k menu FPS, set Max FPS=Unlimited. limiter_sleep_avg=%.3fms last=%.3fms\n",
+                          g_opts.max_fps, g_prof_display_ms[PROF_SLEEP_LIMIT], g_sleep_ms_last);
+            hints++;
+        }
+    }
+    if (g_opts.anaglyph && g_opts.max_fps > 0) {
+        loggy_appendf(out, left, "  [VSYNC] V-Sync is ON and max_fps=%d. Present may block on monitor refresh.\n", g_opts.max_fps);
+        hints++;
+    }
+    if (g_prof_display_ms[PROF_PRESENT] > 2.0) {
+        loggy_appendf(out, left, "  [PRESENT] Present/swap is %.3fms avg. Suspect VSync/DWM/driver/back-buffer wait, not CPU logic.\n", g_prof_display_ms[PROF_PRESENT]);
+        hints++;
+    }
+    if (g_prof_display_ms[PROF_GAMEPAD_POLL] > 0.75) {
+        loggy_appendf(out, left, "  [GAMEPAD] Gamepad poll costs %.3fms avg. XInput calls=%d ok=%d fail=%d skip=%d WinMM numdev=%d pos=%d ok=%d fail=%d caps=%d skip=%d.\n",
+                      g_prof_display_ms[PROF_GAMEPAD_POLL], g_loggy_xinput_calls, g_loggy_xinput_ok,
+                      g_loggy_xinput_fail, g_loggy_xinput_skipped, g_loggy_winmm_numdev_calls,
+                      g_loggy_winmm_pos_calls, g_loggy_winmm_pos_ok, g_loggy_winmm_pos_fail,
+                      g_loggy_winmm_caps_calls, g_loggy_winmm_slots_skipped);
+        hints++;
+    }
+    if (unknown_ms > 1.0 && unknown_ms > top_accounted_ms * 0.25) {
+        loggy_appendf(out, left, "  [UNKNOWN] %.3fms/frame is still outside top-level buckets. Add a profile wrapper around code between profile_begin_frame/profile_end_frame.\n", unknown_ms);
+        hints++;
+    }
+    if (g_prof_display_ms[PROF_RENDER_TOTAL] < 1.0 && g_prof_display_frame_ms > 3.0) {
+        loggy_appendf(out, left, "  [NOT GPU] Render total is only %.3fms while frame is %.3fms. Bottleneck is outside actual drawing.\n",
+                      g_prof_display_ms[PROF_RENDER_TOTAL], g_prof_display_frame_ms);
+        hints++;
+    }
+    if (g_prof_display_ms[PROF_DRAW_CURRENT_SCREEN] > 2.0 && g_screen == SCREEN_TITLE) {
+        loggy_appendf(out, left, "  [MENU DRAW] Title/menu draw costs %.3fms avg. Check title background/panorama/buttons/text loops.\n", g_prof_display_ms[PROF_DRAW_CURRENT_SCREEN]);
+        hints++;
+    }
+    if (g_loggy_gui_text_calls > 1000 || g_loggy_gui_quads > 20000 || g_loggy_gui_buttons > 1000) {
+        loggy_appendf(out, left, "  [GUI SPAM] This frame emits text_calls=%d quads=%d buttons=%d. If this stays high after reset, menu UI is rebuilding/drawing too much.\n",
+                      g_loggy_gui_text_calls, g_loggy_gui_quads, g_loggy_gui_buttons);
+        hints++;
+    }
+    if (g_prof_display_ms[PROF_LOGGY_REFRESH] > 1.0) {
+        loggy_appendf(out, left, "  [LOGGY OVERHEAD] Loggy refresh costs %.3fms avg, last edit update %.3fms. Diagnostic window itself is affecting FPS.\n",
+                      g_prof_display_ms[PROF_LOGGY_REFRESH], g_loggy_edit_refresh_last_ms);
+        hints++;
+    }
+    if (g_screen == SCREEN_INGAME && g_prof_display_ms[PROF_MESH_MAIN] > 2.0) {
+        loggy_appendf(out, left, "  [MESH MAIN] Mesh install/rebuild path costs %.3fms on main thread. Check mesh result install/self-heal/snapshot queues.\n", g_prof_display_ms[PROF_MESH_MAIN]);
+        hints++;
+    }
+    if (g_screen == SCREEN_INGAME && g_prof_display_ms[PROF_WORLD_STREAM] > 1.0) {
+        loggy_appendf(out, left, "  [STREAM] World streaming costs %.3fms on main thread. Check async queue/result install and chunk remap.\n", g_prof_display_ms[PROF_WORLD_STREAM]);
+        hints++;
+    }
+    if (!hints) loggy_appendf(out, left, "  none obvious in current snapshot; use UNKNOWN and HOTTEST BUCKETS above.\n");
+}
+
 static void loggy_build_text(void) {
     char *out = g_loggy.text;
     size_t left = sizeof(g_loggy.text);
@@ -77,6 +229,10 @@ static void loggy_build_text(void) {
     int light_dirty = 0;
     int active_drops = 0;
     int active_particles = 0;
+    DWORD pid = GetCurrentProcessId();
+    DWORD tid = GetCurrentThreadId();
+    DWORD priority = GetPriorityClass(GetCurrentProcess());
+    HWND fg = GetForegroundWindow();
 
     if (g_async_section_mesh_initialized) {
         EnterCriticalSection(&g_async_section_mesh_cs);
@@ -117,32 +273,107 @@ static void loggy_build_text(void) {
     g_loggy_stream_async_results = stream_results;
     g_loggy_stream_remap_active = g_stream_remap_in_progress ? 1 : 0;
 
-    loggy_appendf(&out, &left, "PEXCRAFT LOGGY DIAGNOSTIC WINDOW\n");
-    loggy_appendf(&out, &left, "NATIVE WIN32 HWND. COPY BUTTON TOP RIGHT. EDIT CONTROL HAS REAL SCROLLBARS.\n");
-    loggy_appendf(&out, &left, "FRAME=%d SCREEN=%d FPS=%d/%d/%d FRAME=%.2fMS RENDER=%.2fMS SLEEP=%.2fMS BACKEND=%d WINDOW=%dx%d GUI=%dx%d SCALE=%d\n\n",
-                  g_loggy_frame_no, g_screen, g_debug_fps, g_debug_min_fps, g_debug_max_fps,
-                  g_prof_display_frame_ms, g_render_ms_last, g_sleep_ms_last, g_runtime_renderer_backend,
-                  g_win_w, g_win_h, g_gui_w, g_gui_h, g_gui_scale);
+    double top_accounted_ms = loggy_top_level_accounted_ms();
+    double all_bucket_sum_ms = loggy_sum_all_profile_ms();
+    double unknown_ms = g_prof_display_frame_ms - top_accounted_ms;
+    if (unknown_ms < 0.0) unknown_ms = 0.0;
+    double budget_1000_over = g_prof_display_frame_ms - 1.0;
+    if (budget_1000_over < 0.0) budget_1000_over = 0.0;
 
-    loggy_appendf(&out, &left, "MAIN PROFILER BUCKETS AVG/CALLS/CURRENT-FRAME:\n");
+    loggy_appendf(&out, &left, "PEXCRAFT LOGGY ROOT-CAUSE SNAPSHOT\n");
+    loggy_appendf(&out, &left, "NATIVE WIN32 HWND. ONE COPY SHOULD INCLUDE ENOUGH CONTEXT TO FIND THE BOTTLENECK.\n");
+    loggy_appendf(&out, &left, "FRAME=%d SCREEN=%d/%s FPS=%d min=%d max=%d frame_avg=%.3fms last_wall=%.3fms 1k_budget_over=%.3fms\n",
+                  g_loggy_frame_no, g_screen, loggy_screen_name(g_screen), g_debug_fps, g_debug_min_fps, g_debug_max_fps,
+                  g_prof_display_frame_ms, g_loggy_last_frame_wall_ms, budget_1000_over);
+    loggy_appendf(&out, &left, "ACCOUNTING: top_level=%.3fms unknown=%.3fms all_bucket_sum=%.3fms render_last=%.3fms sleep_last=%.3fms refresh_rate=%dHz\n",
+                  top_accounted_ms, unknown_ms, all_bucket_sum_ms, g_render_ms_last, g_sleep_ms_last, g_system_info.display_refresh_hz);
+    loggy_appendf(&out, &left, "CONFIG: renderer=%s(%d) selected=%s max_fps=%d vsync=%d fullscreen=%d fancy=%d render_distance=%d fov=%.1f scale=%d\n",
+                  renderer_backend_label(g_runtime_renderer_backend), g_runtime_renderer_backend,
+                  renderer_backend_label(g_selected_renderer_backend), g_opts.max_fps, g_opts.anaglyph,
+                  g_opts.fullscreen, g_opts.fancy_graphics, g_opts.render_distance, g_opts.fov, g_gui_scale);
+    loggy_appendf(&out, &left, "WINDOW: client=%dx%d gui=%dx%d render=%dx%d foreground=%d active_hwnd=%p loggy_hwnd=%p pid=%lu tid=%lu priority=0x%lx\n\n",
+                  g_win_w, g_win_h, g_gui_w, g_gui_h, g_render_w, g_render_h,
+                  (fg == g_hwnd) ? 1 : 0, (void*)g_hwnd, (void*)g_loggy.hwnd,
+                  (unsigned long)pid, (unsigned long)tid, (unsigned long)priority);
+
+    loggy_append_root_hints(&out, &left, top_accounted_ms, unknown_ms);
+    loggy_append_hot_buckets(&out, &left);
+
+    loggy_appendf(&out, &left, "\nTOP-LEVEL MAIN LOOP PHASES (do not double-count sub-buckets):\n");
+    loggy_append_phase(&out, &left, "Pump/messages", PROF_PUMP);
+    loggy_append_phase(&out, &left, "Gamepad poll", PROF_GAMEPAD_POLL);
+    loggy_append_phase(&out, &left, "Net poll/apply", PROF_NET_POLL);
+    loggy_append_phase(&out, &left, "Clock/delta", PROF_CLOCK_DT);
+    loggy_append_phase(&out, &left, "Tick total", PROF_TICK_TOTAL);
+    loggy_append_phase(&out, &left, "Async render partial", PROF_ASYNC_RENDER_PARTIAL);
+    loggy_append_phase(&out, &left, "Net smoothing", PROF_NET_SMOOTHING);
+    loggy_append_phase(&out, &left, "Async tick pump", PROF_ASYNC_TICK_PUMP);
+    loggy_append_phase(&out, &left, "Render total", PROF_RENDER_TOTAL);
+    loggy_append_phase(&out, &left, "FPS limiter sleep", PROF_SLEEP_LIMIT);
+    loggy_append_phase(&out, &left, "Loggy refresh", PROF_LOGGY_REFRESH);
+    loggy_appendf(&out, &left, "  %-24s avg=%8.3fms now=%8.3fms\n", "UNPROFILED/UNKNOWN", unknown_ms,
+                  g_loggy_last_frame_wall_ms > 0.0 ? g_loggy_last_frame_wall_ms : g_ft_last_frame_ms);
+
+    loggy_appendf(&out, &left, "\nALL PROFILE BUCKETS AVG/CALLS/CURRENT-FRAME (sub-buckets included; sum double-counts):\n");
     for (int i = 0; i < PROF_COUNT; ++i) {
-        loggy_appendf(&out, &left, "  %-22s avg=%7.3fms now=%7.3fms calls=%3d pct=%5.1f%%\n",
+        loggy_appendf(&out, &left, "  %-24s avg=%8.3fms now=%8.3fms calls=%3d pct=%6.1f%%\n",
                       g_prof_names[i], g_prof_display_ms[i], g_prof_frame_ms[i], g_loggy_profile_calls[i], profile_percent(g_prof_display_ms[i]));
     }
 
-    loggy_appendf(&out, &left, "\nGUI / TEXT / BUTTONS:\n");
-    loggy_appendf(&out, &left, "  text_calls=%d text_chars=%d gui_quads=%d buttons=%d debug_menu=%d chunk_info=%d task_info=%d\n",
-                  g_loggy_gui_text_calls, g_loggy_gui_text_chars, g_loggy_gui_quads, g_loggy_gui_buttons,
-                  g_debug_menu_shown, g_debug_chunk_info_shown, g_debug_task_info_shown);
+    loggy_appendf(&out, &left, "\nFRAME / TICK DETAILS:\n");
+    loggy_appendf(&out, &left, "  dt=%.3fms tick_accum=%.3f ticks_this_frame=%d partial=%.3f total_ticks=%d world_time=%lld screen=%s\n",
+                  g_loggy_dt_ms, g_loggy_tick_accum, g_loggy_ticks_this_frame, g_loggy_partial,
+                  g_ticks, g_world_time, loggy_screen_name(g_screen));
+    loggy_appendf(&out, &left, "  frame_history: last=%.3fms p50=%.3fms p95=%.3fms p99=%.3fms worst=%.3fms debug_counter=%d\n",
+                  g_ft_last_frame_ms, g_ft_p50_ms, g_ft_p95_ms, g_ft_p99_ms, g_ft_worst_ms, g_debug_frame_counter);
 
-    loggy_appendf(&out, &left, "\nRENDER / MESH:\n");
-    loggy_appendf(&out, &left, "  visible_sections=%d generated_chunks=%d fancy=%d direct_backend=%d display_lists=%d\n",
+    loggy_appendf(&out, &left, "\nWIN32 MESSAGE PUMP:\n");
+    loggy_appendf(&out, &left, "  messages_this_frame=%d last_msg=0x%04x last_msg_time=%lu quit_seen=%d pump_avg=%.3fms pump_now=%.3fms\n",
+                  g_loggy_win_msg_count, g_loggy_win_last_msg, (unsigned long)g_loggy_win_last_msg_time,
+                  g_loggy_win_quit_seen, g_prof_display_ms[PROF_PUMP], g_prof_frame_ms[PROF_PUMP]);
+
+    loggy_appendf(&out, &left, "\nGAMEPAD RAW POLL / INPUT FOCUS:\n");
+    loggy_appendf(&out, &left, "  connected=%d primary=%d focus=%s poll_avg=%.3fms poll_now=%.3fms\n",
+                  g_loggy_gamepad_connected, g_loggy_gamepad_primary, loggy_focus_name(g_loggy_gamepad_focus),
+                  g_prof_display_ms[PROF_GAMEPAD_POLL], g_prof_frame_ms[PROF_GAMEPAD_POLL]);
+    loggy_appendf(&out, &left, "  XInput: calls=%d ok=%d fail=%d skipped_empty=%d  WinMM: numdev=%d pos=%d ok=%d fail=%d caps=%d skipped_empty=%d\n",
+                  g_loggy_xinput_calls, g_loggy_xinput_ok, g_loggy_xinput_fail, g_loggy_xinput_skipped,
+                  g_loggy_winmm_numdev_calls, g_loggy_winmm_pos_calls, g_loggy_winmm_pos_ok,
+                  g_loggy_winmm_pos_fail, g_loggy_winmm_caps_calls, g_loggy_winmm_slots_skipped);
+    for (int gi = 0; gi < g_gamepad_count && gi < PEX_GAMEPAD_MAX; ++gi) {
+        PexGamepadState *pad = &g_gamepads[gi];
+        loggy_appendf(&out, &left, "  pad[%d] slot=%d name=%.64s kind=%.32s lx=%.2f ly=%.2f rx=%.2f ry=%.2f lt=%.2f rt=%.2f buttons=A%d B%d X%d Y%d LB%d RB%d Back%d Start%d D%d%d%d%d\n",
+                      gi, pad->slot, pad->name, pad->kind, pad->lx, pad->ly, pad->rx, pad->ry, pad->lt, pad->rt,
+                      pad->a, pad->b, pad->x, pad->y, pad->lb, pad->rb, pad->back, pad->start,
+                      pad->dpad_up, pad->dpad_down, pad->dpad_left, pad->dpad_right);
+    }
+
+    loggy_appendf(&out, &left, "\nRENDER BREAKDOWN:\n");
+    loggy_appendf(&out, &left, "  begin=%.3f clear_setup=%.3f draw_screen=%.3f cursor=%.3f fps_counter=%.3f present=%.3f total=%.3f\n",
+                  g_prof_display_ms[PROF_RENDERER_BEGIN_FRAME], g_prof_display_ms[PROF_RENDER_CLEAR_SETUP],
+                  g_prof_display_ms[PROF_DRAW_CURRENT_SCREEN], g_prof_display_ms[PROF_GAMEPAD_CURSOR],
+                  g_prof_display_ms[PROF_FPS_COUNTER], g_prof_display_ms[PROF_PRESENT], g_prof_display_ms[PROF_RENDER_TOTAL]);
+    loggy_appendf(&out, &left, "  world: cull=%.3f mesh_main=%.3f solid=%.3f entities=%.3f particles=%.3f translucent=%.3f overlays=%.3f clouds=%.3f hud_gui=%.3f\n",
+                  g_prof_display_ms[PROF_CULL_SORT], g_prof_display_ms[PROF_MESH_MAIN], g_prof_display_ms[PROF_WORLD_DRAW],
+                  g_prof_display_ms[PROF_WORLD_ENTITIES], g_prof_display_ms[PROF_WORLD_PARTICLES],
+                  g_prof_display_ms[PROF_WORLD_TRANSLUCENT], g_prof_display_ms[PROF_WORLD_OVERLAYS],
+                  g_prof_display_ms[PROF_WORLD_CLOUDS], g_prof_display_ms[PROF_HUD_GUI]);
+
+    loggy_appendf(&out, &left, "\nGUI / TEXT / BUTTONS THIS FRAME:\n");
+    loggy_appendf(&out, &left, "  text_calls=%d text_chars=%d gui_quads=%d buttons=%d debug_menu=%d chunk_info=%d task_info=%d button_count=%d mouse=%d,%d grabbed=%d hidden=%d\n",
+                  g_loggy_gui_text_calls, g_loggy_gui_text_chars, g_loggy_gui_quads, g_loggy_gui_buttons,
+                  g_debug_menu_shown, g_debug_chunk_info_shown, g_debug_task_info_shown,
+                  g_button_count, g_mouse_x, g_mouse_y, g_mouse_grabbed, g_cursor_hidden);
+
+    loggy_appendf(&out, &left, "\nRENDER / MESH STATE:\n");
+    loggy_appendf(&out, &left, "  visible_sections=%d generated_chunks=%d fancy=%d direct_backend=%d display_lists=%d texture_terrain=%u font=%u title_logo=%u panorama0=%u\n",
                   g_loggy_visible_sections, g_loggy_visible_chunks, g_opts.fancy_graphics,
-                  flat_direct_backend() ? 1 : 0, flat_display_lists_supported() ? 1 : 0);
-    loggy_appendf(&out, &left, "  queue: jobs=%d busy=%d uploads=%d upload_busy=%d results=%d prof_jobs=%d prof_uploads=%d prof_results=%d\n",
+                  flat_direct_backend() ? 1 : 0, flat_display_lists_supported() ? 1 : 0,
+                  tex_terrain.id, tex_font.id, tex_title_logo.id, tex_panorama[0].id);
+    loggy_appendf(&out, &left, "  async_mesh_queue: jobs=%d busy=%d uploads=%d upload_busy=%d results=%d prof_jobs=%d prof_uploads=%d prof_results=%d\n",
                   mesh_jobs, mesh_busy, mesh_uploads, mesh_upload_busy, mesh_results,
                   g_prof_mesh_jobs_last, g_prof_mesh_uploads_last, g_prof_mesh_results_last);
-    loggy_appendf(&out, &left, "  frame: submit_calls=%d snapshot_cells=%d installs=%d install_vtx=%d install_idx=%d stale_results=%d\n",
+    loggy_appendf(&out, &left, "  frame_mesh: submit_calls=%d snapshot_cells=%d installs=%d install_vtx=%d install_idx=%d stale_results=%d\n",
                   g_loggy_mesh_submit_calls, g_loggy_mesh_submit_snapshot_cells,
                   g_loggy_mesh_installs, g_loggy_mesh_install_vertices, g_loggy_mesh_install_indices,
                   g_loggy_mesh_stale_results);
@@ -180,15 +411,22 @@ static void loggy_build_text(void) {
                   (void*)g_save_thread, g_save_thread_done, g_save_thread_shutdown, save_queue);
 
     loggy_appendf(&out, &left, "\nGAMEPLAY / SIM:\n");
-    loggy_appendf(&out, &left, "  player=(%.2f %.2f %.2f) motion=(%.3f %.3f %.3f) on_ground=%d selected_slot=%d world_type=%d structures=%d\n",
-                  g_player_x, g_player_y, g_player_z, g_player_motion_x, g_player_motion_y, g_player_motion_z,
+    loggy_appendf(&out, &left, "  player=(%.2f %.2f %.2f) prev=(%.2f %.2f %.2f) motion=(%.3f %.3f %.3f) yaw=%.2f pitch=%.2f on_ground=%d selected_slot=%d world_type=%d structures=%d\n",
+                  g_player_x, g_player_y, g_player_z, g_player_prev_x, g_player_prev_y, g_player_prev_z,
+                  g_player_motion_x, g_player_motion_y, g_player_motion_z, g_player_yaw, g_player_pitch,
                   g_player_on_ground, g_selected_hotbar_slot, g_world_type, g_world_map_features);
     loggy_appendf(&out, &left, "  falling active=%d spawned=%d cells=%d particles=%d drops=%d liquids_ms=%.3f world_stream_ms=%.3f\n",
                   g_prof_falling_active_last, g_prof_falling_spawns_last, g_prof_falling_cells_last,
                   active_particles, active_drops, g_prof_display_ms[PROF_LIQUIDS], g_prof_display_ms[PROF_WORLD_STREAM]);
 
+    loggy_appendf(&out, &left, "\nSYSTEM INFO CACHE:\n");
+    loggy_appendf(&out, &left, "  platform=%s display=%dx%d@%dHz %s ram=%llu/%lluMB gpu=%.96s vendor=%.64s api=%.64s net=%d\n",
+                  g_system_info.platform, g_system_info.screen_w, g_system_info.screen_h, g_system_info.display_refresh_hz,
+                  g_system_info.display_name, g_system_info.ram_available_mb, g_system_info.ram_total_mb,
+                  g_system_info.gpu_renderer, g_system_info.gpu_vendor, g_system_info.gpu_version, g_system_info.network_available);
+
     loggy_appendf(&out, &left, "\nHOT QUEUE SAMPLE:\n");
-    int maxq = q_remaining < 16 ? q_remaining : 16;
+    int maxq = q_remaining < 24 ? q_remaining : 24;
     for (int i = 0; i < maxq; ++i) {
         int qi = g_stream_gen_queue_index + i;
         loggy_appendf(&out, &left, "  stream_q[%02d] world_chunk=%d,%d score=%d\n", i,
@@ -197,10 +435,16 @@ static void loggy_build_text(void) {
     }
     if (maxq <= 0) loggy_appendf(&out, &left, "  none\n");
 
+    loggy_appendf(&out, &left, "\nCOPY / LOGGY WINDOW:\n");
+    loggy_appendf(&out, &left, "  text_cap=%d edit_cap=%d line_count=%d edit_refreshes=%d edit_refresh_last=%.3fms clipboard_copies=%d update_interval=%.2fs\n",
+                  PEX_WIN32_LOGGY_TEXT_CAP, PEX_WIN32_LOGGY_EDIT_CAP, g_loggy.line_count,
+                  g_loggy_edit_refreshes, g_loggy_edit_refresh_last_ms, g_loggy_clipboard_copies,
+                  PEX_WIN32_LOGGY_UPDATE_SECONDS);
+
     loggy_appendf(&out, &left, "\nNOTES:\n");
-    loggy_appendf(&out, &left, "  Windows --loggy is native Win32 now; no SDL window/context is involved.\n");
-    loggy_appendf(&out, &left, "  This window shows instrumented hot paths, queues, worker states, and frame buckets.\n");
-    loggy_appendf(&out, &left, "  It does not magically hook every C function; add LOGGY_POINT/name counters for new suspects.\n");
+    loggy_appendf(&out, &left, "  ACCOUNTING top_level is the useful value. all_bucket_sum double-counts nested render/world buckets.\n");
+    loggy_appendf(&out, &left, "  If frame is 80-100 FPS but render_total/present are tiny, the root is CPU, controller polling, frame cap, Loggy overhead, or UNKNOWN main-loop code.\n");
+    loggy_appendf(&out, &left, "  This still cannot magically hook every C function; unknown>1ms means add profile wrappers around the remaining code path.\n");
     *out = '\0';
     loggy_count_lines();
 }
@@ -242,6 +486,7 @@ static void loggy_copy_text_to_clipboard(void) {
     EmptyClipboard();
     SetClipboardData(CF_TEXT, mem);
     CloseClipboard();
+    g_loggy_clipboard_copies++;
 }
 
 static void loggy_layout_controls(void) {
@@ -276,10 +521,14 @@ static void loggy_set_edit_text_preserve_scroll(void) {
 }
 
 static void loggy_refresh_now(void) {
+    double start_time;
     if (!g_loggy_enabled || !g_loggy.hwnd || !g_loggy.edit) return;
+    start_time = now_seconds();
     loggy_build_text();
     loggy_set_edit_text_preserve_scroll();
     g_loggy.last_build_time = now_seconds();
+    g_loggy_edit_refresh_last_ms = (g_loggy.last_build_time - start_time) * 1000.0;
+    g_loggy_edit_refreshes++;
 }
 
 static LRESULT CALLBACK loggy_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -322,7 +571,9 @@ static LRESULT CALLBACK loggy_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             break;
         case WM_TIMER:
             if (wparam == PEX_WIN32_LOGGY_TIMER) {
+                double t_loggy_timer = profile_begin();
                 loggy_refresh_now();
+                profile_add_time(PROF_LOGGY_REFRESH, t_loggy_timer);
                 return 0;
             }
             break;

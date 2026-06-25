@@ -7073,6 +7073,7 @@ static void draw_flat_test_world(void) {
     draw_flat_section_passes(g_flat_visible_sections, visible_count);
     profile_add_time(PROF_WORLD_DRAW, prof_part);
 
+    prof_part = profile_begin();
     draw_third_person_player();
     draw_multiplayer_remote_players();
     glGetDoublev(GL_MODELVIEW_MATRIX, g_name_modelview);
@@ -7081,12 +7082,21 @@ static void draw_flat_test_world(void) {
     g_name_matrices_valid = 1;
     draw_falling_blocks(g_frame_partial);
     draw_passive_mobs(g_frame_partial);
+    profile_add_time(PROF_WORLD_ENTITIES, prof_part);
+
+    prof_part = profile_begin();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     draw_dropped_items();
     draw_pickup_fx_items();
     draw_dig_particles(g_frame_partial);
+    profile_add_time(PROF_WORLD_PARTICLES, prof_part);
+
+    prof_part = profile_begin();
     draw_translucent_sections(g_flat_visible_sections, visible_count);
+    profile_add_time(PROF_WORLD_TRANSLUCENT, prof_part);
+
+    prof_part = profile_begin();
     draw_block_selection_border();
     draw_remote_break_overlays();
     if (g_breaking_block && flat_get_block(g_break_x, g_break_y, g_break_z) != 0) {
@@ -7094,9 +7104,12 @@ static void draw_flat_test_world(void) {
         int stage = (int)(dmg * 10.0f);
         draw_break_overlay_cube((float)g_break_x, (float)g_break_y, (float)g_break_z, stage);
     }
+    profile_add_time(PROF_WORLD_OVERLAYS, prof_part);
 
+    prof_part = profile_begin();
     glEnable(GL_FOG);
     draw_source_clouds();
+    profile_add_time(PROF_WORLD_CLOUDS, prof_part);
 
     glColor4f(1,1,1,1);
     glDisable(GL_FOG);

@@ -115,11 +115,18 @@ static void render(float partial) {
     }
     last_debug_menu_shown = g_debug_menu_shown;
 
+    double part_start = profile_begin();
     update_debug_fps_counter();
+    profile_add_time(PROF_RENDER_FPS_UPDATE, part_start);
     g_frame_partial = partial;
+    part_start = profile_begin();
     player_render_begin_frame();
+    profile_add_time(PROF_PLAYER_RENDER_SNAPSHOT, part_start);
 
-    if (!pex_renderer_begin_frame()) {
+    part_start = profile_begin();
+    int begin_ok = pex_renderer_begin_frame();
+    profile_add_time(PROF_RENDERER_BEGIN_FRAME, part_start);
+    if (!begin_ok) {
         g_render_ms_last = 0.0;
         record_frame_time_sample(render_entry_time);
         profile_add_time(PROF_RENDER_TOTAL, render_profile_time);
@@ -127,12 +134,15 @@ static void render(float partial) {
     }
     g_render_w = g_win_w;
     g_render_h = g_win_h;
+    part_start = profile_begin();
     glViewport(0, 0, g_render_w, g_render_h);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     setup_gui_projection();
+    profile_add_time(PROF_RENDER_CLEAR_SETUP, part_start);
     double render_start_time = now_seconds();
-    double part_start = profile_begin();
+    part_start = profile_begin();
     draw_current_screen(partial);
+    profile_add_time(PROF_DRAW_CURRENT_SCREEN, part_start);
     profile_add_time(PROF_SCREEN_DRAW, part_start);
 #ifdef PEX_PLATFORM_ANDROID
     draw_android_touch_controls();

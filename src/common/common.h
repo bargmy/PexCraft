@@ -1656,9 +1656,17 @@ static double g_render_ms_last = 0.0;
 
 typedef enum PexMainThreadProfileId {
     PROF_PUMP = 0,
+    PROF_GAMEPAD_POLL,
     PROF_NET_POLL,
+    PROF_CLOCK_DT,
     PROF_TICK_TOTAL,
+    PROF_TICK_TITLE,
     PROF_WORLDGEN_TICK,
+    PROF_TICK_PACK_INSTALL,
+    PROF_TICK_INGAME_ENQUEUE,
+    PROF_ASYNC_RENDER_PARTIAL,
+    PROF_NET_SMOOTHING,
+    PROF_ASYNC_TICK_PUMP,
     PROF_INGAME_TOTAL,
     PROF_INVENTORY,
     PROF_FURNACE,
@@ -1669,9 +1677,19 @@ typedef enum PexMainThreadProfileId {
     PROF_LIQUIDS,
     PROF_BUTTONS,
     PROF_PLAYER_LOGIC,
+    PROF_RENDER_FPS_UPDATE,
+    PROF_PLAYER_RENDER_SNAPSHOT,
+    PROF_RENDERER_BEGIN_FRAME,
+    PROF_RENDER_CLEAR_SETUP,
+    PROF_DRAW_CURRENT_SCREEN,
     PROF_MESH_MAIN,
     PROF_CULL_SORT,
     PROF_WORLD_DRAW,
+    PROF_WORLD_ENTITIES,
+    PROF_WORLD_PARTICLES,
+    PROF_WORLD_TRANSLUCENT,
+    PROF_WORLD_OVERLAYS,
+    PROF_WORLD_CLOUDS,
     PROF_HUD_GUI,
     PROF_SCREEN_DRAW,
     PROF_FPS_COUNTER,
@@ -1681,14 +1699,24 @@ typedef enum PexMainThreadProfileId {
     PROF_MESH_RESULT_INSTALL,
     PROF_MESH_SUBMIT_SNAPSHOT,
     PROF_RENDER_TOTAL,
+    PROF_SLEEP_LIMIT,
+    PROF_LOGGY_REFRESH,
     PROF_COUNT
 } PexMainThreadProfileId;
 
 static const char *g_prof_names[PROF_COUNT] = {
     "Pump/messages",
+    "Gamepad poll",
     "Net poll/apply",
+    "Clock/delta",
     "Tick total",
+    "Title tick",
     "Worldgen tick",
+    "Pack install tick",
+    "Ingame enqueue",
+    "Async render partial",
+    "Net smoothing",
+    "Async tick pump",
     "Ingame tick",
     "Inventory",
     "Furnaces",
@@ -1699,9 +1727,19 @@ static const char *g_prof_names[PROF_COUNT] = {
     "Liquids",
     "Buttons/plates",
     "Player logic",
+    "Render FPS update",
+    "Player render snap",
+    "Renderer begin frame",
+    "Clear/setup",
+    "Draw current screen",
     "Mesh install",
     "Cull/sort",
-    "World draw",
+    "World draw solid",
+    "World entities",
+    "World particles",
+    "World translucent",
+    "World overlays",
+    "World clouds",
     "HUD/GUI",
     "Screen draw",
     "FPS counter",
@@ -1710,7 +1748,9 @@ static const char *g_prof_names[PROF_COUNT] = {
     "Mesh self-heal",
     "Mesh result install",
     "Mesh submit snapshot",
-    "Render total"
+    "Render total",
+    "FPS limiter sleep",
+    "Loggy refresh"
 };
 
 static double g_prof_frame_ms[PROF_COUNT];
@@ -1788,6 +1828,33 @@ static int g_loggy_stream_installed_total = 0;
 static int g_loggy_stream_remap_active = 0;
 static int g_loggy_visible_sections = 0;
 static int g_loggy_visible_chunks = 0;
+static int g_loggy_ticks_this_frame = 0;
+static double g_loggy_tick_accum = 0.0;
+static double g_loggy_dt_ms = 0.0;
+static double g_loggy_partial = 0.0;
+static int g_loggy_win_msg_count = 0;
+static int g_loggy_win_quit_seen = 0;
+static unsigned int g_loggy_win_last_msg = 0;
+static unsigned long g_loggy_win_last_msg_time = 0;
+static double g_loggy_last_frame_wall_ms = 0.0;
+static double g_loggy_last_frame_begin_time = 0.0;
+static double g_loggy_last_frame_end_time = 0.0;
+static int g_loggy_xinput_calls = 0;
+static int g_loggy_xinput_ok = 0;
+static int g_loggy_xinput_fail = 0;
+static int g_loggy_xinput_skipped = 0;
+static int g_loggy_winmm_numdev_calls = 0;
+static int g_loggy_winmm_pos_calls = 0;
+static int g_loggy_winmm_pos_ok = 0;
+static int g_loggy_winmm_pos_fail = 0;
+static int g_loggy_winmm_caps_calls = 0;
+static int g_loggy_winmm_slots_skipped = 0;
+static int g_loggy_gamepad_connected = 0;
+static int g_loggy_gamepad_primary = -1;
+static int g_loggy_gamepad_focus = 0;
+static int g_loggy_clipboard_copies = 0;
+static int g_loggy_edit_refreshes = 0;
+static double g_loggy_edit_refresh_last_ms = 0.0;
 
 static int g_third_person_view = 0; /* Java 1.2.5 GameSettings.thirdPersonView: 0=first, 1=back, 2=front. */
 static void third_person_view_cycle(void) {
