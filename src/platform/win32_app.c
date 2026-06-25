@@ -373,6 +373,7 @@ static void main_loop(void) {
         render(partial);
         sleep_for_max_fps(frame_start_time);
         profile_end_frame();
+        loggy_draw();
     }
 }
 
@@ -655,7 +656,8 @@ static int show_resource_downloader(HINSTANCE inst) {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
-    (void)hPrev; (void)lpCmdLine;
+    (void)hPrev;
+    if (loggy_cmdline_has_flag(lpCmdLine, "--loggy")) g_loggy_enabled = 1;
     pex_log_init();
     pex_install_crash_handlers();
     pex_logf("WinMain enter: %s", APP_TITLE);
@@ -724,6 +726,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
         return 3;
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
+    if (g_loggy_enabled) loggy_init();
     if (should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else if (g_renderer_backend_unavailable_notice) {
@@ -758,6 +761,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     free_texture_pack_icons();
     pex_gamepad_shutdown();
     pex_sound_shutdown();
+    loggy_shutdown();
     pex_renderer_shutdown();
     if (g_wic_factory) { IWICImagingFactory_Release(g_wic_factory); g_wic_factory = NULL; }
     CoUninitialize();
