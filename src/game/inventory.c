@@ -584,11 +584,13 @@ static float flat_sun_brightness_for_light(float partial) {
 static void flat_lightmap_color_from_packed(int packed, float *r, float *g, float *b) {
     /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
        overworld, gamma=0, torchFlickerX=0, no lightning.  Java applies this as
-       a 16x16 lightmap texture; this C renderer bakes equivalent colors into
-       terrain vertices. */
+       a 16x16 lightmap texture every frame.  When terrain sections are being
+       compiled, g_flat_bake_stable_mesh_light forces a neutral sun value so
+       cached chunk meshes do not change brightness just because they were
+       rebuilt later than their neighbors. */
     int sky = (packed >> 20) & 15;
     int block = (packed >> 4) & 15;
-    float sun = flat_sun_brightness_for_light(1.0f);
+    float sun = g_flat_bake_stable_mesh_light ? 1.0f : flat_sun_brightness_for_light(1.0f);
     float light_sky = flat_java_light_brightness_from_level(sky) * (sun * 0.95f + 0.05f);
     float light_block = flat_java_light_brightness_from_level(block) * 1.5f;
     float sky_rg = light_sky * (sun * 0.65f + 0.35f);

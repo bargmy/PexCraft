@@ -4558,6 +4558,8 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     FlatDirectMeshBuilder mb0, mb1;
+    int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
+    g_flat_bake_stable_mesh_light = 1;
 
     flat_direct_begin(&mb0);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -4636,6 +4638,7 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
         if (g_flat_direct_capture_skip0) *g_flat_direct_capture_skip0 = !has0;
         if (g_flat_direct_capture_skip1) *g_flat_direct_capture_skip1 = !(has1 && g_opts.fancy_graphics);
         g_flat_direct_capture_success = 1;
+        g_flat_bake_stable_mesh_light = old_stable_mesh_light;
         return;
     }
 
@@ -4650,6 +4653,7 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
     g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && g_opts.fancy_graphics);
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
+    g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
 
 static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
@@ -4670,6 +4674,8 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
     if (y1 > FLAT_WORLD_Y_MAX) y1 = FLAT_WORLD_Y_MAX;
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
+    int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
+    g_flat_bake_stable_mesh_light = 1;
 
     glNewList(g_flat_section_lists[sy][cz][cx][0], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -4771,6 +4777,7 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
     g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && g_opts.fancy_graphics);
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
+    g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
 
 
