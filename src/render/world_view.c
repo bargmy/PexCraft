@@ -4559,7 +4559,7 @@ static void rebuild_flat_world_section_mesh_direct(int sy, int cx, int cz) {
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     FlatDirectMeshBuilder mb0, mb1;
     int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 1;
+    g_flat_bake_stable_mesh_light = 0;
 
     flat_direct_begin(&mb0);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -4675,7 +4675,7 @@ static void rebuild_flat_world_section_list(int sy, int cx, int cz) {
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 1;
+    g_flat_bake_stable_mesh_light = 0;
 
     glNewList(g_flat_section_lists[sy][cz][cx][0], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -7032,58 +7032,11 @@ static void draw_first_person_hand(void) {
     glColor4f(1,1,1,1);
 }
 
-static float java125_world_time_dark_overlay_alpha(void) {
-    /* Temporary fixed-function equivalent for Java EntityRenderer.updateLightmap().
-       Terrain meshes are intentionally compiled with a stable daytime lightmap so
-       dusk/night no longer forces every section to rebuild.  Until the renderer
-       carries packed sky/block light into a real 16x16 lightmap texture, apply the
-       time-of-day part as a render-time full-world darkening pass.  This keeps
-       day/night dynamic without "reloading" chunk meshes. */
-    float cr, cg, cb;
-    float sr, sg, sb;
-    int old_stable = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 0;
-    flat_lightmap_color_from_packed((15 << 20), &cr, &cg, &cb);
-    g_flat_bake_stable_mesh_light = 1;
-    flat_lightmap_color_from_packed((15 << 20), &sr, &sg, &sb);
-    g_flat_bake_stable_mesh_light = old_stable;
-
-    float current = cr * 0.30f + cg * 0.59f + cb * 0.11f;
-    float stable = sr * 0.30f + sg * 0.59f + sb * 0.11f;
-    if (stable <= 0.001f) return 0.0f;
-    float alpha = 1.0f - current / stable;
-    if (alpha < 0.0f) alpha = 0.0f;
-    if (alpha > 0.76f) alpha = 0.76f;
-    return alpha;
-}
-
-static void draw_java125_world_time_dark_overlay(void) {
-    float alpha = java125_world_time_dark_overlay_alpha();
-    if (alpha <= 0.005f) return;
-
-    setup_gui_projection();
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.0f, 0.0f, 0.0f, alpha);
-    glBegin(GL_QUADS);
-    glVertex3f(0.0f, (float)g_gui_h, 0.0f);
-    glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
-    glVertex3f((float)g_gui_w, 0.0f, 0.0f);
-    glVertex3f(0.0f, 0.0f, 0.0f);
-    glEnd();
-    glColor4f(1,1,1,1);
-    glEnable(GL_TEXTURE_2D);
-    glEnable(GL_ALPHA_TEST);
-}
 
 static void draw_ingame_world_view(int with_hand) {
     draw_sky_only();
     draw_flat_test_world();
     if (with_hand && !g_third_person_view) draw_first_person_hand();
     draw_in_block_overlay();
-    draw_java125_world_time_dark_overlay();
     setup_gui_projection();
 }

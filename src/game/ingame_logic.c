@@ -309,13 +309,12 @@ static void pex_update_time_light_bucket(void) {
         return;
     }
     if (sub != last_sub) {
-        /* Java 1.2.5 updates World.skylightSubtracted during World.tick(), but it
-           does not call RenderGlobal.loadRenderers() or mark every WorldRenderer
-           dirty just because day/night changed.  EntityRenderer.updateLightmap()
-           updates the 16x16 lightmap texture instead.  This C renderer currently
-           bakes stable sky/block vertex colors into cached section meshes, so
-           rebuilding all chunks here only causes the visible "world reload" while
-           night falls and does not make the world correctly darker. */
+        /* Java 1.2.5 updates a dynamic lightmap here.  This renderer still bakes
+           the lightmap into section vertices, so rebuild section colors when the
+           Java skylightSubtracted bucket changes.  Keep old section meshes valid
+           while replacements are prepared; this avoids the visible chunk reload
+           that happened when the old path invalidated every renderer. */
+        mark_flat_render_sections_dirty_all_keep_valid();
         last_sub = sub;
     }
 }

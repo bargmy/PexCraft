@@ -1189,9 +1189,9 @@ static unsigned char g_flat_block_light[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT
    them.  When these pointers are NULL, flat_get_block/meta read normal globals. */
 /* Terrain section meshes are cached for many frames.  Java 1.2.5 stores
    sky/block light coordinates in its chunk display lists and applies the
-   time-of-day lightmap dynamically each frame.  This C renderer currently bakes
-   vertex colors, so mesh compilation must not sample g_world_time or chunks
-   rebuilt later will become brighter/darker than old chunks. */
+   time-of-day lightmap dynamically each frame.  This C renderer still bakes
+   the current Java lightmap into vertex colors, so skylightSubtracted changes
+   dirty section colors without invalidating the old drawable mesh. */
 static PEX_THREAD_LOCAL int g_flat_bake_stable_mesh_light = 0;
 static int g_flat_recent_block_mesh_dirty_tick = -1000000;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_blocks = NULL;

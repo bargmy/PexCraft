@@ -151,9 +151,12 @@ static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int orig
 static int stream_world_chunk_local_x(int wcx);
 static int stream_world_chunk_local_z(int wcz);
 static void mark_flat_render_chunks_dirty_around(int x, int z);
+static void mark_flat_render_sections_dirty_all_keep_valid(void);
 static void mark_flat_render_sections_dirty_around_block(int x, int y, int z);
 static void flat_mark_section_after_generation(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy);
+static int flat_section_has_any_block_local(int lcx, int lcz, int sy);
+static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1);
 static void flat_bump_chunk_light_version_local(int lcx, int lcz);
 static void flat_publish_chunk_light_ready_local(int lcx, int lcz, int ready, int dirty_sections);
 static int flat_chunk_light_ready_local(int lcx, int lcz);
@@ -584,10 +587,9 @@ static float flat_sun_brightness_for_light(float partial) {
 static void flat_lightmap_color_from_packed(int packed, float *r, float *g, float *b) {
     /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
        overworld, gamma=0, torchFlickerX=0, no lightning.  Java applies this as
-       a 16x16 lightmap texture every frame.  When terrain sections are being
-       compiled, g_flat_bake_stable_mesh_light forces a neutral sun value so
-       cached chunk meshes do not change brightness just because they were
-       rebuilt later than their neighbors. */
+       a 16x16 lightmap texture every frame.  This renderer still bakes the
+       current lightmap result into section vertex colors, so time-light changes
+       dirty section colors without invalidating the old drawable mesh. */
     int sky = (packed >> 20) & 15;
     int block = (packed >> 4) & 15;
     float sun = g_flat_bake_stable_mesh_light ? 1.0f : flat_sun_brightness_for_light(1.0f);
@@ -990,6 +992,197 @@ static void flat_recalculate_lighting_chunk(int cx, int cz) {
     flat_recalculate_lighting_region(cx * 16, cz * 16, cx * 16 + 15, cz * 16 + 15);
 }
 
+
+#define FLAT_JAVA_LIGHT_QUEUE_CAP 32768
+#define FLAT_JAVA_LIGHT_KIND_SKY 0
+#define FLAT_JAVA_LIGHT_KIND_BLOCK 1
+
+static int flat_chunks_near_generated_for_light(int x, int y, int z, int radius) {
+    (void)y;
+    int cx0 = floor_div16(x - radius);
+    int cx1 = floor_div16(x + radius);
+    int cz0 = floor_div16(z - radius);
+    int cz1 = floor_div16(z + radius);
+    for (int cz = cz0; cz <= cz1; ++cz) {
+        for (int cx = cx0; cx <= cx1; ++cx) {
+            int lcx = stream_world_chunk_local_x(cx);
+            int lcz = stream_world_chunk_local_z(cz);
+            if (!flat_local_chunk_valid(lcx, lcz)) return 0;
+            if (!g_flat_world_chunk_generated[lcz][lcx]) return 0;
+        }
+    }
+    return 1;
+}
+
+static int flat_light_saved_value_kind(int kind, int x, int y, int z) {
+    return (kind == FLAT_JAVA_LIGHT_KIND_SKY) ?
+        flat_get_saved_sky_light_value(x, y, z) :
+        flat_get_saved_block_light_value(x, y, z);
+}
+
+static void flat_mark_light_cell_changed(int x, int y, int z) {
+    if (!flat_in_bounds(x, y, z)) return;
+    int fx = flat_index(x);
+    int fz = flat_z_index(z);
+    int lcx = fx / FLAT_RENDER_CHUNK;
+    int lcz = fz / FLAT_RENDER_CHUNK;
+    int sy = (y - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
+    if (flat_local_chunk_valid(lcx, lcz)) {
+        g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
+        flat_bump_chunk_light_version_local(lcx, lcz);
+    }
+    flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+}
+
+static void flat_set_light_value_kind(int kind, int x, int y, int z, int value) {
+    if (value < 0) value = 0;
+    if (value > 15) value = 15;
+    if (!flat_in_bounds(x, y, z)) return;
+    int yi = flat_y_index(y);
+    int zi = flat_z_index(z);
+    int xi = flat_index(x);
+    unsigned char *dst = (kind == FLAT_JAVA_LIGHT_KIND_SKY) ?
+        &g_flat_sky_light[yi][zi][xi] :
+        &g_flat_block_light[yi][zi][xi];
+    if ((*dst & 15) == value) return;
+    *dst = (unsigned char)value;
+    flat_mark_light_cell_changed(x, y, z);
+}
+
+static int flat_can_block_see_sky_slow(int x, int y, int z) {
+    if (!flat_in_bounds(x, y, z)) return 1;
+    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
+        if (flat_light_opacity_for_id(flat_get_block(x, yy, z)) >= 255) return 0;
+    }
+    return 1;
+}
+
+static int flat_compute_light_value_kind(int kind, int x, int y, int z) {
+    int id = flat_get_block(x, y, z);
+    int opacity = flat_light_opacity_for_id(id);
+    if (opacity == 0) opacity = 1;
+
+    if (kind == FLAT_JAVA_LIGHT_KIND_SKY && flat_can_block_see_sky_slow(x, y, z)) {
+        return 15;
+    }
+
+    int best = (kind == FLAT_JAVA_LIGHT_KIND_BLOCK) ? flat_block_light_value_for_id(id) : 0;
+    int v;
+
+    v = flat_light_saved_value_kind(kind, x - 1, y, z) - opacity; if (v > best) best = v;
+    v = flat_light_saved_value_kind(kind, x + 1, y, z) - opacity; if (v > best) best = v;
+    v = flat_light_saved_value_kind(kind, x, y - 1, z) - opacity; if (v > best) best = v;
+    v = flat_light_saved_value_kind(kind, x, y + 1, z) - opacity; if (v > best) best = v;
+    v = flat_light_saved_value_kind(kind, x, y, z - 1) - opacity; if (v > best) best = v;
+    v = flat_light_saved_value_kind(kind, x, y, z + 1) - opacity; if (v > best) best = v;
+
+    if (best < 0) best = 0;
+    if (best > 15) best = 15;
+    return best;
+}
+
+static void flat_java125_update_light_by_type_immediate(int kind, int x, int y, int z) {
+    if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) return;
+    if (!flat_chunks_near_generated_for_light(x, y, z, 17)) {
+        flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
+        return;
+    }
+
+    int *queue = (int*)malloc(sizeof(int) * FLAT_JAVA_LIGHT_QUEUE_CAP);
+    if (!queue) {
+        flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
+        return;
+    }
+
+    int head = 0;
+    int tail = 0;
+    int old_value = flat_light_saved_value_kind(kind, x, y, z);
+    int new_value = flat_compute_light_value_kind(kind, x, y, z);
+
+    if (new_value > old_value) {
+        queue[tail++] = 133152;
+    } else if (new_value < old_value) {
+        queue[tail++] = 133152 + (old_value << 18);
+        while (head < tail) {
+            int code = queue[head++];
+            int wx = (code & 63) - 32 + x;
+            int wy = ((code >> 6) & 63) - 32 + y;
+            int wz = ((code >> 12) & 63) - 32 + z;
+            int level = (code >> 18) & 15;
+            int saved = flat_light_saved_value_kind(kind, wx, wy, wz);
+            if (saved != level) continue;
+
+            flat_set_light_value_kind(kind, wx, wy, wz, 0);
+            if (level <= 0) continue;
+
+            int dx = wx - x; if (dx < 0) dx = -dx;
+            int dy = wy - y; if (dy < 0) dy = -dy;
+            int dz = wz - z; if (dz < 0) dz = -dz;
+            if (dx + dy + dz >= 17) continue;
+
+            static const int ox[6] = {-1, 1, 0, 0, 0, 0};
+            static const int oy[6] = {0, 0, -1, 1, 0, 0};
+            static const int oz[6] = {0, 0, 0, 0, -1, 1};
+            for (int i = 0; i < 6 && tail < FLAT_JAVA_LIGHT_QUEUE_CAP; ++i) {
+                int nx = wx + ox[i], ny = wy + oy[i], nz = wz + oz[i];
+                int n_saved = flat_light_saved_value_kind(kind, nx, ny, nz);
+                int n_opacity = flat_light_opacity_for_id(flat_get_block(nx, ny, nz));
+                if (n_opacity == 0) n_opacity = 1;
+                if (n_saved == level - n_opacity) {
+                    queue[tail++] = nx - x + 32 + ((ny - y + 32) << 6) +
+                                    ((nz - z + 32) << 12) + ((level - n_opacity) << 18);
+                }
+            }
+        }
+        head = 0;
+    }
+
+    while (head < tail) {
+        int code = queue[head++];
+        int wx = (code & 63) - 32 + x;
+        int wy = ((code >> 6) & 63) - 32 + y;
+        int wz = ((code >> 12) & 63) - 32 + z;
+        int saved = flat_light_saved_value_kind(kind, wx, wy, wz);
+        int computed = flat_compute_light_value_kind(kind, wx, wy, wz);
+        if (computed == saved) continue;
+
+        flat_set_light_value_kind(kind, wx, wy, wz, computed);
+        if (computed <= saved) continue;
+
+        int dx = wx - x; if (dx < 0) dx = -dx;
+        int dy = wy - y; if (dy < 0) dy = -dy;
+        int dz = wz - z; if (dz < 0) dz = -dz;
+        if (dx + dy + dz >= 17 || tail >= FLAT_JAVA_LIGHT_QUEUE_CAP - 6) continue;
+
+        if (flat_light_saved_value_kind(kind, wx - 1, wy, wz) < computed) queue[tail++] = wx - 1 - x + 32 + ((wy - y + 32) << 6) + ((wz - z + 32) << 12);
+        if (flat_light_saved_value_kind(kind, wx + 1, wy, wz) < computed) queue[tail++] = wx + 1 - x + 32 + ((wy - y + 32) << 6) + ((wz - z + 32) << 12);
+        if (flat_light_saved_value_kind(kind, wx, wy - 1, wz) < computed) queue[tail++] = wx - x + 32 + ((wy - 1 - y + 32) << 6) + ((wz - z + 32) << 12);
+        if (flat_light_saved_value_kind(kind, wx, wy + 1, wz) < computed) queue[tail++] = wx - x + 32 + ((wy + 1 - y + 32) << 6) + ((wz - z + 32) << 12);
+        if (flat_light_saved_value_kind(kind, wx, wy, wz - 1) < computed) queue[tail++] = wx - x + 32 + ((wy - y + 32) << 6) + ((wz - 1 - z + 32) << 12);
+        if (flat_light_saved_value_kind(kind, wx, wy, wz + 1) < computed) queue[tail++] = wx - x + 32 + ((wy - y + 32) << 6) + ((wz + 1 - z + 32) << 12);
+    }
+
+    free(queue);
+}
+
+static int flat_java125_update_light_for_edit_immediate(int x, int y, int z, int old_id, int new_id) {
+    if (g_stream_remap_in_progress) return 0;
+    if (!flat_persistent_edit_active()) return 0;
+
+    int old_light = flat_block_light_value_for_id(old_id);
+    int new_light = flat_block_light_value_for_id(new_id);
+    int old_opacity = flat_light_opacity_for_id(old_id);
+    int new_opacity = flat_light_opacity_for_id(new_id);
+    if (old_light == new_light && old_opacity == new_opacity) return 1;
+
+    if (old_opacity != new_opacity) {
+        flat_java125_update_light_by_type_immediate(FLAT_JAVA_LIGHT_KIND_SKY, x, y, z);
+    }
+    flat_java125_update_light_by_type_immediate(FLAT_JAVA_LIGHT_KIND_BLOCK, x, y, z);
+    return 1;
+}
+
+
 static int g_flat_light_dirty = 0;
 static int g_flat_light_x0 = 0, g_flat_light_z0 = 0, g_flat_light_x1 = 0, g_flat_light_z1 = 0;
 static CRITICAL_SECTION g_flat_light_dirty_cs;
@@ -1032,19 +1225,19 @@ static void flat_note_lighting_dirty_around_block(int x, int y, int z) {
 }
 
 static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id, int new_id) {
-    (void)y;
     int old_light = flat_block_light_value_for_id(old_id);
     int new_light = flat_block_light_value_for_id(new_id);
     int old_opacity = flat_light_opacity_for_id(old_id);
     int new_opacity = flat_light_opacity_for_id(new_id);
 
     if (old_light > 0 || new_light > 0 || old_opacity != new_opacity) {
-        /* Block light can be affected by either a source changing or an occluder
-           changing.  The previous code widened only source edits; placing a
-           normal block near a torch recalculated a tiny area that often did not
-           include the torch, then wrote zeros over the torch's propagated light.
-           Rebuild the whole possible 15-block influence area for both source and
-           opacity changes so nearby edits cannot make torch light disappear. */
+        /* Player edits must light immediately like Java World.setBlock() ->
+           updateAllLightTypes().  Do not leave torch/block updates waiting for
+           the background lighting worker; that made placed torches visibly lag. */
+        if (flat_java125_update_light_for_edit_immediate(x, y, z, old_id, new_id)) return;
+
+        /* Non-player/batched updates still use the worker path so fluids/falling
+           blocks and streaming do not stall the main/render thread. */
         flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
     } else {
         flat_note_lighting_dirty_around_block(x, y, z);
@@ -1583,6 +1776,26 @@ static void mark_flat_render_chunks_dirty_all(void) {
     g_flat_renderer_sort_dirty = 1;
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
+}
+
+static void mark_flat_render_sections_dirty_all_keep_valid(void) {
+    /* Java 1.2.5 changes day/night lighting through EntityRenderer.updateLightmap()
+       without throwing away WorldRenderer display lists.  This port still bakes
+       the lightmap into terrain vertex colors, so when skylightSubtracted changes
+       we must rebuild section colors, but old meshes must remain drawable until
+       their replacements are ready. */
+    for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
+        for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
+            if (!g_flat_world_chunk_generated[cz][cx]) continue;
+            flat_refresh_chunk_section_occupancy_local(cx, cz);
+            g_flat_world_chunk_dirty[cz][cx] = 1;
+            for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
+                if (!flat_section_has_any_block_local(cx, cz, sy)) continue;
+                flat_mark_section_dirty_keep_valid(cx, cz, sy);
+            }
+        }
+    }
+    g_flat_renderer_sort_dirty = 1;
 }
 
 static void mark_flat_render_chunks_dirty_around(int x, int z) {
@@ -5023,41 +5236,70 @@ static void break_target_block(void) {
 
 static void update_breaking(void) {
     g_prev_break_damage = g_break_damage;
-    if (g_block_hit_delay > 0) g_block_hit_delay--;
-    if (!key_down_vk(VK_LBUTTON)) { reset_breaking_state(); return; }
+
+    if (g_block_hit_delay > 0) {
+        g_block_hit_delay--;
+        return;
+    }
+
+    if (!key_down_vk(VK_LBUTTON)) {
+        reset_breaking_state();
+        return;
+    }
+
     FlatRayHit hit = flat_raycast();
-    if (!hit.hit) { reset_breaking_state(); return; }
+    if (!hit.hit) {
+        reset_breaking_state();
+        return;
+    }
+
+    int id = flat_get_block(hit.bx, hit.by, hit.bz);
+    if (id == 0 || id == BLOCK_BEDROCK || block_is_liquid(id)) {
+        reset_breaking_state();
+        return;
+    }
+
     trigger_hand_swing();
+
     if (!g_breaking_block || hit.bx != g_break_x || hit.by != g_break_y || hit.bz != g_break_z) {
+        /* PlayerControllerSP.onPlayerDamageBlock(): changing target only resets
+           curBlockDamage/prevBlockDamage and records the new coordinates.  The
+           first damage increment happens on the following tick, which is why the
+           crack animation does not jump immediately in Java 1.2.5. */
         g_breaking_block = 1;
         g_break_x = hit.bx; g_break_y = hit.by; g_break_z = hit.bz; g_break_face = hit.face;
-        g_break_damage = g_prev_break_damage = 0.0f;
+        g_break_damage = 0.0f;
+        g_prev_break_damage = 0.0f;
         g_break_sound_counter = 0.0f;
+        g_last_sent_mine_stage = -1;
+        return;
     }
-    if (g_block_hit_delay > 0) return;
-    int id = flat_get_block(g_break_x, g_break_y, g_break_z);
-    if (id == 0 || id == BLOCK_BEDROCK || block_is_liquid(id)) { reset_breaking_state(); return; }
-    g_break_swing_holding = 1; /* while-mining loop */
-    if (g_ingame_ticks != g_last_hit_particle_tick || g_break_x != g_last_hit_particle_x || g_break_y != g_last_hit_particle_y || g_break_z != g_last_hit_particle_z || g_break_face != g_last_hit_particle_face) {
+
+    g_break_swing_holding = 1;
+
+    if (g_ingame_ticks != g_last_hit_particle_tick ||
+        g_break_x != g_last_hit_particle_x || g_break_y != g_last_hit_particle_y ||
+        g_break_z != g_last_hit_particle_z || g_break_face != g_last_hit_particle_face) {
         spawn_block_hit_particle(g_break_x, g_break_y, g_break_z, g_break_face, id);
-        if (g_mp_connected) {
-            int stage = (int)(g_break_damage * 10.0f);
-            if (stage < 0) stage = 0;
-            if (stage > 9) stage = 9;
-            pex_net_send_player_action_progress(PEX_ACTION_MINE_HIT, g_break_x, g_break_y, g_break_z, g_break_face, id, stage);
-            g_last_sent_mine_stage = stage;
-        }
         g_last_hit_particle_x = g_break_x; g_last_hit_particle_y = g_break_y; g_last_hit_particle_z = g_break_z;
         g_last_hit_particle_face = g_break_face; g_last_hit_particle_tick = g_ingame_ticks;
     }
+
     float rel = block_relative_strength(id);
-    /* Classic-style water penalty: only slow mining when the player's head is
-       actually underwater and the target block is touching water.  This keeps
-       normal shoreline mining unchanged but makes true underwater mining slower. */
     if (flat_player_head_in_water() && flat_block_is_underwater_target(g_break_x, g_break_y, g_break_z)) {
         rel *= 0.20f;
     }
+
     g_break_damage += rel;
+
+    if (((int)g_break_sound_counter % 4) == 0) {
+        /* Java PlayerControllerSP plays the step sound before incrementing
+           blockDestroySoundCounter, so a newly-mined block gets feedback on the
+           first damage tick and then every fourth tick. */
+        pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.50f, 0.8f);
+    }
+    g_break_sound_counter += 1.0f;
+
     if (g_mp_connected) {
         int stage = (int)(g_break_damage * 10.0f);
         if (stage < 0) stage = 0;
@@ -5067,15 +5309,12 @@ static void update_breaking(void) {
             g_last_sent_mine_stage = stage;
         }
     }
-    g_break_sound_counter += 1.0f;
-    if (((int)g_break_sound_counter % 4) == 0) {
-        pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.50f, 0.8f);
-    }
+
     if (g_break_damage >= 1.0f) {
         break_target_block();
         reset_breaking_state();
-        /* No repeated block-hit pause while holding; the first click/start is the only delay feel. */
-        g_block_hit_delay = 0;
+        /* PlayerControllerSP.blockHitWait = 5 after a successful break. */
+        g_block_hit_delay = 5;
     }
 }
 
