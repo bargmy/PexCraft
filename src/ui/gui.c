@@ -72,7 +72,7 @@ static int pex_java_random_next_int(PexJavaRandom *rng, int bound) {
     return val;
 }
 
-static void draw_debug_chunk_info_line(int x, int *y, const char *line, int color) {
+static void draw_chunk_debug_line(int x, int *y, const char *line, int color) {
     if (!y || !line) return;
     if (*y <= g_gui_h - 10) draw_text(line, x, *y, color);
     *y += 10;
@@ -85,7 +85,7 @@ static int debug_stream_queue_slot(int wcx, int wcz) {
     return -1;
 }
 
-static void draw_debug_chunk_info_panel(int x, int *y) {
+static void draw_chunk_debug_panel(int x, int *y) {
     char line[256];
 
     int bx = (int)floorf(g_player_x);
@@ -139,34 +139,34 @@ static void draw_debug_chunk_info_panel(int x, int *y) {
         }
     }
 
-    draw_debug_chunk_info_line(x, y, "Chunk under player (F3+V):", 0xE0E0E0);
+    draw_chunk_debug_line(x, y, "Chunk under player (F3+V):", 0xE0E0E0);
 
     snprintf(line, sizeof(line), "world chunk %d,%d  local %d,%d  block %d,%d,%d", wcx, wcz, lcx, lcz, bx, by, bz);
-    draw_debug_chunk_info_line(x, y, line, 14737632);
+    draw_chunk_debug_line(x, y, line, 14737632);
 
     snprintf(line, sizeof(line), "local block %d,%d  section %d  in window %d  generated %d", lx, lz, sy, local_ok, generated);
-    draw_debug_chunk_info_line(x, y, line, local_ok && generated ? 14737632 : 0xFF8080);
+    draw_chunk_debug_line(x, y, line, local_ok && generated ? 14737632 : 0xFF8080);
 
     if (!local_ok) {
         snprintf(line, sizeof(line), "active origin %d,%d  base chunk %d,%d", g_flat_world_origin_x, g_flat_world_origin_z, base_cx, base_cz);
-        draw_debug_chunk_info_line(x, y, line, 0xFF8080);
+        draw_chunk_debug_line(x, y, line, 0xFF8080);
         return;
     }
 
     snprintf(line, sizeof(line), "spawn preload %d  modified %d  lightReady %d  lightVer %u",
              g_flat_chunk_initial_preload[lcz][lcx], g_flat_world_chunk_modified[lcz][lcx],
              light_ready, light_version);
-    draw_debug_chunk_info_line(x, y, line, light_ready ? 14737632 : 0xFFFF80);
+    draw_chunk_debug_line(x, y, line, light_ready ? 14737632 : 0xFFFF80);
 
     snprintf(line, sizeof(line), "chunk dirty %d valid %d hasLiquid %d envDue %d occ %04x",
              g_flat_world_chunk_dirty[lcz][lcx], g_flat_world_chunk_valid[lcz][lcx],
              g_flat_world_chunk_has_liquid[lcz][lcx], g_flat_chunk_environment_light_due[lcz][lcx],
              (unsigned)mask);
-    draw_debug_chunk_info_line(x, y, line, 14737632);
+    draw_chunk_debug_line(x, y, line, 14737632);
 
     snprintf(line, sizeof(line), "sections nonempty %d dirty %d valid %d building %d staleLight %d",
              nonempty_sections, dirty_sections, valid_sections, building_sections, stale_light_sections);
-    draw_debug_chunk_info_line(x, y, line, stale_light_sections ? 0xFF8080 : 14737632);
+    draw_chunk_debug_line(x, y, line, stale_light_sections ? 0xFF8080 : 14737632);
 
     if (section_ok) {
         int sec_nonempty = (mask & (unsigned short)(1u << sy)) != 0;
@@ -174,7 +174,7 @@ static void draw_debug_chunk_info_panel(int x, int *y) {
         snprintf(line, sizeof(line), "current section: nonempty %d dirty %d valid %d building %d stale %d",
                  sec_nonempty, g_flat_section_dirty[sy][lcz][lcx], g_flat_section_valid[sy][lcz][lcx],
                  g_flat_section_mesh_building[sy][lcz][lcx], sec_stale);
-        draw_debug_chunk_info_line(x, y, line, sec_stale ? 0xFF8080 : 14737632);
+        draw_chunk_debug_line(x, y, line, sec_stale ? 0xFF8080 : 14737632);
 
         snprintf(line, sizeof(line), "meshVer %u meshLight %u skip %d/%d list %u/%u dmesh %u/%u",
                  g_flat_section_mesh_version[sy][lcz][lcx],
@@ -185,41 +185,41 @@ static void draw_debug_chunk_info_panel(int x, int *y) {
                  (unsigned)g_flat_section_lists[sy][lcz][lcx][1],
                  g_flat_section_direct_mesh[sy][lcz][lcx][0],
                  g_flat_section_direct_mesh[sy][lcz][lcx][1]);
-        draw_debug_chunk_info_line(x, y, line, sec_stale ? 0xFF8080 : 14737632);
+        draw_chunk_debug_line(x, y, line, sec_stale ? 0xFF8080 : 14737632);
     }
 
     snprintf(line, sizeof(line), "blocks under/feet/head %d/%d/%d  topY %d",
              flat_get_block(bx, under_y, bz), flat_get_block(bx, by, bz),
              flat_get_block(bx, head_y, bz), top_y);
-    draw_debug_chunk_info_line(x, y, line, 14737632);
+    draw_chunk_debug_line(x, y, line, 14737632);
 
     snprintf(line, sizeof(line), "sky under/feet/head %d/%d/%d  blockLight %d/%d/%d",
              flat_get_sky_light(bx, under_y, bz), flat_get_sky_light(bx, by, bz),
              flat_get_sky_light(bx, head_y, bz), flat_get_block_light(bx, under_y, bz),
              flat_get_block_light(bx, by, bz), flat_get_block_light(bx, head_y, bz));
-    draw_debug_chunk_info_line(x, y, line, light_ready ? 14737632 : 0xFFFF80);
+    draw_chunk_debug_line(x, y, line, light_ready ? 14737632 : 0xFFFF80);
 
     snprintf(line, sizeof(line), "queue %s slot %d/%d index %d installed %d keepInit %d",
              queue_state == 0 ? "no" : (queue_state == 1 ? "queued" : "passed"),
              qslot, g_stream_gen_queue_count, g_stream_gen_queue_index,
              g_stream_gen_queue_installed_count, g_stream_generation_keep_completed);
-    draw_debug_chunk_info_line(x, y, line, 14737632);
+    draw_chunk_debug_line(x, y, line, 14737632);
 
     snprintf(line, sizeof(line), "async workers %d jobs %d active %d results %d streamBusy %d lightDirty %d lightBusy %d",
              g_stream_async_worker_count, g_stream_async_job_count, g_stream_async_active_count,
              g_stream_async_result_count, g_world_stream_service_busy,
              flat_lighting_pending_dirty(), g_flat_lighting_worker_busy);
-    draw_debug_chunk_info_line(x, y, line, 14737632);
+    draw_chunk_debug_line(x, y, line, 14737632);
 
     snprintf(line, sizeof(line), "initial batch run %d %d/%d  lightSettle req/run/done %d/%d/%d p%d",
              g_stream_initial_batch_running, g_stream_initial_batch_done_units,
              g_stream_initial_batch_total_units, g_stream_initial_light_settle_requested,
              g_stream_initial_light_settle_running, g_stream_initial_light_settle_done,
              g_stream_initial_light_settle_progress);
-    draw_debug_chunk_info_line(x, y, line, 14737632);
+    draw_chunk_debug_line(x, y, line, 14737632);
 }
 
-static void draw_debug_task_profile_panel(void) {
+static void draw_profile_debug_panel(void) {
     char line[256];
     int fps = g_debug_fps;
     int min_fps = g_debug_min_fps ? g_debug_min_fps : fps;
@@ -243,7 +243,7 @@ static void draw_debug_task_profile_panel(void) {
     for (int pi = 0; pi < PROF_COUNT; ++pi) {
         double ms = g_prof_display_ms[pi];
         snprintf(line, sizeof(line), "%02d %-18s %6.2fms %5.1f%%",
-                 pi, g_prof_names[pi], ms, pex_profile_pct(ms));
+                 pi, g_prof_names[pi], ms, profile_percent(ms));
         draw_text(line, x, y, ms >= 1.0 ? 0xFFFF80 : 14737632);
         y += 10;
         if (y > g_gui_h - 12) break;
@@ -289,7 +289,7 @@ static void draw_debug_task_profile_panel(void) {
         int edit_age = g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick;
         if (edit_age < 0 || edit_age > 999) edit_age = 999;
         snprintf(line, sizeof(line), "Edit mesh boost age %d  night overlay %.2f",
-                 edit_age, java125_world_time_dark_overlay_alpha());
+                 edit_age, world_dark_overlay_alpha());
         draw_text(line, right_x, ry, edit_age <= 12 ? 0xFFFF80 : 14737632); ry += 10;
     }
     snprintf(line, sizeof(line), "Generated preload batch %d %d/%d light settle %d/%d/%d p%d",
@@ -310,8 +310,8 @@ static void draw_hud(void) {
     int h = g_gui_h;
     int hotbar_x = w / 2 - 91;
     int hotbar_y = h - 22;
-    draw_textured_rect_256_tex(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
-    draw_textured_rect_256_tex(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
+    draw_textured_rect_256(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
+    draw_textured_rect_256(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
 
 #if defined(GL_ONE_MINUS_DST_COLOR) && defined(GL_ONE_MINUS_SRC_COLOR)
     glEnable(GL_BLEND);
@@ -355,9 +355,9 @@ static void draw_hud(void) {
     for (int i = 0; i < 10; i++) {
         if (armor > 0) {
             int ax = left + i * 8;
-            if (i * 2 + 1 < armor) draw_textured_rect_256_tex(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == armor) draw_textured_rect_256_tex(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
-            else draw_textured_rect_256_tex(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < armor) draw_textured_rect_256(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == armor) draw_textured_rect_256(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
+            else draw_textured_rect_256(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
         }
 
         int x = left + i * 8;
@@ -365,13 +365,13 @@ static void draw_hud(void) {
         if (hp <= 4 && hp > 0) {
             y += pex_java_random_next_int(&heart_rng, 2);
         }
-        draw_textured_rect_256_tex(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
+        draw_textured_rect_256(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
         if (flash_old) {
-            if (i * 2 + 1 < prev_hp) draw_textured_rect_256_tex(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == prev_hp) draw_textured_rect_256_tex(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < prev_hp) draw_textured_rect_256(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == prev_hp) draw_textured_rect_256(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
         }
-        if (i * 2 + 1 < hp) draw_textured_rect_256_tex(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
-        else if (i * 2 + 1 == hp) draw_textured_rect_256_tex(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
+        if (i * 2 + 1 < hp) draw_textured_rect_256(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
+        else if (i * 2 + 1 == hp) draw_textured_rect_256(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
     }
 
     if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
@@ -386,13 +386,13 @@ static void draw_hud(void) {
             if (g_player_food_saturation <= 0.0f && food > 0 && (g_ingame_ticks % (food * 3 + 1)) == 0) {
                 y += pex_java_random_next_int(&heart_rng, 3) - 1;
             }
-            draw_textured_rect_256_tex(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
+            draw_textured_rect_256(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
             if (food_flash) {
-                if (i * 2 + 1 < prev_food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
-                else if (i * 2 + 1 == prev_food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
+                if (i * 2 + 1 < prev_food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == prev_food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
             }
-            if (i * 2 + 1 < food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == food) draw_textured_rect_256_tex(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
         }
     }
 
@@ -405,7 +405,7 @@ static void draw_hud(void) {
         if (full < 0) full = 0;
         if (partial < 0) partial = 0;
         for (int i = 0; i < full + partial && i < 10; i++) {
-            draw_textured_rect_256_tex(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
+            draw_textured_rect_256(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
         }
     }
 
@@ -415,8 +415,8 @@ static void draw_hud(void) {
         if (fill < 0) fill = 0;
         if (fill > 183) fill = 183;
         int xp_y = h - 32 + 3;
-        draw_textured_rect_256_tex(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
-        if (fill > 0) draw_textured_rect_256_tex(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
+        draw_textured_rect_256(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
+        if (fill > 0) draw_textured_rect_256(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
     }
     if (g_player_xp_level > 0) {
         char lvl[16];
@@ -434,7 +434,7 @@ static void draw_hud(void) {
 
     draw_text(VERSION_TEXT, 2, 2, 16777215);
     if (g_debug_menu_shown && g_debug_task_info_shown) {
-        draw_debug_task_profile_panel();
+        draw_profile_debug_panel();
     } else if (g_debug_menu_shown) {
         char line[160];
         int fps = g_debug_fps;
@@ -477,7 +477,7 @@ static void draw_hud(void) {
         for (int pi = 0; pi < PROF_COUNT; pi++) {
             double ms = g_prof_display_ms[pi];
             if (ms < 0.01 && pi != PROF_PUMP && pi != PROF_NET_POLL && pi != PROF_TICK_TOTAL && pi != PROF_RENDER_TOTAL) continue;
-            snprintf(line, sizeof(line), "%-16s %5.2fms %4.0f%%", g_prof_names[pi], ms, pex_profile_pct(ms));
+            snprintf(line, sizeof(line), "%-16s %5.2fms %4.0f%%", g_prof_names[pi], ms, profile_percent(ms));
             draw_text(line, 2, y, 14737632);
             y += 10;
             if (y > g_gui_h - 70) break;
@@ -503,7 +503,7 @@ static void draw_hud(void) {
         draw_text(line, right_x, ry, 14737632); ry += 12;
 
         if (g_debug_chunk_info_shown) {
-            draw_debug_chunk_info_panel(right_x, &ry);
+            draw_chunk_debug_panel(right_x, &ry);
         } else {
             draw_text("F3+V: chunk info off  F3+J: task profiler", right_x, ry, 0xA0A0A0);
         }
@@ -514,19 +514,19 @@ static void draw_hud(void) {
 
 static void draw_ingame_screen(void) {
     draw_ingame_world_view(1);
-    double prof_gui = pex_profile_begin();
+    double prof_gui = profile_begin();
     draw_hud();
-    pex_profile_add(PROF_HUD_GUI, prof_gui);
+    profile_add_time(PROF_HUD_GUI, prof_gui);
 }
 
 static void draw_pause_screen(void) {
     draw_ingame_world_view(1);
-    double prof_gui = pex_profile_begin();
+    double prof_gui = profile_begin();
     draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
     draw_save_message();
     draw_centered_text("Game menu", g_gui_w / 2, 40, 16777215);
     draw_all_buttons();
-    pex_profile_add(PROF_HUD_GUI, prof_gui);
+    profile_add_time(PROF_HUD_GUI, prof_gui);
 }
 
 static float g_steve_uv_w = 64.0f;
@@ -726,7 +726,7 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
 }
 
 
-static void draw_java125_hovering_text(const char *lines[], int line_count, int mx, int my) {
+static void draw_hovering_text(const char *lines[], int line_count, int mx, int my) {
     if (!lines || line_count <= 0) return;
     int width = 0;
     for (int i = 0; i < line_count; ++i) {
@@ -791,7 +791,7 @@ static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
         lines[line_count++] = durability;
     }
 
-    draw_java125_hovering_text(lines, line_count, mx, my);
+    draw_hovering_text(lines, line_count, mx, my);
 }
 
 static void draw_hovered_item_tooltip(void) {
@@ -829,7 +829,7 @@ static void draw_inventory_screen(void) {
 }
 
 
-static void draw_container_player_inventory_stacks_at(int x, int y, int inv_y, int hotbar_y) {
+static void draw_player_inventory_stacks_at(int x, int y, int inv_y, int hotbar_y) {
     for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
         int slot = 9 + col + row * 9;
         draw_item_stack_gui(&g_inventory[slot], x + 8 + col * 18, y + inv_y + row * 18);
@@ -837,8 +837,8 @@ static void draw_container_player_inventory_stacks_at(int x, int y, int inv_y, i
     for (int col = 0; col < 9; col++) draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + hotbar_y);
 }
 
-static void draw_container_player_inventory_stacks(int x, int y) {
-    draw_container_player_inventory_stacks_at(x, y, 84, 142);
+static void draw_player_inventory_stacks(int x, int y) {
+    draw_player_inventory_stacks_at(x, y, 84, 142);
 }
 
 static void draw_workbench_screen(void) {
@@ -859,7 +859,7 @@ static void draw_workbench_screen(void) {
     draw_item_stack_gui(&out, x + 124, y + 35);
 
     draw_text_no_shadow("Inventory", x + 8, y + 72, 4210752);
-    draw_container_player_inventory_stacks(x, y);
+    draw_player_inventory_stacks(x, y);
     draw_hovered_item_tooltip();
     draw_carried_stack();
 }
@@ -896,7 +896,7 @@ static void draw_chest_screen(void) {
         ItemStack *st = chest_get_open_slot_ptr(col + row * 9);
         if (st) draw_item_stack_gui(st, x + 8 + col * 18, y + 18 + row * 18);
     }
-    draw_container_player_inventory_stacks_at(x, y, inv_slots_y, hotbar_y);
+    draw_player_inventory_stacks_at(x, y, inv_slots_y, hotbar_y);
     draw_hovered_item_tooltip();
 
     draw_carried_stack();
@@ -931,7 +931,7 @@ static void draw_furnace_screen(void) {
     if (fuel) draw_item_stack_gui(fuel, x + 56, y + 53);
     if (out) draw_item_stack_gui(out, x + 116, y + 35);
 
-    draw_container_player_inventory_stacks(x, y);
+    draw_player_inventory_stacks(x, y);
     draw_hovered_item_tooltip();
     draw_carried_stack();
 }
@@ -1016,10 +1016,10 @@ static void draw_renderer_restart_prompt(void) {
     draw_all_buttons();
 }
 
-static void draw_classic_pack_download_prompt(void) {
+static void draw_pack_download_prompt(void) {
     char size_line[MAX_LABEL];
     char summary[MAX_LABEL];
-    classic_resource_size_start_fetch();
+    pack_install_start_size_fetch();
     classic_resource_missing_summary(summary, sizeof(summary));
     draw_default_bg();
     draw_centered_text("Release Resources Required", g_gui_w / 2, g_gui_h / 4 - 60 + 18, 16777215);
@@ -1030,7 +1030,7 @@ static void draw_classic_pack_download_prompt(void) {
 #else
     draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
 #endif
-    classic_resource_size_format(size_line, sizeof(size_line));
+    format_download_size(size_line, sizeof(size_line));
     draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 89, 10526880);
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
     draw_text("Only Release textures and Moog City 2 are downloaded.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);

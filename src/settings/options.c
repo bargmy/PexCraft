@@ -298,7 +298,7 @@ static void bump_option(OptionId opt, int delta) {
     else if (opt == OPT_VIEW_BOBBING) g_opts.view_bobbing = !g_opts.view_bobbing;
     else if (opt == OPT_ANAGLYPH) { g_opts.anaglyph = !g_opts.anaglyph; apply_vsync_setting(); }
     else if (opt == OPT_DIFFICULTY) g_opts.difficulty = (g_opts.difficulty + delta) & 3;
-    else if (opt == OPT_GRAPHICS) { g_opts.fancy_graphics = !g_opts.fancy_graphics; mark_flat_render_chunks_dirty_all(); }
+    else if (opt == OPT_GRAPHICS) { g_opts.fancy_graphics = !g_opts.fancy_graphics; flat_mark_all_chunks_dirty(); }
     else if (opt == OPT_FULLSCREEN) { set_fullscreen_enabled(!g_opts.fullscreen); return; }
     else if (opt == OPT_SHOW_FPS) g_opts.show_fps = !g_opts.show_fps;
     else if (opt == OPT_RENDERER) {

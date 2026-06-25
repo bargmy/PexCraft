@@ -148,20 +148,20 @@ static int flat_index(int coord) { return coord - g_flat_world_origin_x; }
 static int flat_z_index(int coord) { return coord - g_flat_world_origin_z; }
 static int floor_div16(int v);
 static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int origin_z);
-static int stream_world_chunk_local_x(int wcx);
-static int stream_world_chunk_local_z(int wcz);
-static void mark_flat_render_chunks_dirty_around(int x, int z);
-static void mark_flat_render_sections_dirty_all_keep_valid(void);
-static void mark_flat_render_sections_dirty_around_block(int x, int y, int z);
-static void flat_mark_section_after_generation(int lcx, int lcz, int sy);
-static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy);
-static int flat_section_has_any_block_local(int lcx, int lcz, int sy);
-static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1);
-static void flat_bump_chunk_light_version_local(int lcx, int lcz);
-static void flat_publish_chunk_light_ready_local(int lcx, int lcz, int ready, int dirty_sections);
-static int flat_chunk_light_ready_local(int lcx, int lcz);
-static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz);
-static void flat_apply_chunk_environment_light_local(int lcx, int lcz);
+static int stream_local_chunk_x(int wcx);
+static int stream_local_chunk_z(int wcz);
+static void flat_mark_chunks_dirty_near(int x, int z);
+static void flat_mark_all_sections_dirty(void);
+static void flat_mark_sections_dirty_near_block(int x, int y, int z);
+static void flat_mark_generated_section(int lcx, int lcz, int sy);
+static void flat_mark_section_dirty(int cx, int cz, int sy);
+static int flat_section_has_blocks(int lcx, int lcz, int sy);
+static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
+static void flat_bump_light_version(int lcx, int lcz);
+static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections);
+static int flat_chunk_light_ready(int lcx, int lcz);
+static void flat_reset_sky_light(int lcx, int lcz);
+static void flat_apply_environment_light(int lcx, int lcz);
 static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
 static void flat_flush_pending_lighting(void);
@@ -186,13 +186,13 @@ static int flat_persistent_edit_active(void) { return g_flat_persistent_edit_dep
 static int flat_block_intersects_player(int bx, int by, int bz);
 static void spawn_item_stack(float x, float y, float z, ItemStack st, int random_spread);
 static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int origin_z);
-static int stream_world_chunk_local_x(int wcx);
-static int stream_world_chunk_local_z(int wcz);
-static void stream_mark_local_chunk_dirty(int lcx, int lcz);
-static void stream_mark_local_chunk_generated(int lcx, int lcz);
+static int stream_local_chunk_x(int wcx);
+static int stream_local_chunk_z(int wcz);
+static void stream_mark_chunk_dirty(int lcx, int lcz);
+static void stream_mark_chunk_generated(int lcx, int lcz);
 static void stream_queue_add_chunk(int wcx, int wcz);
-static void stream_queue_add_chunk_directional_safety(int base_cx, int base_cz, int pcx, int pcz, int radius);
-static int stream_queue_missing_visible_chunks_near_player(void);
+static void stream_queue_chunk_safety(int base_cx, int base_cz, int pcx, int pcz, int radius);
+static int stream_queue_visible_chunks(void);
 static void process_stream_generation_queue(void);
 static int stream_generation_active(void);
 static int psp_player_terrain_ready_or_hold(void);
@@ -208,19 +208,19 @@ static int flat_in_bounds(int x, int y, int z) {
            z >= g_flat_world_origin_z && z < g_flat_world_origin_z + FLAT_WORLD_SIZE;
 }
 
-static int flat_local_chunk_x_for_world(int x) { return flat_index(x) / FLAT_RENDER_CHUNK; }
-static int flat_local_chunk_z_for_world(int z) { return flat_z_index(z) / FLAT_RENDER_CHUNK; }
+static int flat_local_chunk_x(int x) { return flat_index(x) / FLAT_RENDER_CHUNK; }
+static int flat_local_chunk_z(int z) { return flat_z_index(z) / FLAT_RENDER_CHUNK; }
 static int flat_section_y_for_world(int y) { return (y - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION; }
 
 static int flat_local_chunk_valid(int lcx, int lcz) {
     return lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS;
 }
 
-static int flat_world_chunk_generated_at_block(int x, int z) {
+static int flat_chunk_generated_at_block(int x, int z) {
     if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE ||
         z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return 0;
-    int lcx = flat_local_chunk_x_for_world(x);
-    int lcz = flat_local_chunk_z_for_world(z);
+    int lcx = flat_local_chunk_x(x);
+    int lcz = flat_local_chunk_z(z);
     return flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx];
 }
 
@@ -231,7 +231,7 @@ static int flat_player_columns_generated_at(float px, float pz) {
         for (int ix = 0; ix < 3; ix++) {
             int x = (int)floorf(xs[ix]);
             int z = (int)floorf(zs[iz]);
-            if (!flat_world_chunk_generated_at_block(x, z)) return 0;
+            if (!flat_chunk_generated_at_block(x, z)) return 0;
         }
     }
     return 1;
@@ -241,7 +241,7 @@ static int flat_section_index_valid(int sy) {
     return sy >= 0 && sy < FLAT_RENDER_SECTIONS_Y;
 }
 
-static int flat_scan_section_nonempty_local(int lcx, int lcz, int sy) {
+static int flat_scan_section_nonempty(int lcx, int lcz, int sy) {
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return 0;
     int x0 = lcx * FLAT_RENDER_CHUNK;
     int z0 = lcz * FLAT_RENDER_CHUNK;
@@ -259,36 +259,36 @@ static int flat_scan_section_nonempty_local(int lcx, int lcz, int sy) {
     return 0;
 }
 
-static int flat_refresh_section_occupancy_local(int lcx, int lcz, int sy) {
+static int flat_refresh_section_occupancy(int lcx, int lcz, int sy) {
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return 0;
     unsigned short bit = (unsigned short)(1u << sy);
-    int nonempty = flat_scan_section_nonempty_local(lcx, lcz, sy);
+    int nonempty = flat_scan_section_nonempty(lcx, lcz, sy);
     if (nonempty) g_flat_chunk_section_non_empty_mask[lcz][lcx] |= bit;
     else g_flat_chunk_section_non_empty_mask[lcz][lcx] &= (unsigned short)~bit;
     return nonempty;
 }
 
-static unsigned short flat_refresh_chunk_section_occupancy_local(int lcx, int lcz) {
+static unsigned short flat_refresh_chunk_occupancy(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
     unsigned short mask = 0;
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-        if (flat_scan_section_nonempty_local(lcx, lcz, sy)) mask |= (unsigned short)(1u << sy);
+        if (flat_scan_section_nonempty(lcx, lcz, sy)) mask |= (unsigned short)(1u << sy);
     }
     g_flat_chunk_section_non_empty_mask[lcz][lcx] = mask;
     return mask;
 }
 
-static void flat_update_section_occupancy_after_block_change(int x, int y, int z, int new_id) {
+static void flat_update_section_after_block_change(int x, int y, int z, int new_id) {
     if (!flat_in_bounds(x, y, z)) return;
-    int lcx = flat_local_chunk_x_for_world(x);
-    int lcz = flat_local_chunk_z_for_world(z);
+    int lcx = flat_local_chunk_x(x);
+    int lcz = flat_local_chunk_z(z);
     int sy = flat_section_y_for_world(y);
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return;
     unsigned short bit = (unsigned short)(1u << sy);
     if (new_id != 0) {
         g_flat_chunk_section_non_empty_mask[lcz][lcx] |= bit;
     } else if (g_flat_chunk_section_non_empty_mask[lcz][lcx] & bit) {
-        flat_refresh_section_occupancy_local(lcx, lcz, sy);
+        flat_refresh_section_occupancy(lcx, lcz, sy);
     }
 }
 
@@ -438,7 +438,7 @@ static int flat_sky_light_after_block(int incoming, int id) {
     return incoming;
 }
 
-static float flat_java_light_brightness_from_level_base(int level, float base) {
+static float flat_light_level_brightness_base(int level, float base) {
     if (level < 0) level = 0;
     if (level > 15) level = 15;
     /* WorldProvider.generateLightBrightnessTable(); base=0.0 overworld, 0.1 nether. */
@@ -446,17 +446,17 @@ static float flat_java_light_brightness_from_level_base(int level, float base) {
     return (1.0f - inv) / (inv * 3.0f + 1.0f) * (1.0f - base) + base;
 }
 
-static float flat_java_light_table_base(void) {
+static float flat_light_table_base(void) {
     /* This client only has an overworld-like provider today.  Keeping the base
        as a function makes the Nether 0.1F table a one-line change if dimensions
        are added later. */
     return 0.0f;
 }
 
-static float flat_java_light_brightness_from_level(int level) {
-    return flat_java_light_brightness_from_level_base(level, flat_java_light_table_base());
+static float flat_light_level_brightness(int level) {
+    return flat_light_level_brightness_base(level, flat_light_table_base());
 }
-static float flat_current_celestial_angle_for_light(void) {
+static float flat_light_sun_angle(void) {
     int t = (int)(g_world_time % 24000LL);
     if (t < 0) t += 24000;
     float a = ((float)t + 1.0f) / 24000.0f - 0.25f;
@@ -470,9 +470,9 @@ static float flat_current_celestial_angle_for_light(void) {
     return a;
 }
 
-static int flat_current_skylight_subtracted(void) {
+static int flat_skylight_subtracted(void) {
     /* Java 1.2.5 World.calculateSkylightSubtracted(), with rain/thunder = 0. */
-    float a = flat_current_celestial_angle_for_light();
+    float a = flat_light_sun_angle();
     float v = 1.0f - (cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.5f);
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
@@ -499,7 +499,7 @@ static int flat_block_can_block_grass_java(int id) {
     return 0;
 }
 
-static int flat_block_uses_neighbor_brightness(int id) {
+static int flat_uses_neighbor_brightness(int id) {
     if (id == 0) return 0; /* Java Block.useNeighborBrightness[0] remains false. */
     if (id == BLOCK_SLAB || id == BLOCK_FARMLAND ||
         id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) return 1;
@@ -507,75 +507,75 @@ static int flat_block_uses_neighbor_brightness(int id) {
     return 0;
 }
 
-static int flat_get_saved_sky_light_value(int x, int y, int z) {
+static int flat_saved_sky_light(int x, int y, int z) {
     return flat_get_sky_light(x, y, z);
 }
 
-static int flat_get_saved_block_light_value(int x, int y, int z) {
+static int flat_saved_block_light(int x, int y, int z) {
     return flat_get_block_light(x, y, z);
 }
 
-static int flat_get_sky_light_value_do(int x, int y, int z, int use_neighbor) {
-    if (!use_neighbor || !flat_block_uses_neighbor_brightness(flat_get_block(x, y, z))) {
-        return flat_get_saved_sky_light_value(x, y, z);
+static int flat_sample_sky_light(int x, int y, int z, int use_neighbor) {
+    if (!use_neighbor || !flat_uses_neighbor_brightness(flat_get_block(x, y, z))) {
+        return flat_saved_sky_light(x, y, z);
     }
-    int best = flat_get_saved_sky_light_value(x, y + 1, z);
-    int v = flat_get_saved_sky_light_value(x + 1, y, z); if (v > best) best = v;
-    v = flat_get_saved_sky_light_value(x - 1, y, z); if (v > best) best = v;
-    v = flat_get_saved_sky_light_value(x, y, z + 1); if (v > best) best = v;
-    v = flat_get_saved_sky_light_value(x, y, z - 1); if (v > best) best = v;
+    int best = flat_saved_sky_light(x, y + 1, z);
+    int v = flat_saved_sky_light(x + 1, y, z); if (v > best) best = v;
+    v = flat_saved_sky_light(x - 1, y, z); if (v > best) best = v;
+    v = flat_saved_sky_light(x, y, z + 1); if (v > best) best = v;
+    v = flat_saved_sky_light(x, y, z - 1); if (v > best) best = v;
     return best;
 }
 
-static int flat_get_block_light_value_do(int x, int y, int z, int use_neighbor) {
-    if (!use_neighbor || !flat_block_uses_neighbor_brightness(flat_get_block(x, y, z))) {
-        return flat_get_saved_block_light_value(x, y, z);
+static int flat_sample_block_light(int x, int y, int z, int use_neighbor) {
+    if (!use_neighbor || !flat_uses_neighbor_brightness(flat_get_block(x, y, z))) {
+        return flat_saved_block_light(x, y, z);
     }
-    int best = flat_get_saved_block_light_value(x, y + 1, z);
-    int v = flat_get_saved_block_light_value(x + 1, y, z); if (v > best) best = v;
-    v = flat_get_saved_block_light_value(x - 1, y, z); if (v > best) best = v;
-    v = flat_get_saved_block_light_value(x, y, z + 1); if (v > best) best = v;
-    v = flat_get_saved_block_light_value(x, y, z - 1); if (v > best) best = v;
+    int best = flat_saved_block_light(x, y + 1, z);
+    int v = flat_saved_block_light(x + 1, y, z); if (v > best) best = v;
+    v = flat_saved_block_light(x - 1, y, z); if (v > best) best = v;
+    v = flat_saved_block_light(x, y, z + 1); if (v > best) best = v;
+    v = flat_saved_block_light(x, y, z - 1); if (v > best) best = v;
     return best;
 }
 
-static int flat_get_light_brightness_for_sky_blocks(int x, int y, int z, int min_block_light) {
+static int flat_pack_sky_block_light(int x, int y, int z, int min_block_light) {
     /* Java 1.2.5 World.getLightBrightnessForSkyBlocks(): pack saved sky and
        block light independently.  Day/night darkening belongs in the lightmap
        (`EntityRenderer.updateLightmap`), not by destructively subtracting from
        the packed sky channel. */
-    int sky = flat_get_sky_light_value_do(x, y, z, 1);
-    int block = flat_get_block_light_value_do(x, y, z, 1);
+    int sky = flat_sample_sky_light(x, y, z, 1);
+    int block = flat_sample_block_light(x, y, z, 1);
     if (block < min_block_light) block = min_block_light;
     if (sky < 0) sky = 0; if (sky > 15) sky = 15;
     if (block < 0) block = 0; if (block > 15) block = 15;
     return (sky << 20) | (block << 4);
 }
 
-static int flat_get_daylight_adjusted_light_value(int x, int y, int z, int min_block_light) {
+static int flat_daylight_adjusted_light(int x, int y, int z, int min_block_light) {
     /* Java World/Chunk.getBlockLightValue(..., skylightSubtracted) path used for
        gameplay tests such as passive-mob spawning: sky is reduced by current
        skylightSubtracted, then compared against block light. */
-    int sky = flat_get_sky_light_value_do(x, y, z, 1) - flat_current_skylight_subtracted();
-    int block = flat_get_block_light_value_do(x, y, z, 1);
+    int sky = flat_sample_sky_light(x, y, z, 1) - flat_skylight_subtracted();
+    int block = flat_sample_block_light(x, y, z, 1);
     if (block < min_block_light) block = min_block_light;
     if (sky < 0) sky = 0; if (sky > 15) sky = 15;
     if (block < 0) block = 0; if (block > 15) block = 15;
     return (sky > block) ? sky : block;
 }
 
-static int flat_mixed_brightness_for_block(int id, int x, int y, int z) {
-    return flat_get_light_brightness_for_sky_blocks(x, y, z, flat_block_light_value_for_id(id));
+static int flat_block_mixed_brightness(int id, int x, int y, int z) {
+    return flat_pack_sky_block_light(x, y, z, flat_block_light_value_for_id(id));
 }
 
-static int flat_combined_light_value(int x, int y, int z) {
-    return flat_get_daylight_adjusted_light_value(x, y, z, 0);
+static int flat_combined_light(int x, int y, int z) {
+    return flat_daylight_adjusted_light(x, y, z, 0);
 }
 
-static float flat_sun_brightness_for_light(float partial) {
+static float flat_light_sun_brightness(float partial) {
     /* World.func_35464_b(float), with rain/thunder/lightning omitted because this
        port does not yet implement those weather systems. */
-    float a = flat_current_celestial_angle_for_light();
+    float a = flat_light_sun_angle();
     (void)partial;
     float v = 1.0f - (cosf(a * (float)M_PI * 2.0f) * 2.0f + 0.2f);
     if (v < 0.0f) v = 0.0f;
@@ -584,19 +584,19 @@ static float flat_sun_brightness_for_light(float partial) {
     return v * 0.8f + 0.2f;
 }
 
-static float java125_world_time_dark_overlay_alpha(void) {
+static float world_dark_overlay_alpha(void) {
     /* Debug/overlay helper shared by GUI and platform unity builds.  It follows
        the same Java 1.2.5 sun-brightness curve used by the CPU lightmap, so the
        value is 0.0 in full daylight and rises smoothly toward night darkness.
        Because Java's overworld sun brightness bottoms out at 0.2F, the maximum
        dark overlay is 0.8 rather than full black. */
-    float alpha = 1.0f - flat_sun_brightness_for_light(1.0f);
+    float alpha = 1.0f - flat_light_sun_brightness(1.0f);
     if (alpha < 0.0f) alpha = 0.0f;
     if (alpha > 1.0f) alpha = 1.0f;
     return alpha;
 }
 
-static void flat_lightmap_color_from_packed(int packed, float *r, float *g, float *b) {
+static void flat_lightmap_color(int packed, float *r, float *g, float *b) {
     /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
        overworld, gamma=0, torchFlickerX=0, no lightning.  Java applies this as
        a 16x16 lightmap texture every frame.  This renderer still bakes the
@@ -604,9 +604,9 @@ static void flat_lightmap_color_from_packed(int packed, float *r, float *g, floa
        dirty section colors without invalidating the old drawable mesh. */
     int sky = (packed >> 20) & 15;
     int block = (packed >> 4) & 15;
-    float sun = g_flat_bake_stable_mesh_light ? 1.0f : flat_sun_brightness_for_light(1.0f);
-    float light_sky = flat_java_light_brightness_from_level(sky) * (sun * 0.95f + 0.05f);
-    float light_block = flat_java_light_brightness_from_level(block) * 1.5f;
+    float sun = g_flat_bake_stable_mesh_light ? 1.0f : flat_light_sun_brightness(1.0f);
+    float light_sky = flat_light_level_brightness(sky) * (sun * 0.95f + 0.05f);
+    float light_block = flat_light_level_brightness(block) * 1.5f;
     float sky_rg = light_sky * (sun * 0.65f + 0.35f);
     float torch_g = light_block * ((light_block * 0.6f + 0.4f) * 0.6f + 0.4f);
     float torch_b = light_block * (light_block * light_block * 0.6f + 0.4f);
@@ -625,9 +625,9 @@ static void flat_lightmap_color_from_packed(int packed, float *r, float *g, floa
     *r = rr; *g = gg; *b = bb;
 }
 
-static float flat_brightness_from_packed(int packed) {
+static float flat_packed_light_brightness(int packed) {
     float r, g, b;
-    flat_lightmap_color_from_packed(packed, &r, &g, &b);
+    flat_lightmap_color(packed, &r, &g, &b);
     /* Scalar fallback for AO/particles where this renderer still has a single
        brightness channel.  Weighted luminance keeps night closer to Java's blue
        lightmap than max(sky, block) did. */
@@ -635,11 +635,11 @@ static float flat_brightness_from_packed(int packed) {
 }
 
 static void flat_light_color(int x, int y, int z, float *r, float *g, float *b) {
-    flat_lightmap_color_from_packed(flat_get_light_brightness_for_sky_blocks(x, y, z, 0), r, g, b);
+    flat_lightmap_color(flat_pack_sky_block_light(x, y, z, 0), r, g, b);
 }
 
 static float flat_light_brightness(int x, int y, int z) {
-    return flat_brightness_from_packed(flat_get_light_brightness_for_sky_blocks(x, y, z, 0));
+    return flat_packed_light_brightness(flat_pack_sky_block_light(x, y, z, 0));
 }
 
 typedef struct FlatLightQueueCell { short x, y, z; } FlatLightQueueCell;
@@ -690,7 +690,7 @@ static void flat_propagate_light_region(unsigned char *arr, int x0, int y0, int 
     }
 }
 
-static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky) {
+static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky) {
     if (rx1 < rx0) { int t = rx0; rx0 = rx1; rx1 = t; }
     if (rz1 < rz0) { int t = rz0; rz0 = rz1; rz1 = t; }
     if (margin < 0) margin = 0;
@@ -794,14 +794,14 @@ static void flat_recalculate_lighting_region_ex(int rx0, int rz0, int rx1, int r
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
             if (changed_chunks[lcz][lcx]) {
                 g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
-                flat_bump_chunk_light_version_local(lcx, lcz);
+                flat_bump_light_version(lcx, lcz);
             }
         }
     }
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
             for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
-                if (changed_sections[sy][lcz][lcx]) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+                if (changed_sections[sy][lcz][lcx]) flat_mark_section_dirty(lcx, lcz, sy);
             }
         }
     }
@@ -816,16 +816,16 @@ static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1)
     /* The caller already widens light-source/opacity edits to the Java 15-block
        influence radius.  Do not add another 16-block compute margin here: that
        was the main reason one block break expanded into a ~63x63xheight rebuild. */
-    flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 0, 1);
+    flat_relight_region(rx0, rz0, rx1, rz1, 0, 1);
 }
 
 #ifndef FLAT_CHUNK_BLOCK_COUNT
 #define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
 #endif
 static int flat_chunk_buf_index(int lx, int y, int lz);
-static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1);
+static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
 
-static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
+static void flat_relight_fast_surface_chunk(int cx, int cz) {
     int x0 = cx * 16, z0 = cz * 16;
     int x1 = x0 + 15, z1 = z0 + 15;
     if (x0 < g_flat_world_origin_x) x0 = g_flat_world_origin_x;
@@ -846,16 +846,16 @@ static void flat_recalculate_lighting_chunk_fast_surface(int cx, int cz) {
             }
         }
     }
-    int lcx = stream_world_chunk_local_x(cx);
-    int lcz = stream_world_chunk_local_z(cz);
+    int lcx = stream_local_chunk_x(cx);
+    int lcz = stream_local_chunk_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) {
-        flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
+        flat_publish_light_ready(lcx, lcz, 1, 1);
     }
     pex_logf("lighting fast surface chunk=%d,%d local=%d,%d", cx, cz, lcx, lcz);
 }
 
 
-static void flat_compute_chunk_light_fast_from_buffers(const unsigned char *buf, unsigned char *sky, unsigned char *block) {
+static void flat_compute_chunk_light(const unsigned char *buf, unsigned char *sky, unsigned char *block) {
     if (!buf || !sky || !block) return;
     for (int lx = 0; lx < 16; lx++) {
         for (int lz = 0; lz < 16; lz++) {
@@ -871,32 +871,32 @@ static void flat_compute_chunk_light_fast_from_buffers(const unsigned char *buf,
     }
 }
 
-static int flat_id_is_saved_user_light_source(int id) {
+static int flat_id_is_light_source(int id) {
     return id == BLOCK_TORCH || id == BLOCK_FURNACE_LIT ||
            id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_FIRE ||
            id == BLOCK_GLOWSTONE || id == BLOCK_JACK_O_LANTERN ||
            id == BLOCK_PORTAL;
 }
 
-static int flat_chunk_buffer_has_saved_user_light_source(const unsigned char *buf) {
+static int flat_chunk_buffer_has_light_source(const unsigned char *buf) {
     if (!buf) return 0;
     for (int lx = 0; lx < 16; lx++) {
         for (int lz = 0; lz < 16; lz++) {
             for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
-                if (flat_id_is_saved_user_light_source(buf[flat_chunk_buf_index(lx, y, lz)])) return 1;
+                if (flat_id_is_light_source(buf[flat_chunk_buf_index(lx, y, lz)])) return 1;
             }
         }
     }
     return 0;
 }
 
-static void flat_note_chunk_block_light_dirty(int cx, int cz) {
+static void flat_mark_chunk_block_light_dirty(int cx, int cz) {
     int x0 = cx * 16;
     int z0 = cz * 16;
-    flat_note_lighting_dirty_region(x0 - 15, z0 - 15, x0 + 30, z0 + 30);
+    flat_mark_light_dirty_region(x0 - 15, z0 - 15, x0 + 30, z0 + 30);
 }
 
-static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigned char *sky, const unsigned char *block) {
+static void flat_copy_light_buffers_to_world(int cx, int cz, const unsigned char *sky, const unsigned char *block) {
     if (!sky || !block) return;
     for (int lx = 0; lx < 16; lx++) {
         int wx = cx * 16 + lx;
@@ -914,18 +914,18 @@ static void copy_flat_chunk_light_buffers_to_world(int cx, int cz, const unsigne
             }
         }
     }
-    int lcx = stream_world_chunk_local_x(cx);
-    int lcz = stream_world_chunk_local_z(cz);
+    int lcx = stream_local_chunk_x(cx);
+    int lcz = stream_local_chunk_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) {
-        flat_publish_chunk_light_ready_local(lcx, lcz, 0, 1);
+        flat_publish_light_ready(lcx, lcz, 0, 1);
     }
 }
 
 static int g_flat_chunk_environment_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 
-static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz) {
+static void flat_reset_sky_light(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
-    flat_publish_chunk_light_ready_local(lcx, lcz, 0, 0);
+    flat_publish_light_ready(lcx, lcz, 0, 0);
     int x0 = lcx * FLAT_RENDER_CHUNK;
     int z0 = lcz * FLAT_RENDER_CHUNK;
     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
@@ -942,16 +942,16 @@ static void flat_reset_chunk_light_no_shadows_local(int lcx, int lcz) {
     }
 }
 
-static void flat_apply_chunk_environment_light_local(int lcx, int lcz) {
+static void flat_apply_environment_light(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     if (!g_flat_world_chunk_generated[lcz][lcx]) return;
     int wcx = floor_div16(g_flat_world_origin_x) + lcx;
     int wcz = floor_div16(g_flat_world_origin_z) + lcz;
     pex_logf_trace("lighting immediate environment pass local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
-    flat_recalculate_lighting_region_ex(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15, 16, 1);
+    flat_relight_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15, 16, 1);
 }
 
-static int flat_chunk_sky_light_needs_rebuild_local(int lcx, int lcz) {
+static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
     if (!g_flat_world_chunk_generated[lcz][lcx]) return 0;
     int x0 = g_flat_world_origin_x + lcx * FLAT_RENDER_CHUNK;
@@ -991,16 +991,16 @@ static int flat_chunk_sky_light_needs_rebuild_local(int lcx, int lcz) {
     return 0;
 }
 
-static int flat_repair_chunk_light_if_missing_local(int lcx, int lcz) {
-    if (!flat_chunk_sky_light_needs_rebuild_local(lcx, lcz)) return 0;
+static int flat_repair_missing_light(int lcx, int lcz) {
+    if (!flat_sky_light_needs_rebuild(lcx, lcz)) return 0;
     int wcx = floor_div16(g_flat_world_origin_x) + lcx;
     int wcz = floor_div16(g_flat_world_origin_z) + lcz;
     pex_logf("lighting repaired missing skylight chunk local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
-    flat_recalculate_lighting_chunk_fast_surface(wcx, wcz);
+    flat_relight_fast_surface_chunk(wcx, wcz);
     return 1;
 }
 
-static void flat_recalculate_lighting_chunk(int cx, int cz) {
+static void flat_relight_chunk(int cx, int cz) {
     flat_recalculate_lighting_region(cx * 16, cz * 16, cx * 16 + 15, cz * 16 + 15);
 }
 
@@ -1009,7 +1009,7 @@ static void flat_recalculate_lighting_chunk(int cx, int cz) {
 #define FLAT_JAVA_LIGHT_KIND_SKY 0
 #define FLAT_JAVA_LIGHT_KIND_BLOCK 1
 
-static int flat_chunks_near_generated_for_light(int x, int y, int z, int radius) {
+static int flat_light_chunks_ready_near(int x, int y, int z, int radius) {
     (void)y;
     int cx0 = floor_div16(x - radius);
     int cx1 = floor_div16(x + radius);
@@ -1017,8 +1017,8 @@ static int flat_chunks_near_generated_for_light(int x, int y, int z, int radius)
     int cz1 = floor_div16(z + radius);
     for (int cz = cz0; cz <= cz1; ++cz) {
         for (int cx = cx0; cx <= cx1; ++cx) {
-            int lcx = stream_world_chunk_local_x(cx);
-            int lcz = stream_world_chunk_local_z(cz);
+            int lcx = stream_local_chunk_x(cx);
+            int lcz = stream_local_chunk_z(cz);
             if (!flat_local_chunk_valid(lcx, lcz)) return 0;
             if (!g_flat_world_chunk_generated[lcz][lcx]) return 0;
         }
@@ -1028,8 +1028,8 @@ static int flat_chunks_near_generated_for_light(int x, int y, int z, int radius)
 
 static int flat_light_saved_value_kind(int kind, int x, int y, int z) {
     return (kind == FLAT_JAVA_LIGHT_KIND_SKY) ?
-        flat_get_saved_sky_light_value(x, y, z) :
-        flat_get_saved_block_light_value(x, y, z);
+        flat_saved_sky_light(x, y, z) :
+        flat_saved_block_light(x, y, z);
 }
 
 static void flat_mark_light_cell_changed(int x, int y, int z) {
@@ -1041,9 +1041,9 @@ static void flat_mark_light_cell_changed(int x, int y, int z) {
     int sy = (y - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
     if (flat_local_chunk_valid(lcx, lcz)) {
         g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
-        flat_bump_chunk_light_version_local(lcx, lcz);
+        flat_bump_light_version(lcx, lcz);
     }
-    flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+    flat_mark_section_dirty(lcx, lcz, sy);
 }
 
 static void flat_set_light_value_kind(int kind, int x, int y, int z, int value) {
@@ -1093,16 +1093,16 @@ static int flat_compute_light_value_kind(int kind, int x, int y, int z) {
     return best;
 }
 
-static void flat_java125_update_light_by_type_immediate(int kind, int x, int y, int z) {
+static void flat_update_light_now(int kind, int x, int y, int z) {
     if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) return;
-    if (!flat_chunks_near_generated_for_light(x, y, z, 17)) {
-        flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
+    if (!flat_light_chunks_ready_near(x, y, z, 17)) {
+        flat_mark_light_dirty_region(x - 15, z - 15, x + 15, z + 15);
         return;
     }
 
     int *queue = (int*)malloc(sizeof(int) * FLAT_JAVA_LIGHT_QUEUE_CAP);
     if (!queue) {
-        flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
+        flat_mark_light_dirty_region(x - 15, z - 15, x + 15, z + 15);
         return;
     }
 
@@ -1177,7 +1177,7 @@ static void flat_java125_update_light_by_type_immediate(int kind, int x, int y, 
     free(queue);
 }
 
-static int flat_java125_update_light_for_edit_immediate(int x, int y, int z, int old_id, int new_id) {
+static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_id) {
     if (g_stream_remap_in_progress) return 0;
     if (!flat_persistent_edit_active()) return 0;
 
@@ -1188,9 +1188,9 @@ static int flat_java125_update_light_for_edit_immediate(int x, int y, int z, int
     if (old_light == new_light && old_opacity == new_opacity) return 1;
 
     if (old_opacity != new_opacity) {
-        flat_java125_update_light_by_type_immediate(FLAT_JAVA_LIGHT_KIND_SKY, x, y, z);
+        flat_update_light_now(FLAT_JAVA_LIGHT_KIND_SKY, x, y, z);
     }
-    flat_java125_update_light_by_type_immediate(FLAT_JAVA_LIGHT_KIND_BLOCK, x, y, z);
+    flat_update_light_now(FLAT_JAVA_LIGHT_KIND_BLOCK, x, y, z);
     return 1;
 }
 
@@ -1200,7 +1200,7 @@ static int g_flat_light_x0 = 0, g_flat_light_z0 = 0, g_flat_light_x1 = 0, g_flat
 static CRITICAL_SECTION g_flat_light_dirty_cs;
 static int g_flat_light_dirty_cs_initialized = 0;
 
-static void flat_light_dirty_lock_ensure(void) {
+static void flat_light_dirty_lock(void) {
     if (g_flat_light_dirty_cs_initialized) return;
     InitializeCriticalSection(&g_flat_light_dirty_cs);
     g_flat_light_dirty_cs_initialized = 1;
@@ -1208,15 +1208,15 @@ static void flat_light_dirty_lock_ensure(void) {
 
 static int flat_lighting_pending_dirty(void) {
     int pending = 0;
-    flat_light_dirty_lock_ensure();
+    flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
     pending = g_flat_light_dirty ? 1 : 0;
     LeaveCriticalSection(&g_flat_light_dirty_cs);
     return pending;
 }
 
-static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1) {
-    flat_light_dirty_lock_ensure();
+static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1) {
+    flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
     if (!g_flat_light_dirty) {
         g_flat_light_dirty = 1;
@@ -1231,12 +1231,12 @@ static void flat_note_lighting_dirty_region(int x0, int z0, int x1, int z1) {
     flat_lighting_worker_wake();
 }
 
-static void flat_note_lighting_dirty_around_block(int x, int y, int z) {
+static void flat_mark_light_dirty_around_block(int x, int y, int z) {
     (void)y;
-    flat_note_lighting_dirty_region(x, z, x, z);
+    flat_mark_light_dirty_region(x, z, x, z);
 }
 
-static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id, int new_id) {
+static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, int new_id) {
     int old_light = flat_block_light_value_for_id(old_id);
     int new_light = flat_block_light_value_for_id(new_id);
     int old_opacity = flat_light_opacity_for_id(old_id);
@@ -1246,19 +1246,19 @@ static void flat_note_lighting_dirty_for_change(int x, int y, int z, int old_id,
         /* Player edits must light immediately like Java World.setBlock() ->
            updateAllLightTypes().  Do not leave torch/block updates waiting for
            the background lighting worker; that made placed torches visibly lag. */
-        if (flat_java125_update_light_for_edit_immediate(x, y, z, old_id, new_id)) return;
+        if (flat_update_edit_light_now(x, y, z, old_id, new_id)) return;
 
         /* Non-player/batched updates still use the worker path so fluids/falling
            blocks and streaming do not stall the main/render thread. */
-        flat_note_lighting_dirty_region(x - 15, z - 15, x + 15, z + 15);
+        flat_mark_light_dirty_region(x - 15, z - 15, x + 15, z + 15);
     } else {
-        flat_note_lighting_dirty_around_block(x, y, z);
+        flat_mark_light_dirty_around_block(x, y, z);
     }
 }
 
 static void flat_preview_pending_lighting(void) {
     int dirty = 0, x0 = 0, z0 = 0, x1 = 0, z1 = 0;
-    flat_light_dirty_lock_ensure();
+    flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
     dirty = g_flat_light_dirty;
     x0 = g_flat_light_x0; z0 = g_flat_light_z0; x1 = g_flat_light_x1; z1 = g_flat_light_z1;
@@ -1269,12 +1269,12 @@ static void flat_preview_pending_lighting(void) {
     /* Small, synchronous visual preview only.  This is intentionally much
        smaller than the full 15-block light update; it avoids gameplay hitches
        while making the edited area update before the async/full pass completes. */
-    flat_recalculate_lighting_region_ex(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
+    flat_relight_region(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
 }
 
-static int flat_take_pending_lighting_region(int *x0, int *z0, int *x1, int *z1) {
+static int flat_take_pending_light_region(int *x0, int *z0, int *x1, int *z1) {
     if (g_stream_remap_in_progress) return 0;
-    flat_light_dirty_lock_ensure();
+    flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
     if (!g_flat_light_dirty || g_stream_remap_in_progress) {
         LeaveCriticalSection(&g_flat_light_dirty_cs);
@@ -1289,7 +1289,7 @@ static int flat_take_pending_lighting_region(int *x0, int *z0, int *x1, int *z1)
 
 static void flat_flush_pending_lighting(void) {
     int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
-    if (!flat_take_pending_lighting_region(&x0, &z0, &x1, &z1)) return;
+    if (!flat_take_pending_light_region(&x0, &z0, &x1, &z1)) return;
     pex_logf_trace("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
     flat_recalculate_lighting_region(x0, z0, x1, z1);
 }
@@ -1315,7 +1315,7 @@ static void flat_set_meta_raw(int x, int y, int z, int meta) {
         if (block_is_liquid(flat_get_block(x, y, z))) {
             g_flat_levels[flat_y_index(y)][flat_z_index(z)][flat_index(x)] = (unsigned char)(meta & 15);
         }
-        mark_flat_render_sections_dirty_around_block(x, y, z);
+        flat_mark_sections_dirty_near_block(x, y, z);
         if (flat_persistent_edit_active()) {
             mark_flat_chunk_modified_at(x, z);
             g_save_dirty = 1;
@@ -1339,7 +1339,7 @@ static int flat_chunk_buf_index(int lx, int y, int lz) {
     return flat_y_index(y) * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK) + lz * FLAT_RENDER_CHUNK + lx;
 }
 
-static void flat_chunk_delta_path_current(int cx, int cz, char *out, size_t cap, int create_dir) {
+static void flat_build_chunk_delta_path(int cx, int cz, char *out, size_t cap, int create_dir) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)cx; (void)cz; (void)create_dir; if (cap) out[0] = 0; return;
 #endif
@@ -1359,7 +1359,7 @@ static void flat_chunk_delta_path_current(int cx, int cz, char *out, size_t cap,
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
 
-static void flat_chunk_delta_path_legacy(int cx, int cz, char *out, size_t cap) {
+static void flat_legacy_chunk_delta_path(int cx, int cz, char *out, size_t cap) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)cx; (void)cz; if (cap) out[0] = 0; return;
 #endif
@@ -1377,7 +1377,7 @@ static void flat_chunk_delta_path_legacy(int cx, int cz, char *out, size_t cap) 
 }
 
 static void flat_chunk_delta_path(int cx, int cz, char *out, size_t cap) {
-    flat_chunk_delta_path_current(cx, cz, out, cap, 1);
+    flat_build_chunk_delta_path(cx, cz, out, cap, 1);
 }
 
 static void mark_flat_chunk_modified_at(int x, int z) {
@@ -1390,7 +1390,7 @@ static void mark_flat_chunk_modified_at(int x, int z) {
     }
 }
 
-static void mark_flat_chunks_modified_all(void) {
+static void flat_mark_all_chunks_modified(void) {
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
         for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
             g_flat_world_chunk_modified[cz][cx] = 1;
@@ -1431,7 +1431,7 @@ static int psp_safe_height_at(int x, int z, long long seed) {
 }
 #endif
 
-static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp) {
+static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp) {
     if (!out) return;
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
 
@@ -1524,16 +1524,16 @@ static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char 
     }
 }
 
-static void generate_flat_chunk_base_to_buffer(int cx, int cz, unsigned char *out) {
+static void flat_generate_chunk_base_to_buffer(int cx, int cz, unsigned char *out) {
 #if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
     TerrainProvider *reuse = NULL;
 #else
     TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
 #endif
-    generate_flat_chunk_base_to_buffer_ex(cx, cz, out, g_world_type, g_world_seed, reuse);
+    flat_generate_chunk_base(cx, cz, out, g_world_type, g_world_seed, reuse);
 }
 
-static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char *buf) {
+static void flat_copy_chunk_buffer(int cx, int cz, const unsigned char *buf) {
     if (!buf) return;
     for (int lx = 0; lx < 16; lx++) {
         int wx = cx * 16 + lx;
@@ -1550,17 +1550,17 @@ static void copy_flat_chunk_buffer_to_world(int cx, int cz, const unsigned char 
             }
         }
     }
-    int lcx = stream_world_chunk_local_x(cx);
-    int lcz = stream_world_chunk_local_z(cz);
-    if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-    flat_recalculate_lighting_chunk_fast_surface(cx, cz);
-    if (flat_chunk_buffer_has_saved_user_light_source(buf)) flat_note_chunk_block_light_dirty(cx, cz);
+    int lcx = stream_local_chunk_x(cx);
+    int lcz = stream_local_chunk_z(cz);
+    if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
+    flat_relight_fast_surface_chunk(cx, cz);
+    if (flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-    psp_fast_surface_mark_dirty_block(cx * 16 + 8, cz * 16 + 8);
+    psp_fast_surface_mark_dirty(cx * 16 + 8, cz * 16 + 8);
 #endif
 }
 
-static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
+static void flat_load_chunk_delta(int cx, int cz) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)cx; (void)cz; return;
 #endif
@@ -1569,10 +1569,10 @@ static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
 #endif
     if (!g_loaded_world_dir[0]) return;
     char path[MAX_PATHBUF];
-    flat_chunk_delta_path_current(cx, cz, path, sizeof(path), 0);
+    flat_build_chunk_delta_path(cx, cz, path, sizeof(path), 0);
     FILE *f = fopen(path, "rb");
     if (!f) {
-        flat_chunk_delta_path_legacy(cx, cz, path, sizeof(path));
+        flat_legacy_chunk_delta_path(cx, cz, path, sizeof(path));
         f = fopen(path, "rb");
     }
     if (!f) return;
@@ -1588,10 +1588,10 @@ static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
     unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
     unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
     if (!buf || !meta) { free(buf); free(meta); fclose(f); return; }
-    int ok = pex_chunk_delta_read_payload_from_open_file(f, magic, rcx, rcz, count, cx, cz, buf, meta);
+    int ok = chunk_delta_read_payload(f, magic, rcx, rcz, count, cx, cz, buf, meta);
     fclose(f);
     if (ok) {
-        copy_flat_chunk_buffer_to_world(cx, cz, buf);
+        flat_copy_chunk_buffer(cx, cz, buf);
         {
             for (int lx = 0; lx < 16; lx++) {
                 int wx = cx * 16 + lx;
@@ -1611,13 +1611,13 @@ static void load_modified_flat_chunk_delta_into_flat(int cx, int cz) {
             }
         }
     }
-    flat_recalculate_lighting_chunk_fast_surface(cx, cz);
+    flat_relight_fast_surface_chunk(cx, cz);
     free(buf);
     free(meta);
 }
 
 
-static void flat_chunk_delta_path_current_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap, int create_dir) {
+static void flat_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap, int create_dir) {
     if (!world_dir || !world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -1631,7 +1631,7 @@ static void flat_chunk_delta_path_current_for_dir(const char *world_dir, int cx,
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
 
-static void flat_chunk_delta_path_legacy_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap) {
+static void flat_legacy_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap) {
     if (!world_dir || !world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -1642,17 +1642,17 @@ static void flat_chunk_delta_path_legacy_for_dir(const char *world_dir, int cx, 
     snprintf(out, cap, "%s\\pexcraft_modified_chunks\\c.%s.%s.pcd", world_dir, bx, bz);
 }
 
-static void load_modified_flat_chunk_delta_into_buffers_for_dir(const char *world_dir, int cx, int cz,
+static void flat_load_chunk_delta_for_dir(const char *world_dir, int cx, int cz,
                                                                 unsigned char *buf, unsigned char *meta) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)world_dir; (void)cx; (void)cz; (void)buf; (void)meta; return;
 #endif
     if (!world_dir || !world_dir[0] || !buf || !meta) return;
     char path[MAX_PATHBUF];
-    flat_chunk_delta_path_current_for_dir(world_dir, cx, cz, path, sizeof(path), 0);
+    flat_chunk_delta_path_for_dir(world_dir, cx, cz, path, sizeof(path), 0);
     FILE *f = fopen(path, "rb");
     if (!f) {
-        flat_chunk_delta_path_legacy_for_dir(world_dir, cx, cz, path, sizeof(path));
+        flat_legacy_chunk_delta_path_for_dir(world_dir, cx, cz, path, sizeof(path));
         f = fopen(path, "rb");
     }
     if (!f) return;
@@ -1665,14 +1665,14 @@ static void load_modified_flat_chunk_delta_into_buffers_for_dir(const char *worl
         fclose(f);
         return;
     }
-    if (!pex_chunk_delta_read_payload_from_open_file(f, magic, rcx, rcz, count, cx, cz, buf, meta)) {
+    if (!chunk_delta_read_payload(f, magic, rcx, rcz, count, cx, cz, buf, meta)) {
         memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
     }
     fclose(f);
 }
 
 static int g_copy_chunk_skip_main_light = 0;
-static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char *buf, const unsigned char *meta) {
+static void flat_copy_chunk_buffers(int cx, int cz, const unsigned char *buf, const unsigned char *meta) {
     if (!buf) return;
     for (int lx = 0; lx < 16; lx++) {
         int wx = cx * 16 + lx;
@@ -1692,11 +1692,11 @@ static void copy_flat_chunk_buffers_to_world(int cx, int cz, const unsigned char
             }
         }
     }
-    int lcx = stream_world_chunk_local_x(cx);
-    int lcz = stream_world_chunk_local_z(cz);
-    if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-    if (!g_copy_chunk_skip_main_light) flat_recalculate_lighting_chunk_fast_surface(cx, cz);
-    if (flat_chunk_buffer_has_saved_user_light_source(buf)) flat_note_chunk_block_light_dirty(cx, cz);
+    int lcx = stream_local_chunk_x(cx);
+    int lcz = stream_local_chunk_z(cz);
+    if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
+    if (!g_copy_chunk_skip_main_light) flat_relight_fast_surface_chunk(cx, cz);
+    if (flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
@@ -1715,7 +1715,7 @@ static void save_one_modified_flat_chunk(int lcx, int lcz) {
     unsigned char *cur_meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
     if (!base || !cur || !cur_meta) { free(base); free(cur); free(cur_meta); return; }
 
-    generate_flat_chunk_base_to_buffer(cx, cz, base);
+    flat_generate_chunk_base_to_buffer(cx, cz, base);
     memset(cur, 0, FLAT_CHUNK_BLOCK_COUNT);
     for (int lx = 0; lx < 16; lx++) {
         int wx = cx * 16 + lx;
@@ -1740,7 +1740,7 @@ static void save_one_modified_flat_chunk(int lcx, int lcz) {
     if (memcmp(base, cur, FLAT_CHUNK_BLOCK_COUNT) == 0 && !meta_nonzero) {
         DeleteFileA(path);
     } else {
-        pex_chunk_delta_write_payload_to_path(path, cx, cz, cur, cur_meta);
+        chunk_delta_write_payload(path, cx, cz, cur, cur_meta);
     }
     g_flat_world_chunk_modified[lcz][lcx] = 0;
     free(base);
@@ -1762,7 +1762,7 @@ static void save_modified_flat_chunks_sync(void) {
 }
 
 static void save_modified_flat_chunks(void) {
-    pex_request_modified_chunk_save_async();
+    request_chunk_save_async();
 }
 
 
@@ -1773,15 +1773,15 @@ static void flat_note_section_mesh_changed(int sy, int cz, int cx) {
     g_flat_section_mesh_building[sy][cz][cx] = 0;
 }
 
-static void mark_flat_render_chunks_dirty_all(void) {
+static void flat_mark_all_chunks_dirty(void) {
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
         for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
-            if (g_flat_world_chunk_generated[cz][cx]) flat_refresh_chunk_section_occupancy_local(cx, cz);
+            if (g_flat_world_chunk_generated[cz][cx]) flat_refresh_chunk_occupancy(cx, cz);
             g_flat_world_chunk_dirty[cz][cx] = 1;
             g_flat_world_chunk_valid[cz][cx] = 0;
             g_flat_world_chunk_has_liquid[cz][cx] = 0;
             for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-                flat_mark_section_after_generation(cx, cz, sy);
+                flat_mark_generated_section(cx, cz, sy);
             }
         }
     }
@@ -1790,7 +1790,7 @@ static void mark_flat_render_chunks_dirty_all(void) {
     g_flat_section_geometry_dirty = 0;
 }
 
-static void mark_flat_render_sections_dirty_all_keep_valid(void) {
+static void flat_mark_all_sections_dirty(void) {
     /* Java 1.2.5 changes day/night lighting through EntityRenderer.updateLightmap()
        without throwing away WorldRenderer display lists.  This port still bakes
        the lightmap into terrain vertex colors, so when skylightSubtracted changes
@@ -1799,18 +1799,18 @@ static void mark_flat_render_sections_dirty_all_keep_valid(void) {
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
         for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
             if (!g_flat_world_chunk_generated[cz][cx]) continue;
-            flat_refresh_chunk_section_occupancy_local(cx, cz);
+            flat_refresh_chunk_occupancy(cx, cz);
             g_flat_world_chunk_dirty[cz][cx] = 1;
             for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-                if (!flat_section_has_any_block_local(cx, cz, sy)) continue;
-                flat_mark_section_dirty_keep_valid(cx, cz, sy);
+                if (!flat_section_has_blocks(cx, cz, sy)) continue;
+                flat_mark_section_dirty(cx, cz, sy);
             }
         }
     }
     g_flat_renderer_sort_dirty = 1;
 }
 
-static void mark_flat_render_chunks_dirty_around(int x, int z) {
+static void flat_mark_chunks_dirty_near(int x, int z) {
     if (!flat_in_bounds(x, FLAT_WORLD_Y_MIN, z)) return;
     int fx = flat_index(x);
     int fz = flat_z_index(z);
@@ -1833,7 +1833,7 @@ static void mark_flat_render_chunks_dirty_around(int x, int z) {
     g_flat_renderer_sort_dirty = 1;
 }
 
-static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy) {
+static void flat_mark_section_dirty(int cx, int cz, int sy) {
     if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
     g_flat_section_dirty[sy][cz][cx] = 1;
     flat_note_section_mesh_changed(sy, cz, cx);
@@ -1841,7 +1841,7 @@ static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy) {
     g_flat_renderer_sort_dirty = 1;
 }
 
-static void mark_flat_render_sections_dirty_around_block(int x, int y, int z) {
+static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return;
     /* A player/block edit should be visible quickly.  Java adds the touched
        WorldRenderer(s) to worldRenderersToUpdate immediately; keep the heavy
@@ -1859,41 +1859,41 @@ static void mark_flat_render_sections_dirty_around_block(int x, int y, int z) {
        shared boundary.  The previous implementation dirtied the full 3x3x3
        neighborhood for every edit/liquid/falling-block update, causing 27
        sections to be rebuilt for many single-block changes. */
-    flat_mark_section_dirty_keep_valid(cx0, cz0, sy0);
-    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty_keep_valid(cx0 - 1, cz0, sy0);
-    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty_keep_valid(cx0 + 1, cz0, sy0);
-    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty_keep_valid(cx0, cz0 - 1, sy0);
-    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty_keep_valid(cx0, cz0 + 1, sy0);
-    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_section_dirty_keep_valid(cx0, cz0, sy0 - 1);
-    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_section_dirty_keep_valid(cx0, cz0, sy0 + 1);
+    flat_mark_section_dirty(cx0, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0 - 1, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0 + 1, cz0, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0, cz0 - 1, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0, cz0 + 1, sy0);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_section_dirty(cx0, cz0, sy0 - 1);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_section_dirty(cx0, cz0, sy0 + 1);
 }
 
-static int flat_section_has_any_block_local(int lcx, int lcz, int sy) {
+static int flat_section_has_blocks(int lcx, int lcz, int sy) {
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return 0;
     return (g_flat_chunk_section_non_empty_mask[lcz][lcx] & (unsigned short)(1u << sy)) != 0;
 }
 
-static void flat_bump_chunk_light_version_local(int lcx, int lcz) {
+static void flat_bump_light_version(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     g_flat_chunk_light_version[lcz][lcx]++;
     if (g_flat_chunk_light_version[lcz][lcx] == 0) g_flat_chunk_light_version[lcz][lcx] = 1;
 }
 
-static int flat_chunk_light_ready_local(int lcx, int lcz) {
+static int flat_chunk_light_ready(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
     return g_flat_world_chunk_generated[lcz][lcx] && g_flat_chunk_light_ready[lcz][lcx];
 }
 
-static void flat_publish_chunk_light_ready_local(int lcx, int lcz, int ready, int dirty_sections) {
+static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     int old_ready = g_flat_chunk_light_ready[lcz][lcx];
     g_flat_chunk_light_ready[lcz][lcx] = ready ? 1 : 0;
     if (dirty_sections || old_ready != g_flat_chunk_light_ready[lcz][lcx]) {
-        flat_bump_chunk_light_version_local(lcx, lcz);
+        flat_bump_light_version(lcx, lcz);
     }
     if (!dirty_sections) return;
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
-        if (flat_section_has_any_block_local(lcx, lcz, sy)) {
+        if (flat_section_has_blocks(lcx, lcz, sy)) {
             g_flat_section_dirty[sy][lcz][lcx] = 1;
             g_flat_section_valid[sy][lcz][lcx] = 0;
             flat_note_section_mesh_changed(sy, lcz, lcx);
@@ -1906,16 +1906,16 @@ static void flat_publish_chunk_light_ready_local(int lcx, int lcz, int ready, in
     g_flat_renderer_sort_dirty = 1;
 }
 
-static void flat_mark_section_after_generation(int lcx, int lcz, int sy) {
+static void flat_mark_generated_section(int lcx, int lcz, int sy) {
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return;
-    if (!flat_chunk_light_ready_local(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
+    if (!flat_chunk_light_ready(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
         g_flat_section_dirty[sy][lcz][lcx] = 1;
         g_flat_section_valid[sy][lcz][lcx] = 0;
         flat_note_section_mesh_changed(sy, lcz, lcx);
         g_flat_world_chunk_dirty[lcz][lcx] = 1;
         return;
     }
-    if (flat_section_has_any_block_local(lcx, lcz, sy)) {
+    if (flat_section_has_blocks(lcx, lcz, sy)) {
         g_flat_section_dirty[sy][lcz][lcx] = 1;
         flat_note_section_mesh_changed(sy, lcz, lcx);
         g_flat_section_valid[sy][lcz][lcx] = 0;
@@ -1936,14 +1936,14 @@ static void flat_mark_section_after_generation(int lcx, int lcz, int sy) {
     }
 }
 
-static void stream_mark_neighbor_boundary_dirty(int cx, int cz, int sy) {
+static void stream_mark_neighbor_dirty(int cx, int cz, int sy) {
     if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
     if (!g_flat_world_chunk_generated[cz][cx]) return;
-    if (!flat_section_has_any_block_local(cx, cz, sy)) return;
-    flat_mark_section_dirty_keep_valid(cx, cz, sy);
+    if (!flat_section_has_blocks(cx, cz, sy)) return;
+    flat_mark_section_dirty(cx, cz, sy);
 }
 
-static void stream_mark_local_chunk_generated(int lcx, int lcz) {
+static void stream_mark_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
@@ -1954,16 +1954,16 @@ static void stream_mark_local_chunk_generated(int lcx, int lcz) {
            Java 1.2.5 preloads the terrain area, drains lighting, then lets renderers
            rebuild from the settled world.  Running per-chunk light here was both
            slow and the source of mixed-brightness spawn chunks. */
-        flat_publish_chunk_light_ready_local(lcx, lcz, 0, 1);
+        flat_publish_light_ready(lcx, lcz, 0, 1);
     } else {
         /* Runtime streaming may show a fast local light preview, but the expensive
            neighbor-aware pass is queued/batched for the lighting worker instead of
            blocking the stream commit thread for every chunk. */
-        flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
+        flat_publish_light_ready(lcx, lcz, 1, 1);
         {
             int wcx = floor_div16(g_flat_world_origin_x) + lcx;
             int wcz = floor_div16(g_flat_world_origin_z) + lcz;
-            flat_note_lighting_dirty_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15);
+            flat_mark_light_dirty_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15);
         }
     }
 
@@ -1971,23 +1971,23 @@ static void stream_mark_local_chunk_generated(int lcx, int lcz) {
        This replaces the old 3x3x16 section scan performed for every installed
        streamed chunk.  Only the new chunk gets invalidated; existing neighbor
        meshes stay drawable and are dirtied only on shared borders. */
-    unsigned short mask = flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+    unsigned short mask = flat_refresh_chunk_occupancy(lcx, lcz);
     g_flat_world_chunk_dirty[lcz][lcx] = 1;
     g_flat_world_chunk_valid[lcz][lcx] = 0;
     g_flat_renderer_sort_dirty = 1;
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-        flat_mark_section_after_generation(lcx, lcz, sy);
+        flat_mark_generated_section(lcx, lcz, sy);
         if (mask & (unsigned short)(1u << sy)) {
-            stream_mark_neighbor_boundary_dirty(lcx - 1, lcz, sy);
-            stream_mark_neighbor_boundary_dirty(lcx + 1, lcz, sy);
-            stream_mark_neighbor_boundary_dirty(lcx, lcz - 1, sy);
-            stream_mark_neighbor_boundary_dirty(lcx, lcz + 1, sy);
+            stream_mark_neighbor_dirty(lcx - 1, lcz, sy);
+            stream_mark_neighbor_dirty(lcx + 1, lcz, sy);
+            stream_mark_neighbor_dirty(lcx, lcz - 1, sy);
+            stream_mark_neighbor_dirty(lcx, lcz + 1, sy);
         }
     }
 }
 
 
-static int flat_block_is_opaque_cube_for_snow(int id) {
+static int flat_block_blocks_snow(int id) {
     if (id == 0 || id == BLOCK_WATER || id == BLOCK_STILL_WATER ||
         id == BLOCK_LAVA || id == BLOCK_STILL_LAVA) return 0;
     if (id == BLOCK_SNOW_LAYER || id == BLOCK_ICE || id == BLOCK_GLASS) return 0;
@@ -2004,7 +2004,7 @@ static int flat_block_is_opaque_cube_for_snow(int id) {
 
 static int flat_snow_layer_can_stay_at(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z) || y <= FLAT_WORLD_Y_MIN) return 0;
-    return flat_block_is_opaque_cube_for_snow(flat_get_block(x, y - 1, z));
+    return flat_block_blocks_snow(flat_get_block(x, y - 1, z));
 }
 
 static void flat_set_block_raw(int x, int y, int z, int id) {
@@ -2018,14 +2018,14 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
     if (*cell != id) {
         *cell = (unsigned char)id;
         g_flat_meta[yi][zi][xi] = 0;
-        flat_update_section_occupancy_after_block_change(x, y, z, id);
-        mark_flat_render_sections_dirty_around_block(x, y, z);
+        flat_update_section_after_block_change(x, y, z, id);
+        flat_mark_sections_dirty_near_block(x, y, z);
         if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
             flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
-            flat_note_lighting_dirty_for_change(x, y, z, old_id, id);
+            flat_mark_light_dirty_for_change(x, y, z, old_id, id);
         }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-        psp_fast_surface_mark_dirty_block(x, z);
+        psp_fast_surface_mark_dirty(x, z);
         psp_fast_surface_note_edit_block(x, y, z);
 #endif
         if (flat_persistent_edit_active()) {
@@ -2049,14 +2049,14 @@ static void flat_set_fluid(int x, int y, int z, int id, int level) {
         *cell = (unsigned char)id;
         *lvl = want_level;
         g_flat_meta[yi][zi][xi] = want_level;
-        flat_update_section_occupancy_after_block_change(x, y, z, id);
-        mark_flat_render_sections_dirty_around_block(x, y, z);
+        flat_update_section_after_block_change(x, y, z, id);
+        flat_mark_sections_dirty_near_block(x, y, z);
         if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
             flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
-            flat_note_lighting_dirty_for_change(x, y, z, old_id, id);
+            flat_mark_light_dirty_for_change(x, y, z, old_id, id);
         }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-        psp_fast_surface_mark_dirty_block(x, z);
+        psp_fast_surface_mark_dirty(x, z);
         psp_fast_surface_note_edit_block(x, y, z);
 #endif
         if (flat_persistent_edit_active()) {
@@ -2097,7 +2097,7 @@ static int floor_div16(int v) {
     return v >= 0 ? v / 16 : -((15 - v) / 16);
 }
 
-static int stream_effective_render_chunk_radius(void) {
+static int stream_render_radius(void) {
     int chunks = g_opts.render_distance;
     if (chunks < 2) chunks = 2;
     int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 2;
@@ -2107,7 +2107,7 @@ static int stream_effective_render_chunk_radius(void) {
 }
 
 static int stream_window_margin_blocks(void) {
-    int margin = stream_effective_render_chunk_radius() * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK;
+    int margin = stream_render_radius() * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK;
     int max_margin = FLAT_WORLD_SIZE / 2 - FLAT_RENDER_CHUNK;
     if (max_margin < FLAT_RENDER_CHUNK * 3) max_margin = FLAT_RENDER_CHUNK * 3;
     if (margin > max_margin) margin = max_margin;
@@ -2133,10 +2133,10 @@ static TerrainProvider *beta_stream_provider(void) {
 }
 
 #if defined(PEX_PLATFORM_WII)
-static int wii_safe_copy_chunk_to_flat_direct(int cx, int cz) {
+static int wii_copy_chunk_to_flat(int cx, int cz) {
     if (!stream_world_chunk_in_window(cx, cz, g_flat_world_origin_x, g_flat_world_origin_z)) return 0;
-    int lcx = stream_world_chunk_local_x(cx);
-    int lcz = stream_world_chunk_local_z(cz);
+    int lcx = stream_local_chunk_x(cx);
+    int lcz = stream_local_chunk_z(cz);
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
     wii_debug_logf("wii direct terrain begin wc=%d,%d local=%d,%d type=%d", cx, cz, lcx, lcz, g_world_type);
 
@@ -2188,8 +2188,8 @@ static int wii_safe_copy_chunk_to_flat_direct(int cx, int cz) {
         }
     }
 
-    flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty_keep_valid(lcx, lcz, sy);
+    flat_refresh_chunk_occupancy(lcx, lcz);
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) flat_mark_section_dirty(lcx, lcz, sy);
     g_flat_world_chunk_dirty[lcz][lcx] = 1;
     g_flat_world_chunk_valid[lcz][lcx] = 1;
     wii_debug_logf("wii direct terrain end wc=%d,%d", cx, cz);
@@ -2199,20 +2199,20 @@ static int wii_safe_copy_chunk_to_flat_direct(int cx, int cz) {
 
 static int beta_preview_copy_chunk_to_flat(int cx, int cz) {
 #if defined(PEX_PLATFORM_WII)
-    return wii_safe_copy_chunk_to_flat_direct(cx, cz);
+    return wii_copy_chunk_to_flat(cx, cz);
 #endif
     unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
     if (!buf) return 0;
-    generate_flat_chunk_base_to_buffer(cx, cz, buf);
-    copy_flat_chunk_buffer_to_world(cx, cz, buf);
+    flat_generate_chunk_base_to_buffer(cx, cz, buf);
+    flat_copy_chunk_buffer(cx, cz, buf);
     free(buf);
     /* Overlay only gameplay edits.  Unchanged chunks live only as seed + coords. */
-    load_modified_flat_chunk_delta_into_flat(cx, cz);
+    flat_load_chunk_delta(cx, cz);
     return 1;
 }
 
 
-static void beta_preview_generate_flat_world(void) {
+static void beta_preview_generate_world(void) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     memset(g_flat_meta, 0, sizeof(g_flat_meta));
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
@@ -2295,10 +2295,10 @@ static void beta_preview_generate_flat_world(void) {
                         if (g_flat_blocks[flat_y_index(0)][fz][fx] == 0) g_flat_blocks[flat_y_index(0)][fz][fx] = BLOCK_BEDROCK;
                     }
                 }
-                load_modified_flat_chunk_delta_into_flat(cx, cz);
-                int lcx = stream_world_chunk_local_x(cx);
-                int lcz = stream_world_chunk_local_z(cz);
-                if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_section_occupancy_local(lcx, lcz);
+                flat_load_chunk_delta(cx, cz);
+                int lcx = stream_local_chunk_x(cx);
+                int lcz = stream_local_chunk_z(cz);
+                if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
             }
         }
         free(cv.blocks);
@@ -2379,7 +2379,7 @@ static int normal_world_height_at(int x, int z) {
     return h;
 }
 
-static void flat_world_center_origin_near(float px, float pz) {
+static void flat_center_origin_near(float px, float pz) {
     int pcx = floor_div16((int)floorf(px));
     int pcz = floor_div16((int)floorf(pz));
     int base_cx = pcx - (FLAT_RENDER_CHUNKS / 2);
@@ -2390,7 +2390,7 @@ static void flat_world_center_origin_near(float px, float pz) {
     g_stream_last_center_chunk_z = 999999;
 }
 
-static void flat_world_prepare_initial_generation(void) {
+static void flat_prepare_initial_generation(void) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     memset(g_flat_meta, 0, sizeof(g_flat_meta));
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
@@ -2480,20 +2480,20 @@ static void stream_initial_beta_batch_free(void) {
     g_stream_initial_batch_running = 0;
 }
 
-static void stream_initial_beta_batch_reset(void) {
+static void stream_reset_initial_batch(void) {
     stream_initial_beta_batch_free();
     g_stream_initial_batch_done_units = 0;
     g_stream_initial_batch_total_units = 0;
 }
 
-static void flat_world_begin_initial_generation(void) {
+static void flat_begin_initial_generation(void) {
     stream_generation_queue_clear();
     g_stream_generation_keep_completed = 1;
     g_stream_initial_light_settle_requested = 0;
     g_stream_initial_light_settle_running = 0;
     g_stream_initial_light_settle_done = 0;
     g_stream_initial_light_settle_progress = 0;
-    stream_initial_beta_batch_reset();
+    stream_reset_initial_batch();
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
@@ -2533,22 +2533,22 @@ static void flat_world_begin_initial_generation(void) {
     world_stream_service_ensure();
 }
 
-static void flat_world_continue_initial_generation(void) {
+static void flat_continue_initial_generation(void) {
     world_stream_service_ensure();
 }
 
-static int flat_world_initial_generation_active(void) {
+static int flat_initial_generation_active(void) {
     return stream_generation_active();
 }
 
-static int flat_world_initial_generation_total(void) {
+static int flat_initial_generation_total(void) {
     if (g_stream_generation_keep_completed && g_world_type == 1 && g_stream_initial_batch_total_units > 0) {
         return g_stream_initial_batch_total_units;
     }
     return g_stream_gen_queue_count;
 }
 
-static int flat_world_initial_generation_done(void) {
+static int flat_initial_generation_done(void) {
     if (g_stream_generation_keep_completed && g_world_type == 1 && g_stream_initial_batch_total_units > 0) {
         int done = g_stream_initial_batch_done_units;
         int total = g_stream_initial_batch_total_units;
@@ -2559,35 +2559,35 @@ static int flat_world_initial_generation_done(void) {
     return g_stream_gen_queue_installed_count;
 }
 
-static void flat_world_begin_initial_light_settle(void) {
+static void flat_begin_initial_light_settle(void) {
     if (g_stream_initial_light_settle_done || g_stream_initial_light_settle_running) return;
     g_stream_initial_light_settle_requested = 1;
 }
 
-static int flat_world_initial_light_settle_done(void) {
+static int flat_initial_light_settle_done(void) {
     return g_stream_initial_light_settle_done;
 }
 
-static int flat_world_initial_light_settle_progress(void) {
+static int flat_initial_light_settle_progress(void) {
     int p = g_stream_initial_light_settle_progress;
     if (p < 0) p = 0;
     if (p > 100) p = 100;
     return p;
 }
 
-static void flat_world_finish_initial_generation(void) {
+static void flat_finish_initial_generation(void) {
     g_stream_generation_keep_completed = 0;
     g_stream_initial_light_settle_requested = 0;
     g_stream_initial_light_settle_running = 0;
     g_stream_initial_light_settle_done = 0;
     g_stream_initial_light_settle_progress = 0;
-    stream_initial_beta_batch_reset();
+    stream_reset_initial_batch();
     stream_generation_queue_clear();
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
 }
 
-static void flat_world_generate_blocks_for_current_origin(void) {
+static void flat_generate_origin_blocks(void) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     memset(g_flat_meta, 0, sizeof(g_flat_meta));
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
@@ -2606,10 +2606,10 @@ static void flat_world_generate_blocks_for_current_origin(void) {
     if (g_world_type == 1) {
         /* Exact same Beta 1.0 generator as before.  The difference is that the
            result is not saved unless gameplay edits the chunk. */
-        beta_preview_generate_flat_world();
+        beta_preview_generate_world();
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++)
             for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++) {
-                stream_mark_local_chunk_generated(lcx, lcz);
+                stream_mark_chunk_generated(lcx, lcz);
             }
     } else {
         int min_cx = floor_div16(g_flat_world_origin_x);
@@ -2620,13 +2620,13 @@ static void flat_world_generate_blocks_for_current_origin(void) {
         if (buf) {
             for (int cz = min_cz; cz <= max_cz; cz++) {
                 for (int cx = min_cx; cx <= max_cx; cx++) {
-                    generate_flat_chunk_base_to_buffer(cx, cz, buf);
-                    copy_flat_chunk_buffer_to_world(cx, cz, buf);
-                    load_modified_flat_chunk_delta_into_flat(cx, cz);
-                    int lcx = stream_world_chunk_local_x(cx);
-                    int lcz = stream_world_chunk_local_z(cz);
+                    flat_generate_chunk_base_to_buffer(cx, cz, buf);
+                    flat_copy_chunk_buffer(cx, cz, buf);
+                    flat_load_chunk_delta(cx, cz);
+                    int lcx = stream_local_chunk_x(cx);
+                    int lcz = stream_local_chunk_z(cz);
                     if (lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS) {
-                        stream_mark_local_chunk_generated(lcx, lcz);
+                        stream_mark_chunk_generated(lcx, lcz);
                     }
                 }
             }
@@ -2634,15 +2634,15 @@ static void flat_world_generate_blocks_for_current_origin(void) {
         }
     }
 
-    mark_flat_render_chunks_dirty_all();
+    flat_mark_all_chunks_dirty();
 }
 
 static void flat_world_reset_blocks(void) {
-    flat_world_center_origin_near(g_player_x, g_player_z);
+    flat_center_origin_near(g_player_x, g_player_z);
     g_stream_gen_queue_count = 0;
     g_stream_gen_queue_index = 0;
 
-    flat_world_generate_blocks_for_current_origin();
+    flat_generate_origin_blocks();
 
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
     memset(g_drops, 0, sizeof(g_drops));
@@ -2705,7 +2705,7 @@ static void fluid_wake_at(int x, int y, int z) {
         g_flat_blocks[yi][zi][xi] = (unsigned char)(id == BLOCK_STILL_WATER ? BLOCK_WATER : BLOCK_LAVA);
         g_flat_levels[yi][zi][xi] = (unsigned char)(level & 15);
         g_flat_meta[yi][zi][xi] = (unsigned char)(level & 15);
-        mark_flat_render_sections_dirty_around_block(x, y, z);
+        flat_mark_sections_dirty_near_block(x, y, z);
         if (flat_persistent_edit_active()) {
             mark_flat_chunk_modified_at(x, z);
             g_save_dirty = 1;
@@ -2739,7 +2739,7 @@ static void fluid_check_for_harden(int x, int y, int z) {
     else if (level <= 4) flat_set_block_raw(x, y, z, BLOCK_COBBLESTONE);
 }
 
-static int flat_block_is_solid_for_collision(int id) {
+static int flat_block_is_solid(int id) {
     return id != 0 && !block_is_liquid(id) &&
            id != BLOCK_SAPLING && id != BLOCK_YELLOW_FLOWER && id != BLOCK_RED_ROSE &&
            id != BLOCK_BROWN_MUSHROOM && id != BLOCK_RED_MUSHROOM &&
@@ -2808,13 +2808,13 @@ static int block_custom_collision_intersects(int id, float minx, float maxx, flo
     }
     if (id == BLOCK_FENCE) {
         if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z + 0.375f, x + 0.625f, y + 1.5f, z + 0.625f)) return 1;
-        if (flat_block_is_solid_for_collision(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z + 0.375f, x + 0.5f, y + 1.5f, z + 0.625f)) return 1;
-        if (flat_block_is_solid_for_collision(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.5f, y, z + 0.375f, x + 1.0f, y + 1.5f, z + 0.625f)) return 1;
-        if (flat_block_is_solid_for_collision(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z, x + 0.625f, y + 1.5f, z + 0.5f)) return 1;
-        if (flat_block_is_solid_for_collision(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z + 0.5f, x + 0.625f, y + 1.5f, z + 1.0f)) return 1;
         return 0;
     }
@@ -2841,7 +2841,7 @@ static int flat_player_in_ladder(void) {
 }
 
 static int flat_solid_for_spawn(int id) {
-    return flat_block_is_solid_for_collision(id);
+    return flat_block_is_solid(id);
 }
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
@@ -2899,19 +2899,19 @@ static void psp_make_spawn_surface(int cx, int ground_y, int cz, int radius) {
             }
             for (int y = ground_y + 1; y <= ground_y + 3 && y <= FLAT_WORLD_Y_MAX; y++) {
                 int id = flat_get_block(x, y, z);
-                if (id == BLOCK_LEAVES || block_is_liquid(id) || flat_block_is_solid_for_collision(id)) {
+                if (id == BLOCK_LEAVES || block_is_liquid(id) || flat_block_is_solid(id)) {
                     flat_set_block_raw(x, y, z, 0);
                 }
             }
         }
     }
 
-    mark_flat_render_chunks_dirty_around(cx, cz);
-    flat_note_lighting_dirty_region(cx - radius - 1, cz - radius - 1, cx + radius + 1, cz + radius + 1);
+    flat_mark_chunks_dirty_near(cx, cz);
+    flat_mark_light_dirty_region(cx - radius - 1, cz - radius - 1, cx + radius + 1, cz + radius + 1);
 }
 
 static int psp_highest_surface_foot_y(int x, int z, int *out_foot_y) {
-    if (!flat_world_chunk_generated_at_block(x, z)) return 0;
+    if (!flat_chunk_generated_at_block(x, z)) return 0;
     for (int y = FLAT_WORLD_Y_MAX - 3; y >= FLAT_WORLD_Y_MIN; y--) {
         int id = flat_get_block(x, y, z);
         if (!flat_solid_for_spawn(id) || id == BLOCK_LEAVES || block_is_liquid(id)) continue;
@@ -2927,7 +2927,7 @@ static int psp_highest_surface_foot_y(int x, int z, int *out_foot_y) {
     return 0;
 }
 
-static void psp_ensure_spawn_surface_for_position(float *px, float *py, float *pz, int force_emergency) {
+static void psp_ensure_spawn_surface(float *px, float *py, float *pz, int force_emergency) {
     int cx = (int)floorf(*px);
     int cz = (int)floorf(*pz);
     int foot_y = (int)floorf(*py - 1.62f + 0.001f);
@@ -3274,7 +3274,7 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
                    feet as a temporary collision plane; head/body space stays
                    non-solid so this cannot trap the player inside invisible
                    chunk walls. */
-                if (!flat_world_chunk_generated_at_block(x, z) && y <= (int)floorf(feet)) {
+                if (!flat_chunk_generated_at_block(x, z) && y <= (int)floorf(feet)) {
                     return 1;
                 }
 #if defined(PEX_PLATFORM_PSP)
@@ -3285,7 +3285,7 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
                     if (door_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
                 } else if (block_has_custom_collision(bid)) {
                     if (block_custom_collision_intersects(bid, minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
-                } else if (flat_block_is_solid_for_collision(bid)) {
+                } else if (flat_block_is_solid(bid)) {
                     if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz,
                                             (float)x, (float)y, (float)z,
                                             (float)(x + 1), (float)(y + 1), (float)(z + 1))) return 1;
@@ -3375,7 +3375,7 @@ static int flat_item_aabb_collides(float px, float py, float pz) {
                     if (door_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
                 } else if (block_has_custom_collision(bid)) {
                     if (block_custom_collision_intersects(bid, minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
-                } else if (flat_block_is_solid_for_collision(bid)) {
+                } else if (flat_block_is_solid(bid)) {
                     if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz,
                                             (float)x, (float)y, (float)z,
                                             (float)(x + 1), (float)(y + 1), (float)(z + 1))) return 1;
@@ -3432,20 +3432,20 @@ static void flat_block_add_collision_boxes(int id, int x, int y, int z, const Fl
     }
     if (id == BLOCK_FENCE) {
         flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z + 0.375f, x + 0.625f, y + 1.5f, z + 0.625f);
-        if (flat_block_is_solid_for_collision(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
             flat_add_collision_box(boxes, count, max_boxes, query, x, y, z + 0.375f, x + 0.5f, y + 1.5f, z + 0.625f);
-        if (flat_block_is_solid_for_collision(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
             flat_add_collision_box(boxes, count, max_boxes, query, x + 0.5f, y, z + 0.375f, x + 1.0f, y + 1.5f, z + 0.625f);
-        if (flat_block_is_solid_for_collision(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
             flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z, x + 0.625f, y + 1.5f, z + 0.5f);
-        if (flat_block_is_solid_for_collision(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
             flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z + 0.5f, x + 0.625f, y + 1.5f, z + 1.0f);
         return;
     }
-    if (flat_block_is_solid_for_collision(id)) flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
+    if (flat_block_is_solid(id)) flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
 }
 
-static int flat_get_colliding_bounding_boxes(const FlatAABB *query, FlatAABB *boxes, int max_boxes) {
+static int flat_get_collision_boxes(const FlatAABB *query, FlatAABB *boxes, int max_boxes) {
     int count = 0;
     int x0 = (int)floorf(query->minx);
     int x1 = (int)floorf(query->maxx + 1.0f);
@@ -3495,7 +3495,7 @@ static void dropped_item_move_entity(FlatDroppedItem *e, float dx, float dy, flo
     if (dy < 0) sweep.miny += dy; else sweep.maxy += dy;
     if (dz < 0) sweep.minz += dz; else sweep.maxz += dz;
     FlatAABB boxes[128];
-    int n = flat_get_colliding_bounding_boxes(&sweep, boxes, 128);
+    int n = flat_get_collision_boxes(&sweep, boxes, 128);
     float odx = dx, ody = dy, odz = dz;
     for (int i = 0; i < n; ++i) dy = aabb_clip_y(&boxes[i], &box, dy);
     aabb_offset(&box, 0.0f, dy, 0.0f);
@@ -3692,8 +3692,8 @@ static void chest_remove_tile_index(int idx) {
     g_save_dirty = 1;
 }
 
-static int flat_block_is_opaque_cube_for_chest(int id) {
-    return flat_block_is_opaque_cube_for_snow(id);
+static int flat_block_blocks_chest(int id) {
+    return flat_block_blocks_snow(id);
 }
 
 static int chest_neighbor_count_at(int x, int y, int z) {
@@ -3729,7 +3729,7 @@ static void chest_on_block_placed(int x, int y, int z) {
 
 static int chest_blocked_above(int x, int y, int z) {
     if (y >= FLAT_WORLD_Y_MAX) return 0;
-    return flat_block_is_opaque_cube_for_chest(flat_get_block(x, y + 1, z));
+    return flat_block_blocks_chest(flat_get_block(x, y + 1, z));
 }
 
 static int chest_open_at(int x, int y, int z) {
@@ -3805,7 +3805,7 @@ static void chest_spawn_stack_like_java(int x, int y, int z, ItemStack st) {
     }
 }
 
-static void chest_drop_contents_and_remove_at(int x, int y, int z) {
+static void chest_drop_contents(int x, int y, int z) {
     int idx = chest_find_tile(x, y, z);
     if (idx >= 0) {
         ChestTile *ct = &g_chest_tiles[idx];
@@ -4029,7 +4029,7 @@ static int furnace_open_at(int x, int y, int z) {
     return 1;
 }
 
-static void furnace_drop_contents_and_remove_at(int x, int y, int z) {
+static void furnace_drop_contents(int x, int y, int z) {
     int idx = furnace_find_tile(x, y, z);
     if (idx >= 0) {
         FurnaceTile *ft = &g_furnace_tiles[idx];
@@ -4649,7 +4649,7 @@ static void reset_breaking_state(void) {
     g_last_sent_mine_stage = -1;
 }
 
-static int held_item_can_harvest_drop_for_block(int block_id) {
+static int held_item_can_harvest_drop(int block_id) {
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     int held_id = stack_empty(held) ? 0 : held->id;
     return held_item_can_harvest_block_id(held_id, block_id);
@@ -4729,10 +4729,10 @@ static int place_door_from_item(int item_id, int x, int y, int z) {
     else if (dir == 2) dz = -1;
     else dx = 1;
 
-    int left_solid = (flat_block_is_opaque_cube_for_snow(flat_get_block(x - dx, y, z - dz)) ? 1 : 0) +
-                     (flat_block_is_opaque_cube_for_snow(flat_get_block(x - dx, y + 1, z - dz)) ? 1 : 0);
-    int right_solid = (flat_block_is_opaque_cube_for_snow(flat_get_block(x + dx, y, z + dz)) ? 1 : 0) +
-                      (flat_block_is_opaque_cube_for_snow(flat_get_block(x + dx, y + 1, z + dz)) ? 1 : 0);
+    int left_solid = (flat_block_blocks_snow(flat_get_block(x - dx, y, z - dz)) ? 1 : 0) +
+                     (flat_block_blocks_snow(flat_get_block(x - dx, y + 1, z - dz)) ? 1 : 0);
+    int right_solid = (flat_block_blocks_snow(flat_get_block(x + dx, y, z + dz)) ? 1 : 0) +
+                      (flat_block_blocks_snow(flat_get_block(x + dx, y + 1, z + dz)) ? 1 : 0);
     int left_door = flat_get_block(x - dx, y, z - dz) == block_id || flat_get_block(x - dx, y + 1, z - dz) == block_id;
     int right_door = flat_get_block(x + dx, y, z + dz) == block_id || flat_get_block(x + dx, y + 1, z + dz) == block_id;
     if ((left_door && !right_door) || right_solid > left_solid) {
@@ -4863,7 +4863,7 @@ static int attached_source_powers_block(int sx, int sy, int sz, int x, int y, in
     return 0;
 }
 
-static int redstone_block_is_strongly_powered(int x, int y, int z) {
+static int redstone_is_strongly_powered(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return 0;
     if (block_is_pressure_plate(flat_get_block(x, y + 1, z)) && (flat_get_meta(x, y + 1, z) & 1)) return 1;
 
@@ -4887,7 +4887,7 @@ static int redstone_calc_wire_strength_at(int x, int y, int z) {
         int nx = x + d[i][0], ny = y + d[i][1], nz = z + d[i][2];
         int src = redstone_active_source_at(nx, ny, nz);
         if (src > best) best = src;
-        if (redstone_block_is_strongly_powered(nx, ny, nz) && best < 15) best = 15;
+        if (redstone_is_strongly_powered(nx, ny, nz) && best < 15) best = 15;
         int w = redstone_wire_strength_at(nx, ny, nz);
         if (w > 0 && w - 1 > best) best = w - 1;
 
@@ -4906,12 +4906,12 @@ static int redstone_door_should_open(int x, int lower_y, int z) {
     static const int d[6][3] = {{1,0,0},{-1,0,0},{0,0,1},{0,0,-1},{0,1,0},{0,-1,0}};
     for (int half = 0; half < 2; half++) {
         int y = lower_y + half;
-        if (redstone_block_is_strongly_powered(x, y, z)) return 1;
+        if (redstone_is_strongly_powered(x, y, z)) return 1;
         for (int i = 0; i < 6; i++) {
             int nx = x + d[i][0], ny = y + d[i][1], nz = z + d[i][2];
             if (redstone_active_source_at(nx, ny, nz) > 0) return 1;
             if (redstone_wire_strength_at(nx, ny, nz) > 0) return 1;
-            if (redstone_block_is_strongly_powered(nx, ny, nz)) return 1;
+            if (redstone_is_strongly_powered(nx, ny, nz)) return 1;
         }
     }
     return 0;
@@ -5035,7 +5035,7 @@ static int player_over_pressure_plate_at(int x, int y, int z) {
     return px1 > x0 && px0 < x1 && pz1 > z0 && pz0 < z1 && py1 >= (float)y && py0 <= (float)y + 0.25f;
 }
 
-static void update_buttons_and_pressure_plates(void) {
+static void update_buttons_and_plates(void) {
     for (int i = 0; i < MAX_BUTTON_TIMERS; i++) {
         ButtonTimer *bt = &g_button_timers[i];
         if (!bt->active) continue;
@@ -5125,7 +5125,7 @@ static int reeds_can_stay_at(int x, int y, int z) {
            block_is_water(flat_get_block(x, y - 1, z + 1)) || block_is_water(flat_get_block(x, y - 1, z - 1));
 }
 
-static void drop_and_clear_block_no_particles(int x, int y, int z, int drop_ok) {
+static void drop_block_no_particles(int x, int y, int z, int drop_ok) {
     int id = flat_get_block(x, y, z);
     if (id == 0) return;
     flat_set_block(x, y, z, 0);
@@ -5143,10 +5143,10 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
     for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; yy++) {
         int id = flat_get_block(x, yy, z);
         if (id == BLOCK_CACTUS) {
-            if (!cactus_can_stay_at(x, yy, z)) drop_and_clear_block_no_particles(x, yy, z, 1);
+            if (!cactus_can_stay_at(x, yy, z)) drop_block_no_particles(x, yy, z, 1);
             else break;
         } else if (id == BLOCK_REEDS) {
-            if (!reeds_can_stay_at(x, yy, z)) drop_and_clear_block_no_particles(x, yy, z, 1);
+            if (!reeds_can_stay_at(x, yy, z)) drop_block_no_particles(x, yy, z, 1);
             else break;
         } else break;
     }
@@ -5164,13 +5164,13 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
             int below = flat_get_block(nx, ny - 1, nz);
             int ok = below != 0 && !block_is_liquid(below);
             if (id == BLOCK_CROPS) ok = (below == BLOCK_FARMLAND);
-            if (!ok) drop_and_clear_block_no_particles(nx, ny, nz, 1);
+            if (!ok) drop_block_no_particles(nx, ny, nz, 1);
             continue;
         }
         if (block_is_torch_id(id)) {
             int m = flat_get_meta(nx, ny, nz) & 7;
             if (m == 0) m = 5;
-            if (!torch_can_stay_with_meta(nx, ny, nz, m)) drop_and_clear_block_no_particles(nx, ny, nz, 1);
+            if (!torch_can_stay_with_meta(nx, ny, nz, m)) drop_block_no_particles(nx, ny, nz, 1);
             continue;
         }
         if (id == BLOCK_LADDER || id == BLOCK_WALL_SIGN || block_is_button_or_lever(id)) {
@@ -5181,11 +5181,11 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
                 else if (m == 3) ok = flat_block_occludes_for_support(flat_get_block(nx, ny, nz - 1));
                 else if (m == 4) ok = flat_block_occludes_for_support(flat_get_block(nx + 1, ny, nz));
                 else if (m == 5) ok = flat_block_occludes_for_support(flat_get_block(nx - 1, ny, nz));
-                if (!ok) drop_and_clear_block_no_particles(nx, ny, nz, 1);
+                if (!ok) drop_block_no_particles(nx, ny, nz, 1);
             } else if (id == BLOCK_LEVER) {
-                if (!lever_can_stay_with_meta(nx, ny, nz, m)) drop_and_clear_block_no_particles(nx, ny, nz, 1);
+                if (!lever_can_stay_with_meta(nx, ny, nz, m)) drop_block_no_particles(nx, ny, nz, 1);
             } else if (!block_supports_attached_side(nx, ny, nz, m)) {
-                drop_and_clear_block_no_particles(nx, ny, nz, 1);
+                drop_block_no_particles(nx, ny, nz, 1);
             }
             continue;
         }
@@ -5204,7 +5204,7 @@ static void break_target_block(void) {
             pex_net_send_block_action(PEX_BLOCK_BREAK, g_break_x, g_break_y, g_break_z, g_break_face, 0);
             flat_set_block(g_break_x, g_break_y, g_break_z, 0);
         } else {
-            door_break_at(g_break_x, g_break_y, g_break_z, held_item_can_harvest_drop_for_block(id));
+            door_break_at(g_break_x, g_break_y, g_break_z, held_item_can_harvest_drop(id));
             redstone_update_near(g_break_x, g_break_y, g_break_z);
         }
         return;
@@ -5223,13 +5223,13 @@ static void break_target_block(void) {
 
     flat_begin_persistent_edit();
     if (id == BLOCK_CHEST) {
-        chest_drop_contents_and_remove_at(g_break_x, g_break_y, g_break_z);
+        chest_drop_contents(g_break_x, g_break_y, g_break_z);
     } else if (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT) {
-        furnace_drop_contents_and_remove_at(g_break_x, g_break_y, g_break_z);
+        furnace_drop_contents(g_break_x, g_break_y, g_break_z);
     }
     if (id == BLOCK_ICE) {
         int below = flat_get_block(g_break_x, g_break_y - 1, g_break_z);
-        if (flat_block_is_solid_for_collision(below) || block_is_liquid(below)) {
+        if (flat_block_is_solid(below) || block_is_liquid(below)) {
             flat_place_fluid_source(g_break_x, g_break_y, g_break_z, BLOCK_WATER);
         } else {
             flat_set_block(g_break_x, g_break_y, g_break_z, 0);
@@ -5241,7 +5241,7 @@ static void break_target_block(void) {
     flat_end_persistent_edit();
     redstone_update_near(g_break_x, g_break_y, g_break_z);
     int drop = block_drop_id(id);
-    if (drop > 0 && held_item_can_harvest_drop_for_block(id)) {
+    if (drop > 0 && held_item_can_harvest_drop(id)) {
         spawn_item_stack((float)g_break_x + 0.5f, (float)g_break_y + 0.7f, (float)g_break_z + 0.5f, make_stack(drop, 1, 0), 1);
     }
 }
@@ -5317,7 +5317,7 @@ static void update_breaking(void) {
         if (stage < 0) stage = 0;
         if (stage > 9) stage = 9;
         if (stage != g_last_sent_mine_stage) {
-            pex_net_send_player_action_progress(PEX_ACTION_MINE_HIT, g_break_x, g_break_y, g_break_z, g_break_face, id, stage);
+            net_send_action_progress(PEX_ACTION_MINE_HIT, g_break_x, g_break_y, g_break_z, g_break_face, id, stage);
             g_last_sent_mine_stage = stage;
         }
     }
@@ -5470,7 +5470,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
     if (id == ITEM_BUCKET_WATER || id == ITEM_BUCKET_LAVA) {
         if (!flat_in_bounds(px, py, pz)) return 0;
         int existing = flat_get_block(px, py, pz);
-        if (existing == 0 || !flat_block_is_solid_for_collision(existing) || block_is_liquid(existing)) {
+        if (existing == 0 || !flat_block_is_solid(existing) || block_is_liquid(existing)) {
             int fluid = id == ITEM_BUCKET_WATER ? BLOCK_WATER : BLOCK_LAVA;
             flat_begin_persistent_edit();
             flat_place_fluid_source(px, py, pz, fluid);
@@ -5689,7 +5689,7 @@ static float block_slipperiness_for_item(int id) {
     return 0.60f;
 }
 
-static void inventory_drop_all_items_on_death(void) {
+static void inventory_drop_death_items(void) {
     for (int i = 0; i < 36; i++) {
         if (!stack_empty(&g_inventory[i])) {
             if (g_mp_connected) pex_net_send_drop_item(g_inventory[i]);
@@ -5800,9 +5800,9 @@ static int flat_spawn_has_open_sky(int x, int z, int foot_y) {
     return 1;
 }
 
-static int flat_column_spawn_y_ex(int x, int z, int require_sky) {
+static int flat_column_spawn_y_checked(int x, int z, int require_sky) {
     if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE || z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return -9999;
-    if (!flat_world_chunk_generated_at_block(x, z)) return -9999;
+    if (!flat_chunk_generated_at_block(x, z)) return -9999;
     for (int y = FLAT_WORLD_Y_MAX - 3; y >= FLAT_WORLD_Y_MIN; y--) {
         int id = flat_get_block(x, y, z);
         if (!flat_solid_for_spawn(id)) continue;
@@ -5818,10 +5818,10 @@ static int flat_column_spawn_y_ex(int x, int z, int require_sky) {
 }
 
 static int flat_column_spawn_y(int x, int z) {
-    return flat_column_spawn_y_ex(x, z, 1);
+    return flat_column_spawn_y_checked(x, z, 1);
 }
 
-static int flat_find_safe_spawn_pass_limited(float *out_x, float *out_y, float *out_z, int require_sky, int max_radius) {
+static int flat_find_safe_spawn_limited(float *out_x, float *out_y, float *out_z, int require_sky, int max_radius) {
     const int center_x = 0;
     const int center_z = 0;
 
@@ -5839,7 +5839,7 @@ static int flat_find_safe_spawn_pass_limited(float *out_x, float *out_y, float *
                 if (x < g_flat_world_origin_x + 2 || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE - 2 ||
                     z < g_flat_world_origin_z + 2 || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 2) continue;
 
-                int sy = flat_column_spawn_y_ex(x, z, require_sky);
+                int sy = flat_column_spawn_y_checked(x, z, require_sky);
                 if (sy == -9999) continue;
 
                 int ground = flat_get_block(x, sy - 1, z);
@@ -5876,7 +5876,7 @@ static int flat_find_safe_spawn_pass_limited(float *out_x, float *out_y, float *
 }
 
 static int flat_find_safe_spawn_pass(float *out_x, float *out_y, float *out_z, int require_sky) {
-    return flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, require_sky, -1);
+    return flat_find_safe_spawn_limited(out_x, out_y, out_z, require_sky, -1);
 }
 
 static int flat_find_safe_spawn(float *out_x, float *out_y, float *out_z) {
@@ -5885,19 +5885,19 @@ static int flat_find_safe_spawn(float *out_x, float *out_y, float *out_z) {
        up.  First try real generated terrain; then stamp a tiny metadata-tagged
        flat safety surface so first spawn/respawn has a guaranteed solid block
        under the player's feet while the real Beta chunks finish streaming. */
-    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 1, 24)) {
-        psp_ensure_spawn_surface_for_position(out_x, out_y, out_z, 0);
+    if (flat_find_safe_spawn_limited(out_x, out_y, out_z, 1, 24)) {
+        psp_ensure_spawn_surface(out_x, out_y, out_z, 0);
         return 1;
     }
-    if (flat_find_safe_spawn_pass_limited(out_x, out_y, out_z, 0, 40)) {
-        psp_ensure_spawn_surface_for_position(out_x, out_y, out_z, 0);
+    if (flat_find_safe_spawn_limited(out_x, out_y, out_z, 0, 40)) {
+        psp_ensure_spawn_surface(out_x, out_y, out_z, 0);
         return 1;
     }
 
     *out_x = 0.5f;
     *out_y = 65.62f;
     *out_z = 0.5f;
-    psp_ensure_spawn_surface_for_position(out_x, out_y, out_z, 1);
+    psp_ensure_spawn_surface(out_x, out_y, out_z, 1);
     g_psp_respawn_snap_pending = 1;
     return 1;
 #else
@@ -5920,9 +5920,9 @@ static void psp_snap_respawn_to_ready_ground(void) {
     if (!flat_player_columns_generated_at(g_player_x, g_player_z)) return;
 
     float sx, sy, sz;
-    if (flat_find_safe_spawn_pass_limited(&sx, &sy, &sz, 1, 24) ||
-        flat_find_safe_spawn_pass_limited(&sx, &sy, &sz, 0, 40)) {
-        psp_ensure_spawn_surface_for_position(&sx, &sy, &sz, 0);
+    if (flat_find_safe_spawn_limited(&sx, &sy, &sz, 1, 24) ||
+        flat_find_safe_spawn_limited(&sx, &sy, &sz, 0, 40)) {
+        psp_ensure_spawn_surface(&sx, &sy, &sz, 0);
         g_player_x = g_player_prev_x = sx;
         g_player_y = g_player_prev_y = sy;
         g_player_z = g_player_prev_z = sz;
@@ -5937,12 +5937,12 @@ static void psp_snap_respawn_to_ready_ground(void) {
        least avoid keeping the player in the void. */
     int x = (int)floorf(g_player_x);
     int z = (int)floorf(g_player_z);
-    int syi = flat_column_spawn_y_ex(x, z, 0);
+    int syi = flat_column_spawn_y_checked(x, z, 0);
     if (syi != -9999) {
         float sx = (float)x + 0.5f;
         float sy = (float)syi + 1.62f;
         float sz = (float)z + 0.5f;
-        psp_ensure_spawn_surface_for_position(&sx, &sy, &sz, 0);
+        psp_ensure_spawn_surface(&sx, &sy, &sz, 0);
         g_player_x = g_player_prev_x = sx;
         g_player_y = g_player_prev_y = sy;
         g_player_z = g_player_prev_z = sz;
@@ -6039,7 +6039,7 @@ static int falling_block_aabb_collides(float x, float y, float z) {
     for (int y = y0; y <= y1; y++) {
         for (int z = z0; z <= z1; z++) {
             for (int x = x0; x <= x1; x++) {
-                if (flat_block_is_solid_for_collision(flat_get_block(x, y, z))) return 1;
+                if (flat_block_is_solid(flat_get_block(x, y, z))) return 1;
             }
         }
     }
@@ -6162,7 +6162,7 @@ static void reset_flat_player_spawn(void) {
     g_player_yaw = g_player_prev_yaw = 0.0f;
     g_player_pitch = g_player_prev_pitch = 0.0f;
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    psp_ensure_spawn_surface_for_position(&g_player_x, &g_player_y, &g_player_z, 0);
+    psp_ensure_spawn_surface(&g_player_x, &g_player_y, &g_player_z, 0);
     g_player_prev_x = g_player_x;
     g_player_prev_y = g_player_y;
     g_player_prev_z = g_player_z;
@@ -6289,7 +6289,7 @@ static int fluid_effective_level_at(int x, int y, int z, int is_water) {
     return level;
 }
 
-static int fluid_side_is_exposed_for_flow_vector(int x, int y, int z) {
+static int fluid_side_exposed_for_flow(int x, int y, int z) {
     int id = flat_get_block(x, y, z);
     if (block_is_liquid(id)) return 0;
     if (id == BLOCK_ICE) return 0;
@@ -6323,14 +6323,14 @@ static void fluid_flow_vector_at(int x, int y, int z, int is_water, float *vx, f
 
     if (flat_get_level(x, y, z) >= 8) {
         int edge =
-            fluid_side_is_exposed_for_flow_vector(x, y, z - 1) ||
-            fluid_side_is_exposed_for_flow_vector(x, y, z + 1) ||
-            fluid_side_is_exposed_for_flow_vector(x - 1, y, z) ||
-            fluid_side_is_exposed_for_flow_vector(x + 1, y, z) ||
-            fluid_side_is_exposed_for_flow_vector(x, y + 1, z - 1) ||
-            fluid_side_is_exposed_for_flow_vector(x, y + 1, z + 1) ||
-            fluid_side_is_exposed_for_flow_vector(x - 1, y + 1, z) ||
-            fluid_side_is_exposed_for_flow_vector(x + 1, y + 1, z);
+            fluid_side_exposed_for_flow(x, y, z - 1) ||
+            fluid_side_exposed_for_flow(x, y, z + 1) ||
+            fluid_side_exposed_for_flow(x - 1, y, z) ||
+            fluid_side_exposed_for_flow(x + 1, y, z) ||
+            fluid_side_exposed_for_flow(x, y + 1, z - 1) ||
+            fluid_side_exposed_for_flow(x, y + 1, z + 1) ||
+            fluid_side_exposed_for_flow(x - 1, y + 1, z) ||
+            fluid_side_exposed_for_flow(x + 1, y + 1, z);
         if (edge) {
             float len = sqrtf(ax * ax + ay * ay + az * az);
             if (len > 0.0001f) { ax /= len; ay /= len; az /= len; }
@@ -6608,7 +6608,7 @@ static void flat_lighting_worker_ensure(void) {
     return;
 #else
     if (g_flat_lighting_worker_initialized) return;
-    flat_light_dirty_lock_ensure();
+    flat_light_dirty_lock();
     InitializeCriticalSection(&g_flat_lighting_worker_cs);
     g_flat_lighting_worker_stop = 0;
     g_flat_lighting_worker_busy = 0;
@@ -6835,9 +6835,9 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
                 }
                 reuse = worker_tp_valid ? worker_tp : NULL;
             }
-            generate_flat_chunk_base_to_buffer_ex(job.cx, job.cz, r.buf, job.type, job.seed, reuse);
-            load_modified_flat_chunk_delta_into_buffers_for_dir(job.world_dir, job.cx, job.cz, r.buf, r.meta);
-            flat_compute_chunk_light_fast_from_buffers(r.buf, r.sky, r.blocklight);
+            flat_generate_chunk_base(job.cx, job.cz, r.buf, job.type, job.seed, reuse);
+            flat_load_chunk_delta_for_dir(job.world_dir, job.cx, job.cz, r.buf, r.meta);
+            flat_compute_chunk_light(r.buf, r.sky, r.blocklight);
         } else {
             stream_async_free_result_payload(&r);
         }
@@ -6988,10 +6988,10 @@ static int stream_async_install_ready(int max_install) {
         if (r.epoch == g_stream_generation_epoch &&
             stream_world_chunk_in_window(r.cx, r.cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
             g_copy_chunk_skip_main_light = (r.sky && r.blocklight) ? 1 : 0;
-            copy_flat_chunk_buffers_to_world(r.cx, r.cz, r.buf, r.meta);
+            flat_copy_chunk_buffers(r.cx, r.cz, r.buf, r.meta);
             g_copy_chunk_skip_main_light = 0;
-            if (r.sky && r.blocklight) copy_flat_chunk_light_buffers_to_world(r.cx, r.cz, r.sky, r.blocklight);
-            stream_mark_local_chunk_generated(stream_world_chunk_local_x(r.cx), stream_world_chunk_local_z(r.cz));
+            if (r.sky && r.blocklight) flat_copy_light_buffers_to_world(r.cx, r.cz, r.sky, r.blocklight);
+            stream_mark_chunk_generated(stream_local_chunk_x(r.cx), stream_local_chunk_z(r.cz));
             g_stream_gen_queue_installed_count++;
             installed++;
         }
@@ -7028,7 +7028,7 @@ static PexRendererBackend *stream_direct_mesh_backend(void) {
 #endif
 }
 
-static void stream_destroy_direct_mesh_handle(unsigned int h) {
+static void stream_destroy_mesh_handle(unsigned int h) {
     (void)h;
     /* World streaming now runs off the game/render thread.  Do not destroy GPU
        mesh handles from the streaming service thread; the remap path reuses or
@@ -7036,7 +7036,7 @@ static void stream_destroy_direct_mesh_handle(unsigned int h) {
        replace live handles safely. */
 }
 
-static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_origin_z,
+static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
                                                     int new_origin_x, int new_origin_z) {
     pex_logf_trace("chunk render remap origin old=%d,%d new=%d,%d", old_origin_x, old_origin_z, new_origin_x, new_origin_z);
     GLuint old_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -7105,8 +7105,8 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
                         reusable_section_lists[reusable_section_count][1] = old_section_lists[sy][ocz][ocx][1];
                         reusable_section_count++;
                     }
-                    stream_destroy_direct_mesh_handle(old_section_direct_mesh[sy][ocz][ocx][0]);
-                    stream_destroy_direct_mesh_handle(old_section_direct_mesh[sy][ocz][ocx][1]);
+                    stream_destroy_mesh_handle(old_section_direct_mesh[sy][ocz][ocx][0]);
+                    stream_destroy_mesh_handle(old_section_direct_mesh[sy][ocz][ocx][1]);
                 }
             }
         }
@@ -7222,7 +7222,7 @@ static void stream_remap_render_chunks_after_shift(int old_origin_x, int old_ori
     g_flat_section_geometry_dirty = 0;
 }
 
-static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int old_origin_z,
+static void stream_remap_block_storage(int old_origin_x, int old_origin_z,
                                                        int new_origin_x, int new_origin_z) {
     int ox0 = old_origin_x > new_origin_x ? old_origin_x : new_origin_x;
     int oz0 = old_origin_z > new_origin_z ? old_origin_z : new_origin_z;
@@ -7304,15 +7304,15 @@ static void stream_remap_flat_block_storage_after_shift(int old_origin_x, int ol
     }
 }
 
-static int stream_world_chunk_local_x(int wcx) {
+static int stream_local_chunk_x(int wcx) {
     return (wcx * FLAT_RENDER_CHUNK - g_flat_world_origin_x) / FLAT_RENDER_CHUNK;
 }
 
-static int stream_world_chunk_local_z(int wcz) {
+static int stream_local_chunk_z(int wcz) {
     return (wcz * FLAT_RENDER_CHUNK - g_flat_world_origin_z) / FLAT_RENDER_CHUNK;
 }
 
-static void stream_mark_local_chunk_dirty(int lcx, int lcz) {
+static void stream_mark_chunk_dirty(int lcx, int lcz) {
     if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) return;
     for (int dz = -1; dz <= 1; dz++) {
         for (int dx = -1; dx <= 1; dx++) {
@@ -7341,8 +7341,8 @@ static int stream_queue_contains_chunk(int wcx, int wcz) {
 static void stream_queue_add_chunk(int wcx, int wcz) {
     if (g_stream_gen_queue_count >= STREAM_GEN_QUEUE_MAX) return;
     if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) return;
-    int lcx = stream_world_chunk_local_x(wcx);
-    int lcz = stream_world_chunk_local_z(wcz);
+    int lcx = stream_local_chunk_x(wcx);
+    int lcz = stream_local_chunk_z(wcz);
     if (lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS &&
         g_flat_world_chunk_generated[lcz][lcx]) return;
     if (stream_queue_contains_chunk(wcx, wcz)) return;
@@ -7374,7 +7374,7 @@ static void stream_player_chunk_direction(float *out_dx, float *out_dz) {
     *out_dz = dz / len;
 }
 
-static void stream_queue_add_chunk_directional_safety(int base_cx, int base_cz, int pcx, int pcz, int radius) {
+static void stream_queue_chunk_safety(int base_cx, int base_cz, int pcx, int pcz, int radius) {
     if (radius < 2) radius = 2;
     int ahead = radius;
     if (ahead > 8) ahead = 8;
@@ -7413,8 +7413,8 @@ static void stream_queue_add_chunk_directional_safety(int base_cx, int base_cz, 
 static int stream_chunk_priority_score(int wcx, int wcz) {
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
-    int pcx = stream_world_chunk_local_x(floor_div16((int)floorf(g_player_x)));
-    int pcz = stream_world_chunk_local_z(floor_div16((int)floorf(g_player_z)));
+    int pcx = stream_local_chunk_x(floor_div16((int)floorf(g_player_x)));
+    int pcz = stream_local_chunk_z(floor_div16((int)floorf(g_player_z)));
     if (pcx < 0) pcx = 0;
     if (pcz < 0) pcz = 0;
     if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
@@ -7436,7 +7436,7 @@ static int stream_chunk_priority_score(int wcx, int wcz) {
     return score;
 }
 
-static void stream_reprioritize_queue_for_player(void) {
+static void stream_reprioritize_queue(void) {
     int begin = g_stream_gen_queue_index;
     if (begin < 0) begin = 0;
     if (begin + 1 >= g_stream_gen_queue_count) return;
@@ -7456,20 +7456,20 @@ static void stream_reprioritize_queue_for_player(void) {
     }
 }
 
-static int stream_queue_missing_visible_chunks_near_player(void) {
+static int stream_queue_visible_chunks(void) {
     stream_generation_queue_clear();
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
-    int pcx = stream_world_chunk_local_x(floor_div16((int)floorf(g_player_x)));
-    int pcz = stream_world_chunk_local_z(floor_div16((int)floorf(g_player_z)));
+    int pcx = stream_local_chunk_x(floor_div16((int)floorf(g_player_x)));
+    int pcz = stream_local_chunk_z(floor_div16((int)floorf(g_player_z)));
     if (pcx < 0) pcx = 0;
     if (pcz < 0) pcz = 0;
     if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
     if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
-    int radius = stream_effective_render_chunk_radius();
-    stream_queue_add_chunk_directional_safety(base_cx, base_cz, pcx, pcz, radius);
+    int radius = stream_render_radius();
+    stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, radius);
     for (int ring = 0; ring <= radius; ring++) {
         int before = g_stream_gen_queue_count;
         for (int dz = -ring; dz <= ring; dz++) {
@@ -7491,11 +7491,11 @@ static int stream_queue_missing_visible_chunks_near_player(void) {
     return g_stream_gen_queue_count > 0;
 }
 
-static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_origin_z) {
+static void stream_queue_missing_chunks(int old_origin_x, int old_origin_z) {
     stream_generation_queue_clear();
 
-    int pcx = stream_world_chunk_local_x(floor_div16((int)floorf(g_player_x)));
-    int pcz = stream_world_chunk_local_z(floor_div16((int)floorf(g_player_z)));
+    int pcx = stream_local_chunk_x(floor_div16((int)floorf(g_player_x)));
+    int pcz = stream_local_chunk_z(floor_div16((int)floorf(g_player_z)));
     if (pcx < 0) pcx = 0;
     if (pcz < 0) pcz = 0;
     if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
@@ -7503,7 +7503,7 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
-    stream_queue_add_chunk_directional_safety(base_cx, base_cz, pcx, pcz, stream_effective_render_chunk_radius());
+    stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, stream_render_radius());
 
     /* Queue only chunks that are newly exposed by the window shift.  The old
        version regenerated the entire 256x256 window synchronously here, which
@@ -7525,14 +7525,14 @@ static void stream_queue_missing_chunks_near_player(int old_origin_x, int old_or
     }
 }
 
-static int stream_initial_try_generate_beta_batch(void) {
+static int stream_generate_initial_batch(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #else
     StreamInitialBetaBatchState *s = &g_stream_initial_beta_batch;
 
     if (!g_stream_generation_keep_completed || g_world_type != 1 || g_stream_gen_queue_count <= 0) {
-        if (s->active) stream_initial_beta_batch_reset();
+        if (s->active) stream_reset_initial_batch();
         return 0;
     }
     if (!s->active && (g_stream_gen_queue_index != 0 || g_stream_gen_queue_installed_count != 0)) return 0;
@@ -7567,7 +7567,7 @@ static int stream_initial_try_generate_beta_batch(void) {
         s->cv.blocks = (unsigned char*)calloc((size_t)s->cv.chunks * (size_t)s->cv.chunks * 32768u, 1);
 
         if (!s->tp || !s->beta_blocks || !s->buf || !s->meta || !s->cv.blocks) {
-            stream_initial_beta_batch_reset();
+            stream_reset_initial_batch();
             return 0;
         }
 
@@ -7637,8 +7637,8 @@ static int stream_initial_try_generate_beta_batch(void) {
                 continue;
             }
 
-            int lcx = stream_world_chunk_local_x(wcx);
-            int lcz = stream_world_chunk_local_z(wcz);
+            int lcx = stream_local_chunk_x(wcx);
+            int lcz = stream_local_chunk_z(wcz);
             if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
                 g_stream_gen_queue_index = i + 1;
                 g_stream_gen_queue_installed_count++;
@@ -7662,19 +7662,19 @@ static int stream_initial_try_generate_beta_batch(void) {
                     }
                 }
             }
-            load_modified_flat_chunk_delta_into_buffers_for_dir(g_loaded_world_dir, wcx, wcz, s->buf, s->meta);
+            flat_load_chunk_delta_for_dir(g_loaded_world_dir, wcx, wcz, s->buf, s->meta);
 
             g_copy_chunk_skip_main_light = 1;
-            copy_flat_chunk_buffers_to_world(wcx, wcz, s->buf, s->meta);
+            flat_copy_chunk_buffers(wcx, wcz, s->buf, s->meta);
             g_copy_chunk_skip_main_light = 0;
-            stream_mark_local_chunk_generated(lcx, lcz);
+            stream_mark_chunk_generated(lcx, lcz);
 
             g_stream_gen_queue_index = i + 1;
             g_stream_gen_queue_installed_count++;
             g_stream_initial_batch_done_units++;
             did_work = 1;
         } else {
-            stream_initial_beta_batch_reset();
+            stream_reset_initial_batch();
             return 0;
         }
 
@@ -7689,10 +7689,10 @@ static int stream_initial_try_generate_beta_batch(void) {
 }
 
 static void process_stream_generation_queue(void) {
-    if (stream_initial_try_generate_beta_batch()) return;
+    if (stream_generate_initial_batch()) return;
 
     stream_async_init();
-    stream_reprioritize_queue_for_player();
+    stream_reprioritize_queue();
 
     /* If thread creation fails/is disabled, keep the world functional with a
        small synchronous budget rather than leaving missing terrain forever. */
@@ -7707,9 +7707,9 @@ static void process_stream_generation_queue(void) {
 #endif
             pex_logf_trace("chunk stream sync install index=%d/%d world=%d,%d", idx + 1, g_stream_gen_queue_count, wcx, wcz);
             beta_preview_copy_chunk_to_flat(wcx, wcz);
-            stream_mark_local_chunk_generated(stream_world_chunk_local_x(wcx), stream_world_chunk_local_z(wcz));
+            stream_mark_chunk_generated(stream_local_chunk_x(wcx), stream_local_chunk_z(wcz));
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
-            psp_fast_surface_mark_dirty_block(wcx * 16 + 8, wcz * 16 + 8);
+            psp_fast_surface_mark_dirty(wcx * 16 + 8, wcz * 16 + 8);
 #endif
             g_stream_gen_queue_installed_count++;
         }
@@ -7739,7 +7739,7 @@ static void process_stream_generation_queue(void) {
 
 
 
-static void flat_world_run_initial_light_settle_service(void) {
+static void flat_run_initial_light_settle(void) {
     if (!g_stream_initial_light_settle_requested || g_stream_initial_light_settle_done) return;
     g_stream_initial_light_settle_requested = 0;
     g_stream_initial_light_settle_running = 1;
@@ -7773,15 +7773,15 @@ static void flat_world_run_initial_light_settle_service(void) {
            border and prevents the "one chunk has a different brightness until I
            edit a block" failure. */
         g_stream_initial_light_settle_progress = 15;
-        flat_recalculate_lighting_region_ex(rx0, rz0, rx1, rz1, 16, 1);
+        flat_relight_region(rx0, rz0, rx1, rz1, 16, 1);
         g_stream_initial_light_settle_progress = 90;
         for (int lcz = min_lcz; lcz <= max_lcz; ++lcz) {
             for (int lcx = min_lcx; lcx <= max_lcx; ++lcx) {
                 if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
-                flat_refresh_chunk_section_occupancy_local(lcx, lcz);
-                flat_publish_chunk_light_ready_local(lcx, lcz, 1, 1);
+                flat_refresh_chunk_occupancy(lcx, lcz);
+                flat_publish_light_ready(lcx, lcz, 1, 1);
                 for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
-                    flat_mark_section_after_generation(lcx, lcz, sy);
+                    flat_mark_generated_section(lcx, lcz, sy);
                 }
             }
         }
@@ -7820,7 +7820,7 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
             if (stream_generation_active()) {
                 process_stream_generation_queue();
             } else if (g_stream_initial_light_settle_requested && !g_stream_initial_light_settle_done) {
-                flat_world_run_initial_light_settle_service();
+                flat_run_initial_light_settle();
             }
             flat_lighting_worker_wake();
             if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
@@ -7922,7 +7922,7 @@ static void update_infinite_world_streaming(void) {
     /* After the fast spawn-area load, fill the requested render-distance area
        in the background.  This keeps the loading screen short while still
        honoring high render distance as terrain becomes available. */
-    if (stream_queue_missing_visible_chunks_near_player()) {
+    if (stream_queue_visible_chunks()) {
         process_stream_generation_queue();
         return;
     }
@@ -7935,7 +7935,7 @@ static void update_infinite_world_streaming(void) {
        result was an endless "Generating terrain chunks" loop and all generated
        terrain moving away from the player, so only sky/HUD/inventory rendered.
        Keep the Wii active window fixed for now.  The visible 4x4 chunk window is
-       filled above by stream_queue_missing_visible_chunks_near_player(). */
+       filled above by stream_queue_visible_chunks(). */
     return;
 #endif
 
@@ -7977,18 +7977,18 @@ static void update_infinite_world_streaming(void) {
     g_stream_remap_in_progress = 1;
     g_flat_world_origin_x = new_origin_x;
     g_flat_world_origin_z = new_origin_z;
-    stream_remap_render_chunks_after_shift(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    stream_remap_render_chunks(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
 
     /* Preserve edited/generated blocks in the overlap of the old and new window.
        This used to copy the entire 3D world into two huge scratch arrays and then
        copy it back byte-by-byte, which caused the hitch during terrain streaming.
        The row-copy remap keeps only a small 2D scratch plane and leaves exposed
        strips as air for the async generator to fill. */
-    stream_remap_flat_block_storage_after_shift(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    stream_remap_block_storage(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
     g_stream_remap_in_progress = 0;
     flat_lighting_worker_wake();
 
-    stream_queue_missing_chunks_near_player(old_origin_x, old_origin_z);
+    stream_queue_missing_chunks(old_origin_x, old_origin_z);
     process_stream_generation_queue();
 
     g_stream_last_center_chunk_x = pcx;

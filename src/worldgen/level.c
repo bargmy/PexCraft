@@ -703,7 +703,7 @@ static int canvas_top_solid(GenCanvas *cv, int wx, int wz) {
     return 0;
 }
 
-static int canvas_find_top_solid_or_liquid_for_snow(GenCanvas *cv, int wx, int wz) {
+static int canvas_snow_surface_y(GenCanvas *cv, int wx, int wz) {
     /* World.findTopSolidBlock from b1.0 returns the first solid-or-liquid
        material plus one.  Leaves count as solid material there, so snow may
        settle on tree canopies in cold biomes. */
@@ -1157,7 +1157,7 @@ static void qm_populate_canvas(TerrainProvider *tp, GenCanvas *cv, int cx, int c
     for(int i=0;i<20;i++) canvas_place_liquid_spring(cv,BLK_LAVA,baseX+jr_next_int_bound(r,16)+8,jr_next_int_bound(r,jr_next_int_bound(r,jr_next_int_bound(r,112)+8)+8),baseZ+jr_next_int_bound(r,16)+8);
     tp->snow = biome_manager_temperatures(&tp->biomeManager, tp->snow, &tp->snowCap, baseX+8, baseZ+8, 16,16);
     for(int x=baseX+8; x<baseX+24; x++) for(int z=baseZ+8; z<baseZ+24; z++) {
-        int ix=x-(baseX+8), iz=z-(baseZ+8), y=canvas_find_top_solid_or_liquid_for_snow(cv,x,z);
+        int ix=x-(baseX+8), iz=z-(baseZ+8), y=canvas_snow_surface_y(cv,x,z);
         double temp=tp->snow[ix*16+iz] - (y-64)/64.0*0.3;
         if(temp < 0.5 && y>0 && y<128 && canvas_get(cv,x,y,z)==0 && canvas_can_snow_stay_at(cv,x,y,z)) canvas_set(cv,x,y,z,BLK_SNOW_LAYER);
     }

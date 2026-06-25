@@ -7,7 +7,7 @@
 #define PEX_SAVE_ZLIB_CHUNK_DELTAS 0
 #endif
 
-static void generate_flat_chunk_base_to_buffer_ex(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp);
+static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp);
 #ifndef FLAT_CHUNK_BLOCK_COUNT
 #define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
 #endif
@@ -17,15 +17,15 @@ static void level_path_for_dir(const char *dir, char *out, size_t cap) {
     snprintf(out, cap, "%s\\level.dat", dir);
 }
 
-static void legacy_world_type_path_for_dir(const char *dir, char *out, size_t cap) {
+static void legacy_type_path_for_dir(const char *dir, char *out, size_t cap) {
     snprintf(out, cap, "%s\\pexcraft_world_type.txt", dir);
 }
 
-static void legacy_world_seed_path_for_dir(const char *dir, char *out, size_t cap) {
+static void legacy_seed_path_for_dir(const char *dir, char *out, size_t cap) {
     snprintf(out, cap, "%s\\pexcraft_seed.txt", dir);
 }
 
-static void legacy_world_state_path_for_dir(const char *dir, char *out, size_t cap) {
+static void legacy_state_path_for_dir(const char *dir, char *out, size_t cap) {
     snprintf(out, cap, "%s\\pexcraft_flat_world.dat", dir);
 }
 
@@ -112,7 +112,7 @@ static int read_level_string_tag_for_dir(const char *dir, const char *tag, char 
     return 0;
 }
 
-static int read_binary_level_summary_for_dir(const char *dir, long long *out_seed, int *out_world_type, long long *out_last_played) {
+static int read_level_summary(const char *dir, long long *out_seed, int *out_world_type, long long *out_last_played) {
     char path[MAX_PATHBUF];
     level_path_for_dir(dir, path, sizeof(path));
     FILE *f = fopen(path, "rb");
@@ -171,12 +171,12 @@ static int read_binary_level_summary_for_dir(const char *dir, long long *out_see
     return ok;
 }
 
-static int read_binary_level_metadata_for_dir(const char *dir, long long *out_seed, int *out_world_type) {
-    return read_binary_level_summary_for_dir(dir, out_seed, out_world_type, NULL);
+static int read_level_metadata(const char *dir, long long *out_seed, int *out_world_type) {
+    return read_level_summary(dir, out_seed, out_world_type, NULL);
 }
 
 static int read_level_seed_for_dir(const char *dir, long long *out_seed) {
-    if (read_binary_level_metadata_for_dir(dir, out_seed, NULL)) return 1;
+    if (read_level_metadata(dir, out_seed, NULL)) return 1;
     return read_level_long_tag_for_dir(dir, "RandomSeed", out_seed);
 }
 
@@ -185,7 +185,7 @@ static int read_world_seed_for_dir(const char *dir, long long *out_seed) {
 
     /* Legacy fallback only.  New saves keep this in level.dat. */
     char path[MAX_PATHBUF];
-    legacy_world_seed_path_for_dir(dir, path, sizeof(path));
+    legacy_seed_path_for_dir(dir, path, sizeof(path));
     FILE *f = fopen(path, "rb");
     if (f) {
         char buf[128] = "";
@@ -199,7 +199,7 @@ static int read_world_seed_for_dir(const char *dir, long long *out_seed) {
 
 static int read_world_type_for_dir(const char *dir) {
     int type = 0;
-    if (read_binary_level_metadata_for_dir(dir, NULL, &type)) return type ? 1 : 0;
+    if (read_level_metadata(dir, NULL, &type)) return type ? 1 : 0;
     if (read_level_int_tag_for_dir(dir, "WorldType", &type)) return type ? 1 : 0;
 
     char gen[64];
@@ -209,7 +209,7 @@ static int read_world_type_for_dir(const char *dir) {
 
     /* Legacy fallback only.  New saves keep this in level.dat. */
     char path[MAX_PATHBUF];
-    legacy_world_type_path_for_dir(dir, path, sizeof(path));
+    legacy_type_path_for_dir(dir, path, sizeof(path));
     FILE *f = fopen(path, "rb");
     if (!f) return 0;
     char buf[32] = "";
@@ -249,7 +249,7 @@ static int world_state_magic_is_known(const char *magic) {
            memcmp(magic, "PXCFLT12", 8) == 0;
 }
 
-static FILE *open_current_world_state_file(void) {
+static FILE *open_world_state_file(void) {
     char path[MAX_PATHBUF];
     world_state_path(path, sizeof(path));
     FILE *f = fopen(path, "rb");
@@ -262,7 +262,7 @@ static FILE *open_current_world_state_file(void) {
         fclose(f);
     }
 
-    legacy_world_state_path_for_dir(g_loaded_world_dir, path, sizeof(path));
+    legacy_state_path_for_dir(g_loaded_world_dir, path, sizeof(path));
     f = fopen(path, "rb");
     if (f) return f;
     return NULL;
@@ -270,11 +270,11 @@ static FILE *open_current_world_state_file(void) {
 
 static void cleanup_legacy_world_metadata(const char *dir) {
     char path[MAX_PATHBUF];
-    legacy_world_state_path_for_dir(dir, path, sizeof(path));
+    legacy_state_path_for_dir(dir, path, sizeof(path));
     DeleteFileA(path);
-    legacy_world_seed_path_for_dir(dir, path, sizeof(path));
+    legacy_seed_path_for_dir(dir, path, sizeof(path));
     DeleteFileA(path);
-    legacy_world_type_path_for_dir(dir, path, sizeof(path));
+    legacy_type_path_for_dir(dir, path, sizeof(path));
     DeleteFileA(path);
 }
 
@@ -331,7 +331,7 @@ static void pex_save_snapshot_free(PexSaveSnapshot *ss) {
     free(ss);
 }
 
-static int pex_save_snapshot_add_modified_chunk(PexSaveSnapshot *ss, int lcx, int lcz) {
+static int save_snapshot_add_chunk(PexSaveSnapshot *ss, int lcx, int lcz) {
     if (!ss) return 0;
     if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) return 1;
     if (!g_flat_world_chunk_modified[lcz][lcx]) return 1;
@@ -404,7 +404,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
 
     for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++) {
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++) {
-            if (!pex_save_snapshot_add_modified_chunk(ss, lcx, lcz)) {
+            if (!save_snapshot_add_chunk(ss, lcx, lcz)) {
                 pex_save_snapshot_free(ss);
                 return NULL;
             }
@@ -414,7 +414,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     return ss;
 }
 
-static void pex_clear_snapshot_chunk_modified_flags(const PexSaveSnapshot *ss) {
+static void save_snapshot_clear_flags(const PexSaveSnapshot *ss) {
     if (!ss) return;
     int base_cx = pex_save_floor_div16(g_flat_world_origin_x);
     int base_cz = pex_save_floor_div16(g_flat_world_origin_z);
@@ -427,7 +427,7 @@ static void pex_clear_snapshot_chunk_modified_flags(const PexSaveSnapshot *ss) {
     }
 }
 
-static void pex_restore_snapshot_chunk_modified_flags(const PexSaveSnapshot *ss) {
+static void save_snapshot_restore_flags(const PexSaveSnapshot *ss) {
     if (!ss) return;
     int base_cx = pex_save_floor_div16(g_flat_world_origin_x);
     int base_cz = pex_save_floor_div16(g_flat_world_origin_z);
@@ -440,7 +440,7 @@ static void pex_restore_snapshot_chunk_modified_flags(const PexSaveSnapshot *ss)
     }
 }
 
-static void pex_snapshot_chunk_delta_path(const PexSaveSnapshot *ss, int cx, int cz, char *out, size_t cap) {
+static void snapshot_chunk_delta_path(const PexSaveSnapshot *ss, int cx, int cz, char *out, size_t cap) {
     if (!ss || !ss->loaded_world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -454,13 +454,13 @@ static void pex_snapshot_chunk_delta_path(const PexSaveSnapshot *ss, int cx, int
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
 
-static int pex_chunk_delta_magic_is_raw(const char magic[8]) {
+static int chunk_delta_is_raw(const char magic[8]) {
     return memcmp(magic, "CHNKDLT1", 8) == 0 ||
            memcmp(magic, "CHNKDLT2", 8) == 0 ||
            memcmp(magic, "PXCDLT12", 8) == 0;
 }
 
-static int pex_chunk_delta_read_payload_from_open_file(FILE *f, const char magic[8],
+static int chunk_delta_read_payload(FILE *f, const char magic[8],
                                                        int rcx, int rcz, int count,
                                                        int cx, int cz,
                                                        unsigned char *blocks,
@@ -468,7 +468,7 @@ static int pex_chunk_delta_read_payload_from_open_file(FILE *f, const char magic
     if (!f || !blocks || !meta) return 0;
     if (rcx != cx || rcz != cz || count != FLAT_CHUNK_BLOCK_COUNT) return 0;
 
-    if (pex_chunk_delta_magic_is_raw(magic)) {
+    if (chunk_delta_is_raw(magic)) {
         int ok = fread(blocks, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
         int has_meta = (memcmp(magic, "CHNKDLT2", 8) == 0);
         if (ok && has_meta) ok = fread(meta, 1, FLAT_CHUNK_BLOCK_COUNT, f) == FLAT_CHUNK_BLOCK_COUNT;
@@ -513,7 +513,7 @@ static int pex_chunk_delta_read_payload_from_open_file(FILE *f, const char magic
     return 0;
 }
 
-static int pex_chunk_delta_write_payload_to_path(const char *path, int cx, int cz,
+static int chunk_delta_write_payload(const char *path, int cx, int cz,
                                                  const unsigned char *blocks,
                                                  const unsigned char *meta) {
     if (!path || !path[0] || !blocks || !meta) return 0;
@@ -569,7 +569,7 @@ static int pex_chunk_delta_write_payload_to_path(const char *path, int cx, int c
     }
 }
 
-static void pex_save_snapshot_one_modified_flat_chunk(PexSaveSnapshot *ss, PexSaveChunkSnapshot *cs) {
+static void save_snapshot_one_chunk(PexSaveSnapshot *ss, PexSaveChunkSnapshot *cs) {
     if (!ss || !cs || !ss->loaded_world_dir[0] || !cs->blocks || !cs->meta) return;
 
     int cx = cs->cx;
@@ -577,33 +577,33 @@ static void pex_save_snapshot_one_modified_flat_chunk(PexSaveSnapshot *ss, PexSa
     unsigned char *base = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
     if (!base) return;
 
-    generate_flat_chunk_base_to_buffer_ex(cx, cz, base, ss->world_type, ss->world_seed, NULL);
+    flat_generate_chunk_base(cx, cz, base, ss->world_type, ss->world_seed, NULL);
 
     char path[MAX_PATHBUF];
-    pex_snapshot_chunk_delta_path(ss, cx, cz, path, sizeof(path));
+    snapshot_chunk_delta_path(ss, cx, cz, path, sizeof(path));
     int meta_nonzero = 0;
     for (int i = 0; i < FLAT_CHUNK_BLOCK_COUNT; i++) { if (cs->meta[i]) { meta_nonzero = 1; break; } }
     if (memcmp(base, cs->blocks, FLAT_CHUNK_BLOCK_COUNT) == 0 && !meta_nonzero) {
         DeleteFileA(path);
     } else {
-        pex_chunk_delta_write_payload_to_path(path, cx, cz, cs->blocks, cs->meta);
+        chunk_delta_write_payload(path, cx, cz, cs->blocks, cs->meta);
     }
 
     free(base);
 }
 
-static void pex_save_snapshot_modified_flat_chunks(PexSaveSnapshot *ss) {
+static void save_snapshot_flat_chunks(PexSaveSnapshot *ss) {
     if (!ss || !ss->loaded_world_dir[0]) return;
     for (int i = 0; i < ss->chunk_count; i++) {
-        pex_save_snapshot_one_modified_flat_chunk(ss, &ss->chunks[i]);
+        save_snapshot_one_chunk(ss, &ss->chunks[i]);
     }
 }
 
-static void pex_save_snapshot_world_state(PexSaveSnapshot *ss) {
+static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!ss || !ss->loaded_world_dir[0]) return;
 
     migrate_legacy_chunk_folder(ss->loaded_world_dir);
-    pex_save_snapshot_modified_flat_chunks(ss);
+    save_snapshot_flat_chunks(ss);
 
     if (!ss->write_world_state) return;
 
@@ -755,7 +755,7 @@ static DWORD WINAPI pex_save_thread_proc(LPVOID param) {
             LeaveCriticalSection(&g_save_cs);
 
             if (ss) {
-                pex_save_snapshot_world_state(ss);
+                save_snapshot_world_state(ss);
                 pex_save_snapshot_free(ss);
                 continue;
             }
@@ -765,7 +765,7 @@ static DWORD WINAPI pex_save_thread_proc(LPVOID param) {
     }
 }
 
-static int pex_save_worker_ensure_started(void) {
+static int save_worker_ensure_started(void) {
     if (!g_save_event) {
         g_save_event = CreateEventA(NULL, FALSE, FALSE, NULL);
         if (!g_save_event) return 0;
@@ -782,7 +782,7 @@ static int pex_save_worker_ensure_started(void) {
 
 static int pex_save_enqueue_snapshot(PexSaveSnapshot *ss) {
     if (!ss) return 0;
-    if (!pex_save_worker_ensure_started()) return 0;
+    if (!save_worker_ensure_started()) return 0;
 
     EnterCriticalSection(&g_save_cs);
     ss->next = NULL;
@@ -796,7 +796,7 @@ static int pex_save_enqueue_snapshot(PexSaveSnapshot *ss) {
     return 1;
 }
 
-static void pex_request_modified_chunk_save_async(void) {
+static void request_chunk_save_async(void) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     return;
 #endif
@@ -809,14 +809,14 @@ static void pex_request_modified_chunk_save_async(void) {
         return;
     }
 
-    pex_clear_snapshot_chunk_modified_flags(ss);
+    save_snapshot_clear_flags(ss);
     if (!pex_save_enqueue_snapshot(ss)) {
-        pex_restore_snapshot_chunk_modified_flags(ss);
+        save_snapshot_restore_flags(ss);
         pex_save_snapshot_free(ss);
     }
 }
 
-static void save_current_world_state_sync(void) {
+static void save_world_state_sync(void) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     g_save_dirty = 0;
     g_last_autosave_tick = g_ingame_ticks;
@@ -974,14 +974,14 @@ static void save_current_world_state(void) {
     PexSaveSnapshot *ss = pex_save_snapshot_create(1);
     if (!ss) { pex_logf("save async snapshot create failed dir=%s", g_loaded_world_dir); return; }
 
-    pex_clear_snapshot_chunk_modified_flags(ss);
+    save_snapshot_clear_flags(ss);
     g_save_dirty = 0;
     g_last_autosave_tick = g_ingame_ticks;
     g_save_message_ticks = SAVE_MESSAGE_TICKS;
 
     if (!pex_save_enqueue_snapshot(ss)) {
         pex_logf("save async enqueue failed dir=%s", g_loaded_world_dir);
-        pex_restore_snapshot_chunk_modified_flags(ss);
+        save_snapshot_restore_flags(ss);
         g_save_dirty = 1;
         pex_save_snapshot_free(ss);
     } else {
@@ -990,7 +990,7 @@ static void save_current_world_state(void) {
 }
 
 
-static void reset_player_damage_visual_state(void) {
+static void reset_player_damage_visuals(void) {
     g_player_health = player_health_clamp(g_player_health);
     g_player_prev_health = g_player_health;
     g_hearts_life = 0;
@@ -1005,7 +1005,7 @@ static int load_current_world_state(void) {
 #endif
     if (!g_loaded_world_dir[0]) return 0;
 
-    FILE *f = open_current_world_state_file();
+    FILE *f = open_world_state_file();
     if (!f) return 0;
 
     char magic[8];
@@ -1217,7 +1217,7 @@ static int load_current_world_state(void) {
         /* Rebuild the active window from seed + tiny edited-chunk deltas unless
            the loading screen is going to do it incrementally with progress. */
         if (!g_load_state_skip_terrain_rebuild) {
-            flat_world_generate_blocks_for_current_origin();
+            flat_generate_origin_blocks();
             g_last_load_state_had_terrain = 1;
         }
     } else {
@@ -1227,11 +1227,11 @@ static int load_current_world_state(void) {
         }
         /* Old saves contain a full active-window block dump.  Mark every chunk so
            the next save converts the bloated file into delta chunks. */
-        mark_flat_chunks_modified_all();
+        flat_mark_all_chunks_modified();
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++)
             for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++)
                 g_flat_world_chunk_generated[lcz][lcx] = 1;
-        mark_flat_render_chunks_dirty_all();
+        flat_mark_all_chunks_dirty();
         g_last_load_state_had_terrain = 1;
     }
 
@@ -1285,7 +1285,7 @@ static int load_current_world_state(void) {
     memset(&g_carried_stack, 0, sizeof(g_carried_stack));
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
-    reset_player_damage_visual_state();
+    reset_player_damage_visuals();
     pex_logf("world state loaded dir=%s version=%d health=%d dead=%d origin=%d,%d", g_loaded_world_dir, version, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
     g_save_dirty = (version < 18) ? 1 : 0;
     return 1;
@@ -1310,21 +1310,21 @@ static void finish_prepared_world_entry(int loaded_state) {
     }
     if (loaded_state) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-        passive_mobs_ensure_minimum_population(10, 1200);
+        passive_mobs_ensure_population(10, 1200);
 #else
-        passive_mobs_ensure_minimum_population(16, 1800);
+        passive_mobs_ensure_population(16, 1800);
 #endif
     }
 
     g_chat_input[0] = 0;
     g_chat_count = 0;
-    reset_player_damage_visual_state();
+    reset_player_damage_visuals();
     g_last_autosave_tick = g_ingame_ticks;
     g_save_message_ticks = 0;
     hud_add_chat(loaded_state ? "Loaded saved world." : "Loaded world.");
     if (g_player_dead || g_player_health <= 0) {
         g_player_dead = 1;
-        player_health_set_no_animation(0);
+        player_health_set_silent(0);
         g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
         set_screen(SCREEN_DEATH);
     } else {
@@ -1348,17 +1348,17 @@ static void enter_world_from_job(void) {
     int loaded_state = load_current_world_state();
     if (!loaded_state) {
         inventory_reset();
-        player_health_set_no_animation(20);
+        player_health_set_silent(20);
         player_food_reset();
         player_xp_reset();
-        reset_player_damage_visual_state();
+        reset_player_damage_visuals();
         memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
         g_player_armor = 0;
         g_player_damage_remainder = 0;
         g_ingame_ticks = 0;
         g_world_time = 0;
-        flat_world_center_origin_near(g_player_x, g_player_z);
-        flat_world_generate_blocks_for_current_origin();
+        flat_center_origin_near(g_player_x, g_player_z);
+        flat_generate_origin_blocks();
     }
     finish_prepared_world_entry(loaded_state);
 }
@@ -1378,7 +1378,7 @@ static void leave_world_to_title(void) {
     g_loaded_world_name[0] = 0;
     g_chat_input[0] = 0;
     g_chat_count = 0;
-    reset_player_damage_visual_state();
+    reset_player_damage_visuals();
     pex_logf("left world to title");
     set_screen(SCREEN_TITLE);
 }
@@ -1512,10 +1512,10 @@ static void worldgen_tick(void) {
 
         if (!g_worldgen.loaded_state) {
             inventory_reset();
-            player_health_set_no_animation(20);
+            player_health_set_silent(20);
             player_food_reset();
             player_xp_reset();
-            reset_player_damage_visual_state();
+            reset_player_damage_visuals();
             memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
             g_player_armor = 0;
             g_player_damage_remainder = 0;
@@ -1526,7 +1526,7 @@ static void worldgen_tick(void) {
             g_player_x = g_player_prev_x = 0.5f;
             g_player_y = g_player_prev_y = 5.62f;
             g_player_z = g_player_prev_z = 0.5f;
-            flat_world_center_origin_near(g_player_x, g_player_z);
+            flat_center_origin_near(g_player_x, g_player_z);
         } else if (g_last_load_state_had_terrain) {
             /* Java 1.2.5 RenderGlobal.loadRenderers() only marks world renderers
                dirty after a world switch; it does not block the loading screen until
@@ -1540,10 +1540,10 @@ static void worldgen_tick(void) {
             return;
         }
 
-        flat_world_prepare_initial_generation();
-        flat_world_begin_initial_generation();
-        g_worldgen.terrain_total = flat_world_initial_generation_total();
-        g_worldgen.terrain_done = flat_world_initial_generation_done();
+        flat_prepare_initial_generation();
+        flat_begin_initial_generation();
+        g_worldgen.terrain_total = flat_initial_generation_total();
+        g_worldgen.terrain_done = flat_initial_generation_done();
         g_worldgen.phase = 1;
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain %d/%d",
                  g_worldgen.terrain_done, g_worldgen.terrain_total);
@@ -1552,26 +1552,26 @@ static void worldgen_tick(void) {
     }
 
     if (g_worldgen.phase == 1) {
-        flat_world_continue_initial_generation();
-        g_worldgen.terrain_total = flat_world_initial_generation_total();
-        g_worldgen.terrain_done = flat_world_initial_generation_done();
+        flat_continue_initial_generation();
+        g_worldgen.terrain_total = flat_initial_generation_total();
+        g_worldgen.terrain_done = flat_initial_generation_done();
         if (g_worldgen.terrain_total <= 0) g_worldgen.terrain_total = 1;
         int terrain_p = (g_worldgen.terrain_done * 82) / g_worldgen.terrain_total;
         g_worldgen.progress = 5 + terrain_p;
         if (g_worldgen.progress > 87) g_worldgen.progress = 87;
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain %d/%d",
                  g_worldgen.terrain_done, g_worldgen.terrain_total);
-        if (!flat_world_initial_generation_active()) {
-            flat_world_begin_initial_light_settle();
-            if (!flat_world_initial_light_settle_done()) {
-                int light_p = flat_world_initial_light_settle_progress();
+        if (!flat_initial_generation_active()) {
+            flat_begin_initial_light_settle();
+            if (!flat_initial_light_settle_done()) {
+                int light_p = flat_initial_light_settle_progress();
                 g_worldgen.progress = 87 + (light_p * 5) / 100;
                 if (g_worldgen.progress > 92) g_worldgen.progress = 92;
                 snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Lighting terrain");
                 return;
             }
 
-            flat_world_finish_initial_generation();
+            flat_finish_initial_generation();
             if (!g_worldgen.loaded_state) reset_flat_player_spawn();
             /* Match Java 1.2.5: terrain is preloaded and lighting is drained before
                entry, but renderer rebuilds are queued/updated after the world is

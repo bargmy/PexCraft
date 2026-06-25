@@ -13,12 +13,12 @@ static void wii_debug_wait_frames(int frames) {
     for (int i = 0; i < frames; ++i) VIDEO_WaitVSync();
 }
 
-static unsigned int wii_debug_xfb_phys_offset(const void *xfb) {
+static unsigned int wii_xfb_phys_offset(const void *xfb) {
     return (unsigned int)((uintptr_t)xfb & 0x0fffffffu);
 }
 
-static int wii_debug_xfb_looks_valid(const void *xfb) {
-    return xfb && wii_debug_xfb_phys_offset(xfb) < 0x01800000u;
+static int wii_xfb_looks_valid(const void *xfb) {
+    return xfb && wii_xfb_phys_offset(xfb) < 0x01800000u;
 }
 
 #ifndef PEX_WII_ONSCREEN_DEBUG
@@ -36,8 +36,8 @@ static void wii_debug_init_console(void) {
     }
     g_wii_debug_xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(g_wii_debug_rmode));
     SYS_Report("[PexCraft/Wii] debug console XFB ptr=%p phys=%08x valid=%d\n",
-               g_wii_debug_xfb, wii_debug_xfb_phys_offset(g_wii_debug_xfb), wii_debug_xfb_looks_valid(g_wii_debug_xfb));
-    if (!wii_debug_xfb_looks_valid(g_wii_debug_xfb)) {
+               g_wii_debug_xfb, wii_xfb_phys_offset(g_wii_debug_xfb), wii_xfb_looks_valid(g_wii_debug_xfb));
+    if (!wii_xfb_looks_valid(g_wii_debug_xfb)) {
         SYS_Report("[PexCraft/Wii] debug console: invalid framebuffer allocation; skipping on-screen console\n");
         g_wii_debug_xfb = NULL;
         return;

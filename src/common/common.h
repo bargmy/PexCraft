@@ -686,13 +686,13 @@ static int player_health_clamp(int health) {
     return health;
 }
 
-static void player_health_set_no_animation(int health) {
+static void player_health_set_silent(int health) {
     g_player_health = player_health_clamp(health);
     g_player_prev_health = g_player_health;
     g_hearts_life = 0;
 }
 
-static void player_health_set_with_java_hearts(int health) {
+static void player_health_set_hearts(int health) {
     int old_health = player_health_clamp(g_player_health);
     int new_health = player_health_clamp(health);
     if (new_health < old_health) {
@@ -708,7 +708,7 @@ static void player_health_set_with_java_hearts(int health) {
     }
 }
 
-static void player_health_damage_hearts_without_delta(void) {
+static void player_health_damage_hearts(void) {
     g_player_prev_health = player_health_clamp(g_player_health);
     g_hearts_life = PEX_HEARTS_HALVES_LIFE;
 }
@@ -1672,11 +1672,11 @@ static void restart_application_now(void);
 static void start_world_generation(int slot);
 static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot);
 static void worldgen_tick(void);
-static int classic_pack_installed(void);
-static int release_resources_install_blocking(void);
+static int pack_is_installed(void);
+static int pack_resources_install_blocking(void);
 static void pex_menu_music_start_once(void);
 static void pex_menu_music_stop(void);
-static int classic_pack_missing_required_textures(void);
+static int pack_missing_required_textures(void);
 static int classic_sounds_installed(void);
 static void pex_sound_rescan(void);
 static void pex_sound_play(const char *key, float volume, float pitch);
@@ -1685,14 +1685,14 @@ static void pex_sound_shutdown(void);
 static const char *pex_block_step_sound_key(int id);
 static const char *pex_block_dig_sound_key(int id);
 static int classic_resources_need_update(void);
-static int should_show_classic_pack_download_prompt(void);
+static int should_show_pack_download_prompt(void);
 static void classic_resource_missing_summary(char *out, size_t cap);
-static void start_classic_pack_install(void);
-static void classic_pack_install_tick(void);
+static void pack_install_start(void);
+static void pack_install_tick(void);
 static void enter_world_from_job(void);
 static void ingame_tick(void);
 static void ingame_tick_async_queue(void);
-static void ingame_tick_async_pump_main_thread(void);
+static void ingame_pump_async_tick(void);
 static float ingame_tick_async_render_partial(float fallback_partial);
 static void player_render_begin_frame(void);
 static void ingame_tick_async_shutdown(void);
@@ -1710,22 +1710,22 @@ static void set_fullscreen_enabled(int enabled);
 static void toggle_fullscreen(void);
 static void handle_grabbed_mouse_move(int px, int py);
 static void flat_world_reset_blocks(void);
-static void flat_world_center_origin_near(float px, float pz);
-static void flat_world_generate_blocks_for_current_origin(void);
-static void flat_world_prepare_initial_generation(void);
-static void flat_world_begin_initial_generation(void);
-static void flat_world_continue_initial_generation(void);
-static int flat_world_initial_generation_active(void);
-static int flat_world_initial_generation_total(void);
-static int flat_world_initial_generation_done(void);
-static void flat_world_begin_initial_light_settle(void);
-static int flat_world_initial_light_settle_done(void);
-static int flat_world_initial_light_settle_progress(void);
-static void flat_world_finish_initial_generation(void);
-static void mark_flat_render_chunks_dirty_all(void);
+static void flat_center_origin_near(float px, float pz);
+static void flat_generate_origin_blocks(void);
+static void flat_prepare_initial_generation(void);
+static void flat_begin_initial_generation(void);
+static void flat_continue_initial_generation(void);
+static int flat_initial_generation_active(void);
+static int flat_initial_generation_total(void);
+static int flat_initial_generation_done(void);
+static void flat_begin_initial_light_settle(void);
+static int flat_initial_light_settle_done(void);
+static int flat_initial_light_settle_progress(void);
+static void flat_finish_initial_generation(void);
+static void flat_mark_all_chunks_dirty(void);
 static void worldgen_mesh_prep_reset(void);
 static int worldgen_mesh_prep_step(int max_rebuilds);
-static void flat_gl_cpu_mesh_remap_after_shift(int old_origin_x, int old_origin_z, int new_origin_x, int new_origin_z);
+static void flat_cpu_mesh_remap_shift(int old_origin_x, int old_origin_z, int new_origin_x, int new_origin_z);
 static int worldgen_mesh_prep_total(void);
 static int worldgen_mesh_prep_done(void);
 static void inventory_reset(void);
@@ -1738,7 +1738,7 @@ static int chest_open_slot_count(void);
 static int chest_can_place_at(int x, int y, int z);
 static void chest_on_block_placed(int x, int y, int z);
 static int chest_open_at(int x, int y, int z);
-static void chest_drop_contents_and_remove_at(int x, int y, int z);
+static void chest_drop_contents(int x, int y, int z);
 static int chest_slots_have_items(const ItemStack *slots, int n);
 static void chest_clear_all_tiles(void);
 static void chest_close_open_inventory(void);
@@ -1746,7 +1746,7 @@ static FurnaceTile *furnace_open_tile(void);
 static ItemStack *furnace_get_slot_ptr(int local_slot);
 static int furnace_open_at(int x, int y, int z);
 static void furnace_on_block_placed(int x, int y, int z);
-static void furnace_drop_contents_and_remove_at(int x, int y, int z);
+static void furnace_drop_contents(int x, int y, int z);
 static void furnace_clear_all_tiles(void);
 static void furnace_close_open_inventory(void);
 static void furnace_tick_all(void);
@@ -1782,11 +1782,11 @@ static void apply_player_fluid_velocity(int is_water);
 static void update_falling_blocks(void);
 static void passive_mobs_reset(void);
 static void passive_mobs_spawn_initial(void);
-static void passive_mobs_ensure_minimum_population(int wanted, int attempts);
+static void passive_mobs_ensure_population(int wanted, int attempts);
 static void update_passive_mobs(void);
 static void passive_mobs_apply_riding(void);
 static int passive_mobs_attack_from_player(void);
-static int passive_mobs_interact_from_player(void);
+static int passive_mobs_player_interact(void);
 static void draw_java_entity_shadow(float x, float y, float z, float shadow_size, float shadow_alpha);
 static void draw_passive_mobs(float partial);
 static void passive_mobs_read_from_file(FILE *f, int version);
@@ -1802,9 +1802,9 @@ static int write_level_dat(const char *world_dir, const char *world_name, long l
 static int write_session_lock(const char *world_dir);
 static void save_modified_flat_chunks(void);
 static void save_modified_flat_chunks_sync(void);
-static void pex_request_modified_chunk_save_async(void);
-static void load_modified_flat_chunk_delta_into_flat(int cx, int cz);
-static void mark_flat_chunks_modified_all(void);
+static void request_chunk_save_async(void);
+static void flat_load_chunk_delta(int cx, int cz);
+static void flat_mark_all_chunks_modified(void);
 static void async_section_mesh_shutdown(void);
 static int pex_net_connect_to_server(const char *server);
 static void pex_net_poll(void);
@@ -1814,7 +1814,7 @@ static void pex_net_disconnect(void);
 static void pex_net_send_player_state(void);
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id);
 static void pex_net_send_player_action(int action, int x, int y, int z, int face, int block_id);
-static void pex_net_send_player_action_progress(int action, int x, int y, int z, int face, int block_id, int progress);
+static void net_send_action_progress(int action, int x, int y, int z, int face, int block_id, int progress);
 static int pex_net_player_ray_distance(float max_dist, float *out_t);
 static int pex_net_try_attack_player(void);
 static void pex_net_send_drop_item(ItemStack st);

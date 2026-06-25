@@ -223,13 +223,13 @@ typedef struct PexGPUImmediateStream {
 static PexGPUImmediateStream g_gpu_imm;
 
 static PexD3D11Backend g_d3d11;
-static void pex_compat_d3d11_release_failed_device(IDXGISwapChain **swap, ID3D11Device **dev, ID3D11DeviceContext **ctx) {
+static void compat_d3d11_release_failed_device(IDXGISwapChain **swap, ID3D11Device **dev, ID3D11DeviceContext **ctx) {
     if (ctx && *ctx) { ID3D11DeviceContext_Release(*ctx); *ctx = NULL; }
     if (swap && *swap) { IDXGISwapChain_Release(*swap); *swap = NULL; }
     if (dev && *dev) { ID3D11Device_Release(*dev); *dev = NULL; }
 }
 
-static HRESULT pex_compat_d3d11_create_device_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
+static HRESULT compat_d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
                                                          const D3D_FEATURE_LEVEL *levels,
                                                          UINT level_count,
                                                          D3D_FEATURE_LEVEL *got_level) {
@@ -256,14 +256,14 @@ static HRESULT pex_compat_d3d11_create_device_swap_chain(DXGI_SWAP_CHAIN_DESC *b
                 g_d3d11.swap_flags = desc.Flags;
                 return hr;
             }
-            pex_compat_d3d11_release_failed_device(&g_d3d11.swap, &g_d3d11.dev, &g_d3d11.ctx);
+            compat_d3d11_release_failed_device(&g_d3d11.swap, &g_d3d11.dev, &g_d3d11.ctx);
         }
     }
     return hr;
 }
 
 static void pex_gpu_flush_immediate_stream(void);
-static void pex_gpu_queue_or_draw_immediate_batch(const PexD3DBatch *b);
+static void compat_queue_or_draw_batch(const PexD3DBatch *b);
 static int pex_using_d3d11(void) { return g_runtime_renderer_backend == RENDERER_D3D11 && g_d3d11.active; }
 static int pex_using_gpu_backend(void) { return (g_runtime_renderer_backend == RENDERER_D3D9 && g_d3d9.active) || (g_runtime_renderer_backend == RENDERER_D3D11 && g_d3d11.active); }
 
@@ -327,7 +327,7 @@ static void pex_glstyle_perspective(double fovy, double aspect, double znear, do
     pex_mat_postmul(pex_current_matrix(), &p);
 }
 
-static void pex_mat_depth_remap_gl_to_d3d(PexMat4 *m) {
+static void compat_depth_remap_gl_to_d3d(PexMat4 *m) {
     /* Convert OpenGL clip depth [-w,+w] to D3D clip depth [0,+w].
        This is applied after projection: z_d3d = 0.5*z_gl + 0.5*w. */
     PexMat4 r; pex_mat_identity(&r);
@@ -355,7 +355,7 @@ static void pex_d3d_invalidate_cache(void) {
     g_d3d9.matrix_dirty = 1;
 }
 
-static void pex_d3d_mark_matrix_dirty(void) {
+static void compat_d3d_mark_matrix_dirty(void) {
     g_d3d9.matrix_dirty = 1;
 }
 
@@ -365,7 +365,7 @@ static DWORD pex_float_as_dword(float f) {
     return u.d;
 }
 
-static void pex_d3d_set_render_state(D3DRENDERSTATETYPE state, DWORD value) {
+static void compat_d3d_set_render_state(D3DRENDERSTATETYPE state, DWORD value) {
     unsigned int idx = (unsigned int)state;
     if (idx < PEX_D3D_STATE_MAX && g_d3d9.cache.valid && g_d3d9.cache.rs_valid[idx] && g_d3d9.cache.rs[idx] == value) return;
     IDirect3DDevice9_SetRenderState(g_d3d9.dev, state, value);
@@ -375,7 +375,7 @@ static void pex_d3d_set_render_state(D3DRENDERSTATETYPE state, DWORD value) {
     }
 }
 
-static void pex_d3d_set_texture_stage_state(D3DTEXTURESTAGESTATETYPE state, DWORD value) {
+static void compat_d3d_set_texture_stage(D3DTEXTURESTAGESTATETYPE state, DWORD value) {
     unsigned int idx = (unsigned int)state;
     if (idx < PEX_D3D_TSS_MAX && g_d3d9.cache.valid && g_d3d9.cache.tss_valid[idx] && g_d3d9.cache.tss[idx] == value) return;
     IDirect3DDevice9_SetTextureStageState(g_d3d9.dev, 0, state, value);
@@ -385,7 +385,7 @@ static void pex_d3d_set_texture_stage_state(D3DTEXTURESTAGESTATETYPE state, DWOR
     }
 }
 
-static void pex_d3d_set_sampler_state(D3DSAMPLERSTATETYPE state, DWORD value) {
+static void compat_d3d_set_sampler_state(D3DSAMPLERSTATETYPE state, DWORD value) {
     unsigned int idx = (unsigned int)state;
     if (idx < PEX_D3D_SAMPLER_MAX && g_d3d9.cache.valid && g_d3d9.cache.sampler_valid[idx] && g_d3d9.cache.sampler[idx] == value) return;
     IDirect3DDevice9_SetSamplerState(g_d3d9.dev, 0, state, value);
@@ -422,7 +422,7 @@ static void pex_d3d_apply_matrices(void) {
     if (!g_d3d9.matrix_dirty && g_d3d9.matrix_cache_valid && g_d3d9.cache.valid) return;
     PexMat4 mvp;
     pex_mat_mul(&mvp, &g_d3d9.projection, &g_d3d9.modelview);
-    pex_mat_depth_remap_gl_to_d3d(&mvp);
+    compat_depth_remap_gl_to_d3d(&mvp);
 
     D3DMATRIX id; memset(&id, 0, sizeof(id));
     id._11 = id._22 = id._33 = id._44 = 1.0f;
@@ -483,7 +483,7 @@ static void pex_batch_reserve(PexD3DBatch *b, int add) {
     b->cap = nc;
 }
 
-static int pex_d3d_count_output_vertices(int mode, int in_count) {
+static int compat_d3d_count_vertices(int mode, int in_count) {
     if (in_count <= 0) return 0;
     if (mode == GL_TRIANGLES) return (in_count / 3) * 3;
     if (mode == GL_QUADS) return (in_count / 4) * 6;
@@ -493,19 +493,19 @@ static int pex_d3d_count_output_vertices(int mode, int in_count) {
     return 0;
 }
 
-static D3DPRIMITIVETYPE pex_d3d_primitive_for_mode(int mode) {
+static D3DPRIMITIVETYPE compat_d3d_primitive_for_mode(int mode) {
     if (mode == GL_LINES) return D3DPT_LINELIST;
     if (mode == GL_LINE_STRIP) return D3DPT_LINESTRIP;
     return D3DPT_TRIANGLELIST;
 }
 
-static UINT pex_d3d_primitive_count_for_mode(int mode, int out_count) {
+static UINT compat_d3d_primitive_count(int mode, int out_count) {
     if (mode == GL_LINES) return (UINT)(out_count / 2);
     if (mode == GL_LINE_STRIP) return (out_count >= 2) ? (UINT)(out_count - 1) : 0;
     return (UINT)(out_count / 3);
 }
 
-static void pex_d3d_convert_batch_to_vertices(const PexD3DBatch *b, PexD3DVertex *out) {
+static void compat_d3d_convert_batch(const PexD3DBatch *b, PexD3DVertex *out) {
     int oi = 0;
     if (b->mode == GL_TRIANGLES) {
         int n = (b->count / 3) * 3;
@@ -529,21 +529,21 @@ static void pex_d3d_convert_batch_to_vertices(const PexD3DBatch *b, PexD3DVertex
             pex_copy_vertex(&b->v[i+1], &out[oi++]);
         }
     } else if (b->mode == GL_LINES || b->mode == GL_LINE_STRIP) {
-        int n = pex_d3d_count_output_vertices(b->mode, b->count);
+        int n = compat_d3d_count_vertices(b->mode, b->count);
         for (int i = 0; i < n; i++) pex_copy_vertex(&b->v[i], &out[oi++]);
     }
 }
 
-static int pex_d3d11_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices, int count);
+static int compat_d3d11_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices, int count);
 
-static void pex_d3d_release_batch_gpu(PexD3DBatch *b) {
+static void compat_d3d_release_batch(PexD3DBatch *b) {
     if (!b) return;
     if (b->vb) { IDirect3DVertexBuffer9_Release(b->vb); b->vb = NULL; }
     if (b->vb11) { ID3D11Buffer_Release(b->vb11); b->vb11 = NULL; }
     free(b->sysmem); b->sysmem = NULL; b->sysmem_count = 0;
 }
 
-static int pex_d3d_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices, int count) {
+static int compat_d3d_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices, int count) {
     if (!g_d3d9.dev || !b || !vertices || count <= 0) return 0;
     UINT bytes = (UINT)(sizeof(PexD3DVertex) * (size_t)count);
     if (FAILED(IDirect3DDevice9_CreateVertexBuffer(g_d3d9.dev, bytes, D3DUSAGE_WRITEONLY, PEX_D3D_FVF, D3DPOOL_MANAGED, &b->vb, NULL))) return 0;
@@ -560,9 +560,9 @@ static int pex_d3d_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices
 
 static void pex_batch_finalize_static(PexD3DBatch *b) {
     if (!b) return;
-    int outn = pex_d3d_count_output_vertices(b->mode, b->count);
-    b->d3d_prim = pex_d3d_primitive_for_mode(b->mode);
-    b->primitive_count = pex_d3d_primitive_count_for_mode(b->mode, outn);
+    int outn = compat_d3d_count_vertices(b->mode, b->count);
+    b->d3d_prim = compat_d3d_primitive_for_mode(b->mode);
+    b->primitive_count = compat_d3d_primitive_count(b->mode, outn);
     b->vertex_count = (UINT)outn;
     if (outn <= 0 || b->primitive_count == 0) {
         free(b->v); b->v = NULL; b->count = b->cap = 0;
@@ -570,9 +570,9 @@ static void pex_batch_finalize_static(PexD3DBatch *b) {
     }
     PexD3DVertex *converted = (PexD3DVertex*)malloc(sizeof(PexD3DVertex) * (size_t)outn);
     if (!converted) return;
-    pex_d3d_convert_batch_to_vertices(b, converted);
+    compat_d3d_convert_batch(b, converted);
     free(b->v); b->v = NULL; b->count = b->cap = 0;
-    int ok = pex_using_d3d11() ? pex_d3d11_create_static_vb(b, converted, outn) : pex_d3d_create_static_vb(b, converted, outn);
+    int ok = pex_using_d3d11() ? compat_d3d11_create_static_vb(b, converted, outn) : compat_d3d_create_static_vb(b, converted, outn);
     if (!ok) {
         b->sysmem = converted;
         b->sysmem_count = outn;
@@ -584,7 +584,7 @@ static void pex_batch_finalize_static(PexD3DBatch *b) {
 
 static void pex_list_free(PexD3DList *l) {
     if (!l) return;
-    for (int i=0;i<l->count;i++) { free(l->batches[i].v); pex_d3d_release_batch_gpu(&l->batches[i]); }
+    for (int i=0;i<l->count;i++) { free(l->batches[i].v); compat_d3d_release_batch(&l->batches[i]); }
     free(l->batches);
     free(l);
 }
@@ -630,41 +630,41 @@ static void pex_capture_state(PexD3DStateSnap *s) {
 
 static void pex_d3d_apply_state(const PexD3DStateSnap *s) {
     if (!g_d3d9.dev) return;
-    pex_d3d_set_render_state(D3DRS_ZENABLE, s->depth_enabled ? D3DZB_TRUE : D3DZB_FALSE);
-    pex_d3d_set_render_state(D3DRS_ZWRITEENABLE, s->depth_write ? TRUE : FALSE);
-    pex_d3d_set_render_state(D3DRS_ZFUNC, s->depth_func);
-    pex_d3d_set_render_state(D3DRS_ALPHABLENDENABLE, s->blend_enabled ? TRUE : FALSE);
-    pex_d3d_set_render_state(D3DRS_SRCBLEND, s->src_blend);
-    pex_d3d_set_render_state(D3DRS_DESTBLEND, s->dst_blend);
-    pex_d3d_set_render_state(D3DRS_ALPHATESTENABLE, s->alpha_test_enabled ? TRUE : FALSE);
-    pex_d3d_set_render_state(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
-    pex_d3d_set_render_state(D3DRS_ALPHAREF, 25);
-    pex_d3d_set_render_state(D3DRS_CULLMODE, D3DCULL_NONE);
-    pex_d3d_set_render_state(D3DRS_COLORWRITEENABLE, s->color_write_mask);
-    pex_d3d_set_render_state(D3DRS_FOGENABLE, s->fog_enabled ? TRUE : FALSE);
-    pex_d3d_set_render_state(D3DRS_FOGCOLOR, s->fog_color);
-    pex_d3d_set_render_state(D3DRS_FOGTABLEMODE, D3DFOG_LINEAR);
-    pex_d3d_set_render_state(D3DRS_FOGSTART, pex_float_as_dword(s->fog_start));
-    pex_d3d_set_render_state(D3DRS_FOGEND, pex_float_as_dword(s->fog_end));
+    compat_d3d_set_render_state(D3DRS_ZENABLE, s->depth_enabled ? D3DZB_TRUE : D3DZB_FALSE);
+    compat_d3d_set_render_state(D3DRS_ZWRITEENABLE, s->depth_write ? TRUE : FALSE);
+    compat_d3d_set_render_state(D3DRS_ZFUNC, s->depth_func);
+    compat_d3d_set_render_state(D3DRS_ALPHABLENDENABLE, s->blend_enabled ? TRUE : FALSE);
+    compat_d3d_set_render_state(D3DRS_SRCBLEND, s->src_blend);
+    compat_d3d_set_render_state(D3DRS_DESTBLEND, s->dst_blend);
+    compat_d3d_set_render_state(D3DRS_ALPHATESTENABLE, s->alpha_test_enabled ? TRUE : FALSE);
+    compat_d3d_set_render_state(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
+    compat_d3d_set_render_state(D3DRS_ALPHAREF, 25);
+    compat_d3d_set_render_state(D3DRS_CULLMODE, D3DCULL_NONE);
+    compat_d3d_set_render_state(D3DRS_COLORWRITEENABLE, s->color_write_mask);
+    compat_d3d_set_render_state(D3DRS_FOGENABLE, s->fog_enabled ? TRUE : FALSE);
+    compat_d3d_set_render_state(D3DRS_FOGCOLOR, s->fog_color);
+    compat_d3d_set_render_state(D3DRS_FOGTABLEMODE, D3DFOG_LINEAR);
+    compat_d3d_set_render_state(D3DRS_FOGSTART, pex_float_as_dword(s->fog_start));
+    compat_d3d_set_render_state(D3DRS_FOGEND, pex_float_as_dword(s->fog_end));
     if (s->texture_enabled && s->texture_id < PEX_D3D_MAX_TEXTURES && g_d3d9.textures[s->texture_id].tex) {
         pex_d3d_set_texture0((IDirect3DBaseTexture9*)g_d3d9.textures[s->texture_id].tex);
-        pex_d3d_set_texture_stage_state(D3DTSS_COLOROP, D3DTOP_MODULATE);
-        pex_d3d_set_texture_stage_state(D3DTSS_COLORARG1, D3DTA_TEXTURE);
-        pex_d3d_set_texture_stage_state(D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-        pex_d3d_set_texture_stage_state(D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-        pex_d3d_set_texture_stage_state(D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-        pex_d3d_set_texture_stage_state(D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-        pex_d3d_set_sampler_state(D3DSAMP_ADDRESSU, g_d3d9.textures[s->texture_id].address_u);
-        pex_d3d_set_sampler_state(D3DSAMP_ADDRESSV, g_d3d9.textures[s->texture_id].address_v);
-        pex_d3d_set_sampler_state(D3DSAMP_MINFILTER, g_d3d9.textures[s->texture_id].min_filter ? g_d3d9.textures[s->texture_id].min_filter : D3DTEXF_POINT);
-        pex_d3d_set_sampler_state(D3DSAMP_MAGFILTER, g_d3d9.textures[s->texture_id].mag_filter ? g_d3d9.textures[s->texture_id].mag_filter : D3DTEXF_POINT);
-        pex_d3d_set_sampler_state(D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        compat_d3d_set_texture_stage(D3DTSS_COLOROP, D3DTOP_MODULATE);
+        compat_d3d_set_texture_stage(D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        compat_d3d_set_texture_stage(D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        compat_d3d_set_texture_stage(D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+        compat_d3d_set_texture_stage(D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+        compat_d3d_set_texture_stage(D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+        compat_d3d_set_sampler_state(D3DSAMP_ADDRESSU, g_d3d9.textures[s->texture_id].address_u);
+        compat_d3d_set_sampler_state(D3DSAMP_ADDRESSV, g_d3d9.textures[s->texture_id].address_v);
+        compat_d3d_set_sampler_state(D3DSAMP_MINFILTER, g_d3d9.textures[s->texture_id].min_filter ? g_d3d9.textures[s->texture_id].min_filter : D3DTEXF_POINT);
+        compat_d3d_set_sampler_state(D3DSAMP_MAGFILTER, g_d3d9.textures[s->texture_id].mag_filter ? g_d3d9.textures[s->texture_id].mag_filter : D3DTEXF_POINT);
+        compat_d3d_set_sampler_state(D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     } else {
         pex_d3d_set_texture0(NULL);
-        pex_d3d_set_texture_stage_state(D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-        pex_d3d_set_texture_stage_state(D3DTSS_COLORARG1, D3DTA_DIFFUSE);
-        pex_d3d_set_texture_stage_state(D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
-        pex_d3d_set_texture_stage_state(D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+        compat_d3d_set_texture_stage(D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        compat_d3d_set_texture_stage(D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+        compat_d3d_set_texture_stage(D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+        compat_d3d_set_texture_stage(D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
     }
 }
 
@@ -679,7 +679,7 @@ static int pex_scratch_reserve(int n) {
     return 1;
 }
 
-static int pex_d3d_ensure_dynamic_vb(UINT vertex_count) {
+static int compat_d3d_ensure_dynamic_vb(UINT vertex_count) {
     if (!g_d3d9.dev || vertex_count == 0) return 0;
     if (g_d3d9.dynamic_vb && g_d3d9.dynamic_vb_capacity >= vertex_count) return 1;
     if (g_d3d9.dynamic_vb) {
@@ -695,9 +695,9 @@ static int pex_d3d_ensure_dynamic_vb(UINT vertex_count) {
     return 1;
 }
 
-static void pex_d3d_draw_vertices_dynamic(D3DPRIMITIVETYPE prim, UINT primitive_count, const PexD3DVertex *vertices, UINT vertex_count) {
+static void compat_d3d_draw_dynamic(D3DPRIMITIVETYPE prim, UINT primitive_count, const PexD3DVertex *vertices, UINT vertex_count) {
     if (!g_d3d9.dev || !vertices || vertex_count == 0 || primitive_count == 0) return;
-    if (!pex_d3d_ensure_dynamic_vb(vertex_count)) return;
+    if (!compat_d3d_ensure_dynamic_vb(vertex_count)) return;
     void *dst = NULL;
     UINT bytes = vertex_count * (UINT)sizeof(PexD3DVertex);
     if (FAILED(IDirect3DVertexBuffer9_Lock(g_d3d9.dynamic_vb, 0, bytes, &dst, D3DLOCK_DISCARD))) return;
@@ -708,7 +708,7 @@ static void pex_d3d_draw_vertices_dynamic(D3DPRIMITIVETYPE prim, UINT primitive_
     IDirect3DDevice9_DrawPrimitive(g_d3d9.dev, prim, 0, primitive_count);
 }
 
-static void pex_d3d_draw_compiled_batch(const PexD3DBatch *b) {
+static void compat_d3d_draw_batch(const PexD3DBatch *b) {
     if (!g_d3d9.dev || !b || b->primitive_count == 0 || b->vertex_count == 0) return;
     pex_d3d_apply_state(&b->state);
     pex_d3d_apply_matrices();
@@ -717,39 +717,39 @@ static void pex_d3d_draw_compiled_batch(const PexD3DBatch *b) {
         pex_d3d_set_stream0(b->vb, sizeof(PexD3DVertex));
         IDirect3DDevice9_DrawPrimitive(g_d3d9.dev, b->d3d_prim, 0, b->primitive_count);
     } else if (b->sysmem && b->sysmem_count > 0) {
-        pex_d3d_draw_vertices_dynamic(b->d3d_prim, b->primitive_count, b->sysmem, b->vertex_count);
+        compat_d3d_draw_dynamic(b->d3d_prim, b->primitive_count, b->sysmem, b->vertex_count);
     }
 }
 
 static void pex_d3d_flush_batch(const PexD3DBatch *b) {
     if (!g_d3d9.dev || !b || b->count <= 0) return;
-    int outn = pex_d3d_count_output_vertices(b->mode, b->count);
+    int outn = compat_d3d_count_vertices(b->mode, b->count);
     if (outn <= 0 || !pex_scratch_reserve(outn)) return;
-    pex_d3d_convert_batch_to_vertices(b, g_d3d9.scratch);
-    D3DPRIMITIVETYPE prim = pex_d3d_primitive_for_mode(b->mode);
-    UINT prim_count = pex_d3d_primitive_count_for_mode(b->mode, outn);
+    compat_d3d_convert_batch(b, g_d3d9.scratch);
+    D3DPRIMITIVETYPE prim = compat_d3d_primitive_for_mode(b->mode);
+    UINT prim_count = compat_d3d_primitive_count(b->mode, outn);
     if (!prim_count) return;
     pex_d3d_apply_state(&b->state);
     pex_d3d_apply_matrices();
-    pex_d3d_draw_vertices_dynamic(prim, prim_count, g_d3d9.scratch, (UINT)outn);
+    compat_d3d_draw_dynamic(prim, prim_count, g_d3d9.scratch, (UINT)outn);
 }
 
-static void pex_d3d_set_initial_states(void) {
+static void compat_d3d_set_initial_states(void) {
     if (!g_d3d9.dev) return;
     pex_d3d_invalidate_cache();
     g_d3d9.cache.valid = 1;
-    pex_d3d_set_render_state(D3DRS_LIGHTING, FALSE);
-    pex_d3d_set_render_state(D3DRS_DITHERENABLE, FALSE);
-    pex_d3d_set_render_state(D3DRS_SHADEMODE, D3DSHADE_GOURAUD);
-    pex_d3d_set_render_state(D3DRS_ZENABLE, D3DZB_TRUE);
-    pex_d3d_set_render_state(D3DRS_ZWRITEENABLE, TRUE);
-    pex_d3d_set_render_state(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
-    pex_d3d_set_render_state(D3DRS_CULLMODE, D3DCULL_NONE);
-    pex_d3d_set_render_state(D3DRS_CLIPPING, TRUE);
-    pex_d3d_set_render_state(D3DRS_SPECULARENABLE, FALSE);
-    pex_d3d_set_sampler_state(D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-    pex_d3d_set_sampler_state(D3DSAMP_MINFILTER, D3DTEXF_POINT);
-    pex_d3d_set_sampler_state(D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    compat_d3d_set_render_state(D3DRS_LIGHTING, FALSE);
+    compat_d3d_set_render_state(D3DRS_DITHERENABLE, FALSE);
+    compat_d3d_set_render_state(D3DRS_SHADEMODE, D3DSHADE_GOURAUD);
+    compat_d3d_set_render_state(D3DRS_ZENABLE, D3DZB_TRUE);
+    compat_d3d_set_render_state(D3DRS_ZWRITEENABLE, TRUE);
+    compat_d3d_set_render_state(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+    compat_d3d_set_render_state(D3DRS_CULLMODE, D3DCULL_NONE);
+    compat_d3d_set_render_state(D3DRS_CLIPPING, TRUE);
+    compat_d3d_set_render_state(D3DRS_SPECULARENABLE, FALSE);
+    compat_d3d_set_sampler_state(D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    compat_d3d_set_sampler_state(D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    compat_d3d_set_sampler_state(D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 }
 
 static int pex_d3d9_choose_depth(IDirect3D9 *d3d, D3DFORMAT adapter_fmt, D3DFORMAT *out) {
@@ -813,7 +813,7 @@ static int pex_renderer_d3d9_init(HWND hwnd) {
     if (FAILED(hr) || !g_d3d9.dev) { if (g_d3d9.d3d) { IDirect3D9_Release(g_d3d9.d3d); g_d3d9.d3d = NULL; } return 0; }
     g_d3d9.active = 1;
     g_d3d9.viewport_x = 0; g_d3d9.viewport_y = 0; g_d3d9.viewport_w = g_d3d9.width; g_d3d9.viewport_h = g_d3d9.height;
-    pex_d3d_set_initial_states();
+    compat_d3d_set_initial_states();
     return 1;
 }
 
@@ -840,11 +840,11 @@ static void pex_renderer_d3d9_resize(int w, int h) {
     g_d3d9.pp.BackBufferHeight = h;
     g_d3d9.pp.PresentationInterval = (g_opts.anaglyph && g_opts.max_fps > 0) ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
     HRESULT hr = IDirect3DDevice9_Reset(g_d3d9.dev, &g_d3d9.pp);
-    if (SUCCEEDED(hr)) { pex_d3d_set_initial_states(); g_d3d9.lost = 0; }
+    if (SUCCEEDED(hr)) { compat_d3d_set_initial_states(); g_d3d9.lost = 0; }
     else g_d3d9.lost = 1;
 }
 
-static int pex_renderer_d3d9_begin_frame(void) {
+static int compat_d3d9_begin_frame(void) {
     if (!pex_using_d3d9() || !g_d3d9.dev) return 0;
     HRESULT coop = IDirect3DDevice9_TestCooperativeLevel(g_d3d9.dev);
     if (coop == D3DERR_DEVICELOST) { g_d3d9.lost = 1; return 0; }
@@ -998,7 +998,7 @@ static int pex_renderer_d3d11_init(HWND hwnd) {
     scd.BufferCount = 2; scd.BufferDesc.Width=(UINT)w; scd.BufferDesc.Height=(UINT)h; scd.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM; scd.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT; scd.OutputWindow=hwnd; scd.SampleDesc.Count=1; scd.Windowed=TRUE; scd.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
     D3D_FEATURE_LEVEL fls[3] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
     D3D_FEATURE_LEVEL got;
-    HRESULT hr = pex_compat_d3d11_create_device_swap_chain(&scd, fls, (UINT)ARRAY_COUNT(fls), &got);
+    HRESULT hr = compat_d3d11_create_swap_chain(&scd, fls, (UINT)ARRAY_COUNT(fls), &got);
     if (FAILED(hr) || !g_d3d11.dev || !g_d3d11.ctx || !g_d3d11.swap) return 0;
     if (!pex_d3d11_create_views(w,h)) return 0;
     if (!pex_d3d11_create_pipeline()) return 0;
@@ -1036,7 +1036,7 @@ static void pex_renderer_d3d11_resize(int w, int h) {
     pex_d3d11_create_views(w,h);
 }
 
-static int pex_renderer_d3d11_begin_frame(void) {
+static int compat_d3d11_begin_frame(void) {
     if (!pex_using_d3d11() || !g_d3d11.ctx) return 0;
     g_d3d11.draw_calls = 0; g_d3d11.triangles = 0;
     ID3D11DeviceContext_OMSetRenderTargets(g_d3d11.ctx, 1, &g_d3d11.rtv, g_d3d11.dsv);
@@ -1054,13 +1054,13 @@ static void pex_renderer_d3d11_present(void) {
     IDXGISwapChain_Present(g_d3d11.swap, 0, flags);
 }
 
-static D3D11_PRIMITIVE_TOPOLOGY pex_d3d11_topology_for_mode(int mode) {
+static D3D11_PRIMITIVE_TOPOLOGY compat_d3d11_topology_for_mode(int mode) {
     if (mode == GL_LINES) return D3D11_PRIMITIVE_TOPOLOGY_LINELIST;
     if (mode == GL_LINE_STRIP) return D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP;
     return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 }
 
-static int pex_d3d11_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices, int count) {
+static int compat_d3d11_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertices, int count) {
     if (!g_d3d11.dev || !b || !vertices || count <= 0) return 0;
     D3D11_BUFFER_DESC bd; memset(&bd,0,sizeof(bd));
     bd.ByteWidth = (UINT)(sizeof(PexD3DVertex) * (size_t)count);
@@ -1070,7 +1070,7 @@ static int pex_d3d11_create_static_vb(PexD3DBatch *b, const PexD3DVertex *vertic
     return SUCCEEDED(ID3D11Device_CreateBuffer(g_d3d11.dev, &bd, &init, &b->vb11));
 }
 
-static int pex_d3d11_ensure_dynamic_vb(UINT vertex_count) {
+static int compat_d3d11_ensure_dynamic_vb(UINT vertex_count) {
     if (!g_d3d11.dev || vertex_count == 0) return 0;
     if (g_d3d11.dynamic_vb && g_d3d11.dynamic_vb_capacity >= vertex_count) return 1;
     if (g_d3d11.dynamic_vb) { ID3D11Buffer_Release(g_d3d11.dynamic_vb); g_d3d11.dynamic_vb = NULL; }
@@ -1088,7 +1088,7 @@ static int pex_d3d11_ensure_dynamic_vb(UINT vertex_count) {
 
 static void pex_d3d11_make_cb(const PexD3DStateSnap *s, PexD3D11CB *cb) {
     D3DMATRIX mv = pex_to_d3d_matrix(&g_d3d9.modelview);
-    PexMat4 p = g_d3d9.projection; pex_mat_depth_remap_gl_to_d3d(&p);
+    PexMat4 p = g_d3d9.projection; compat_depth_remap_gl_to_d3d(&p);
     D3DMATRIX pr = pex_to_d3d_matrix(&p);
     memcpy(cb->model, &mv, sizeof(float)*16);
     memcpy(cb->proj, &pr, sizeof(float)*16);
@@ -1104,7 +1104,7 @@ static void pex_d3d11_make_cb(const PexD3DStateSnap *s, PexD3D11CB *cb) {
     cb->fog_params[0] = s->fog_start; cb->fog_params[1] = s->fog_end; cb->fog_params[2] = cb->fog_params[3] = 0.0f;
 }
 
-static void pex_d3d11_bind_compat_pipeline(void) {
+static void compat_d3d11_bind_pipeline(void) {
     if (!g_d3d11.ctx) return;
     /* Native world drawing uses renderer_d3d11.c, which binds a different
        input layout/shader pair for PexVertex (pos,uv,color).  The remaining
@@ -1119,7 +1119,7 @@ static void pex_d3d11_bind_compat_pipeline(void) {
 
 static void pex_d3d11_apply_state(const PexD3DStateSnap *s) {
     if (!g_d3d11.ctx) return;
-    pex_d3d11_bind_compat_pipeline();
+    compat_d3d11_bind_pipeline();
     ID3D11BlendState *blend = (s->color_write_mask == 0) ? g_d3d11.blend_color_off : g_d3d11.blend_off;
     if (s->color_write_mask != 0 && s->blend_enabled) {
         if (s->src_blend == D3DBLEND_DESTCOLOR && s->dst_blend == D3DBLEND_SRCCOLOR) blend = g_d3d11.blend_multiply;
@@ -1150,10 +1150,10 @@ static void pex_d3d11_apply_state(const PexD3DStateSnap *s) {
     ID3D11DeviceContext_PSSetConstantBuffers(g_d3d11.ctx, 0, 1, &g_d3d11.cbuffer);
 }
 
-static void pex_d3d11_draw_vertices_dynamic(D3D11_PRIMITIVE_TOPOLOGY top, const PexD3DVertex *vertices, UINT vertex_count) {
+static void compat_d3d11_draw_dynamic(D3D11_PRIMITIVE_TOPOLOGY top, const PexD3DVertex *vertices, UINT vertex_count) {
     if (!g_d3d11.ctx || !vertices || vertex_count == 0) return;
-    pex_d3d11_bind_compat_pipeline();
-    if (!pex_d3d11_ensure_dynamic_vb(vertex_count)) return;
+    compat_d3d11_bind_pipeline();
+    if (!compat_d3d11_ensure_dynamic_vb(vertex_count)) return;
     D3D11_MAPPED_SUBRESOURCE map;
     UINT bytes = vertex_count * (UINT)sizeof(PexD3DVertex);
     if (FAILED(ID3D11DeviceContext_Map(g_d3d11.ctx, (ID3D11Resource*)g_d3d11.dynamic_vb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return;
@@ -1167,10 +1167,10 @@ static void pex_d3d11_draw_vertices_dynamic(D3D11_PRIMITIVE_TOPOLOGY top, const 
     if (top == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST) g_d3d11.triangles += (int)(vertex_count / 3);
 }
 
-static void pex_d3d11_draw_compiled_batch(const PexD3DBatch *b) {
+static void compat_d3d11_draw_batch(const PexD3DBatch *b) {
     if (!g_d3d11.ctx || !b || b->vertex_count == 0) return;
     pex_d3d11_apply_state(&b->state);
-    D3D11_PRIMITIVE_TOPOLOGY top = pex_d3d11_topology_for_mode(b->mode);
+    D3D11_PRIMITIVE_TOPOLOGY top = compat_d3d11_topology_for_mode(b->mode);
     ID3D11DeviceContext_IASetPrimitiveTopology(g_d3d11.ctx, top);
     UINT stride = sizeof(PexD3DVertex), offset = 0;
     if (b->vb11) {
@@ -1179,17 +1179,17 @@ static void pex_d3d11_draw_compiled_batch(const PexD3DBatch *b) {
         g_d3d11.draw_calls++;
         if (top == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST) g_d3d11.triangles += (int)(b->vertex_count / 3);
     } else if (b->sysmem && b->sysmem_count > 0) {
-        pex_d3d11_draw_vertices_dynamic(top, b->sysmem, b->vertex_count);
+        compat_d3d11_draw_dynamic(top, b->sysmem, b->vertex_count);
     }
 }
 
 static void pex_d3d11_flush_batch(const PexD3DBatch *b) {
     if (!g_d3d11.ctx || !b || b->count <= 0) return;
-    int outn = pex_d3d_count_output_vertices(b->mode, b->count);
+    int outn = compat_d3d_count_vertices(b->mode, b->count);
     if (outn <= 0 || !pex_scratch_reserve(outn)) return;
-    pex_d3d_convert_batch_to_vertices(b, g_d3d9.scratch);
+    compat_d3d_convert_batch(b, g_d3d9.scratch);
     pex_d3d11_apply_state(&b->state);
-    pex_d3d11_draw_vertices_dynamic(pex_d3d11_topology_for_mode(b->mode), g_d3d9.scratch, (UINT)outn);
+    compat_d3d11_draw_dynamic(compat_d3d11_topology_for_mode(b->mode), g_d3d9.scratch, (UINT)outn);
 }
 
 static int pex_gpu_state_equal(const PexD3DStateSnap *a, const PexD3DStateSnap *b) {
@@ -1237,7 +1237,7 @@ static void pex_gpu_flush_immediate_stream(void) {
 
     if (pex_using_d3d11()) {
         pex_d3d11_apply_state(&g_gpu_imm.state);
-        pex_d3d11_draw_vertices_dynamic(g_gpu_imm.d3d11_top, g_gpu_imm.vertices, (UINT)g_gpu_imm.count);
+        compat_d3d11_draw_dynamic(g_gpu_imm.d3d11_top, g_gpu_imm.vertices, (UINT)g_gpu_imm.count);
     } else if (pex_using_d3d9()) {
         UINT prim_count = 0;
         if (g_gpu_imm.d3d_prim == D3DPT_TRIANGLELIST) prim_count = (UINT)(g_gpu_imm.count / 3);
@@ -1246,7 +1246,7 @@ static void pex_gpu_flush_immediate_stream(void) {
         if (prim_count) {
             pex_d3d_apply_state(&g_gpu_imm.state);
             pex_d3d_apply_matrices();
-            pex_d3d_draw_vertices_dynamic(g_gpu_imm.d3d_prim, prim_count, g_gpu_imm.vertices, (UINT)g_gpu_imm.count);
+            compat_d3d_draw_dynamic(g_gpu_imm.d3d_prim, prim_count, g_gpu_imm.vertices, (UINT)g_gpu_imm.count);
         }
     }
 
@@ -1254,7 +1254,7 @@ static void pex_gpu_flush_immediate_stream(void) {
     g_gpu_imm.count = 0;
 }
 
-static void pex_gpu_queue_or_draw_immediate_batch(const PexD3DBatch *b) {
+static void compat_queue_or_draw_batch(const PexD3DBatch *b) {
     if (!b || b->count <= 0) return;
 
     if (!pex_gpu_batch_can_stream(b)) {
@@ -1264,12 +1264,12 @@ static void pex_gpu_queue_or_draw_immediate_batch(const PexD3DBatch *b) {
         return;
     }
 
-    int outn = pex_d3d_count_output_vertices(b->mode, b->count);
+    int outn = compat_d3d_count_vertices(b->mode, b->count);
     if (outn <= 0 || !pex_scratch_reserve(outn)) return;
-    pex_d3d_convert_batch_to_vertices(b, g_d3d9.scratch);
+    compat_d3d_convert_batch(b, g_d3d9.scratch);
 
-    D3DPRIMITIVETYPE prim = pex_d3d_primitive_for_mode(b->mode);
-    D3D11_PRIMITIVE_TOPOLOGY top = pex_d3d11_topology_for_mode(b->mode);
+    D3DPRIMITIVETYPE prim = compat_d3d_primitive_for_mode(b->mode);
+    D3D11_PRIMITIVE_TOPOLOGY top = compat_d3d11_topology_for_mode(b->mode);
 
     if (g_gpu_imm.active &&
         (g_gpu_imm.d3d_prim != prim || g_gpu_imm.d3d11_top != top || !pex_gpu_state_equal(&g_gpu_imm.state, &b->state))) {
@@ -1320,8 +1320,8 @@ static int pex_renderer_backend_init(HWND hwnd) {
 }
 
 static int pex_renderer_begin_frame(void) {
-    if (pex_using_d3d9()) return pex_renderer_d3d9_begin_frame();
-    if (pex_using_d3d11()) return pex_renderer_d3d11_begin_frame();
+    if (pex_using_d3d9()) return compat_d3d9_begin_frame();
+    if (pex_using_d3d11()) return compat_d3d11_begin_frame();
     return 1;
 }
 
@@ -1368,7 +1368,7 @@ static void pex_glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) 
     if (b) mask |= D3DCOLORWRITEENABLE_BLUE;
     if (a) mask |= D3DCOLORWRITEENABLE_ALPHA;
     g_d3d9.color_write_mask = mask;
-    if (pex_using_d3d9() && g_d3d9.dev) pex_d3d_set_render_state(D3DRS_COLORWRITEENABLE, mask);
+    if (pex_using_d3d9() && g_d3d9.dev) compat_d3d_set_render_state(D3DRS_COLORWRITEENABLE, mask);
 }
 static void pex_glAlphaFunc(GLenum f, GLclampf ref) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glAlphaFunc(f,ref); return; } (void)f; (void)ref; }
 static void pex_glLineWidth(GLfloat w) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) glLineWidth(w); else (void)w; }
@@ -1376,14 +1376,14 @@ static void pex_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { if (g_pe
 static void pex_glViewport(GLint x, GLint y, GLsizei w, GLsizei h) { if (!pex_using_gpu_backend()) { glViewport(x,y,w,h); return; } pex_gpu_flush_immediate_stream(); g_d3d9.viewport_x=x; g_d3d9.viewport_y=y; g_d3d9.viewport_w=w; g_d3d9.viewport_h=h; int dy = g_render_h - y - h; if (dy < 0) dy = 0; if (pex_using_d3d11() && g_d3d11.ctx) { D3D11_VIEWPORT vp; memset(&vp,0,sizeof(vp)); vp.TopLeftX=(FLOAT)x; vp.TopLeftY=(FLOAT)dy; vp.Width=(FLOAT)w; vp.Height=(FLOAT)h; vp.MinDepth=0.0f; vp.MaxDepth=1.0f; ID3D11DeviceContext_RSSetViewports(g_d3d11.ctx,1,&vp); } else if (g_d3d9.dev) { D3DVIEWPORT9 vp={(DWORD)x,(DWORD)dy,(DWORD)w,(DWORD)h,0.0f,1.0f}; IDirect3DDevice9_SetViewport(g_d3d9.dev,&vp); } }
 static void pex_glClear(GLbitfield mask) { if (!pex_using_gpu_backend()) { glClear(mask); return; } pex_gpu_flush_immediate_stream(); if (pex_using_d3d11()) { if((mask&GL_COLOR_BUFFER_BIT) && g_d3d11.rtv){ DWORD c=g_d3d9.clear_color; float col[4]={((c>>16)&255)/255.0f,((c>>8)&255)/255.0f,(c&255)/255.0f,((c>>24)&255)/255.0f}; ID3D11DeviceContext_ClearRenderTargetView(g_d3d11.ctx,g_d3d11.rtv,col); } if((mask&GL_DEPTH_BUFFER_BIT) && g_d3d11.dsv) ID3D11DeviceContext_ClearDepthStencilView(g_d3d11.ctx,g_d3d11.dsv,D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,1.0f,0); return; } DWORD flags=0; if(mask&GL_COLOR_BUFFER_BIT)flags|=D3DCLEAR_TARGET; if(mask&GL_DEPTH_BUFFER_BIT)flags|=D3DCLEAR_ZBUFFER; IDirect3DDevice9_Clear(g_d3d9.dev,0,NULL,flags,g_d3d9.clear_color,1.0f,0); }
 static void pex_glMatrixMode(GLenum m) { if (!pex_using_gpu_backend()) { glMatrixMode(m); return; } g_d3d9.matrix_mode = m; }
-static void pex_glLoadIdentity(void) { if (!pex_using_gpu_backend()) { glLoadIdentity(); return; } pex_gpu_flush_immediate_stream(); pex_mat_identity(pex_current_matrix()); pex_d3d_mark_matrix_dirty(); }
+static void pex_glLoadIdentity(void) { if (!pex_using_gpu_backend()) { glLoadIdentity(); return; } pex_gpu_flush_immediate_stream(); pex_mat_identity(pex_current_matrix()); compat_d3d_mark_matrix_dirty(); }
 static void pex_glPushMatrix(void) { if (!pex_using_gpu_backend()) { glPushMatrix(); return; } pex_gpu_flush_immediate_stream(); if(g_d3d9.matrix_mode==GL_PROJECTION){ if(g_d3d9.pr_sp<PEX_D3D_STACK_MAX) g_d3d9.pr_stack[g_d3d9.pr_sp++]=g_d3d9.projection; } else { if(g_d3d9.mv_sp<PEX_D3D_STACK_MAX) g_d3d9.mv_stack[g_d3d9.mv_sp++]=g_d3d9.modelview; } }
-static void pex_glPopMatrix(void) { if (!pex_using_gpu_backend()) { glPopMatrix(); return; } pex_gpu_flush_immediate_stream(); if(g_d3d9.matrix_mode==GL_PROJECTION){ if(g_d3d9.pr_sp>0) g_d3d9.projection=g_d3d9.pr_stack[--g_d3d9.pr_sp]; } else { if(g_d3d9.mv_sp>0) g_d3d9.modelview=g_d3d9.mv_stack[--g_d3d9.mv_sp]; } pex_d3d_mark_matrix_dirty(); }
-static void pex_glTranslatef(GLfloat x, GLfloat y, GLfloat z) { if (!pex_using_gpu_backend()) { glTranslatef(x,y,z); return; } pex_gpu_flush_immediate_stream(); pex_mat_translate(x,y,z); pex_d3d_mark_matrix_dirty(); }
-static void pex_glRotatef(GLfloat a, GLfloat x, GLfloat y, GLfloat z) { if (!pex_using_gpu_backend()) { glRotatef(a,x,y,z); return; } pex_gpu_flush_immediate_stream(); pex_mat_rotate(a,x,y,z); pex_d3d_mark_matrix_dirty(); }
-static void pex_glScalef(GLfloat x, GLfloat y, GLfloat z) { if (!pex_using_gpu_backend()) { glScalef(x,y,z); return; } pex_gpu_flush_immediate_stream(); pex_mat_scale(x,y,z); pex_d3d_mark_matrix_dirty(); }
-static void pex_glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f) { if (!pex_using_gpu_backend()) { glOrtho(l,r,b,t,n,f); return; } pex_gpu_flush_immediate_stream(); PexMat4 m; pex_mat_identity(&m); m.m[0]=(float)(2.0/(r-l)); m.m[5]=(float)(2.0/(t-b)); m.m[10]=(float)(-2.0/(f-n)); m.m[12]=(float)(-(r+l)/(r-l)); m.m[13]=(float)(-(t+b)/(t-b)); m.m[14]=(float)(-(f+n)/(f-n)); pex_mat_postmul(pex_current_matrix(), &m); pex_d3d_mark_matrix_dirty(); }
-static void pex_gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zn, GLdouble zf) { if (!pex_using_gpu_backend()) { gluPerspective(fovy,aspect,zn,zf); return; } pex_gpu_flush_immediate_stream(); pex_glstyle_perspective(fovy,aspect,zn,zf); pex_d3d_mark_matrix_dirty(); }
+static void pex_glPopMatrix(void) { if (!pex_using_gpu_backend()) { glPopMatrix(); return; } pex_gpu_flush_immediate_stream(); if(g_d3d9.matrix_mode==GL_PROJECTION){ if(g_d3d9.pr_sp>0) g_d3d9.projection=g_d3d9.pr_stack[--g_d3d9.pr_sp]; } else { if(g_d3d9.mv_sp>0) g_d3d9.modelview=g_d3d9.mv_stack[--g_d3d9.mv_sp]; } compat_d3d_mark_matrix_dirty(); }
+static void pex_glTranslatef(GLfloat x, GLfloat y, GLfloat z) { if (!pex_using_gpu_backend()) { glTranslatef(x,y,z); return; } pex_gpu_flush_immediate_stream(); pex_mat_translate(x,y,z); compat_d3d_mark_matrix_dirty(); }
+static void pex_glRotatef(GLfloat a, GLfloat x, GLfloat y, GLfloat z) { if (!pex_using_gpu_backend()) { glRotatef(a,x,y,z); return; } pex_gpu_flush_immediate_stream(); pex_mat_rotate(a,x,y,z); compat_d3d_mark_matrix_dirty(); }
+static void pex_glScalef(GLfloat x, GLfloat y, GLfloat z) { if (!pex_using_gpu_backend()) { glScalef(x,y,z); return; } pex_gpu_flush_immediate_stream(); pex_mat_scale(x,y,z); compat_d3d_mark_matrix_dirty(); }
+static void pex_glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f) { if (!pex_using_gpu_backend()) { glOrtho(l,r,b,t,n,f); return; } pex_gpu_flush_immediate_stream(); PexMat4 m; pex_mat_identity(&m); m.m[0]=(float)(2.0/(r-l)); m.m[5]=(float)(2.0/(t-b)); m.m[10]=(float)(-2.0/(f-n)); m.m[12]=(float)(-(r+l)/(r-l)); m.m[13]=(float)(-(t+b)/(t-b)); m.m[14]=(float)(-(f+n)/(f-n)); pex_mat_postmul(pex_current_matrix(), &m); compat_d3d_mark_matrix_dirty(); }
+static void pex_gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zn, GLdouble zf) { if (!pex_using_gpu_backend()) { gluPerspective(fovy,aspect,zn,zf); return; } pex_gpu_flush_immediate_stream(); pex_glstyle_perspective(fovy,aspect,zn,zf); compat_d3d_mark_matrix_dirty(); }
 static void pex_glGetFloatv(GLenum pname, GLfloat *params) { if (!pex_using_gpu_backend()) { glGetFloatv(pname, params); return; } if(pname==GL_PROJECTION_MATRIX) memcpy(params,g_d3d9.projection.m,sizeof(float)*16); else if(pname==GL_MODELVIEW_MATRIX) memcpy(params,g_d3d9.modelview.m,sizeof(float)*16); }
 static void pex_glGetDoublev(GLenum pname, GLdouble *params) {
     if (!pex_using_gpu_backend()) { glGetDoublev(pname, params); return; }
@@ -1443,7 +1443,7 @@ static void pex_glEnd(void) {
     if (g_d3d9.compiling && g_d3d9.compile_batch) {
         pex_batch_finalize_static(g_d3d9.compile_batch);
     } else {
-        pex_gpu_queue_or_draw_immediate_batch(&g_d3d9.immediate);
+        compat_queue_or_draw_batch(&g_d3d9.immediate);
     }
     g_d3d9.begin_active=0; g_d3d9.compile_batch=NULL;
 }
@@ -1451,7 +1451,7 @@ static void pex_glEnd(void) {
 static GLuint pex_glGenLists(GLsizei range) { if (!pex_using_gpu_backend()) return glGenLists(range); if(range<=0)return 0; unsigned int base=g_d3d9.next_list; if(base+(unsigned int)range>=PEX_D3D_MAX_LISTS)return 0; for(int i=0;i<range;i++){ unsigned int id=base+(unsigned int)i; if(g_d3d9.lists[id]){ pex_list_free(g_d3d9.lists[id]); g_d3d9.lists[id]=NULL; } pex_list_ensure(id); } g_d3d9.next_list += (unsigned int)range; return base; }
 static void pex_glNewList(GLuint list, GLenum mode) { if (!pex_using_gpu_backend()) { glNewList(list,mode); return; } (void)mode; if(list>=PEX_D3D_MAX_LISTS)return; if(g_d3d9.lists[list]){ pex_list_free(g_d3d9.lists[list]); g_d3d9.lists[list]=NULL; } pex_list_ensure(list); g_d3d9.compiling=1; g_d3d9.compile_list=list; }
 static void pex_glEndList(void) { if (!pex_using_gpu_backend()) { glEndList(); return; } g_d3d9.compiling=0; g_d3d9.compile_list=0; }
-static void pex_glCallList(GLuint list) { if (!pex_using_gpu_backend()) { glCallList(list); return; } pex_gpu_flush_immediate_stream(); if(list>=PEX_D3D_MAX_LISTS||!g_d3d9.lists[list])return; PexD3DList *l=g_d3d9.lists[list]; for(int i=0;i<l->count;i++){ if(pex_using_d3d11()) pex_d3d11_draw_compiled_batch(&l->batches[i]); else pex_d3d_draw_compiled_batch(&l->batches[i]); } }
+static void pex_glCallList(GLuint list) { if (!pex_using_gpu_backend()) { glCallList(list); return; } pex_gpu_flush_immediate_stream(); if(list>=PEX_D3D_MAX_LISTS||!g_d3d9.lists[list])return; PexD3DList *l=g_d3d9.lists[list]; for(int i=0;i<l->count;i++){ if(pex_using_d3d11()) compat_d3d11_draw_batch(&l->batches[i]); else compat_d3d_draw_batch(&l->batches[i]); } }
 
 static void pex_glGenTextures(GLsizei n, GLuint *ids) { if (!pex_using_gpu_backend()) { glGenTextures(n,ids); return; } for(int i=0;i<n;i++){ if(g_d3d9.next_texture>=PEX_D3D_MAX_TEXTURES) ids[i]=0; else { ids[i]=g_d3d9.next_texture++; g_d3d9.textures[ids[i]].address_u=D3DTADDRESS_CLAMP; g_d3d9.textures[ids[i]].address_v=D3DTADDRESS_CLAMP; g_d3d9.textures[ids[i]].min_filter=D3DTEXF_POINT; g_d3d9.textures[ids[i]].mag_filter=D3DTEXF_POINT; } } }
 static void pex_glBindTexture(GLenum target, GLuint id) { if (g_pex_suppress_gl_immediate) return; if (!pex_using_gpu_backend()) { glBindTexture(target,id); return; } (void)target; g_d3d9.bound_texture=id; }

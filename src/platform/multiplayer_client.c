@@ -40,7 +40,7 @@ static int g_mp_rx_tail = 0;
 static int g_mp_rx_count = 0;
 
 
-static int pex_net_last_error_is_would_block(void);
+static int net_error_is_would_block(void);
 
 static void pex_mp_rx_packet_free(PexMpQueuedPacket *p) {
     if (!p) return;
@@ -143,7 +143,7 @@ static DWORD WINAPI pex_net_rx_worker(LPVOID unused) {
             break;
         }
         if (n < 0) {
-            if (pex_net_last_error_is_would_block()) {
+            if (net_error_is_would_block()) {
                 Sleep(1);
                 continue;
             }
@@ -211,7 +211,7 @@ static void pex_net_free_render_player(PexNetRenderPlayerState *r) {
     memset(r, 0, sizeof(*r));
 }
 
-static void pex_net_free_all_render_players(void) {
+static void net_free_render_players(void) {
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
         pex_net_free_render_player(&g_mp_render_players[i]);
     }
@@ -248,7 +248,7 @@ static const PexNetPlayerState *pex_net_find_player_state(int player_id) {
     return NULL;
 }
 
-static const PexNetPlayerState *pex_net_nearest_remote_player_state(void) {
+static const PexNetPlayerState *net_nearest_remote_player(void) {
     const PexNetPlayerState *best = NULL;
     float best_d2 = 999999.0f;
     for (int i = 0; i < g_mp_player_count; i++) {
@@ -262,7 +262,7 @@ static const PexNetPlayerState *pex_net_nearest_remote_player_state(void) {
     return best;
 }
 
-static void pex_net_apply_local_knockback(float attacker_x, float attacker_z) {
+static void net_apply_local_knockback(float attacker_x, float attacker_z) {
     float dx = attacker_x - g_player_x;
     float dz = attacker_z - g_player_z;
     float len = sqrtf(dx * dx + dz * dz);
@@ -298,7 +298,7 @@ static float pex_net_interp_alpha(void) {
     return (float)a;
 }
 
-static int pex_net_last_error_is_would_block(void) {
+static int net_error_is_would_block(void) {
     int e = WSAGetLastError();
     return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS || e == WSAEALREADY;
 }
@@ -587,14 +587,14 @@ static int pex_mp_cache_peek_chunk_hash(int chunk_x, int chunk_z, uint32_t *out_
     return 1;
 }
 
-static void pex_mp_mark_chunk_loaded_from_cache(int chunk_x, int chunk_z, uint32_t hash) {
+static void mp_mark_chunk_loaded_from_cache(int chunk_x, int chunk_z, uint32_t hash) {
     int lcx = (chunk_x * PEX_NET_CHUNK_SIZE - g_flat_world_origin_x) / FLAT_RENDER_CHUNK;
     int lcz = (chunk_z * PEX_NET_CHUNK_SIZE - g_flat_world_origin_z) / FLAT_RENDER_CHUNK;
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     g_mp_chunk_section_recv_mask[lcz][lcx] = (unsigned short)((1u << PEX_NET_SECTIONS_Y) - 1u);
     g_mp_chunk_hash_cache[lcz][lcx] = hash;
     g_mp_chunk_cache_loaded[lcz][lcx] = 1;
-    stream_mark_local_chunk_generated(lcx, lcz);
+    stream_mark_chunk_generated(lcx, lcz);
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
         g_flat_section_dirty[sy][lcz][lcx] = 1;
         g_flat_section_valid[sy][lcz][lcx] = 0;
@@ -645,7 +645,7 @@ static int pex_mp_cache_load_chunk(int chunk_x, int chunk_z, uint32_t expected_h
         }
     }
     free(blocks);
-    pex_mp_mark_chunk_loaded_from_cache(chunk_x, chunk_z, expected_hash);
+    mp_mark_chunk_loaded_from_cache(chunk_x, chunk_z, expected_hash);
     return 1;
 }
 
@@ -712,7 +712,7 @@ static void pex_mp_note_section_for_cache(int chunk_x, int chunk_z, int section_
     }
 }
 
-static int pex_mp_add_cached_hash_for_request(PexNetChunkRequest *req, int chunk_x, int chunk_z) {
+static int mp_cache_hash_for_request(PexNetChunkRequest *req, int chunk_x, int chunk_z) {
     if (!req || req->hash_count >= PEX_NET_MAX_CHUNK_HASHES) return 0;
     uint32_t hash = 0;
     if (!pex_mp_cache_peek_chunk_hash(chunk_x, chunk_z, &hash)) return 0;
@@ -806,14 +806,14 @@ static DWORD WINAPI pex_net_connect_worker(LPVOID unused) {
     return 0;
 }
 
-static void pex_net_request_chunks_around_player(int force) {
+static void net_request_chunks_around_player(int force) {
     if (!g_mp_connected || g_mp_socket == INVALID_SOCKET) return;
     double now = now_seconds();
     int cx = pex_net_floor_chunk_coord(g_player_x);
     int cz = pex_net_floor_chunk_coord(g_player_z);
     int radius = 0;
     if (g_mp_world_ready) {
-        radius = stream_effective_render_chunk_radius();
+        radius = stream_render_radius();
         if (radius < 1) radius = 1;
         if (radius > 8) radius = 8;
     }
@@ -832,7 +832,7 @@ static void pex_net_request_chunks_around_player(int force) {
             for (int dz = -ring; dz <= ring && req.hash_count < PEX_NET_MAX_CHUNK_HASHES; dz++) {
                 for (int dx = -ring; dx <= ring && req.hash_count < PEX_NET_MAX_CHUNK_HASHES; dx++) {
                     if (ring != 0 && abs(dx) != ring && abs(dz) != ring) continue;
-                    pex_mp_add_cached_hash_for_request(&req, cx + dx, cz + dz);
+                    mp_cache_hash_for_request(&req, cx + dx, cz + dz);
                 }
             }
         }
@@ -846,7 +846,7 @@ static void pex_net_request_chunks_around_player(int force) {
 }
 
 static void pex_net_clear_remote_state(void) {
-    pex_net_free_all_render_players();
+    net_free_render_players();
     memset(g_mp_players, 0, sizeof(g_mp_players));
     memset(g_mp_prev_players, 0, sizeof(g_mp_prev_players));
     memset(g_mp_render_drops, 0, sizeof(g_mp_render_drops));
@@ -906,7 +906,7 @@ static void pex_net_mark_chunk_ready(int chunk_x, int chunk_z) {
     int lcx = (chunk_x * PEX_NET_CHUNK_SIZE - g_flat_world_origin_x) / FLAT_RENDER_CHUNK;
     int lcz = (chunk_z * PEX_NET_CHUNK_SIZE - g_flat_world_origin_z) / FLAT_RENDER_CHUNK;
     if (lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS) {
-        stream_mark_local_chunk_generated(lcx, lcz);
+        stream_mark_chunk_generated(lcx, lcz);
     }
 }
 
@@ -1079,14 +1079,14 @@ static void pex_net_apply_block_change(const PexNetBlockChange *ch) {
     g_flat_blocks[yi][zi][xi] = bid;
     g_flat_levels[yi][zi][xi] = block_is_liquid(bid) ? level : 0;
     g_flat_meta[yi][zi][xi] = block_is_liquid(bid) ? level : meta;
-    int lcx = flat_local_chunk_x_for_world(ch->x);
-    int lcz = flat_local_chunk_z_for_world(ch->z);
+    int lcx = flat_local_chunk_x(ch->x);
+    int lcz = flat_local_chunk_z(ch->z);
     if (flat_local_chunk_valid(lcx, lcz) && !g_flat_world_chunk_generated[lcz][lcx]) {
         g_flat_world_chunk_generated[lcz][lcx] = 1;
     }
-    flat_update_section_occupancy_after_block_change(ch->x, ch->y, ch->z, bid);
-    mark_flat_render_sections_dirty_around_block(ch->x, ch->y, ch->z);
-    mark_flat_render_chunks_dirty_around(ch->x, ch->z);
+    flat_update_section_after_block_change(ch->x, ch->y, ch->z, bid);
+    flat_mark_sections_dirty_near_block(ch->x, ch->y, ch->z);
+    flat_mark_chunks_dirty_near(ch->x, ch->z);
 }
 
 
@@ -1152,12 +1152,12 @@ static void pex_net_apply_player_action(const PexNetPlayerAction *a) {
         float ax = attacker ? attacker->x : g_player_x;
         float az = attacker ? attacker->z : (g_player_z - 1.0f);
         if (attacker_r) { ax = attacker_r->x; az = attacker_r->z; }
-        pex_net_apply_local_knockback(ax, az);
+        net_apply_local_knockback(ax, az);
         if (a->z <= 0 && !g_player_dead) {
-            player_health_set_with_java_hearts(0);
+            player_health_set_hearts(0);
             player_die("was slain");
         } else if (a->z > 0 && a->z < g_player_health) {
-            player_health_set_with_java_hearts(a->z);
+            player_health_set_hearts(a->z);
         }
         return;
     }
@@ -1289,17 +1289,17 @@ static void pex_net_apply_snapshot(const PexNetSnapshot *snap) {
             if (server_health < 0) server_health = 0;
             if (server_health > 20) server_health = 20;
             if (server_health < old_health && !g_player_dead) {
-                const PexNetPlayerState *attacker = pex_net_nearest_remote_player_state();
+                const PexNetPlayerState *attacker = net_nearest_remote_player();
                 if (attacker) {
                     float adx = attacker->x - g_player_x;
                     float adz = attacker->z - g_player_z;
                     if (adx * adx + adz * adz <= 64.0f) {
-                        pex_net_apply_local_knockback(attacker->x, attacker->z);
+                        net_apply_local_knockback(attacker->x, attacker->z);
                     }
                 }
             }
             g_mp_players[i].health = server_health;
-            if (server_health != old_health) player_health_set_with_java_hearts(server_health);
+            if (server_health != old_health) player_health_set_hearts(server_health);
             else g_player_health = server_health;
             g_player_armor = g_mp_players[i].armor;
             if (g_mp_pending_respawn_sync && server_health > 0) {
@@ -1309,7 +1309,7 @@ static void pex_net_apply_snapshot(const PexNetSnapshot *snap) {
                 g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
                 g_player_fall_distance = 0.0f;
                 g_mp_pending_respawn_sync = 0;
-                pex_net_request_chunks_around_player(1);
+                net_request_chunks_around_player(1);
             }
             if (g_player_health <= 0 && !g_player_dead) {
                 player_die("was slain");
@@ -1604,7 +1604,7 @@ static void pex_net_apply_knockback(const PexNetKnockback *kb) {
     g_player_motion_y = kb->my;
     g_player_motion_z = kb->mz;
     if (kb->health >= 0 && kb->health <= 20) {
-        player_health_set_with_java_hearts(kb->health);
+        player_health_set_hearts(kb->health);
     }
     const PexNetPlayerState *attacker = pex_net_find_player_state(kb->attacker_id);
     if (attacker) {
@@ -1640,7 +1640,7 @@ static void pex_net_handle_packet(uint16_t type, const void *payload, uint32_t s
         g_player_x = g_player_prev_x = w->spawn_x;
         g_player_y = g_player_prev_y = w->spawn_y;
         g_player_z = g_player_prev_z = w->spawn_z;
-        player_health_set_no_animation(20);
+        player_health_set_silent(20);
         memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
         g_player_armor = 0;
         g_player_damage_remainder = 0;
@@ -1648,14 +1648,14 @@ static void pex_net_handle_packet(uint16_t type, const void *payload, uint32_t s
         g_player_death_time = 0;
         g_player_hurt_time = 0;
         g_player_attacked_at_yaw = 0.0f;
-        pex_net_free_all_render_players();
+        net_free_render_players();
         memset(g_mp_render_drops, 0, sizeof(g_mp_render_drops));
         g_mp_render_last_time = now_seconds();
         snprintf(g_loaded_world_name, sizeof(g_loaded_world_name), "Multiplayer");
         g_loaded_world_dir[0] = 0;
         pex_net_set_status("Downloading terrain");
         pex_net_send_skin();
-        pex_net_request_chunks_around_player(1);
+        net_request_chunks_around_player(1);
     } else if (type == PEX_S2C_WORLD_START && size == sizeof(PexNetWorldStart)) {
         const PexNetWorldStart *ws = (const PexNetWorldStart *)payload;
         if (ws->chunk_count > 0) g_mp_expected_chunks = ws->chunk_count;
@@ -1861,7 +1861,7 @@ static void pex_net_poll(void) {
     LeaveCriticalSection(&g_mp_rx_cs);
     g_prof_packets_last = packets_this_frame;
     g_prof_chunks_last = chunk_packets_this_frame;
-    pex_net_request_chunks_around_player(0);
+    net_request_chunks_around_player(0);
 }
 
 static int pex_net_connect_to_server(const char *server) {
@@ -1952,7 +1952,7 @@ static void pex_net_send_block_action(int action, int x, int y, int z, int face,
     pex_net_send_packet(PEX_C2S_BLOCK_ACTION, &a, sizeof(a));
 }
 
-static void pex_net_send_player_action_progress(int action, int x, int y, int z, int face, int block_id, int progress) {
+static void net_send_action_progress(int action, int x, int y, int z, int face, int block_id, int progress) {
     if (!g_mp_connected || !g_mp_world_ready || g_mp_player_id <= 0) return;
     PexNetPlayerAction a;
     memset(&a, 0, sizeof(a));
@@ -1968,7 +1968,7 @@ static void pex_net_send_player_action_progress(int action, int x, int y, int z,
 }
 
 static void pex_net_send_player_action(int action, int x, int y, int z, int face, int block_id) {
-    pex_net_send_player_action_progress(action, x, y, z, face, block_id, 0);
+    net_send_action_progress(action, x, y, z, face, block_id, 0);
 }
 
 static int pex_net_player_ray_distance(float max_dist, float *out_t) {
@@ -2235,7 +2235,7 @@ static void pex_net_disconnect(void) {
     g_mp_player_count = 0;
     memset(g_mp_players, 0, sizeof(g_mp_players));
     memset(g_mp_prev_players, 0, sizeof(g_mp_prev_players));
-    pex_net_free_all_render_players();
+    net_free_render_players();
     memset(g_mp_render_drops, 0, sizeof(g_mp_render_drops));
     memset(g_falling_blocks, 0, sizeof(g_falling_blocks));
     g_mp_chunks_received = 0;

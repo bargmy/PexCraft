@@ -33,42 +33,42 @@ static unsigned int wii_embedded_mcrw_pak_len(void) {
     return (unsigned int)(end - start);
 }
 
-static void classic_install_set_state(LONG state, LONG progress, const char *status) {
+static void pack_install_set_state(LONG state, LONG progress, const char *status) {
     if (status) lstrcpynA(g_classic_install_status, status, sizeof(g_classic_install_status));
     InterlockedExchange(&g_classic_install_progress, progress);
     InterlockedExchange(&g_classic_install_state, state);
 }
 
-static void classic_resource_size_start_fetch(void) {
+static void pack_install_start_size_fetch(void) {
     InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_READY);
     InterlockedExchange(&g_classic_download_size_bytes, (LONG)wii_embedded_mcrw_pak_len());
 }
 
-static void classic_resource_size_format(char *out, size_t cap) {
+static void format_download_size(char *out, size_t cap) {
     if (!out || cap == 0) return;
     unsigned int len = wii_embedded_mcrw_pak_len();
     if (len > 0) snprintf(out, cap, "embedded in DOL (%u bytes)", len);
     else snprintf(out, cap, "not embedded in this build");
 }
 
-static void start_classic_pack_install(void) {
+static void pack_install_start(void) {
     (void)g_classic_install_thread;
     if (wii_embedded_mcrw_pak_len() == 0) {
         lstrcpynA(g_classic_install_error, "Embedded Wii texture bundle is empty.", sizeof(g_classic_install_error));
-        classic_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
+        pack_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
     } else {
-        classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in DOL");
+        pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in DOL");
     }
     set_screen(SCREEN_TEXPACK_INSTALL);
 }
 
-static void wii_install_embedded_classic_pack_if_needed(void) {
+static void wii_install_embedded_pack_if_needed(void) {
     g_opts.ignore_classic_resources_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
-    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in DOL");
+    pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in DOL");
 }
 
-static void classic_pack_install_tick(void) {
+static void pack_install_tick(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
     if (state == CLASSIC_INSTALL_DONE) {
         InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);

@@ -6,9 +6,9 @@ static double now_seconds(void) {
     return (double)SDL_GetPerformanceCounter() * inv_freq;
 }
 
-static double pex_profile_begin(void) { return now_seconds(); }
+static double profile_begin(void) { return now_seconds(); }
 
-static void pex_profile_add(PexMainThreadProfileId id, double start_time) {
+static void profile_add_time(PexMainThreadProfileId id, double start_time) {
     if (g_pex_profile_thread_role != PEX_PROFILE_ROLE_MAIN) return;
     if (id < 0 || id >= PROF_COUNT) return;
     double ms = (now_seconds() - start_time) * 1000.0;
@@ -16,13 +16,13 @@ static void pex_profile_add(PexMainThreadProfileId id, double start_time) {
     g_prof_frame_ms[id] += ms;
 }
 
-static void pex_profile_frame_begin(void) {
+static void profile_begin_frame(void) {
     memset(g_prof_frame_ms, 0, sizeof(g_prof_frame_ms));
     g_prof_frame_start_time = now_seconds();
     if (g_prof_accum_start_time <= 0.0) g_prof_accum_start_time = g_prof_frame_start_time;
 }
 
-static void pex_profile_frame_end(void) {
+static void profile_end_frame(void) {
     double now = now_seconds();
     double frame_ms = (now - g_prof_frame_start_time) * 1000.0;
     if (frame_ms < 0.0) frame_ms = 0.0;
@@ -42,7 +42,7 @@ static void pex_profile_frame_end(void) {
     }
 }
 
-static double pex_profile_pct(double ms) {
+static double profile_percent(double ms) {
     double denom = g_prof_display_frame_ms > 0.001 ? g_prof_display_frame_ms : g_ft_last_frame_ms;
     if (denom <= 0.001) return 0.0;
     return (ms * 100.0) / denom;

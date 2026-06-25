@@ -67,7 +67,7 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     return t->id != 0;
 }
 
-static void normalize_sky_alpha_from_luminance(Texture *t) {
+static void normalize_sky_alpha(Texture *t) {
     if (!t || !t->rgba || !t->id || t->w <= 0 || t->h <= 0) return;
     size_t pixels = (size_t)t->w * (size_t)t->h;
     if (pixels == 0 || pixels > (size_t)4096 * (size_t)4096) return;
@@ -106,9 +106,9 @@ static void normalize_sky_alpha_from_luminance(Texture *t) {
 }
 
 static void normalize_sky_sprite_alphas(void) {
-    normalize_sky_alpha_from_luminance(&tex_sun);
-    normalize_sky_alpha_from_luminance(&tex_moon);
-    normalize_sky_alpha_from_luminance(&tex_moon_phases);
+    normalize_sky_alpha(&tex_sun);
+    normalize_sky_alpha(&tex_moon);
+    normalize_sky_alpha(&tex_moon_phases);
 }
 
 
@@ -562,7 +562,7 @@ static void load_pack_icon(TexturePackEntry *e) {
 }
 
 
-static void classic_pack_path(char *out, size_t cap) {
+static void pack_asset_path(char *out, size_t cap) {
     path_join(out, cap, g_texpack_dir, CLASSIC_PACK_NAME);
 }
 
@@ -580,12 +580,12 @@ static int release_file_exists_in_dir(const char *dir, const char *rel) {
     return file_exists(path);
 }
 
-static int classic_pack_installed(void) {
+static int pack_is_installed(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 1;
 #endif
     char dir[MAX_PATHBUF];
-    classic_pack_path(dir, sizeof(dir));
+    pack_asset_path(dir, sizeof(dir));
     return release_file_exists_in_dir(dir, "terrain.png") &&
            release_file_exists_in_dir(dir, "gui/gui.png") &&
            release_file_exists_in_dir(dir, "font/default.png") &&
@@ -594,7 +594,7 @@ static int classic_pack_installed(void) {
            release_file_exists_in_dir(dir, "title/bg/panorama0.png");
 }
 
-static int classic_pack_missing_required_textures(void) {
+static int pack_missing_required_textures(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #endif
@@ -620,8 +620,8 @@ static int classic_pack_missing_required_textures(void) {
         "mob/chicken.png",
         "mob/saddle.png"
     };
-    if (!classic_pack_installed()) return 0;
-    classic_pack_path(dir, sizeof(dir));
+    if (!pack_is_installed()) return 0;
+    pack_asset_path(dir, sizeof(dir));
     for (int i = 0; i < (int)(sizeof(required) / sizeof(required[0])); ++i) {
         if (!release_file_exists_in_dir(dir, required[i])) return 1;
     }
@@ -668,19 +668,19 @@ static int classic_wants_sound_download(void) {
 }
 
 static int classic_resources_need_update(void) {
-    int missing_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int missing_textures = !pack_is_installed() || pack_missing_required_textures();
     int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
     if (missing_textures && !g_opts.ignore_classic_resources_warning) return 1;
     if (missing_sounds) return 1;
     return 0;
 }
 
-static int should_show_classic_pack_download_prompt(void) {
+static int should_show_pack_download_prompt(void) {
     return classic_resources_need_update();
 }
 
 static void classic_resource_missing_summary(char *out, size_t cap) {
-    int missing_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int missing_textures = !pack_is_installed() || pack_missing_required_textures();
     int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
     if (missing_textures && missing_sounds) snprintf(out, cap, "Release textures and Moog City 2 should be downloaded.");
     else if (missing_textures) snprintf(out, cap, "Release textures should be downloaded.");
@@ -693,12 +693,12 @@ static void add_builtin_classic_texture_pack(int *wanted) {
     TexturePackEntry *e = &g_texpacks[g_texpack_count++];
     memset(e, 0, sizeof(*e));
     snprintf(e->name, sizeof(e->name), "%s", CLASSIC_PACK_NAME);
-    classic_pack_path(e->path, sizeof(e->path));
+    pack_asset_path(e->path, sizeof(e->path));
     snprintf(e->desc1, sizeof(e->desc1), "Minecraft 1.2.5 release textures");
     e->is_default = 1;
-    int installed = classic_pack_installed();
+    int installed = pack_is_installed();
     if (installed) {
-        if (classic_pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block/mob textures");
+        if (pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block/mob textures");
         else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing Moog City 2");
         else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Release textures + Moog City 2");
         else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from 1.2.5 client.jar");
@@ -784,7 +784,7 @@ static int make_solid_texture(Texture *t, int w, int h, unsigned char r, unsigne
 
 static int try_release_texture(Texture *tex, const char *rel, int repeat) {
     char dir[MAX_PATHBUF], path[MAX_PATHBUF];
-    classic_pack_path(dir, sizeof(dir));
+    pack_asset_path(dir, sizeof(dir));
     snprintf(path, sizeof(path), "%s\\%s", dir, rel);
     if (load_png_texture(tex, path, repeat)) return 1;
     snprintf(path, sizeof(path), "%s/%s", dir, rel);
@@ -793,7 +793,7 @@ static int try_release_texture(Texture *tex, const char *rel, int repeat) {
 }
 
 static int load_release_textures_from_pack(void) {
-    if (!classic_pack_installed()) return 0;
+    if (!pack_is_installed()) return 0;
     int ok = 1;
     ok = try_release_texture(&tex_bg, "gui\\background.png", 1) && ok;
     ok = try_release_texture(&tex_gui, "gui\\gui.png", 0) && ok;

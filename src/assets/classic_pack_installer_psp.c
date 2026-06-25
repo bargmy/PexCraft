@@ -28,23 +28,23 @@ static char g_classic_install_error[MAX_LABEL] = "";
 static volatile LONG g_classic_download_size_state = CLASSIC_SIZE_READY;
 static volatile LONG g_classic_download_size_bytes = 0;
 
-static void classic_install_set_state(LONG state, LONG progress, const char *status) {
+static void pack_install_set_state(LONG state, LONG progress, const char *status) {
     if (status) lstrcpynA(g_classic_install_status, status, sizeof(g_classic_install_status));
     InterlockedExchange(&g_classic_install_progress, progress);
     InterlockedExchange(&g_classic_install_state, state);
 }
 
-static void classic_install_fail(const char *msg) {
+static void pack_install_fail(const char *msg) {
     lstrcpynA(g_classic_install_error, msg ? msg : "Unknown error", sizeof(g_classic_install_error));
-    classic_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
+    pack_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
 }
 
-static void classic_resource_size_start_fetch(void) {
+static void pack_install_start_size_fetch(void) {
     InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_READY);
     InterlockedExchange(&g_classic_download_size_bytes, (LONG)pexcraft_psp_classic_pack_zip_len);
 }
 
-static void classic_resource_size_format(char *out, size_t cap) {
+static void format_download_size(char *out, size_t cap) {
     if (pexcraft_psp_classic_pack_zip_len > 0) snprintf(out, cap, "embedded in EBOOT (%u bytes)", pexcraft_psp_classic_pack_zip_len);
     else snprintf(out, cap, "not embedded in this build");
 }
@@ -54,19 +54,19 @@ static int psp_write_embedded_classic_zip(const char *zip_path) {
     return pexcraft_psp_classic_pack_zip_len > 0;
 }
 
-static void start_classic_pack_install(void) {
+static void pack_install_start(void) {
     /* Memory-only PSP mode: no extraction to Memory Stick.  The workflow embeds
        already-converted .mcrw textures in the EBOOT, so installation is instant. */
-    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in EBOOT");
+    pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in EBOOT");
 }
 
-static void psp_install_embedded_classic_pack_if_needed(void) {
+static void psp_install_embedded_pack_if_needed(void) {
     g_opts.ignore_classic_resources_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
-    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in EBOOT");
+    pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in EBOOT");
 }
 
-static void classic_pack_install_tick(void) {
+static void pack_install_tick(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
     if (state == CLASSIC_INSTALL_DONE) {
         InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);

@@ -81,7 +81,7 @@ static void pxr_d3d9_mat_mul(float out[16], const float a[16], const float b[16]
     memcpy(out, r, sizeof(r));
 }
 
-static void pxr_d3d9_depth_remap_gl_to_d3d(float m[16]) {
+static void d3d9_depth_remap_gl_to_d3d(float m[16]) {
     float remap[16];
     memset(remap, 0, sizeof(remap));
     remap[0] = remap[5] = remap[15] = 1.0f;
@@ -92,7 +92,7 @@ static void pxr_d3d9_depth_remap_gl_to_d3d(float m[16]) {
     memcpy(m, out, sizeof(out));
 }
 
-static D3DMATRIX pxr_d3d9_gl_col_major_to_d3d_row_matrix(const float m[16]) {
+static D3DMATRIX d3d9_matrix_from_gl(const float m[16]) {
     D3DMATRIX d;
     d._11=m[0];  d._12=m[1];  d._13=m[2];  d._14=m[3];
     d._21=m[4];  d._22=m[5];  d._23=m[6];  d._24=m[7];
@@ -101,7 +101,7 @@ static D3DMATRIX pxr_d3d9_gl_col_major_to_d3d_row_matrix(const float m[16]) {
     return d;
 }
 
-static DWORD pxr_d3d9_pack_argb_from_rgba(uint32_t rgba) {
+static DWORD d3d9_pack_argb(uint32_t rgba) {
     /* PexVertex.color is memory-RGBA: r | g<<8 | b<<16 | a<<24. */
     DWORD r = rgba & 255;
     DWORD g = (rgba >> 8) & 255;
@@ -124,7 +124,7 @@ static void pxr_d3d9_release_dynamic(void) {
     g_pxr_d3d9.dynamic_i_cap = 0;
 }
 
-static void pxr_d3d9_set_initial_states(void) {
+static void d3d9_set_initial_states(void) {
     IDirect3DDevice9 *d = g_pxr_d3d9.dev;
     if (!d) return;
     IDirect3DDevice9_SetFVF(d, PEX_D3D9_FVF);
@@ -162,11 +162,11 @@ static int pxr_d3d9_reset_device(int w, int h) {
     if (FAILED(hr)) return 0;
     g_pxr_d3d9.width = w;
     g_pxr_d3d9.height = h;
-    pxr_d3d9_set_initial_states();
+    d3d9_set_initial_states();
     return 1;
 }
 
-static int renderer_d3d9_init_impl(void *window_handle, int width, int height) {
+static int d3d9_init(void *window_handle, int width, int height) {
     memset(&g_pxr_d3d9, 0, sizeof(g_pxr_d3d9));
     HWND hwnd = (HWND)window_handle;
     if (!hwnd) return 0;
@@ -203,12 +203,12 @@ static int renderer_d3d9_init_impl(void *window_handle, int width, int height) {
         memset(&g_pxr_d3d9, 0, sizeof(g_pxr_d3d9));
         return 0;
     }
-    pxr_d3d9_set_initial_states();
+    d3d9_set_initial_states();
     g_pxr_d3d9.active = 1;
     return 1;
 }
 
-static void renderer_d3d9_shutdown_impl(void) {
+static void d3d9_shutdown(void) {
     for (uint32_t i = 1; i < PEX_RENDERER_MAX_MESHES; ++i) pxr_d3d9_release_mesh(&g_pxr_d3d9.meshes[i]);
     for (uint32_t i = 1; i < PEX_RENDERER_MAX_TEXTURES; ++i) {
         if (g_pxr_d3d9.textures[i].tex) { IDirect3DTexture9_Release(g_pxr_d3d9.textures[i].tex); g_pxr_d3d9.textures[i].tex = NULL; }
@@ -219,12 +219,12 @@ static void renderer_d3d9_shutdown_impl(void) {
     memset(&g_pxr_d3d9, 0, sizeof(g_pxr_d3d9));
 }
 
-static void renderer_d3d9_resize_impl(int width, int height) {
+static void d3d9_resize(int width, int height) {
     if (!g_pxr_d3d9.active) return;
     pxr_d3d9_reset_device(width, height);
 }
 
-static int renderer_d3d9_begin_frame_impl(float r, float g, float b, float a) {
+static int d3d9_begin_frame(float r, float g, float b, float a) {
     if (!g_pxr_d3d9.dev) return 0;
     HRESULT coop = IDirect3DDevice9_TestCooperativeLevel(g_pxr_d3d9.dev);
     if (coop == D3DERR_DEVICELOST) return 0;
@@ -241,7 +241,7 @@ static int renderer_d3d9_begin_frame_impl(float r, float g, float b, float a) {
     return 1;
 }
 
-static void renderer_d3d9_end_frame_impl(void) {
+static void d3d9_end_frame(void) {
     if (!g_pxr_d3d9.dev) return;
     if (g_pxr_d3d9.scene_open) {
         IDirect3DDevice9_EndScene(g_pxr_d3d9.dev);
@@ -250,7 +250,7 @@ static void renderer_d3d9_end_frame_impl(void) {
     IDirect3DDevice9_Present(g_pxr_d3d9.dev, NULL, NULL, NULL, NULL);
 }
 
-static PexTextureHandle renderer_d3d9_create_texture_impl(const PexTextureDesc *desc) {
+static PexTextureHandle d3d9_create_texture(const PexTextureDesc *desc) {
     if (!g_pxr_d3d9.dev || !desc || desc->width <= 0 || desc->height <= 0) return 0;
     uint32_t id = g_pxr_d3d9.next_texture++;
     if (id >= PEX_RENDERER_MAX_TEXTURES) return 0;
@@ -277,7 +277,7 @@ static PexTextureHandle renderer_d3d9_create_texture_impl(const PexTextureDesc *
     return id;
 }
 
-static void renderer_d3d9_destroy_texture_impl(PexTextureHandle handle) {
+static void d3d9_destroy_texture(PexTextureHandle handle) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_TEXTURES) return;
     if (g_pxr_d3d9.textures[handle].tex) IDirect3DTexture9_Release(g_pxr_d3d9.textures[handle].tex);
     memset(&g_pxr_d3d9.textures[handle], 0, sizeof(g_pxr_d3d9.textures[handle]));
@@ -289,7 +289,7 @@ static uint32_t pxr_next_pow2_u32(uint32_t v, uint32_t minv) {
     return c < v ? v : c;
 }
 
-static int pxr_d3d9_ensure_mesh_capacity(PexD3D9Mesh *m, const PexMesh *mesh) {
+static int d3d9_ensure_mesh_capacity(PexD3D9Mesh *m, const PexMesh *mesh) {
     if (!g_pxr_d3d9.dev || !m || !mesh) return 0;
     int recreate = 0;
     if (!m->vb || !m->ib) recreate = 1;
@@ -317,10 +317,10 @@ static int pxr_d3d9_ensure_mesh_capacity(PexD3D9Mesh *m, const PexMesh *mesh) {
     return 1;
 }
 
-static int pxr_d3d9_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
+static int d3d9_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
     if (!g_pxr_d3d9.dev || !mesh || !mesh->vertices || !mesh->indices || mesh->vertex_count == 0 || mesh->index_count == 0) return 0;
     PexD3D9Mesh *m = &g_pxr_d3d9.meshes[id];
-    if (!pxr_d3d9_ensure_mesh_capacity(m, mesh)) return 0;
+    if (!d3d9_ensure_mesh_capacity(m, mesh)) return 0;
     m->vertex_count = mesh->vertex_count;
     m->index_count = mesh->index_count;
 
@@ -331,7 +331,7 @@ static int pxr_d3d9_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
             vdst[i].x = mesh->vertices[i].x;
             vdst[i].y = mesh->vertices[i].y;
             vdst[i].z = mesh->vertices[i].z;
-            vdst[i].color = pxr_d3d9_pack_argb_from_rgba(mesh->vertices[i].color);
+            vdst[i].color = d3d9_pack_argb(mesh->vertices[i].color);
             vdst[i].u = mesh->vertices[i].u;
             vdst[i].v = mesh->vertices[i].v;
         }
@@ -345,19 +345,19 @@ static int pxr_d3d9_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
     return 1;
 }
 
-static PexMeshHandle renderer_d3d9_upload_mesh_impl(const PexMesh *mesh) {
+static PexMeshHandle d3d9_upload_mesh(const PexMesh *mesh) {
     uint32_t id = g_pxr_d3d9.next_mesh++;
     if (id == 0 || id >= PEX_RENDERER_MAX_MESHES) return 0;
-    if (!pxr_d3d9_upload_mesh_to_slot(id, mesh)) return 0;
+    if (!d3d9_upload_mesh_to_slot(id, mesh)) return 0;
     return id;
 }
 
-static int renderer_d3d9_update_mesh_impl(PexMeshHandle handle, const PexMesh *mesh) {
+static int d3d9_update_mesh(PexMeshHandle handle, const PexMesh *mesh) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES) return 0;
-    return pxr_d3d9_upload_mesh_to_slot(handle, mesh);
+    return d3d9_upload_mesh_to_slot(handle, mesh);
 }
 
-static void renderer_d3d9_destroy_mesh_impl(PexMeshHandle handle) {
+static void d3d9_destroy_mesh(PexMeshHandle handle) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES) return;
     pxr_d3d9_release_mesh(&g_pxr_d3d9.meshes[handle]);
 }
@@ -406,9 +406,9 @@ static void pxr_d3d9_apply_state(const PexRenderState *s) {
     }
     float proj_d3d[16];
     memcpy(proj_d3d, s->projection, sizeof(proj_d3d));
-    pxr_d3d9_depth_remap_gl_to_d3d(proj_d3d);
-    D3DMATRIX mv = pxr_d3d9_gl_col_major_to_d3d_row_matrix(s->modelview);
-    D3DMATRIX pr = pxr_d3d9_gl_col_major_to_d3d_row_matrix(proj_d3d);
+    d3d9_depth_remap_gl_to_d3d(proj_d3d);
+    D3DMATRIX mv = d3d9_matrix_from_gl(s->modelview);
+    D3DMATRIX pr = d3d9_matrix_from_gl(proj_d3d);
     D3DMATRIX world;
     memset(&world, 0, sizeof(world));
     world._11 = world._22 = world._33 = world._44 = 1.0f;
@@ -418,7 +418,7 @@ static void pxr_d3d9_apply_state(const PexRenderState *s) {
     g_pxr_d3d9.cache_valid = 1;
 }
 
-static void renderer_d3d9_draw_mesh_impl(PexMeshHandle handle, const PexRenderState *state) {
+static void d3d9_draw_mesh(PexMeshHandle handle, const PexRenderState *state) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES || !g_pxr_d3d9.dev) return;
     PexD3D9Mesh *m = &g_pxr_d3d9.meshes[handle];
     if (!m->vb || !m->ib || m->index_count < 3) return;
@@ -450,7 +450,7 @@ static int pxr_d3d9_ensure_dynamic(uint32_t vcount, uint32_t icount) {
     return 1;
 }
 
-static void renderer_d3d9_draw_dynamic_impl(const PexMesh *mesh, const PexRenderState *state) {
+static void d3d9_draw_dynamic(const PexMesh *mesh, const PexRenderState *state) {
     if (!mesh || !mesh->vertices || !mesh->indices || mesh->vertex_count == 0 || mesh->index_count < 3) return;
     if (!pxr_d3d9_ensure_dynamic(mesh->vertex_count, mesh->index_count)) return;
     PexD3D9Vertex *vdst = NULL;
@@ -458,7 +458,7 @@ static void renderer_d3d9_draw_dynamic_impl(const PexMesh *mesh, const PexRender
     if (FAILED(IDirect3DVertexBuffer9_Lock(g_pxr_d3d9.dynamic_vb, 0, mesh->vertex_count * sizeof(PexD3D9Vertex), (void**)&vdst, D3DLOCK_DISCARD))) return;
     for (uint32_t i = 0; i < mesh->vertex_count; ++i) {
         vdst[i].x = mesh->vertices[i].x; vdst[i].y = mesh->vertices[i].y; vdst[i].z = mesh->vertices[i].z;
-        vdst[i].color = pxr_d3d9_pack_argb_from_rgba(mesh->vertices[i].color); vdst[i].u = mesh->vertices[i].u; vdst[i].v = mesh->vertices[i].v;
+        vdst[i].color = d3d9_pack_argb(mesh->vertices[i].color); vdst[i].u = mesh->vertices[i].u; vdst[i].v = mesh->vertices[i].v;
     }
     IDirect3DVertexBuffer9_Unlock(g_pxr_d3d9.dynamic_vb);
     if (FAILED(IDirect3DIndexBuffer9_Lock(g_pxr_d3d9.dynamic_ib, 0, mesh->index_count * sizeof(uint32_t), (void**)&idst, D3DLOCK_DISCARD))) return;
@@ -476,7 +476,7 @@ static void renderer_d3d9_draw_dynamic_impl(const PexMesh *mesh, const PexRender
 
 static int renderer_d3d9_attach_device(void *dev, int width, int height) {
     if (!dev) return 0;
-    renderer_d3d9_shutdown_impl();
+    d3d9_shutdown();
     memset(&g_pxr_d3d9, 0, sizeof(g_pxr_d3d9));
     g_pxr_d3d9.dev = (IDirect3DDevice9*)dev;
     IDirect3DDevice9_AddRef(g_pxr_d3d9.dev);
@@ -486,27 +486,27 @@ static int renderer_d3d9_attach_device(void *dev, int width, int height) {
     g_pxr_d3d9.height = height > 0 ? height : 480;
     g_pxr_d3d9.next_mesh = 1;
     g_pxr_d3d9.next_texture = 1;
-    pxr_d3d9_set_initial_states();
+    d3d9_set_initial_states();
     return 1;
 }
 
-static PexRendererStats renderer_d3d9_get_stats_impl(void) { return g_pxr_d3d9.stats; }
+static PexRendererStats d3d9_get_stats(void) { return g_pxr_d3d9.stats; }
 
 static PexRendererBackend g_renderer_d3d9_native = {
     "Direct3D 9 Native",
-    renderer_d3d9_init_impl,
-    renderer_d3d9_shutdown_impl,
-    renderer_d3d9_resize_impl,
-    renderer_d3d9_begin_frame_impl,
-    renderer_d3d9_end_frame_impl,
-    renderer_d3d9_create_texture_impl,
-    renderer_d3d9_destroy_texture_impl,
-    renderer_d3d9_upload_mesh_impl,
-    renderer_d3d9_update_mesh_impl,
-    renderer_d3d9_destroy_mesh_impl,
-    renderer_d3d9_draw_mesh_impl,
-    renderer_d3d9_draw_dynamic_impl,
-    renderer_d3d9_get_stats_impl
+    d3d9_init,
+    d3d9_shutdown,
+    d3d9_resize,
+    d3d9_begin_frame,
+    d3d9_end_frame,
+    d3d9_create_texture,
+    d3d9_destroy_texture,
+    d3d9_upload_mesh,
+    d3d9_update_mesh,
+    d3d9_destroy_mesh,
+    d3d9_draw_mesh,
+    d3d9_draw_dynamic,
+    d3d9_get_stats
 };
 
 static PexRendererBackend *renderer_d3d9_get_backend(void) { return &g_renderer_d3d9_native; }

@@ -134,7 +134,7 @@ static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, i
 }
 
 
-static void draw_textured_rect_256_tex(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
+static void draw_textured_rect_256(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
     if (!tex || !tex->id || w <= 0 || h <= 0) return;
     /* Java Gui.drawTexturedModalRect uses a fixed 1/256 atlas coordinate scale.
        Do not divide by the uploaded texture's pixel size here: HD/converted GUI

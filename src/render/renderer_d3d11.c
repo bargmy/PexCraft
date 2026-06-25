@@ -114,13 +114,13 @@ typedef struct PexD3D11DeferredMeshRelease {
 static PexD3D11DeferredMeshRelease g_pxr_d3d11_deferred_mesh_release[PXR_D3D11_DEFERRED_MESH_RELEASE_SLOTS];
 static uint32_t g_pxr_d3d11_frame_serial = 1;
 
-static void pxr_d3d11_release_failed_device(IDXGISwapChain **swap, ID3D11Device **dev, ID3D11DeviceContext **ctx) {
+static void d3d11_release_failed_device(IDXGISwapChain **swap, ID3D11Device **dev, ID3D11DeviceContext **ctx) {
     if (ctx && *ctx) { ID3D11DeviceContext_Release(*ctx); *ctx = NULL; }
     if (swap && *swap) { IDXGISwapChain_Release(*swap); *swap = NULL; }
     if (dev && *dev) { ID3D11Device_Release(*dev); *dev = NULL; }
 }
 
-static HRESULT pxr_d3d11_create_device_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
+static HRESULT d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
                                                   const D3D_FEATURE_LEVEL *levels,
                                                   UINT level_count,
                                                   D3D_FEATURE_LEVEL *got_level) {
@@ -147,7 +147,7 @@ static HRESULT pxr_d3d11_create_device_swap_chain(DXGI_SWAP_CHAIN_DESC *base_des
                 g_pxr_d3d11.swap_flags = desc.Flags;
                 return hr;
             }
-            pxr_d3d11_release_failed_device(&g_pxr_d3d11.swap, &g_pxr_d3d11.dev, &g_pxr_d3d11.ctx);
+            d3d11_release_failed_device(&g_pxr_d3d11.swap, &g_pxr_d3d11.dev, &g_pxr_d3d11.ctx);
         }
     }
     return hr;
@@ -166,7 +166,7 @@ static void pxr_d3d11_mat_mul(float out[16], const float a[16], const float b[16
     memcpy(out, r, sizeof(r));
 }
 
-static void pxr_d3d11_depth_remap_gl_to_d3d(float m[16]) {
+static void d3d11_depth_remap_gl_to_d3d(float m[16]) {
     float remap[16];
     memset(remap, 0, sizeof(remap));
     remap[0] = remap[5] = remap[15] = 1.0f;
@@ -177,7 +177,7 @@ static void pxr_d3d11_depth_remap_gl_to_d3d(float m[16]) {
     memcpy(m, out, sizeof(out));
 }
 
-static void pxr_d3d11_gl_col_major_to_row_major(float out[16], const float m[16]) {
+static void d3d11_matrix_from_gl(float out[16], const float m[16]) {
     /* The engine matrices are OpenGL column-major/column-vector.  HLSL uses
        row-vector math here, so place the GL column-major array into row-major
        memory exactly like the D3D9 fixed-function path. */
@@ -194,7 +194,7 @@ static void pxr_d3d11_release_mesh(PexD3D11Mesh *m) {
     memset(m, 0, sizeof(*m));
 }
 
-static void pxr_d3d11_release_retired_meshes(int release_all) {
+static void d3d11_release_retired_meshes(int release_all) {
     for (int n = 0; n < PXR_D3D11_DEFERRED_MESH_RELEASE_SLOTS; ++n) {
         PexD3D11DeferredMeshRelease *r = &g_pxr_d3d11_deferred_mesh_release[n];
         if (!r->mesh.vb && !r->mesh.ib) continue;
@@ -204,7 +204,7 @@ static void pxr_d3d11_release_retired_meshes(int release_all) {
     }
 }
 
-static void pxr_d3d11_retire_mesh_later(PexD3D11Mesh *m) {
+static void d3d11_retire_mesh_later(PexD3D11Mesh *m) {
     if (!m || (!m->vb && !m->ib)) return;
     for (int n = 0; n < PXR_D3D11_DEFERRED_MESH_RELEASE_SLOTS; ++n) {
         PexD3D11DeferredMeshRelease *r = &g_pxr_d3d11_deferred_mesh_release[n];
@@ -227,7 +227,7 @@ static void pxr_d3d11_retire_mesh_later(PexD3D11Mesh *m) {
    immediate context, so the expensive terrain-section buffer creation/upload can
    happen outside the render thread.  The render thread later adopts the finished
    buffers with a pointer swap. */
-static int renderer_d3d11_prebuild_mesh_buffers(const PexMesh *mesh, PexD3D11Mesh *out) {
+static int d3d11_prebuild_mesh(const PexMesh *mesh, PexD3D11Mesh *out) {
     if (out) memset(out, 0, sizeof(*out));
     if (!out || !g_pxr_d3d11.dev || !mesh || !mesh->vertices || !mesh->indices || mesh->vertex_count == 0 || mesh->index_count == 0) return 0;
 
@@ -264,39 +264,39 @@ static int renderer_d3d11_prebuild_mesh_buffers(const PexMesh *mesh, PexD3D11Mes
     return 1;
 }
 
-static void renderer_d3d11_discard_prebuilt_mesh(PexD3D11Mesh *mesh) {
+static void d3d11_discard_mesh(PexD3D11Mesh *mesh) {
     pxr_d3d11_release_mesh(mesh);
 }
 
-static int renderer_d3d11_adopt_prebuilt_mesh(PexMeshHandle *slot, PexD3D11Mesh *built) {
+static int d3d11_adopt_mesh(PexMeshHandle *slot, PexD3D11Mesh *built) {
     if (!slot || !built || !g_pxr_d3d11.dev || (!built->vb && !built->ib)) return 0;
     uint32_t id = *slot;
     if (id == 0) {
         id = g_pxr_d3d11.next_mesh++;
         if (id == 0 || id >= PEX_RENDERER_MAX_MESHES) {
-            renderer_d3d11_discard_prebuilt_mesh(built);
+            d3d11_discard_mesh(built);
             return 0;
         }
         *slot = id;
     }
     if (id >= PEX_RENDERER_MAX_MESHES) {
-        renderer_d3d11_discard_prebuilt_mesh(built);
+        d3d11_discard_mesh(built);
         return 0;
     }
     PexD3D11Mesh old = g_pxr_d3d11.meshes[id];
     g_pxr_d3d11.meshes[id] = *built;
     memset(built, 0, sizeof(*built));
-    pxr_d3d11_retire_mesh_later(&old);
+    d3d11_retire_mesh_later(&old);
     g_pxr_d3d11.stats.buffer_uploads++;
     return 1;
 }
 
-static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) {
+static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) {
     if (!slot || *slot == 0 || *slot >= PEX_RENDERER_MAX_MESHES) return;
     PexD3D11Mesh old = g_pxr_d3d11.meshes[*slot];
     memset(&g_pxr_d3d11.meshes[*slot], 0, sizeof(g_pxr_d3d11.meshes[*slot]));
     *slot = 0;
-    pxr_d3d11_retire_mesh_later(&old);
+    d3d11_retire_mesh_later(&old);
 }
 
 static void pxr_d3d11_release_views(void) {
@@ -428,7 +428,7 @@ static int pxr_d3d11_create_views(int width, int height) {
     return 1;
 }
 
-static int renderer_d3d11_init_impl(void *window_handle, int width, int height) {
+static int d3d11_init(void *window_handle, int width, int height) {
     memset(&g_pxr_d3d11, 0, sizeof(g_pxr_d3d11));
     HWND hwnd = (HWND)window_handle;
     if (!hwnd) return 0;
@@ -449,7 +449,7 @@ static int renderer_d3d11_init_impl(void *window_handle, int width, int height) 
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
     D3D_FEATURE_LEVEL got;
-    HRESULT hr = pxr_d3d11_create_device_swap_chain(&scd, levels, (UINT)ARRAY_COUNT(levels), &got);
+    HRESULT hr = d3d11_create_swap_chain(&scd, levels, (UINT)ARRAY_COUNT(levels), &got);
     if (FAILED(hr) || !g_pxr_d3d11.dev || !g_pxr_d3d11.ctx || !g_pxr_d3d11.swap) { memset(&g_pxr_d3d11, 0, sizeof(g_pxr_d3d11)); return 0; }
     if (!pxr_d3d11_create_views(width, height)) return 0;
     if (!pxr_d3d11_create_pipeline()) return 0;
@@ -461,8 +461,8 @@ static int renderer_d3d11_init_impl(void *window_handle, int width, int height) 
     return 1;
 }
 
-static void renderer_d3d11_shutdown_impl(void) {
-    pxr_d3d11_release_retired_meshes(1);
+static void d3d11_shutdown(void) {
+    d3d11_release_retired_meshes(1);
     for (uint32_t i = 1; i < PEX_RENDERER_MAX_MESHES; ++i) pxr_d3d11_release_mesh(&g_pxr_d3d11.meshes[i]);
     for (uint32_t i = 1; i < PEX_RENDERER_MAX_TEXTURES; ++i) {
         if (g_pxr_d3d11.textures[i].srv) { ID3D11ShaderResourceView_Release(g_pxr_d3d11.textures[i].srv); g_pxr_d3d11.textures[i].srv = NULL; }
@@ -478,7 +478,7 @@ static void renderer_d3d11_shutdown_impl(void) {
     g_pxr_d3d11_frame_serial = 1;
 }
 
-static void renderer_d3d11_resize_impl(int width, int height) {
+static void d3d11_resize(int width, int height) {
     if (!g_pxr_d3d11.active || !g_pxr_d3d11.swap) return;
     if (width < 1) width = 1;
     if (height < 1) height = 1;
@@ -490,10 +490,10 @@ static void renderer_d3d11_resize_impl(int width, int height) {
     g_pxr_d3d11.cache_valid = 0;
 }
 
-static int renderer_d3d11_begin_frame_impl(float r, float g, float b, float a) {
+static int d3d11_begin_frame(float r, float g, float b, float a) {
     if (!g_pxr_d3d11.ctx) return 0;
     g_pxr_d3d11_frame_serial++;
-    pxr_d3d11_release_retired_meshes(0);
+    d3d11_release_retired_meshes(0);
     g_pxr_d3d11.stats.draw_calls = 0;
     g_pxr_d3d11.stats.triangles = 0;
     g_pxr_d3d11.stats.buffer_uploads = 0;
@@ -512,13 +512,13 @@ static int renderer_d3d11_begin_frame_impl(float r, float g, float b, float a) {
     return 1;
 }
 
-static void renderer_d3d11_end_frame_impl(void) {
+static void d3d11_end_frame(void) {
     if (!g_pxr_d3d11.swap) return;
     UINT flags = (g_pxr_d3d11.allow_tearing && g_opts.max_fps <= 0) ? DXGI_PRESENT_ALLOW_TEARING : 0;
     IDXGISwapChain_Present(g_pxr_d3d11.swap, 0, flags);
 }
 
-static PexTextureHandle renderer_d3d11_create_texture_impl(const PexTextureDesc *desc) {
+static PexTextureHandle d3d11_create_texture(const PexTextureDesc *desc) {
     if (!g_pxr_d3d11.dev || !desc || desc->width <= 0 || desc->height <= 0) return 0;
     uint32_t id = g_pxr_d3d11.next_texture++;
     if (id >= PEX_RENDERER_MAX_TEXTURES) return 0;
@@ -536,20 +536,20 @@ static PexTextureHandle renderer_d3d11_create_texture_impl(const PexTextureDesc 
     return id;
 }
 
-static void renderer_d3d11_destroy_texture_impl(PexTextureHandle handle) {
+static void d3d11_destroy_texture(PexTextureHandle handle) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_TEXTURES) return;
     if (g_pxr_d3d11.textures[handle].srv) ID3D11ShaderResourceView_Release(g_pxr_d3d11.textures[handle].srv);
     if (g_pxr_d3d11.textures[handle].tex) ID3D11Texture2D_Release(g_pxr_d3d11.textures[handle].tex);
     memset(&g_pxr_d3d11.textures[handle], 0, sizeof(g_pxr_d3d11.textures[handle]));
 }
 
-static uint32_t pxr_d3d11_next_pow2_u32(uint32_t v, uint32_t minv) {
+static uint32_t d3d11_next_pow2(uint32_t v, uint32_t minv) {
     uint32_t c = minv;
     while (c < v && c < 0x80000000u) c <<= 1;
     return c < v ? v : c;
 }
 
-static int pxr_d3d11_ensure_mesh_capacity(PexD3D11Mesh *m, const PexMesh *mesh) {
+static int d3d11_ensure_mesh_capacity(PexD3D11Mesh *m, const PexMesh *mesh) {
     if (!g_pxr_d3d11.dev || !m || !mesh) return 0;
     int recreate = 0;
     if (!m->vb || !m->ib) recreate = 1;
@@ -561,8 +561,8 @@ static int pxr_d3d11_ensure_mesh_capacity(PexD3D11Mesh *m, const PexMesh *mesh) 
     if (m->ib) { ID3D11Buffer_Release(m->ib); m->ib = NULL; }
 
     m->dynamic = mesh->dynamic;
-    m->vertex_capacity = pxr_d3d11_next_pow2_u32(mesh->vertex_count, 4096u);
-    m->index_capacity = pxr_d3d11_next_pow2_u32(mesh->index_count, 6144u);
+    m->vertex_capacity = d3d11_next_pow2(mesh->vertex_count, 4096u);
+    m->index_capacity = d3d11_next_pow2(mesh->index_count, 6144u);
 
     D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd));
     bd.ByteWidth = m->vertex_capacity * sizeof(PexVertex);
@@ -581,10 +581,10 @@ static int pxr_d3d11_ensure_mesh_capacity(PexD3D11Mesh *m, const PexMesh *mesh) 
     return 1;
 }
 
-static int pxr_d3d11_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
+static int d3d11_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
     if (!g_pxr_d3d11.dev || !mesh || !mesh->vertices || !mesh->indices || mesh->vertex_count == 0 || mesh->index_count == 0) return 0;
     PexD3D11Mesh *m = &g_pxr_d3d11.meshes[id];
-    if (!pxr_d3d11_ensure_mesh_capacity(m, mesh)) return 0;
+    if (!d3d11_ensure_mesh_capacity(m, mesh)) return 0;
     m->vertex_count = mesh->vertex_count;
     m->index_count = mesh->index_count;
 
@@ -603,19 +603,19 @@ static int pxr_d3d11_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
     return 1;
 }
 
-static PexMeshHandle renderer_d3d11_upload_mesh_impl(const PexMesh *mesh) {
+static PexMeshHandle d3d11_upload_mesh(const PexMesh *mesh) {
     uint32_t id = g_pxr_d3d11.next_mesh++;
     if (id == 0 || id >= PEX_RENDERER_MAX_MESHES) return 0;
-    if (!pxr_d3d11_upload_mesh_to_slot(id, mesh)) return 0;
+    if (!d3d11_upload_mesh_to_slot(id, mesh)) return 0;
     return id;
 }
 
-static int renderer_d3d11_update_mesh_impl(PexMeshHandle handle, const PexMesh *mesh) {
+static int d3d11_update_mesh(PexMeshHandle handle, const PexMesh *mesh) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES) return 0;
-    return pxr_d3d11_upload_mesh_to_slot(handle, mesh);
+    return d3d11_upload_mesh_to_slot(handle, mesh);
 }
 
-static void renderer_d3d11_destroy_mesh_impl(PexMeshHandle handle) {
+static void d3d11_destroy_mesh(PexMeshHandle handle) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES) return;
     pxr_d3d11_release_mesh(&g_pxr_d3d11.meshes[handle]);
 }
@@ -640,9 +640,9 @@ static void pxr_d3d11_apply_state(const PexRenderState *s) {
         PexD3D11CBNative *cb = (PexD3D11CBNative*)map.pData;
         float proj_d3d[16];
         memcpy(proj_d3d, s->projection, sizeof(proj_d3d));
-        pxr_d3d11_depth_remap_gl_to_d3d(proj_d3d);
-        pxr_d3d11_gl_col_major_to_row_major(cb->modelview, s->modelview);
-        pxr_d3d11_gl_col_major_to_row_major(cb->projection, proj_d3d);
+        d3d11_depth_remap_gl_to_d3d(proj_d3d);
+        d3d11_matrix_from_gl(cb->modelview, s->modelview);
+        d3d11_matrix_from_gl(cb->projection, proj_d3d);
         cb->fog_color[0] = ((s->fog_color >> 16) & 255) / 255.0f;
         cb->fog_color[1] = ((s->fog_color >> 8) & 255) / 255.0f;
         cb->fog_color[2] = (s->fog_color & 255) / 255.0f;
@@ -657,7 +657,7 @@ static void pxr_d3d11_apply_state(const PexRenderState *s) {
     ID3D11DeviceContext_PSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
 }
 
-static void renderer_d3d11_draw_mesh_impl(PexMeshHandle handle, const PexRenderState *state) {
+static void d3d11_draw_mesh(PexMeshHandle handle, const PexRenderState *state) {
     if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES || !g_pxr_d3d11.ctx) return;
     PexD3D11Mesh *m = &g_pxr_d3d11.meshes[handle];
     if (!m->vb || !m->ib || m->index_count < 3) return;
@@ -698,7 +698,7 @@ static int pxr_d3d11_ensure_dynamic(uint32_t vcount, uint32_t icount) {
     return 1;
 }
 
-static void renderer_d3d11_draw_dynamic_impl(const PexMesh *mesh, const PexRenderState *state) {
+static void d3d11_draw_dynamic(const PexMesh *mesh, const PexRenderState *state) {
     if (!mesh || !mesh->vertices || !mesh->indices || mesh->vertex_count == 0 || mesh->index_count < 3) return;
     if (!pxr_d3d11_ensure_dynamic(mesh->vertex_count, mesh->index_count)) return;
     D3D11_MAPPED_SUBRESOURCE map;
@@ -721,7 +721,7 @@ static void renderer_d3d11_draw_dynamic_impl(const PexMesh *mesh, const PexRende
 
 static int renderer_d3d11_attach_device(void *dev, void *ctx, int width, int height) {
     if (!dev || !ctx) return 0;
-    renderer_d3d11_shutdown_impl();
+    d3d11_shutdown();
     memset(&g_pxr_d3d11, 0, sizeof(g_pxr_d3d11));
     g_pxr_d3d11.dev = (ID3D11Device*)dev;
     g_pxr_d3d11.ctx = (ID3D11DeviceContext*)ctx;
@@ -733,7 +733,7 @@ static int renderer_d3d11_attach_device(void *dev, void *ctx, int width, int hei
     g_pxr_d3d11.height = height > 0 ? height : 480;
     g_pxr_d3d11.next_mesh = 1;
     g_pxr_d3d11.next_texture = 1;
-    if (!pxr_d3d11_create_pipeline()) { renderer_d3d11_shutdown_impl(); return 0; }
+    if (!pxr_d3d11_create_pipeline()) { d3d11_shutdown(); return 0; }
     ID3D11DeviceContext_IASetInputLayout(g_pxr_d3d11.ctx, g_pxr_d3d11.input_layout);
     ID3D11DeviceContext_VSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.vs, NULL, 0);
     ID3D11DeviceContext_PSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.ps, NULL, 0);
@@ -741,23 +741,23 @@ static int renderer_d3d11_attach_device(void *dev, void *ctx, int width, int hei
     return 1;
 }
 
-static PexRendererStats renderer_d3d11_get_stats_impl(void) { return g_pxr_d3d11.stats; }
+static PexRendererStats d3d11_get_stats(void) { return g_pxr_d3d11.stats; }
 
 static PexRendererBackend g_renderer_d3d11_native = {
     "Direct3D 11 Native",
-    renderer_d3d11_init_impl,
-    renderer_d3d11_shutdown_impl,
-    renderer_d3d11_resize_impl,
-    renderer_d3d11_begin_frame_impl,
-    renderer_d3d11_end_frame_impl,
-    renderer_d3d11_create_texture_impl,
-    renderer_d3d11_destroy_texture_impl,
-    renderer_d3d11_upload_mesh_impl,
-    renderer_d3d11_update_mesh_impl,
-    renderer_d3d11_destroy_mesh_impl,
-    renderer_d3d11_draw_mesh_impl,
-    renderer_d3d11_draw_dynamic_impl,
-    renderer_d3d11_get_stats_impl
+    d3d11_init,
+    d3d11_shutdown,
+    d3d11_resize,
+    d3d11_begin_frame,
+    d3d11_end_frame,
+    d3d11_create_texture,
+    d3d11_destroy_texture,
+    d3d11_upload_mesh,
+    d3d11_update_mesh,
+    d3d11_destroy_mesh,
+    d3d11_draw_mesh,
+    d3d11_draw_dynamic,
+    d3d11_get_stats
 };
 
 static PexRendererBackend *renderer_d3d11_get_backend(void) { return &g_renderer_d3d11_native; }

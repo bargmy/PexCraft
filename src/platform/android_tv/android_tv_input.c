@@ -71,7 +71,7 @@ static int pex_android_tv_digit_to_slot(int digit) {
     return -1;
 }
 
-static int pex_android_tv_consume_hotbar_slot(void) {
+static int android_tv_consume_hotbar_slot(void) {
     for (int digit = 1; digit <= 9; ++digit) {
         if (g_android_tv_digit_edge[digit]) {
             g_android_tv_digit_edge[digit] = 0;
@@ -119,7 +119,7 @@ static void pex_android_tv_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD
 }
 
 static void pex_android_tv_ingame_update(void) {
-    int slot = pex_android_tv_consume_hotbar_slot();
+    int slot = android_tv_consume_hotbar_slot();
     if (slot >= 0 && slot < 9) g_selected_hotbar_slot = slot;
 }
 

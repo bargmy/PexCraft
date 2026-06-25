@@ -420,7 +420,7 @@ static unsigned int wii_read_index(const GLvoid *indices, GLenum type, int i) {
     return 0;
 }
 
-static int wii_arrays_are_pexvertex_interleaved(const unsigned char **base_out) {
+static int wii_arrays_are_interleaved(const unsigned char **base_out) {
     if (!g_wii_vertex_array_enabled || !g_wii_texcoord_array_enabled || !g_wii_color_array_enabled) return 0;
     if (!g_wii_vertex_ptr || !g_wii_texcoord_ptr || !g_wii_color_ptr) return 0;
     if (g_wii_vertex_size != 3 || g_wii_vertex_type != GL_FLOAT) return 0;
@@ -446,7 +446,7 @@ static void wii_emit_pex_vertex(const PexVertex *v) {
 static void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices){
     if (count <= 0 || !indices) return;
     const unsigned char *base = NULL;
-    if (!wii_arrays_are_pexvertex_interleaved(&base)) return;
+    if (!wii_arrays_are_interleaved(&base)) return;
     int draw_count = count;
     GLenum gxmode = wii_draw_mode_for(mode, count, &draw_count);
     draw_count = wii_clamp_gx_count(mode, draw_count);
@@ -472,7 +472,7 @@ static PexMeshHandle wii_backend_upload_mesh(const PexMesh *mesh){ if(!mesh||!me
 static int wii_backend_update_mesh(PexMeshHandle h,const PexMesh *mesh){ if(!h||h>=PEX_WII_MAX_MESHES)return 0; WiiMeshSlot *s=&g_wii_meshes[h]; free(s->vertices); free(s->indices); memset(s,0,sizeof(*s)); PexMeshHandle nh=wii_backend_upload_mesh(mesh); if(nh&&nh!=h){ g_wii_meshes[h]=g_wii_meshes[nh]; memset(&g_wii_meshes[nh],0,sizeof(g_wii_meshes[nh])); } return nh?1:0; }
 static void wii_backend_destroy_mesh(PexMeshHandle h){ if(h&&h<PEX_WII_MAX_MESHES){ free(g_wii_meshes[h].vertices); free(g_wii_meshes[h].indices); memset(&g_wii_meshes[h],0,sizeof(g_wii_meshes[h])); } }
 static void wii_apply_render_state(const PexRenderState *st){ if(!st)return; wii_apply_state_values(st->texture,st->texture_enabled,st->blend_enabled,st->depth_enabled,st->depth_write,st->alpha_test_enabled,0); wii_load_gx_matrices_from(st->modelview,st->projection,0); }
-static void wii_backend_draw_vertices_indexed(const PexVertex *v,const uint32_t *idx,uint32_t vc,uint32_t ic,const PexRenderState *st){
+static void wii_draw_indexed_vertices(const PexVertex *v,const uint32_t *idx,uint32_t vc,uint32_t ic,const PexRenderState *st){
     if(!v||!idx||vc==0||ic==0)return;
     wii_apply_render_state(st);
     uint32_t total=(ic/3)*3;
@@ -496,8 +496,8 @@ static void wii_backend_draw_vertices_indexed(const PexVertex *v,const uint32_t 
         off += chunk;
     }
 }
-static void wii_backend_draw_mesh(PexMeshHandle h,const PexRenderState *st){ if(!h||h>=PEX_WII_MAX_MESHES)return; WiiMeshSlot *s=&g_wii_meshes[h]; wii_backend_draw_vertices_indexed(s->vertices,s->indices,s->vertex_count,s->index_count,st); }
-static void wii_backend_draw_dynamic(const PexMesh *mesh,const PexRenderState *st){ if(!mesh)return; wii_backend_draw_vertices_indexed(mesh->vertices,mesh->indices,mesh->vertex_count,mesh->index_count,st); }
+static void wii_backend_draw_mesh(PexMeshHandle h,const PexRenderState *st){ if(!h||h>=PEX_WII_MAX_MESHES)return; WiiMeshSlot *s=&g_wii_meshes[h]; wii_draw_indexed_vertices(s->vertices,s->indices,s->vertex_count,s->index_count,st); }
+static void wii_backend_draw_dynamic(const PexMesh *mesh,const PexRenderState *st){ if(!mesh)return; wii_draw_indexed_vertices(mesh->vertices,mesh->indices,mesh->vertex_count,mesh->index_count,st); }
 static PexRendererStats wii_backend_get_stats(void){ return g_wii_stats; }
 static int wii_backend_init(void *window_handle,int width,int height){ (void)window_handle;(void)width;(void)height; return 1; }
 static void wii_backend_shutdown(void){ }

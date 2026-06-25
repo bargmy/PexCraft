@@ -208,7 +208,7 @@ fail:
     return 0;
 }
 
-static int pex_remote_encode_jpeg_24bgr(const unsigned char *bgr, int w, int h, unsigned char **out, size_t *out_len) {
+static int remote_encode_jpeg_24bgr(const unsigned char *bgr, int w, int h, unsigned char **out, size_t *out_len) {
     IWICBitmapEncoder *enc = NULL;
     IWICBitmapFrameEncode *frame = NULL;
     IPropertyBag2 *props = NULL;
@@ -291,7 +291,7 @@ static int pex_remote_encode_jpeg_24bgr(const unsigned char *bgr, int w, int h, 
     return ok;
 }
 
-static void pex_remote_http_capture_opengl_frame(void) {
+static void remote_capture_opengl_frame(void) {
     if (!InterlockedCompareExchange(&g_remote_http_running, 1, 1)) return;
     if (InterlockedCompareExchange(&g_remote_http_client_count, 0, 0) <= 0) return;
     if (pex_using_d3d9() || pex_using_d3d11()) return;
@@ -326,7 +326,7 @@ static void pex_remote_http_capture_opengl_frame(void) {
 
     unsigned char *jpg = NULL;
     size_t jpg_len = 0;
-    if (pex_remote_encode_jpeg_24bgr(bgr, w, h, &jpg, &jpg_len)) {
+    if (remote_encode_jpeg_24bgr(bgr, w, h, &jpg, &jpg_len)) {
         EnterCriticalSection(&g_remote_http_cs);
         free(g_remote_http_jpeg);
         g_remote_http_jpeg = jpg;
@@ -396,5 +396,5 @@ static void pex_remote_http_stop(void) {
 #else
 static int pex_remote_http_start(void) { return 1; }
 static void pex_remote_http_stop(void) { }
-static void pex_remote_http_capture_opengl_frame(void) { }
+static void remote_capture_opengl_frame(void) { }
 #endif

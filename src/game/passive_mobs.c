@@ -195,7 +195,7 @@ static int passive_mob_ground_target_ok(int x, int y, int z) {
     if (y <= FLAT_WORLD_Y_MIN || y + 1 > FLAT_WORLD_Y_MAX) return 0;
     int below = flat_get_block(x, y - 1, z);
     if (passive_block_is_liquid(below)) return 0;
-    if (below != BLOCK_GRASS && !flat_block_is_solid_for_collision(below)) return 0;
+    if (below != BLOCK_GRASS && !flat_block_is_solid(below)) return 0;
     if (flat_get_block(x, y, z) != 0 || flat_get_block(x, y + 1, z) != 0) return 0;
     /* Vanilla b1.0 does not reject grass near water.  The old extra shore/water
        guard made beach/forest worlds feel empty because most valid grass around
@@ -246,7 +246,7 @@ static void passive_mob_move_entity(PassiveMob *m, float dx, float dy, float dz)
     if (dz < 0.0f) sweep.minz += dz; else sweep.maxz += dz;
 
     FlatAABB boxes[160];
-    int n = flat_get_colliding_bounding_boxes(&sweep, boxes, 160);
+    int n = flat_get_collision_boxes(&sweep, boxes, 160);
     float odx = dx, ody = dy, odz = dz;
     for (int i = 0; i < n; ++i) dy = aabb_clip_y(&boxes[i], &box, dy);
     aabb_offset(&box, 0.0f, dy, 0.0f);
@@ -269,7 +269,7 @@ static void passive_mob_move_entity(PassiveMob *m, float dx, float dy, float dz)
 static int passive_mob_spawn_ok(int x, int y, int z) {
     if (!passive_mob_ground_target_ok(x, y, z)) return 0;
     if (flat_get_block(x, y - 1, z) != BLOCK_GRASS) return 0;
-    if (flat_combined_light_value(x, y, z) <= 8) return 0;
+    if (flat_combined_light(x, y, z) <= 8) return 0;
     float dx = ((float)x + 0.5f) - g_player_x;
     float dy = (float)y - g_player_y;
     float dz = ((float)z + 0.5f) - g_player_z;
@@ -281,7 +281,7 @@ static int passive_mob_spawn_ok(int x, int y, int z) {
 
     FlatAABB b = { x + 0.05f, y + 0.01f, z + 0.05f, x + 0.95f, y + 1.30f, z + 0.95f };
     FlatAABB boxes[64];
-    if (flat_get_colliding_bounding_boxes(&b, boxes, 64) > 0) return 0;
+    if (flat_get_collision_boxes(&b, boxes, 64) > 0) return 0;
     return 1;
 }
 
@@ -333,7 +333,7 @@ static void passive_mobs_try_natural_spawn(void) {
     }
 }
 
-static void passive_mobs_ensure_minimum_population(int wanted, int attempts) {
+static void passive_mobs_ensure_population(int wanted, int attempts) {
     if (g_mp_connected) return;
     int start = passive_mob_count();
     int cap = passive_mob_target_cap();
@@ -357,7 +357,7 @@ static void passive_mobs_ensure_minimum_population(int wanted, int attempts) {
 
 static void passive_mobs_spawn_initial(void) {
     passive_mobs_reset();
-    passive_mobs_ensure_minimum_population(PEX_PASSIVE_INITIAL_TARGET, 1800);
+    passive_mobs_ensure_population(PEX_PASSIVE_INITIAL_TARGET, 1800);
 }
 
 static void passive_mob_choose_target(PassiveMob *m) {
@@ -385,7 +385,7 @@ static void passive_mob_choose_target(PassiveMob *m) {
             float dist2 = dx * dx + dz * dz;
             if (dist2 < 1.0f) continue;
             int below = flat_get_block(x, y - 1, z);
-            float w = below == BLOCK_GRASS ? 10.0f : (float)flat_combined_light_value(x, y, z) / 15.0f - 0.5f;
+            float w = below == BLOCK_GRASS ? 10.0f : (float)flat_combined_light(x, y, z) / 15.0f - 0.5f;
             w -= fabsf((float)y - m->y) * 3.0f;
             if (dist2 > 64.0f) w -= 3.0f;
             if (w > best_weight) { best_weight = w; best_x = x; best_y = y; best_z = z; }
@@ -429,7 +429,7 @@ static int held_damage_vs_mob(void) {
     }
 }
 
-static void passive_mob_shear_sheep_on_attack(PassiveMob *m) {
+static void passive_mob_shear_sheep(PassiveMob *m) {
     if (!m || m->type != PASSIVE_MOB_SHEEP || m->sheared) return;
     m->sheared = 1;
     int count = 1 + (rand() % 3);
@@ -442,7 +442,7 @@ static void passive_mob_shear_sheep_on_attack(PassiveMob *m) {
 
 static void passive_mob_take_damage(PassiveMob *m, int damage) {
     if (!m || !m->active || m->death_time > 0 || damage <= 0) return;
-    passive_mob_shear_sheep_on_attack(m);
+    passive_mob_shear_sheep(m);
     m->health -= damage;
     player_add_exhaustion(0.3f);
     m->hurt_time = 10;
@@ -529,7 +529,7 @@ static void passive_mobs_dismount_player(void) {
     hud_add_chat("Dismounted.");
 }
 
-static int passive_mobs_interact_from_player(void) {
+static int passive_mobs_player_interact(void) {
     if (g_mp_connected || g_player_dead) return 0;
     if (g_player_riding_passive_mob >= 0) {
         passive_mobs_dismount_player();
@@ -746,7 +746,7 @@ static void update_passive_mobs(void) {
     if (g_mp_connected) return;
     passive_mobs_enforce_cap();
     if ((g_ingame_ticks % 40) == 5 && passive_mob_count() < PEX_PASSIVE_INITIAL_TARGET) {
-        passive_mobs_ensure_minimum_population(PEX_PASSIVE_INITIAL_TARGET, 500);
+        passive_mobs_ensure_population(PEX_PASSIVE_INITIAL_TARGET, 500);
     }
     passive_mobs_try_natural_spawn();
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
@@ -816,7 +816,7 @@ static int passive_mob_visible_to_camera(float x, float y, float z, float radius
     return dist2 < (8.0f + radius) * (8.0f + radius);
 }
 
-static void passive_mobs_build_render_entries_from_snapshot(const PassiveMob *src, float partial,
+static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
                                                             float camx, float camy, float camz,
                                                             float cam_yaw, float cam_pitch,
                                                             PassiveMobRenderEntry *out, int *out_count) {
@@ -906,7 +906,7 @@ static DWORD WINAPI passive_render_worker_proc(LPVOID unused) {
         if (!have) continue;
 
         int count = 0;
-        passive_mobs_build_render_entries_from_snapshot(local_mobs, partial, camx, camy, camz,
+        passive_mobs_build_render_list(local_mobs, partial, camx, camy, camz,
                                                         yaw, pitch, local_entries, &count);
 
         EnterCriticalSection(&g_passive_render_cs);
@@ -950,7 +950,7 @@ static void passive_mobs_submit_render_job(float partial) {
     LeaveCriticalSection(&g_passive_render_cs);
 }
 
-static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap) {
+static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
     int count = 0;
     passive_render_worker_init();
     if (g_passive_render_event && g_passive_render_thread) {
@@ -961,16 +961,16 @@ static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap
         LeaveCriticalSection(&g_passive_render_cs);
         return count;
     }
-    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z,
+    passive_mobs_build_render_list(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z,
                                                     g_player_yaw, g_player_pitch, out, &count);
     if (count > cap) count = cap;
     return count;
 }
 #else
 static void passive_mobs_submit_render_job(float partial) { (void)partial; }
-static int passive_mobs_fetch_render_entries(PassiveMobRenderEntry *out, int cap) {
+static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
     int count = 0;
-    passive_mobs_build_render_entries_from_snapshot(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z,
+    passive_mobs_build_render_list(g_passive_mobs, g_frame_partial, g_player_x, g_player_y, g_player_z,
                                                     g_player_yaw, g_player_pitch, out, &count);
     if (count > cap) count = cap;
     return count;
@@ -1041,7 +1041,7 @@ static void draw_passive_mobs(float partial) {
     if (g_mp_connected) return;
     passive_mobs_submit_render_job(partial);
     PassiveMobRenderEntry entries[PEX_PASSIVE_RENDER_LIMIT];
-    int entry_count = passive_mobs_fetch_render_entries(entries, PEX_PASSIVE_RENDER_LIMIT);
+    int entry_count = passive_mobs_fetch_render_list(entries, PEX_PASSIVE_RENDER_LIMIT);
     if (entry_count <= 0) return;
 
     glPushMatrix();

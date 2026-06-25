@@ -36,7 +36,7 @@ static void pex_input_focus_set(PexInputFocusMode mode) {
     }
 }
 
-static int pex_gamepad_has_intentional_input(const PexGamepadState *p) {
+static int gamepad_has_input(const PexGamepadState *p) {
     if (!p || !p->connected) return 0;
     if (fabsf(p->lx) > 0.35f || fabsf(p->ly) > 0.35f ||
         fabsf(p->rx) > 0.35f || fabsf(p->ry) > 0.35f ||
@@ -86,7 +86,7 @@ static float sdl_axis_norm(Sint16 v) {
 }
 
 
-static int pex_gamepad_sdl2_should_ignore_device(int device_index) {
+static int gamepad_sdl2_should_ignore_device(int device_index) {
     const char *name = SDL_JoystickNameForIndex(device_index);
 #ifdef PEX_PLATFORM_ANDROID
     /* Android phones expose the accelerometer as a joystick on some SDL builds.
@@ -97,7 +97,7 @@ static int pex_gamepad_sdl2_should_ignore_device(int device_index) {
     return 0;
 }
 
-static void pex_gamepad_sdl2_close_all(void) {
+static void gamepad_sdl2_close_all(void) {
     for (int i = 0; i < PEX_GAMEPAD_MAX; i++) {
         if (g_sdl2_pads[i]) { SDL_GameControllerClose(g_sdl2_pads[i]); g_sdl2_pads[i] = NULL; }
         else if (g_sdl2_joys[i]) { SDL_JoystickClose(g_sdl2_joys[i]); g_sdl2_joys[i] = NULL; }
@@ -111,10 +111,10 @@ static void pex_gamepad_scan_devices(void) {
     double now = now_seconds();
     if (now - g_gamepad_probe_last_time < 1.0) return;
     g_gamepad_probe_last_time = now;
-    pex_gamepad_sdl2_close_all();
+    gamepad_sdl2_close_all();
     int total = SDL_NumJoysticks();
     for (int i = 0; i < total && g_sdl2_pad_open_count < PEX_GAMEPAD_MAX; i++) {
-        if (pex_gamepad_sdl2_should_ignore_device(i)) continue;
+        if (gamepad_sdl2_should_ignore_device(i)) continue;
         int slot = g_sdl2_pad_open_count;
         if (SDL_IsGameController(i)) {
             SDL_GameController *gc = SDL_GameControllerOpen(i);
@@ -596,13 +596,13 @@ static void pex_gamepad_update(void) {
        as long as a Wiimote/GameCube pad is present, not only on button edges. */
     if (p) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
 #else
-    if (pex_gamepad_has_intentional_input(p)) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
+    if (gamepad_has_input(p)) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
 #endif
 
     PexGamepadState *active_pad = (g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD) ? p : NULL;
     pex_gamepad_rebuild_virtual_keys(active_pad);
 #ifdef PEX_PLATFORM_ANDROID
-    pex_android_touch_apply_virtual_keys();
+    android_touch_apply_virtual_keys();
 #endif
 
     static double last = 0.0;
@@ -625,7 +625,7 @@ static void pex_gamepad_update(void) {
 
 static void pex_gamepad_shutdown(void) {
 #ifdef PEX_PLATFORM_SDL2
-    pex_gamepad_sdl2_close_all();
+    gamepad_sdl2_close_all();
 #endif
 #if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
     if (g_xinput_dll) { FreeLibrary(g_xinput_dll); g_xinput_dll = NULL; g_xinput_get_state = NULL; }

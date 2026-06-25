@@ -21,7 +21,7 @@ static int g_psp_fast_dirty_min_x = 0x7fffffff;
 static int g_psp_fast_dirty_max_x = -0x7fffffff;
 static int g_psp_fast_dirty_min_z = 0x7fffffff;
 static int g_psp_fast_dirty_max_z = -0x7fffffff;
-static void psp_fast_surface_mark_dirty_block(int x, int z) {
+static void psp_fast_surface_mark_dirty(int x, int z) {
     g_psp_fast_surface_dirty = 1;
     int r = 2;
     if (x - r < g_psp_fast_dirty_min_x) g_psp_fast_dirty_min_x = x - r;
@@ -45,7 +45,7 @@ static void psp_fast_surface_note_edit_block(int x, int y, int z) {
     g_psp_fast_edited_blocks[slot].z = z;
     g_psp_fast_edited_blocks[slot].stamp = stamp;
 }
-static void psp_fast_surface_mark_dirty_all(void) {
+static void psp_fast_mark_all_dirty(void) {
     g_psp_fast_surface_dirty = 1;
     g_psp_fast_dirty_min_x = -0x3fffffff;
     g_psp_fast_dirty_max_x =  0x3fffffff;
@@ -67,10 +67,10 @@ static int renderer_d3d9_attach_device(void *dev, int width, int height) { (void
 static int renderer_d3d11_attach_device(void *dev, void *ctx, int width, int height) { (void)dev; (void)ctx; (void)width; (void)height; return 0; }
 static int pex_using_d3d9(void) { return 0; }
 static int pex_using_d3d11(void) { return 0; }
-static int renderer_d3d11_prebuild_mesh_buffers(const PexMesh *mesh, PexD3D11Mesh *out) { (void)mesh; memset(out, 0, sizeof(*out)); return 0; }
-static void renderer_d3d11_discard_prebuilt_mesh(PexD3D11Mesh *mesh) { if (mesh) memset(mesh, 0, sizeof(*mesh)); }
-static int renderer_d3d11_adopt_prebuilt_mesh(PexMeshHandle *slot, PexD3D11Mesh *built) { (void)slot; (void)built; return 0; }
-static void renderer_d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot = 0; }
+static int d3d11_prebuild_mesh(const PexMesh *mesh, PexD3D11Mesh *out) { (void)mesh; memset(out, 0, sizeof(*out)); return 0; }
+static void d3d11_discard_mesh(PexD3D11Mesh *mesh) { if (mesh) memset(mesh, 0, sizeof(*mesh)); }
+static int d3d11_adopt_mesh(PexMeshHandle *slot, PexD3D11Mesh *built) { (void)slot; (void)built; return 0; }
+static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot = 0; }
 
 #include "render/psp_gu_renderer.c"
 #include "platform/psp_filesystem.c"

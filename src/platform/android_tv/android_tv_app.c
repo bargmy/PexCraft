@@ -14,7 +14,7 @@ static int init_gl(SDL_Window *window) {
     SDL_GL_MakeCurrent(g_hwnd, g_glrc);
     SDL_GL_SetSwapInterval(1);
 
-    if (!pex_android_tv_gles2_init()) return 0;
+    if (!gles2_renderer_init()) return 0;
     glClearColor(0,0,0,0);
     glDisable(GL_DITHER);
     glEnable(GL_TEXTURE_2D);
@@ -35,14 +35,14 @@ static int pex_renderer_backend_init(SDL_Window *window) {
 static int pex_renderer_begin_frame(void) { return 1; }
 static void pex_renderer_present(void) { SDL_GL_SwapWindow(g_hwnd); }
 static void pex_renderer_resize(int w, int h) { (void)w; (void)h; }
-static void pex_renderer_shutdown(void) { pex_android_tv_gles2_shutdown(); }
+static void pex_renderer_shutdown(void) { gles2_renderer_shutdown(); }
 static void pex_gl_suppress_immediate(int on) { (void)on; }
 
 static void apply_vsync_setting(void) {
     if (g_hwnd) SDL_GL_SetSwapInterval(1);
 }
 
-static void refresh_window_size_after_mode_change(void) {
+static void refresh_window_size_after_mode(void) {
     if (!g_hwnd) return;
     SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
     if (g_win_w < 1) g_win_w = 1;
@@ -59,7 +59,7 @@ static void set_fullscreen_enabled(int enabled) {
     g_opts.fullscreen = 1;
     if (g_hwnd) {
         SDL_SetWindowFullscreen(g_hwnd, SDL_WINDOW_FULLSCREEN);
-        refresh_window_size_after_mode_change();
+        refresh_window_size_after_mode();
     }
     save_options();
 }
@@ -213,7 +213,7 @@ static void save_world_state_for_exit(void) {
         pex_net_disconnect();
         return;
     }
-    save_current_world_state_sync();
+    save_world_state_sync();
 }
 
 static void sleep_for_max_fps(double frame_start_time) {
@@ -238,16 +238,16 @@ static void main_loop(void) {
     double tick_accum = 0.0;
     SDL_StartTextInput();
     while (g_running) {
-        pex_profile_frame_begin();
-        double prof_start = pex_profile_begin();
+        profile_begin_frame();
+        double prof_start = profile_begin();
         SDL_Event e;
         while (SDL_PollEvent(&e)) sdl2_handle_event(&e);
-        pex_profile_add(PROF_PUMP, prof_start);
+        profile_add_time(PROF_PUMP, prof_start);
         pex_gamepad_update();
         if (g_mp_connected || pex_net_is_connecting()) {
-            prof_start = pex_profile_begin();
+            prof_start = profile_begin();
             pex_net_poll();
-            pex_profile_add(PROF_NET_POLL, prof_start);
+            profile_add_time(PROF_NET_POLL, prof_start);
         }
         double frame_start_time = now_seconds();
         double t = frame_start_time;
@@ -258,30 +258,30 @@ static void main_loop(void) {
         tick_accum += dt * 20.0;
         int ticks_this_frame = 0;
         while (tick_accum >= 1.0 && ticks_this_frame < 3) {
-            double tick_start = pex_profile_begin();
+            double tick_start = profile_begin();
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
             if (g_screen == SCREEN_GENERATING) {
-                double t_worldgen = pex_profile_begin();
+                double t_worldgen = profile_begin();
                 worldgen_tick();
-                pex_profile_add(PROF_WORLDGEN_TICK, t_worldgen);
+                profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
-            if (g_screen == SCREEN_TEXPACK_INSTALL) classic_pack_install_tick();
+            if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
                 g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) ingame_tick_async_queue();
-            pex_profile_add(PROF_TICK_TOTAL, tick_start);
+            profile_add_time(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
         }
         if (ticks_this_frame >= 3 && tick_accum > 1.0) tick_accum = 1.0;
         float partial = ingame_tick_async_render_partial((float)tick_accum);
         if (g_mp_connected) pex_net_update_smoothing();
-        ingame_tick_async_pump_main_thread();
+        ingame_pump_async_tick();
         render(partial);
         sleep_for_max_fps(frame_start_time);
-        pex_profile_frame_end();
+        profile_end_frame();
     }
     SDL_StopTextInput();
 }
@@ -318,7 +318,7 @@ int main(int argc, char **argv) {
         return 3;
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
-    if (should_show_classic_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
+    if (should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else set_screen(SCREEN_TITLE);
     InitializeCriticalSection(&g_save_cs);

@@ -20,17 +20,17 @@ static char g_classic_install_error[MAX_LABEL] = "";
 static volatile LONG g_classic_download_size_state = CLASSIC_SIZE_ERROR;
 static volatile LONG g_classic_download_size_bytes = 0;
 
-static void classic_resource_size_start_fetch(void) {
+static void pack_install_start_size_fetch(void) {
     InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_ERROR);
     InterlockedExchange(&g_classic_download_size_bytes, 0);
 }
 
-static void classic_resource_size_format(char *out, size_t cap) {
+static void format_download_size(char *out, size_t cap) {
     if (!out || cap == 0) return;
     snprintf(out, cap, "unavailable on Wii");
 }
 
-static void start_classic_pack_install(void) {
+static void pack_install_start(void) {
     (void)g_classic_install_thread;
     InterlockedExchange(&g_classic_install_progress, 0);
     lstrcpynA(g_classic_install_status, "Classic pack download is disabled on Wii.", sizeof(g_classic_install_status));
@@ -39,7 +39,7 @@ static void start_classic_pack_install(void) {
     set_screen(SCREEN_TEXPACK_INSTALL);
 }
 
-static void classic_pack_install_tick(void) {
+static void pack_install_tick(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
     if (state == CLASSIC_INSTALL_ERROR) {
         InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);

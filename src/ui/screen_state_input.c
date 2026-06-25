@@ -38,7 +38,7 @@ static void set_screen(ScreenId s) {
     g_waiting_key = -1;
     g_gamepad_menu_index = 0;
     g_gamepad_virtual_cursor_active = 0;
-    if (s == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) classic_resource_size_start_fetch();
+    if (s == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) pack_install_start_size_fetch();
     set_mouse_grabbed(s == SCREEN_INGAME);
     clear_buttons();
     rebuild_screen();
@@ -72,7 +72,7 @@ static void choose_release_splash(char *out, size_t cap) {
 
     if (!out || cap == 0) return;
     out[0] = 0;
-    classic_pack_path(pack_dir, sizeof(pack_dir));
+    pack_asset_path(pack_dir, sizeof(pack_dir));
     snprintf(path, sizeof(path), "%s/title/splashes.txt", pack_dir);
     f = fopen(path, "rb");
     if (!f) {
@@ -164,7 +164,7 @@ static void scan_world_saves(void) {
                 snprintf(e->display_name, sizeof(e->display_name), "%s", e->dir_name);
             }
             read_level_long_tag_for_dir(e->path, "LastPlayed", &e->last_played);
-            int binary_summary = read_binary_level_summary_for_dir(e->path, NULL, &e->world_type, e->last_played > 0 ? NULL : &e->last_played);
+            int binary_summary = read_level_summary(e->path, NULL, &e->world_type, e->last_played > 0 ? NULL : &e->last_played);
             long long size_on_disk = 0;
             if (read_level_long_tag_for_dir(e->path, "SizeOnDisk", &size_on_disk) && size_on_disk > 0) {
                 e->size_on_disk = (unsigned long long)size_on_disk;
@@ -219,7 +219,7 @@ static void start_selected_world_save(void) {
     start_world_generation_in_dir(g_pending_world_dir, g_pending_world_name, g_pending_world_slot);
 }
 
-static void confirm_delete_selected_world_save(void) {
+static void confirm_delete_world_save(void) {
     if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) return;
     scan_world_saves();
     if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) return;
@@ -525,7 +525,7 @@ static void on_button(Button *b) {
             rebuild_screen();
         } else if (b->id == 10 && g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
             start_selected_world_save();
-        } else if (b->id == 5) confirm_delete_selected_world_save();
+        } else if (b->id == 5) confirm_delete_world_save();
         else if (b->id == 11) {
             char dir_name[64];
             make_unique_world_dir("New World", dir_name, sizeof(dir_name), g_pending_world_dir, sizeof(g_pending_world_dir));
@@ -555,7 +555,7 @@ static void on_button(Button *b) {
             g_selected_world_index = b->id - WORLD_ROW_BUTTON_BASE;
             rebuild_screen();
         } else if (b->id == 10 && g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
-            confirm_delete_selected_world_save();
+            confirm_delete_world_save();
         } else if (b->id == 6) set_screen(SCREEN_WORLD_SELECT);
     } else if (g_screen == SCREEN_CONFIRM_DELETE) {
         if (b->id == 0 && g_pending_world_dir[0]) {
@@ -607,7 +607,7 @@ static void on_button(Button *b) {
         }
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
         if (b->id == 0) {
-            start_classic_pack_install();
+            pack_install_start();
         } else if (b->id == 2) {
             g_opts.download_classic_sounds = !g_opts.download_classic_sounds;
             if (g_opts.download_classic_sounds) g_opts.ignore_classic_sounds_warning = 0;
@@ -616,13 +616,13 @@ static void on_button(Button *b) {
             if (classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
             else set_screen(SCREEN_TITLE);
         } else {
-            if (!classic_pack_installed() || classic_pack_missing_required_textures()) g_opts.ignore_classic_resources_warning = 1;
+            if (!pack_is_installed() || pack_missing_required_textures()) g_opts.ignore_classic_resources_warning = 1;
             if (g_opts.download_classic_sounds && !classic_sounds_installed()) g_opts.ignore_classic_sounds_warning = 1;
             save_options();
             set_screen(SCREEN_TITLE);
         }
     } else if (g_screen == SCREEN_CLASSIC_PACK_WARNING) {
-        if (b->id == 0) start_classic_pack_install();
+        if (b->id == 0) pack_install_start();
         else set_screen(SCREEN_TITLE);
     }
 }
@@ -636,8 +636,8 @@ static void texpack_mouse_down(int mx, int my) {
         int idx = (my - top + g_texpack_scroll - 2) / 36;
         if (mx >= left && mx <= right && idx >= 0 && idx < g_texpack_count) {
             TexturePackEntry *e = &g_texpacks[idx];
-            if (e->is_builtin_classic && !classic_pack_installed()) {
-                start_classic_pack_install();
+            if (e->is_builtin_classic && !pack_is_installed()) {
+                pack_install_start();
                 return;
             } else if (e->is_builtin_classic && classic_resources_need_update()) {
                 set_screen(SCREEN_CLASSIC_PACK_WARNING);
@@ -664,7 +664,7 @@ static void mouse_right_down(int mx, int my) {
     if (g_screen == SCREEN_DEATH) return;
 
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 1); return; }
-    if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); if (passive_mobs_interact_from_player()) return; ingame_right_click(); return; }
+    if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); if (passive_mobs_player_interact()) return; ingame_right_click(); return; }
     (void)mx; (void)my;
 }
 
@@ -750,7 +750,7 @@ static void pex_set_world_time_to_day_tick(long long day_tick) {
     if (g_world_time < 0 && (g_world_time % 24000LL) != 0) day--;
     g_world_time = day * 24000LL + day_tick;
     if (g_world_time < 0) g_world_time = day_tick;
-    g_prof_skylight_subtracted_last = flat_current_skylight_subtracted();
+    g_prof_skylight_subtracted_last = flat_skylight_subtracted();
     g_save_dirty = 1;
 }
 

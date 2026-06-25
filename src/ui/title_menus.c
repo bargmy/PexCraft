@@ -94,7 +94,7 @@ static int title_animation_finished(void) {
     return 1;
 }
 
-static void title_snapshot_reset_if_size_changed(int title_h) {
+static void title_snapshot_reset_on_resize(int title_h) {
     if (g_title_snapshot_w == g_render_w && g_title_snapshot_h == title_h) return;
     if (g_title_snapshot_tex) glDeleteTextures(1, &g_title_snapshot_tex);
     g_title_snapshot_tex = 0;
@@ -241,7 +241,7 @@ static int release_panorama_viewport_y(int target_size) {
     return 0;
 }
 
-static void release_panorama_reset_gl_state(void) {
+static void panorama_reset_gl_state(void) {
 #if defined(GL_SCISSOR_TEST)
     glDisable(GL_SCISSOR_TEST);
 #endif
@@ -272,7 +272,7 @@ static void release_panorama_reset_gl_state(void) {
     glMatrixMode(GL_MODELVIEW);
 }
 
-static void ensure_release_panorama_viewport_texture(void) {
+static void ensure_panorama_viewport_texture(void) {
     int size = release_panorama_target_size();
     if (g_release_panorama_viewport_tex && g_release_panorama_alloc_size == size) return;
     if (g_release_panorama_viewport_tex) {
@@ -359,7 +359,7 @@ static void draw_release_panorama_cube(float partial) {
 }
 
 static void release_panorama_blur_pass(void) {
-    ensure_release_panorama_viewport_texture();
+    ensure_panorama_viewport_texture();
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -403,8 +403,8 @@ static void release_panorama_blur_pass(void) {
 }
 
 static void draw_release_skybox(float partial) {
-    release_panorama_reset_gl_state();
-    ensure_release_panorama_viewport_texture();
+    panorama_reset_gl_state();
+    ensure_panorama_viewport_texture();
 
     /* Java GuiMainMenu.renderSkybox: fixed 256x256 panorama target first. */
     int target_size = release_panorama_target_size();

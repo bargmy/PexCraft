@@ -39,7 +39,7 @@ static void pex_renderer_resize(int w, int h) { (void)w; (void)h; }
 static void pex_renderer_shutdown(void) { wii_gx_shutdown(); }
 static void pex_gl_suppress_immediate(int on) { (void)on; }
 static void apply_vsync_setting(void) { }
-static void refresh_window_size_after_mode_change(void) { }
+static void refresh_window_size_after_mode(void) { }
 static void set_fullscreen_enabled(int enabled) { g_opts.fullscreen = enabled ? 1 : 0; }
 static void toggle_fullscreen(void) { }
 
@@ -64,7 +64,7 @@ static void save_world_state_for_exit(void) {
     pex_join_save_thread_for_exit();
     if (!g_wii_fat_ready) { wii_debug_logf("save skipped: SD/FAT unavailable"); return; }
     if (strncmp(g_loaded_world_dir, "memory:", 7) == 0) { wii_debug_logf("save skipped: memory world"); return; }
-    save_current_world_state_sync();
+    save_world_state_sync();
 }
 
 static volatile int g_wii_power_requested = 0;
@@ -75,7 +75,7 @@ static void wii_power_callback(void) {
 }
 #endif
 
-static void wii_reserve_embedded_asset_mem2(void) {
+static void wii_reserve_asset_mem2(void) {
     /* The embedded texture pak is now linked in the normal DOL data/rodata
        area. Do NOT force it to 0x90010000: that creates a huge address gap
        and can make elf2dol emit a hundreds-of-megabytes DOL. */
@@ -101,10 +101,10 @@ static void main_loop(void) {
     unsigned int wii_frame_counter = 0;
     while (g_running && SYS_MainLoop()) {
         if (SYS_ResetButtonDown() || g_wii_power_requested) g_running = 0;
-        pex_profile_frame_begin();
-        double prof_start = pex_profile_begin();
+        profile_begin_frame();
+        double prof_start = profile_begin();
         pex_gamepad_update();
-        pex_profile_add(PROF_PUMP, prof_start);
+        profile_add_time(PROF_PUMP, prof_start);
 
         double frame_start_time = now_seconds();
         double t = frame_start_time;
@@ -115,20 +115,20 @@ static void main_loop(void) {
         tick_accum += dt * 20.0;
         int ticks_this_frame = 0;
         while (tick_accum >= 1.0 && ticks_this_frame < 2) {
-            double tick_start = pex_profile_begin();
+            double tick_start = profile_begin();
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
             if (g_screen == SCREEN_GENERATING) {
-                double t_worldgen = pex_profile_begin();
+                double t_worldgen = profile_begin();
                 worldgen_tick();
-                pex_profile_add(PROF_WORLDGEN_TICK, t_worldgen);
+                profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
-            if (g_screen == SCREEN_TEXPACK_INSTALL) classic_pack_install_tick();
+            if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
                 g_screen == SCREEN_DEATH) ingame_tick();
-            pex_profile_add(PROF_TICK_TOTAL, tick_start);
+            profile_add_time(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
         }
@@ -155,7 +155,7 @@ static void main_loop(void) {
                            valid_sections, g_stream_gen_queue_index, g_stream_gen_queue_count);
         }
         sleep_for_max_fps(frame_start_time);
-        pex_profile_frame_end();
+        profile_end_frame();
     }
     wii_debug_logf("main loop exit running=%d sys=%d", g_running, SYS_MainLoop());
 }
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
     wii_debug_init_console();
     wii_debug_stagef("main entered");
     wii_debug_memoryf("main entry");
-    wii_reserve_embedded_asset_mem2();
+    wii_reserve_asset_mem2();
     init_dirs();
 #if defined(HW_RVL)
     SYS_SetPowerCallback(wii_power_callback);
@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
     g_opts.show_fps = 1;
     g_opts.ignore_classic_resources_warning = 1;
     wii_debug_stagef("embedded classic pack setup");
-    wii_install_embedded_classic_pack_if_needed();
+    wii_install_embedded_pack_if_needed();
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;

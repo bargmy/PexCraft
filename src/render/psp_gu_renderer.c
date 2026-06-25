@@ -347,7 +347,7 @@ static int psp_gu_init(void) {
     return 1;
 }
 
-static unsigned int psp_gu_current_display_offset(void) { return g_psp_display_offset; }
+static unsigned int psp_gu_display_offset(void) { return g_psp_display_offset; }
 static void psp_gu_shutdown(void) {
     PEX_PSP_LOGF("GU_SHUTDOWN sceGuTerm");
     for (GLuint i=1;i<PEX_PSP_LIST_COUNT;i++) psp_list_free(i);
@@ -482,7 +482,7 @@ static void psp_backend_destroy_mesh(PexMeshHandle handle) {
     g_psp_backend_meshes[handle] = NULL;
 }
 
-static void psp_backend_draw_batch_with_state(const PspBatch *b, const PexRenderState *state) {
+static void psp_draw_batch(const PspBatch *b, const PexRenderState *state) {
     if (!b || !b->v || b->count <= 0 || !state) return;
     psp_apply_state_values((GLuint)state->texture, state->texture_enabled, state->blend_enabled,
                            state->depth_enabled, state->alpha_test_enabled, 0);
@@ -501,13 +501,13 @@ static void psp_backend_draw_batch_with_state(const PspBatch *b, const PexRender
 
 static void psp_backend_draw_mesh(PexMeshHandle handle, const PexRenderState *state) {
     if (handle == 0 || handle >= PEX_PSP_MAX_BACKEND_MESHES) return;
-    psp_backend_draw_batch_with_state(g_psp_backend_meshes[handle], state);
+    psp_draw_batch(g_psp_backend_meshes[handle], state);
 }
 
 static void psp_backend_draw_dynamic(const PexMesh *mesh, const PexRenderState *state) {
     PspBatch *b = psp_batch_create_from_mesh(mesh);
     if (!b) return;
-    psp_backend_draw_batch_with_state(b, state);
+    psp_draw_batch(b, state);
     psp_batch_destroy(b);
 }
 

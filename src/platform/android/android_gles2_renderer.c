@@ -155,7 +155,7 @@ static GLuint android_tv_compile_shader(GLenum type, const char *src) {
     return sh;
 }
 
-static int pex_android_tv_gles2_init(void) {
+static int gles2_renderer_init(void) {
     const char *vs =
         "attribute vec3 a_pos;\n"
         "attribute vec2 a_uv;\n"
@@ -302,7 +302,7 @@ static void android_tv_list_append(GLuint list, AndroidTVBatch *b) {
     l->last = b;
 }
 
-static void android_tv_draw_or_store_current(void) {
+static void android_tv_draw_or_store(void) {
     AndroidTVBatch *b = android_tv_batch_create(g_android_tv_imm, g_android_tv_imm_count, g_android_tv_begin_mode);
     if (!b) return;
     if (g_android_tv_compiling) android_tv_list_append(g_android_tv_compile_list, b);
@@ -466,7 +466,7 @@ static void pex_android_tv_glVertex3f(GLfloat x, GLfloat y, GLfloat z) {
     v->r = g_android_tv_cur_color[0]; v->g = g_android_tv_cur_color[1]; v->b = g_android_tv_cur_color[2]; v->a = g_android_tv_cur_color[3];
 }
 static void pex_android_tv_glVertex2f(GLfloat x, GLfloat y) { pex_android_tv_glVertex3f(x, y, 0.0f); }
-static void pex_android_tv_glEnd(void) { if (!g_android_tv_begin_active) return; g_android_tv_begin_active = 0; android_tv_draw_or_store_current(); }
+static void pex_android_tv_glEnd(void) { if (!g_android_tv_begin_active) return; g_android_tv_begin_active = 0; android_tv_draw_or_store(); }
 
 static GLuint pex_android_tv_glGenLists(GLsizei range) { GLuint base = g_android_tv_next_list; int r = range > 0 ? range : 1; for (int i=0;i<r;i++) if (base + (GLuint)i < PEX_ANDROID_TV_MAX_LISTS) android_tv_list_free(base + (GLuint)i); g_android_tv_next_list += (GLuint)r; if (g_android_tv_next_list >= PEX_ANDROID_TV_MAX_LISTS) g_android_tv_next_list = PEX_ANDROID_TV_MAX_LISTS - 1; return base; }
 static void pex_android_tv_glNewList(GLuint list, GLenum mode) { (void)mode; if (list > 0 && list < PEX_ANDROID_TV_MAX_LISTS) android_tv_list_free(list); g_android_tv_compiling = 1; g_android_tv_compile_list = list; }
@@ -478,7 +478,7 @@ static void pex_android_tv_glBindTexture(GLenum target, GLuint texture) { if (ta
 static void pex_android_tv_glTexParameteri(GLenum target, GLenum pname, GLint param) { if (param == GL_CLAMP) param = GL_CLAMP_TO_EDGE; glTexParameteri(target, pname, param); }
 static void pex_android_tv_glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const GLvoid *pixels) { if (internal == 4) internal = GL_RGBA; if (format == GL_BGRA) format = GL_RGBA; glTexImage2D(target, level, internal, w, h, border, format, type, pixels); }
 static void pex_android_tv_glDeleteTextures(GLsizei n, const GLuint *textures) { glDeleteTextures(n, textures); }
-static void pex_android_tv_glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h) { glCopyTexSubImage2D(target, level, xoff, yoff, x, y, w, h); }
+static void android_gl_copy_tex_sub_image_2d(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h) { glCopyTexSubImage2D(target, level, xoff, yoff, x, y, w, h); }
 static void pex_android_tv_glPixelStorei(GLenum pname, GLint param) { glPixelStorei(pname, param); }
 static const GLubyte *pex_android_tv_glGetString(GLenum name) { return glGetString(name); }
 
@@ -487,7 +487,7 @@ static void pex_android_tv_glDisableClientState(GLenum array) { if (array == GL_
 static void pex_android_tv_glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_android_tv_vertex_size=size; g_android_tv_vertex_type=type; g_android_tv_vertex_stride=stride; g_android_tv_vertex_ptr=pointer; }
 static void pex_android_tv_glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_android_tv_texcoord_size=size; g_android_tv_texcoord_type=type; g_android_tv_texcoord_stride=stride; g_android_tv_texcoord_ptr=pointer; }
 static void pex_android_tv_glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { g_android_tv_color_size=size; g_android_tv_color_type=type; g_android_tv_color_stride=stride; g_android_tv_color_ptr=pointer; }
-static int android_tv_ensure_index16_tmp(int needed) {
+static int gles2_ensure_index16_buffer(int needed) {
     if (needed <= g_android_tv_index16_cap) return 1;
     int cap = g_android_tv_index16_cap ? g_android_tv_index16_cap : 4096;
     while (cap < needed) cap *= 2;
@@ -498,7 +498,7 @@ static int android_tv_ensure_index16_tmp(int needed) {
     return 1;
 }
 
-static int android_tv_arrays_are_pexvertex_interleaved(const unsigned char **base_out, GLsizei *stride_out) {
+static int gles2_arrays_are_interleaved(const unsigned char **base_out, GLsizei *stride_out) {
     if (!g_android_tv_vertex_array_enabled || !g_android_tv_texcoord_array_enabled || !g_android_tv_color_array_enabled) return 0;
     if (!g_android_tv_vertex_ptr || !g_android_tv_texcoord_ptr || !g_android_tv_color_ptr) return 0;
     if (g_android_tv_vertex_size != 3 || g_android_tv_vertex_type != GL_FLOAT) return 0;
@@ -521,7 +521,7 @@ static int android_tv_draw_elements_fast(GLenum mode, GLsizei count, GLenum type
     if (mode != GL_TRIANGLES && mode != GL_LINES && mode != GL_LINE_STRIP && mode != GL_TRIANGLE_STRIP) return 0;
     const unsigned char *base = NULL;
     GLsizei stride = 0;
-    if (!android_tv_arrays_are_pexvertex_interleaved(&base, &stride)) return 0;
+    if (!gles2_arrays_are_interleaved(&base, &stride)) return 0;
     if (type != GL_UNSIGNED_INT && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_BYTE) return 0;
 
     unsigned int max_idx = 0;
@@ -557,7 +557,7 @@ static int android_tv_draw_elements_fast(GLenum mode, GLsizei count, GLenum type
     GLenum draw_type = type;
     const GLvoid *draw_offset = (const GLvoid*)0;
     if (type == GL_UNSIGNED_INT && max_idx <= 65535u) {
-        if (!android_tv_ensure_index16_tmp(count)) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, 0); return 0; }
+        if (!gles2_ensure_index16_buffer(count)) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, 0); return 0; }
         const GLuint *src = (const GLuint*)indices;
         for (int i = 0; i < count; ++i) g_android_tv_index16_tmp[i] = (GLushort)src[i];
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(GLushort)), g_android_tv_index16_tmp, GL_DYNAMIC_DRAW);
@@ -598,7 +598,7 @@ static int pex_android_tv_gluProject(GLdouble objx, GLdouble objy, GLdouble objz
     return 1;
 }
 
-static void pex_android_tv_gles2_shutdown(void) {
+static void gles2_renderer_shutdown(void) {
     for (GLuint i = 1; i < PEX_ANDROID_TV_MAX_LISTS; ++i) android_tv_list_free(i);
     free(g_android_tv_imm); g_android_tv_imm = NULL; g_android_tv_imm_cap = 0;
     free(g_android_tv_index16_tmp); g_android_tv_index16_tmp = NULL; g_android_tv_index16_cap = 0;

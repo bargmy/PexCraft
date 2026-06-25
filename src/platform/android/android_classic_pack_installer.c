@@ -25,15 +25,15 @@ static char g_classic_downloaded_jar_path[MAX_PATHBUF] = "";
 static volatile LONG g_classic_download_size_state = CLASSIC_SIZE_UNKNOWN;
 static volatile LONG g_classic_download_size_bytes = 0;
 
-static void classic_install_set_state(LONG state, LONG progress, const char *status) {
+static void pack_install_set_state(LONG state, LONG progress, const char *status) {
     if (status) lstrcpynA(g_classic_install_status, status, sizeof(g_classic_install_status));
     InterlockedExchange(&g_classic_install_progress, progress);
     InterlockedExchange(&g_classic_install_state, state);
 }
 
-static void classic_install_fail(const char *msg) {
+static void pack_install_fail(const char *msg) {
     lstrcpynA(g_classic_install_error, msg ? msg : "Unknown error", sizeof(g_classic_install_error));
-    classic_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
+    pack_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
     log_msg("Minecraft Classic texture pack install failed: %s", g_classic_install_error);
 }
 
@@ -123,13 +123,13 @@ static void android_call_string_copy(const char *method, char *out, size_t cap) 
     (*env)->DeleteLocalRef(env, activity);
 }
 
-static void classic_resource_size_start_fetch(void) {
+static void pack_install_start_size_fetch(void) {
     LONG old = InterlockedCompareExchange(&g_classic_download_size_state, CLASSIC_SIZE_FETCHING, CLASSIC_SIZE_UNKNOWN);
     if (old != CLASSIC_SIZE_UNKNOWN) return;
     android_call_void_string("startClassicPackSizeFetch", CLASSIC_PACK_URL);
 }
 
-static void classic_resource_size_format(char *out, size_t cap) {
+static void format_download_size(char *out, size_t cap) {
     int state = android_call_int("getClassicPackSizeState");
     int bytes = android_call_int("getClassicPackSizeBytes");
     if (state == CLASSIC_SIZE_READY && bytes > 0) {
@@ -152,32 +152,32 @@ static DWORD WINAPI classic_extract_worker(LPVOID unused) {
     err[0] = 0;
 
     ensure_dir(g_texpack_dir);
-    classic_pack_path(pack_dir, sizeof(pack_dir));
-    classic_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
+    pack_asset_path(pack_dir, sizeof(pack_dir));
+    pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
 
     if (!pxc_extract_zip_file(g_classic_downloaded_jar_path, pack_dir, err, sizeof(err))) {
-        classic_install_fail(err[0] ? err : "Could not extract client.jar internally");
+        pack_install_fail(err[0] ? err : "Could not extract client.jar internally");
         return 0;
     }
-    if (!classic_pack_installed() || classic_pack_missing_required_textures()) {
-        classic_install_fail("Extracted pack is missing required textures");
+    if (!pack_is_installed() || pack_missing_required_textures()) {
+        pack_install_fail("Extracted pack is missing required textures");
         return 0;
     }
 
     DeleteFileA(g_classic_downloaded_jar_path);
-    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
+    pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
     log_msg("Installed Minecraft Classic texture pack at %s", pack_dir);
     return 0;
 }
 
 static void classic_start_extract_thread(void) {
     if (g_classic_install_thread) return;
-    classic_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
+    pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
     g_classic_install_thread = CreateThread(NULL, 0, classic_extract_worker, NULL, 0, NULL);
-    if (!g_classic_install_thread) classic_install_fail("Could not start extractor thread");
+    if (!g_classic_install_thread) pack_install_fail("Could not start extractor thread");
 }
 
-static void start_classic_pack_install(void) {
+static void pack_install_start(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, CLASSIC_INSTALL_DOWNLOADING, CLASSIC_INSTALL_IDLE);
     if (state == CLASSIC_INSTALL_DOWNLOADING || state == CLASSIC_INSTALL_EXTRACTING) {
         set_screen(SCREEN_TEXPACK_INSTALL);
@@ -193,15 +193,15 @@ static void start_classic_pack_install(void) {
     g_classic_install_error[0] = 0;
     snprintf(g_classic_downloaded_jar_path, sizeof(g_classic_downloaded_jar_path), "%s/minecraft_classic_client.jar", g_mc_dir);
     DeleteFileA(g_classic_downloaded_jar_path);
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading client.jar...");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading client.jar...");
     set_screen(SCREEN_TEXPACK_INSTALL);
 
     if (!android_call_bool_string_string("startClassicPackDownload", CLASSIC_PACK_URL, g_classic_downloaded_jar_path)) {
-        classic_install_fail("Could not start Android downloader");
+        pack_install_fail("Could not start Android downloader");
     }
 }
 
-static void classic_pack_install_tick(void) {
+static void pack_install_tick(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
     if (state == CLASSIC_INSTALL_DOWNLOADING) {
         int jstate = android_call_int("getClassicPackDownloadState");
@@ -211,8 +211,8 @@ static void classic_pack_install_tick(void) {
         android_call_string_copy("getClassicPackDownloadStatus", status, sizeof(status));
         if (prog < 0) prog = 0;
         if (prog > 89) prog = 89;
-        if (status[0]) classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, prog, status);
-        else classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, prog, "Downloading client.jar...");
+        if (status[0]) pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, prog, status);
+        else pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, prog, "Downloading client.jar...");
 
         if (jstate == CLASSIC_INSTALL_DONE) {
             classic_start_extract_thread();
@@ -220,7 +220,7 @@ static void classic_pack_install_tick(void) {
             char err[MAX_LABEL];
             err[0] = 0;
             android_call_string_copy("getClassicPackDownloadError", err, sizeof(err));
-            classic_install_fail(err[0] ? err : "Android download failed");
+            pack_install_fail(err[0] ? err : "Android download failed");
         }
     } else if (state == CLASSIC_INSTALL_DONE) {
         if (g_classic_install_thread) {

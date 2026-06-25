@@ -129,7 +129,7 @@ static int item_max_damage(int id) {
     return armor_max > 0 ? armor_max : 0;
 }
 
-static int block_item_should_render_3d(int id) {
+static int block_item_is_3d(int id) {
     if (!item_is_block_id(id)) return 0;
     /* Keep the Java 3-D inventory path for normal cube-like blocks, but also
        force chests down the model renderer so the inventory icon matches the
@@ -144,7 +144,7 @@ static int block_item_should_render_3d(int id) {
     return 1;
 }
 
-static void draw_item_icon_2d_gui(const ItemStack *st, int x, int y) {
+static void draw_item_icon_gui_2d(const ItemStack *st, int x, int y) {
     if (stack_empty(st) || !tex_items.id) return;
     int tile = item_icon_tile(st->id);
     int sx = (tile & 15) * 16;
@@ -160,7 +160,7 @@ static void draw_item_icon_2d_gui(const ItemStack *st, int x, int y) {
 }
 
 
-static void emit_inventory_cuboid_face_for_block(int id,
+static void emit_inventory_cuboid_face(int id,
                                                  float bx, float by, float bz,
                                                  float x0, float y0, float z0,
                                                  float x1, float y1, float z1,
@@ -214,21 +214,21 @@ static void emit_inventory_cuboid_face_for_block(int id,
     }
 }
 
-static void emit_inventory_cuboid_faces_for_block(int id,
+static void emit_inventory_cuboid_faces(int id,
                                                   float bx, float by, float bz,
                                                   float x0, float y0, float z0,
                                                   float x1, float y1, float z1) {
     for (int face = 0; face < 6; face++) {
-        emit_inventory_cuboid_face_for_block(id, bx, by, bz, x0, y0, z0, x1, y1, z1, face);
+        emit_inventory_cuboid_face(id, bx, by, bz, x0, y0, z0, x1, y1, z1, face);
     }
 }
 
-static void draw_inventory_cuboid_model_for_block(int id,
+static void draw_inventory_cuboid_model(int id,
                                                    float bx, float by, float bz,
                                                    float x0, float y0, float z0,
                                                    float x1, float y1, float z1) {
     glBegin(GL_QUADS);
-    emit_inventory_cuboid_faces_for_block(id, bx, by, bz, x0, y0, z0, x1, y1, z1);
+    emit_inventory_cuboid_faces(id, bx, by, bz, x0, y0, z0, x1, y1, z1);
     glEnd();
 }
 
@@ -239,28 +239,28 @@ static void draw_inventory_block_model(int id) {
        winding/order as the deobfuscated Java source so only the correct faces
        are visible. */
     const float bx = -0.5f, by = -0.5f, bz = -0.5f;
-    if (id == BLOCK_SLAB) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_SNOW_LAYER) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
-    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
-    if (id == BLOCK_STONE_BUTTON) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
-    if (id == BLOCK_CACTUS) { draw_inventory_cuboid_model_for_block(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_SLAB) { draw_inventory_cuboid_model(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_inventory_cuboid_model(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_inventory_cuboid_model(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
+    if (id == BLOCK_STONE_BUTTON) { draw_inventory_cuboid_model(id, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
+    if (id == BLOCK_CACTUS) { draw_inventory_cuboid_model(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_FENCE) {
         glBegin(GL_QUADS);
-        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
-        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
-        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        emit_inventory_cuboid_faces(id, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        emit_inventory_cuboid_faces(id, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        emit_inventory_cuboid_faces(id, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
         glEnd();
         return;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
         glBegin(GL_QUADS);
-        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0,0,0,1,0.5f,1);
-        emit_inventory_cuboid_faces_for_block(id, bx,by,bz, 0.5f,0.5f,0,1,1,1);
+        emit_inventory_cuboid_faces(id, bx,by,bz, 0,0,0,1,0.5f,1);
+        emit_inventory_cuboid_faces(id, bx,by,bz, 0.5f,0.5f,0,1,1,1);
         glEnd();
         return;
     }
     if (id == BLOCK_CHEST) { draw_chest_block(bx,by,bz); return; }
-    draw_inventory_cuboid_model_for_block(id, bx, by, bz, 0,0,0,1,1,1);
+    draw_inventory_cuboid_model(id, bx, by, bz, 0,0,0,1,1,1);
 }
 
 static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, float pz, float u, float v) {
@@ -280,7 +280,7 @@ static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, flo
     glVertex3f(gx, gy, 0.0f);
 }
 
-static void emit_inventory_iso_face_for_block(int id, int slot_x, int slot_y,
+static void emit_inventory_iso_face(int id, int slot_x, int slot_y,
                                               float x0, float y0, float z0,
                                               float x1, float y1, float z1,
                                               int face) {
@@ -318,39 +318,39 @@ static void emit_inventory_iso_face_for_block(int id, int slot_x, int slot_y,
     }
 }
 
-static void draw_inventory_iso_cuboid_for_block(int id, int slot_x, int slot_y,
+static void draw_inventory_iso_cuboid(int id, int slot_x, int slot_y,
                                                 float x0, float y0, float z0,
                                                 float x1, float y1, float z1) {
     glBegin(GL_QUADS);
     /* At Java's inventory rotation the visible faces are x-min, z-max, and top.
        Emit only those faces, in painter order, so no back/inside face can bleed
        through on PSP/D3D compatibility paths. */
-    emit_inventory_iso_face_for_block(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
-    emit_inventory_iso_face_for_block(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
-    emit_inventory_iso_face_for_block(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
+    emit_inventory_iso_face(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
+    emit_inventory_iso_face(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
+    emit_inventory_iso_face(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
     glEnd();
 }
 
 static void draw_inventory_iso_block_model(int id, int slot_x, int slot_y) {
-    if (id == BLOCK_SLAB) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_SNOW_LAYER) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.125f,1); return; }
-    if (id == BLOCK_CACTUS) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
-    if (id == BLOCK_CHEST) { draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,14.0f/16.0f,0.9375f); return; }
+    if (id == BLOCK_SLAB) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_CACTUS) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_CHEST) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,14.0f/16.0f,0.9375f); return; }
     if (id == BLOCK_FENCE) {
-        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
-        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
-        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
         return;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
-        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,0.5f,1);
-        draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0.5f,0.5f,0,1,1,1);
+        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,0.5f,1);
+        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.5f,0.5f,0,1,1,1);
         return;
     }
-    draw_inventory_iso_cuboid_for_block(id, slot_x, slot_y, 0,0,0,1,1,1);
+    draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,1,1);
 }
 
-static void draw_block_item_3d_gui(const ItemStack *st, int x, int y) {
+static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
     if (stack_empty(st) || !tex_terrain.id) return;
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -692,7 +692,7 @@ static const char *item_display_name(int id) {
     return "";
 }
 
-static void draw_item_stack_gui_ex(const ItemStack *st, int x, int y, int animate_pop) {
+static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int animate_pop) {
     if (stack_empty(st)) return;
     int pushed = 0;
     float var6 = animate_pop ? ((float)st->pop_time - g_frame_partial) : 0.0f;
@@ -708,9 +708,9 @@ static void draw_item_stack_gui_ex(const ItemStack *st, int x, int y, int animat
     glColorMask(1,1,1,1);
     glColor4f(1,1,1,1);
     if (item_is_block_id(st->id)) {
-        if (block_item_should_render_3d(st->id)) draw_block_item_3d_gui(st, x, y);
+        if (block_item_is_3d(st->id)) draw_block_item_gui_3d(st, x, y);
         else draw_block_item_icon_gui(st->id, x, y);
-    } else draw_item_icon_2d_gui(st, x, y);
+    } else draw_item_icon_gui_2d(st, x, y);
 
     if (pushed) glPopMatrix();
 
@@ -748,11 +748,11 @@ static void draw_item_stack_gui_ex(const ItemStack *st, int x, int y, int animat
 }
 
 static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
-    draw_item_stack_gui_ex(st, x, y, 0);
+    draw_item_stack_gui_base(st, x, y, 0);
 }
 
 static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y) {
-    draw_item_stack_gui_ex(st, x, y, 1);
+    draw_item_stack_gui_base(st, x, y, 1);
 }
 
 static void draw_carried_stack(void) {

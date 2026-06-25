@@ -40,14 +40,14 @@ static void psp_boot_debug_redraw(const char *footer) {
 }
 
 
-static void psp_boot_debug_redraw_gu_front(const char *footer) {
-    unsigned int off = psp_gu_current_display_offset();
+static void psp_redraw_gu_front(const char *footer) {
+    unsigned int off = psp_gu_display_offset();
     void *base = (void *)(0x44000000u + off);
     pspDebugScreenInitEx(base, PSP_DISPLAY_PIXEL_FORMAT_8888, 0);
     psp_boot_debug_redraw(footer);
 }
 
-static void psp_boot_debug_show_runtime_overlay(const char *phase) {
+static void psp_show_runtime_overlay(const char *phase) {
     g_psp_runtime_overlay_frame++;
     char footer[192];
     snprintf(footer, sizeof(footer),
@@ -56,8 +56,8 @@ static void psp_boot_debug_show_runtime_overlay(const char *phase) {
              g_psp_runtime_overlay_frame,
              g_screen,
              (unsigned long long)g_ticks,
-             psp_gu_current_display_offset());
-    psp_boot_debug_redraw_gu_front(footer);
+             psp_gu_display_offset());
+    psp_redraw_gu_front(footer);
 }
 
 static void psp_boot_debug_stagef(const char *fmt, ...) {
@@ -71,13 +71,13 @@ static void psp_boot_debug_stagef(const char *fmt, ...) {
     snprintf(g_psp_boot_debug_lines[g_psp_boot_debug_count % 18], 96, "%s", line);
     g_psp_boot_debug_count++;
     g_psp_boot_debug_stage++;
-    if (g_psp_gu_debug_screen_ready) psp_boot_debug_redraw_gu_front("working... after GU takeover");
+    if (g_psp_gu_debug_screen_ready) psp_redraw_gu_front("working... after GU takeover");
     else psp_boot_debug_redraw("working...");
     sceKernelDelayThread(g_psp_gu_debug_screen_ready ? 900000 : 350000);
 }
 
 static void psp_boot_debug_pause(const char *footer, int usec) {
-    if (g_psp_gu_debug_screen_ready) psp_boot_debug_redraw_gu_front(footer);
+    if (g_psp_gu_debug_screen_ready) psp_redraw_gu_front(footer);
     else psp_boot_debug_redraw(footer);
     if (usec > 0) sceKernelDelayThread((SceUInt)usec);
 }
@@ -87,7 +87,7 @@ static void psp_boot_debug_hold(const char *footer) {
     char line[160];
     snprintf(line, sizeof(line), "%s\n\nDebug hold: START+SELECT+L+R exits.", footer ? footer : "PSP debug hold");
     for (;;) {
-        if (g_psp_gu_debug_screen_ready) psp_boot_debug_redraw_gu_front(line);
+        if (g_psp_gu_debug_screen_ready) psp_redraw_gu_front(line);
         else psp_boot_debug_redraw(line);
         SceCtrlData pad;
         memset(&pad, 0, sizeof(pad));
@@ -107,8 +107,8 @@ static void psp_boot_debug_fail(const char *msg) {
     psp_boot_debug_hold("Boot stopped. Check this stage.");
 }
 #else
-static void psp_boot_debug_redraw_gu_front(const char *footer) { (void)footer; }
-static void psp_boot_debug_show_runtime_overlay(const char *phase) { (void)phase; }
+static void psp_redraw_gu_front(const char *footer) { (void)footer; }
+static void psp_show_runtime_overlay(const char *phase) { (void)phase; }
 static void psp_boot_debug_stagef(const char *fmt, ...) { (void)fmt; }
 static void psp_boot_debug_pause(const char *footer, int usec) { (void)footer; (void)usec; }
 static void psp_boot_debug_hold(const char *footer) {
@@ -141,7 +141,7 @@ static int init_gl(HWND unused) {
     psp_boot_debug_stagef("initializing PSP GU");
     if (!psp_gu_init()) { psp_boot_debug_fail("psp_gu_init failed"); return 0; }
     g_psp_gu_debug_screen_ready = 1;
-    psp_boot_debug_redraw_gu_front("GU returned OK. Front-buffer debug console is active.");
+    psp_redraw_gu_front("GU returned OK. Front-buffer debug console is active.");
 #if PEX_PSP_BOOT_DEBUG
     sceKernelDelayThread(1200000);
 #endif
@@ -172,7 +172,7 @@ static void pex_renderer_present(void) {
     psp_gu_end_frame();
 #if PEX_PSP_VERBOSE
     if (g_psp_runtime_overlay_frame < 360 || (g_psp_runtime_overlay_frame % 60u) == 0u) {
-        psp_boot_debug_show_runtime_overlay("after-present");
+        psp_show_runtime_overlay("after-present");
     }
 #endif
 }
@@ -180,7 +180,7 @@ static void pex_renderer_resize(int w, int h) { (void)w; (void)h; }
 static void pex_renderer_shutdown(void) { psp_gu_shutdown(); }
 static void pex_gl_suppress_immediate(int on) { (void)on; }
 static void apply_vsync_setting(void) { }
-static void refresh_window_size_after_mode_change(void) { }
+static void refresh_window_size_after_mode(void) { }
 static void set_fullscreen_enabled(int enabled) { g_opts.fullscreen = enabled ? 1 : 0; }
 static void toggle_fullscreen(void) { }
 
@@ -206,7 +206,7 @@ static void save_world_state_for_exit(void) {
     pex_join_save_thread_for_exit();
 #else
     pex_join_save_thread_for_exit();
-    save_current_world_state_sync();
+    save_world_state_sync();
 #endif
 }
 
@@ -235,12 +235,12 @@ static void main_loop(void) {
         if (psp_verbose_frame <= 120 || (psp_verbose_frame % 60u) == 0u) {
             PEX_PSP_LOGF("FRAME %u begin: screen=%d ticks=%llu", psp_verbose_frame, g_screen, (unsigned long long)g_ticks);
         }
-        pex_profile_frame_begin();
-        double prof_start = pex_profile_begin();
+        profile_begin_frame();
+        double prof_start = profile_begin();
         if (psp_verbose_frame <= 20) PEX_PSP_LOGF("FRAME %u: pex_gamepad_update begin", psp_verbose_frame);
         pex_gamepad_update();
         if (psp_verbose_frame <= 20) PEX_PSP_LOGF("FRAME %u: pex_gamepad_update end", psp_verbose_frame);
-        pex_profile_add(PROF_PUMP, prof_start);
+        profile_add_time(PROF_PUMP, prof_start);
 
         double frame_start_time = now_seconds();
         double t = frame_start_time;
@@ -252,22 +252,22 @@ static void main_loop(void) {
         int ticks_this_frame = 0;
         while (tick_accum >= 1.0 && ticks_this_frame < 2) {
             if (psp_verbose_frame <= 60) PEX_PSP_LOGF("FRAME %u: tick begin screen=%d", psp_verbose_frame, g_screen);
-            double tick_start = pex_profile_begin();
+            double tick_start = profile_begin();
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
             if (g_screen == SCREEN_GENERATING) {
-                double t_worldgen = pex_profile_begin();
+                double t_worldgen = profile_begin();
                 PEX_PSP_LOGF("FRAME %u: worldgen_tick begin", psp_verbose_frame);
                 worldgen_tick();
                 PEX_PSP_LOGF("FRAME %u: worldgen_tick end", psp_verbose_frame);
-                pex_profile_add(PROF_WORLDGEN_TICK, t_worldgen);
+                profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
-            if (g_screen == SCREEN_TEXPACK_INSTALL) classic_pack_install_tick();
+            if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
                 g_screen == SCREEN_DEATH) ingame_tick();
-            pex_profile_add(PROF_TICK_TOTAL, tick_start);
+            profile_add_time(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
             if (psp_verbose_frame <= 60) PEX_PSP_LOGF("FRAME %u: tick end ticks=%llu", psp_verbose_frame, (unsigned long long)g_ticks);
@@ -284,7 +284,7 @@ static void main_loop(void) {
 #endif
         }
         sleep_for_max_fps(frame_start_time);
-        pex_profile_frame_end();
+        profile_end_frame();
         if (psp_verbose_frame <= 120 || (psp_verbose_frame % 60u) == 0u) PEX_PSP_LOGF("FRAME %u end: running=%d screen=%d", psp_verbose_frame, g_running, g_screen);
     }
     PEX_PSP_LOGF("MAIN_LOOP exit: running=%d screen=%d ticks=%llu", g_running, g_screen, (unsigned long long)g_ticks);
@@ -326,7 +326,7 @@ int main(int argc, char **argv) {
     PEX_PSP_LOGF("load_options end/forced PSP: user=%s fps=%d renderer=%d rd=%d fancy=%d", g_opts.username, g_opts.max_fps, g_selected_renderer_backend, g_opts.render_distance, g_opts.fancy_graphics);
     psp_boot_debug_stagef("RAM options loaded; PSP-safe graphics forced");
     PEX_PSP_LOGF("embedded classic pack prepare begin");
-    psp_install_embedded_classic_pack_if_needed();
+    psp_install_embedded_pack_if_needed();
     PEX_PSP_LOGF("embedded classic pack prepare end");
     psp_boot_debug_stagef("embedded classic pack ready");
     g_runtime_renderer_backend = RENDERER_OPENGL;
@@ -355,7 +355,7 @@ int main(int argc, char **argv) {
     set_screen(SCREEN_TITLE);
     PEX_PSP_LOGF("set_screen(SCREEN_TITLE) end: screen=%d", g_screen);
     psp_boot_debug_stagef("title screen selected");
-    psp_boot_debug_redraw_gu_front("Reached title screen setup. Calling main_loop next.");
+    psp_redraw_gu_front("Reached title screen setup. Calling main_loop next.");
 #if PEX_PSP_BOOT_DEBUG
     sceKernelDelayThread(1500000);
 #endif

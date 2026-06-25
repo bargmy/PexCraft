@@ -322,7 +322,7 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return ch >= 0;
 }
 
-static void pex_sound_backend_stop_menu_music(void) {
+static void sound_backend_stop_menu_music(void) {
     if (pMix_HaltChannel && g_pex_menu_music_channel >= 0) {
         pMix_HaltChannel(g_pex_menu_music_channel);
     }
@@ -330,7 +330,7 @@ static void pex_sound_backend_stop_menu_music(void) {
 }
 
 static void pex_sound_shutdown(void) {
-    pex_sound_backend_stop_menu_music();
+    sound_backend_stop_menu_music();
     for (int i = 0; i < g_sound_pitch_cache_count; ++i) {
         free(g_sound_pitch_cache[i].chunk.abuf);
         g_sound_pitch_cache[i].chunk.abuf = NULL;
@@ -398,7 +398,7 @@ static int pex_win_pcm_append(BYTE **data, DWORD *bytes, DWORD *cap, const char 
     return 1;
 }
 
-static void pex_win_pcm_apply_volume_16(BYTE *data, DWORD bytes, float volume) {
+static void win_pcm_apply_volume_16(BYTE *data, DWORD bytes, float volume) {
     if (!data || bytes == 0) return;
     if (volume > 0.999f && volume < 1.001f) return;
     short *s = (short *)data;
@@ -488,7 +488,7 @@ static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMAT
     WAVEHDR hdr;
     MMRESULT mm;
     if (!data || bytes == 0 || !fmt) return 0;
-    pex_win_pcm_apply_volume_16(data, bytes, volume);
+    win_pcm_apply_volume_16(data, bytes, volume);
     memset(&hdr, 0, sizeof(hdr));
     hdr.lpData = (LPSTR)data;
     hdr.dwBufferLength = bytes;
@@ -555,12 +555,12 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return 1;
 }
 
-static void pex_sound_backend_stop_menu_music(void) {
+static void sound_backend_stop_menu_music(void) {
     InterlockedIncrement((volatile LONG *)&g_pex_menu_music_stop_generation);
 }
 
 static void pex_sound_shutdown(void) {
-    pex_sound_backend_stop_menu_music();
+    sound_backend_stop_menu_music();
     for (int i = 0; i < g_win_sound_cache_count; ++i) {
         free(g_win_sound_cache[i].data);
         g_win_sound_cache[i].data = NULL;
@@ -572,7 +572,7 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     (void)path; (void)volume; (void)pitch;
     return 0;
 }
-static void pex_sound_backend_stop_menu_music(void) { }
+static void sound_backend_stop_menu_music(void) { }
 static void pex_sound_shutdown(void) { }
 #endif
 
@@ -603,7 +603,7 @@ static void pex_menu_music_start_once(void) {
 static void pex_menu_music_stop(void) {
     g_pex_menu_music_request = 0;
     g_menu_music_started = 0;
-    pex_sound_backend_stop_menu_music();
+    sound_backend_stop_menu_music();
 }
 
 static void pex_sound_missing_notice_once(void) {

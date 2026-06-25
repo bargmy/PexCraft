@@ -99,13 +99,13 @@ static void draw_current_screen(float partial) {
         case SCREEN_CHAT: draw_chat_screen(); break;
         case SCREEN_NOTICE: draw_notice(); break;
         case SCREEN_RENDERER_RESTART_PROMPT: draw_renderer_restart_prompt(); break;
-        case SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT: draw_classic_pack_download_prompt(); break;
+        case SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT: draw_pack_download_prompt(); break;
         case SCREEN_CLASSIC_PACK_WARNING: draw_classic_pack_warning(); break;
     }
 }
 
 static void render(float partial) {
-    double render_profile_time = pex_profile_begin();
+    double render_profile_time = profile_begin();
     double render_entry_time = now_seconds();
     static int last_debug_menu_shown = 0;
     if (g_debug_menu_shown && !last_debug_menu_shown) {
@@ -120,7 +120,7 @@ static void render(float partial) {
     if (!pex_renderer_begin_frame()) {
         g_render_ms_last = 0.0;
         record_frame_time_sample(render_entry_time);
-        pex_profile_add(PROF_RENDER_TOTAL, render_profile_time);
+        profile_add_time(PROF_RENDER_TOTAL, render_profile_time);
         return;
     }
     g_render_w = g_win_w;
@@ -138,5 +138,5 @@ static void render(float partial) {
     pex_renderer_present();
     g_render_ms_last = (now_seconds() - render_start_time) * 1000.0;
     record_frame_time_sample(render_entry_time);
-    pex_profile_add(PROF_RENDER_TOTAL, render_profile_time);
+    profile_add_time(PROF_RENDER_TOTAL, render_profile_time);
 }

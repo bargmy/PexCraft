@@ -79,7 +79,7 @@ static float pex_android_touch_clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-static int pex_android_touch_inventory_screen(void) {
+static int android_touch_inventory_screen(void) {
     return g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
            g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST;
 }
@@ -99,7 +99,7 @@ static int pex_android_touch_button_pause(int x, int y) {
     return pex_android_touch_in_rect(x, y, g_gui_w - 50, 4, 46, 24);
 }
 
-static int pex_android_touch_button_inventory(int x, int y) {
+static int android_touch_inventory_button(int x, int y) {
     return pex_android_touch_in_rect(x, y, g_gui_w - 58, 34, 54, 26);
 }
 
@@ -234,7 +234,7 @@ static void pex_android_touch_begin_break(void) {
     mouse_down(g_mouse_x, g_mouse_y);
 }
 
-static void pex_android_touch_ui_reset_inventory_touch(void) {
+static void android_touch_reset_inventory(void) {
     g_android_inv_dragging = 0;
     g_android_inv_drag_start_slot = -1;
     g_android_inv_drag_down_x = 0;
@@ -251,13 +251,13 @@ static void pex_android_touch_ui_down(SDL_FingerID id, int x, int y) {
     g_android_ui_finger = id;
     g_mouse_x = x;
     g_mouse_y = y;
-    if (pex_android_touch_inventory_screen() && pex_android_touch_button_close(x, y)) {
+    if (android_touch_inventory_screen() && pex_android_touch_button_close(x, y)) {
         set_screen(SCREEN_INGAME);
         g_android_ui_finger = PEX_ANDROID_TOUCH_NONE;
-        pex_android_touch_ui_reset_inventory_touch();
+        android_touch_reset_inventory();
         return;
     }
-    if (pex_android_touch_inventory_screen()) {
+    if (android_touch_inventory_screen()) {
         /* Do not left-click immediately on Android inventory screens.  A
            touch-down may become a long-press stack split, so defer the normal
            left-click until release. */
@@ -318,7 +318,7 @@ static void pex_android_touch_ui_up(SDL_FingerID id, int x, int y) {
                 inventory_mouse_click(x, y, 0);
             }
         }
-        pex_android_touch_ui_reset_inventory_touch();
+        android_touch_reset_inventory();
     } else {
         mouse_up(x, y);
     }
@@ -330,7 +330,7 @@ static void pex_android_touch_ingame_down(SDL_FingerID id, int x, int y) {
     int slot = pex_android_touch_hotbar_slot(x, y);
     if (slot >= 0) { g_selected_hotbar_slot = slot; return; }
     if (pex_android_touch_button_pause(x, y)) { set_screen(SCREEN_PAUSE); return; }
-    if (pex_android_touch_button_inventory(x, y)) { set_screen(SCREEN_INVENTORY); return; }
+    if (android_touch_inventory_button(x, y)) { set_screen(SCREEN_INVENTORY); return; }
     if (pex_android_touch_button_jump(x, y)) { g_android_jump_finger = id; g_android_jump_down = 1; return; }
     if (pex_android_touch_button_sneak(x, y)) {
         g_android_sneak_finger = id;
@@ -412,8 +412,8 @@ static void pex_android_touch_world_tick(void) {
 }
 
 static void pex_android_touch_inventory_tick(void) {
-    if (!pex_android_touch_inventory_screen()) {
-        pex_android_touch_ui_reset_inventory_touch();
+    if (!android_touch_inventory_screen()) {
+        android_touch_reset_inventory();
         return;
     }
     if (g_android_ui_finger == PEX_ANDROID_TOUCH_NONE || !g_android_inv_dragging) return;
@@ -458,7 +458,7 @@ static int pex_android_handle_touch_event(SDL_Event *e) {
     return 1;
 }
 
-static void pex_android_touch_apply_virtual_keys(void) {
+static void android_touch_apply_virtual_keys(void) {
     /* Touch is not a gamepad.  Feed only the movement/action key state here so
        gameplay works without enabling controller menus/cursors. */
     if (g_input_focus_mode != PEX_INPUT_FOCUS_TOUCH) return;
@@ -476,8 +476,8 @@ static void pex_android_touch_ingame_update(void) {
 }
 
 static void draw_android_touch_controls(void) {
-    if (g_screen != SCREEN_INGAME && !pex_android_touch_inventory_screen()) return;
-    if (pex_android_touch_inventory_screen()) {
+    if (g_screen != SCREEN_INGAME && !android_touch_inventory_screen()) return;
+    if (android_touch_inventory_screen()) {
         draw_rect(g_gui_w - 38, 6, g_gui_w - 6, 30, (int)0xAA000000u);
         draw_text("X", g_gui_w - 25, 14, 0xFFFFFF);
         draw_text("Tap/drag slots. Hold stack to split half. Tap X or Android Back to close.", 8, g_gui_h - 12, 0xE0E0E0);

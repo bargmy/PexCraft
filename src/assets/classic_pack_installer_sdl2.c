@@ -44,7 +44,7 @@ typedef struct ClassicSoundDownloadCtx {
     volatile LONG failed;
 } ClassicSoundDownloadCtx;
 
-static LONG classic_atomic_inc(volatile LONG *target) {
+static LONG atomic_increment_int(volatile LONG *target) {
 #ifdef _WIN32
     return InterlockedIncrement(target);
 #else
@@ -68,7 +68,7 @@ typedef struct ClassicCurlMemoryCtx {
 typedef struct ClassicCurlProgressCtx { int last_pct; } ClassicCurlProgressCtx;
 #endif
 
-static unsigned long long parse_decimal_u64(const char *s) {
+static unsigned long long parse_u64_decimal(const char *s) {
     unsigned long long v = 0;
     if (!s) return 0;
     while (*s == ' ' || *s == '\t') s++;
@@ -81,19 +81,19 @@ static unsigned long long parse_decimal_u64(const char *s) {
     return v;
 }
 
-static void classic_install_set_state(LONG state, LONG progress, const char *status) {
+static void pack_install_set_state(LONG state, LONG progress, const char *status) {
     if (status) lstrcpynA(g_classic_install_status, status, sizeof(g_classic_install_status));
     InterlockedExchange(&g_classic_install_progress, progress);
     InterlockedExchange(&g_classic_install_state, state);
 }
 
-static void classic_install_fail(const char *msg) {
+static void pack_install_fail(const char *msg) {
     lstrcpynA(g_classic_install_error, msg ? msg : "Unknown error", sizeof(g_classic_install_error));
-    classic_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
+    pack_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
     log_msg("PexCraft Release resources install failed: %s", g_classic_install_error);
 }
 
-static unsigned long long classic_file_size_bytes(const char *path) {
+static unsigned long long file_size_bytes(const char *path) {
     FILE *f = fopen(path, "rb");
     long n;
     if (!f) return 0;
@@ -103,26 +103,26 @@ static unsigned long long classic_file_size_bytes(const char *path) {
     return n > 0 ? (unsigned long long)n : 0ULL;
 }
 
-static int classic_sound_asset_path_ok(const char *path) {
+static int legacy_sound_path_is_valid(const char *path) {
     if (!path) return 0;
     /* Moog City 2 is the Minecraft 1.2.5 menu track stored in the legacy
        asset index.  In that index it is named sounds/music/menu/menu2.ogg. */
     return !strcmp(path, "sounds/music/menu/menu2.ogg") || !strcmp(path, "music/menu/menu2.ogg");
 }
 
-static const char *classic_sound_output_rel(const char *path) {
+static const char *legacy_sound_output_path(const char *path) {
     if (!path) return "music/menu/menu2.ogg";
     if (!strncmp(path, "sounds/", 7)) return path + 7;
     return path;
 }
 
-static const char *classic_json_find_token(const char *p, const char *end, const char *token) {
+static const char *json_find_token(const char *p, const char *end, const char *token) {
     size_t tl = strlen(token);
     for (; p && p + tl <= end; ++p) if (!memcmp(p, token, tl)) return p;
     return NULL;
 }
 
-static int classic_parse_legacy_sounds(const char *json, size_t len, ClassicSoundAsset **out_assets, int *out_count, unsigned long long *out_size) {
+static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAsset **out_assets, int *out_count, unsigned long long *out_size) {
     const char *p = json, *end = json + len;
     int cap = 0, count = 0;
     unsigned long long total = 0;
@@ -146,11 +146,11 @@ static int classic_parse_legacy_sounds(const char *json, size_t len, ClassicSoun
         if (key_len == 0 || key_len >= sizeof(key)) { p = r + 1; continue; }
         memcpy(key, q + 1, key_len); key[key_len] = 0;
         p = r + 1;
-        if (!classic_sound_asset_path_ok(key)) continue;
+        if (!legacy_sound_path_is_valid(key)) continue;
         obj_end = strchr(p, '}');
         if (!obj_end || obj_end > end) break;
-        hash_tok = classic_json_find_token(p, obj_end, "\"hash\"");
-        size_tok = classic_json_find_token(p, obj_end, "\"size\"");
+        hash_tok = json_find_token(p, obj_end, "\"hash\"");
+        size_tok = json_find_token(p, obj_end, "\"size\"");
         if (!hash_tok || !size_tok) { p = obj_end + 1; continue; }
         hash_tok = strchr(hash_tok + 6, '"');
         if (!hash_tok || hash_tok >= obj_end) { p = obj_end + 1; continue; }
@@ -159,7 +159,7 @@ static int classic_parse_legacy_sounds(const char *json, size_t len, ClassicSoun
         memcpy(hash, hash_tok, 40); hash[40] = 0;
         size_tok = strchr(size_tok + 6, ':');
         if (!size_tok || size_tok >= obj_end) { p = obj_end + 1; continue; }
-        sz = (unsigned int)parse_decimal_u64(size_tok + 1);
+        sz = (unsigned int)parse_u64_decimal(size_tok + 1);
         if (!sz) { p = obj_end + 1; continue; }
         total += sz;
         if (out_assets) {
@@ -222,7 +222,7 @@ static int classic_curl_progress_cb(void *userdata, curl_off_t dltotal, curl_off
         if (!ctx || pct != ctx->last_pct) {
             char st[MAX_LABEL];
             snprintf(st, sizeof(st), "Downloading client.jar (%d%%)", pct);
-            classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
+            pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
             if (ctx) ctx->last_pct = pct;
         }
     }
@@ -230,7 +230,7 @@ static int classic_curl_progress_cb(void *userdata, curl_off_t dltotal, curl_off
 }
 #endif
 
-static int classic_download_url_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len) {
+static int http_download_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len) {
     CURL *curl;
     CURLcode rc;
     ClassicCurlMemoryCtx ctx;
@@ -258,7 +258,7 @@ static int classic_download_url_to_memory(const char *url, char **out_data, size
     return 1;
 }
 
-static int classic_download_url_to_file_simple(const char *url, const char *path, unsigned int expect_size) {
+static int http_download_to_file(const char *url, const char *path, unsigned int expect_size) {
     CURL *curl;
     CURLcode rc;
     FILE *out;
@@ -289,7 +289,7 @@ static int classic_download_url_to_file_simple(const char *url, const char *path
     return 1;
 }
 
-static int classic_query_download_size_bytes(const char *url, unsigned long long *out_bytes) {
+static int pack_install_query_size_bytes(const char *url, unsigned long long *out_bytes) {
     CURL *curl;
     curl_off_t clen = -1;
     CURLcode rc;
@@ -310,7 +310,7 @@ static int classic_query_download_size_bytes(const char *url, unsigned long long
     return 1;
 }
 
-static int classic_query_sound_index_size(unsigned long long *out_bytes, int *out_count) {
+static int legacy_sound_index_download_size(unsigned long long *out_bytes, int *out_count) {
     char *json = NULL;
     size_t len = 0;
     unsigned long long total = 0;
@@ -318,8 +318,8 @@ static int classic_query_sound_index_size(unsigned long long *out_bytes, int *ou
     int ok;
     if (out_bytes) *out_bytes = 0;
     if (out_count) *out_count = 0;
-    if (!classic_download_url_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) return 0;
-    ok = classic_parse_legacy_sounds(json, len, NULL, &count, &total);
+    if (!http_download_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) return 0;
+    ok = legacy_sound_parse_index(json, len, NULL, &count, &total);
     free(json);
     if (!ok) return 0;
     if (out_bytes) *out_bytes = total;
@@ -327,7 +327,7 @@ static int classic_query_sound_index_size(unsigned long long *out_bytes, int *ou
     return 1;
 }
 
-static void classic_resource_size_format(char *out, size_t cap) {
+static void format_download_size(char *out, size_t cap) {
     LONG state = InterlockedCompareExchange(&g_classic_download_size_state, 0, 0);
     if (state == CLASSIC_SIZE_READY) {
         LONG tex = InterlockedCompareExchange(&g_classic_texture_download_size_bytes, 0, 0);
@@ -354,9 +354,9 @@ static void classic_resource_size_format(char *out, size_t cap) {
     snprintf(out, cap, "Download size: unavailable");
 }
 
-static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
+static DWORD WINAPI pack_install_size_worker(LPVOID unused) {
     (void)unused;
-    int need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int need_textures = !pack_is_installed() || pack_missing_required_textures();
     int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
     int got_any = 0;
 
@@ -366,7 +366,7 @@ static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
 
     if (need_textures) {
         unsigned long long bytes = 0;
-        if (classic_query_download_size_bytes(CLASSIC_PACK_URL, &bytes) && bytes > 0 && bytes <= 0x7fffffffULL) {
+        if (pack_install_query_size_bytes(CLASSIC_PACK_URL, &bytes) && bytes > 0 && bytes <= 0x7fffffffULL) {
             InterlockedExchange(&g_classic_texture_download_size_bytes, (LONG)bytes);
             got_any = 1;
         }
@@ -377,7 +377,7 @@ static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
     if (need_sounds) {
         unsigned long long sound_bytes = 0;
         int sound_count = 0;
-        if (classic_query_sound_index_size(&sound_bytes, &sound_count) && sound_bytes > 0 && sound_bytes <= 0x7fffffffULL) {
+        if (legacy_sound_index_download_size(&sound_bytes, &sound_count) && sound_bytes > 0 && sound_bytes <= 0x7fffffffULL) {
             InterlockedExchange(&g_classic_sound_download_size_bytes, (LONG)sound_bytes);
             InterlockedExchange(&g_classic_sound_download_count, (LONG)sound_count);
             got_any = 1;
@@ -390,15 +390,15 @@ static DWORD WINAPI classic_download_size_worker(LPVOID unused) {
     return 0;
 }
 
-static void classic_resource_size_start_fetch(void) {
+static void pack_install_start_size_fetch(void) {
     LONG old = InterlockedCompareExchange(&g_classic_download_size_state, CLASSIC_SIZE_FETCHING, CLASSIC_SIZE_UNKNOWN);
     if (old != CLASSIC_SIZE_UNKNOWN) return;
-    HANDLE th = CreateThread(NULL, 0, classic_download_size_worker, NULL, 0, NULL);
+    HANDLE th = CreateThread(NULL, 0, pack_install_size_worker, NULL, 0, NULL);
     if (th) CloseHandle(th);
     else InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_ERROR);
 }
 
-static int classic_download_client_jar_linux(const char *url, const char *zip_path) {
+static int pack_install_download_client_jar_linux(const char *url, const char *zip_path) {
     CURL *curl;
     CURLcode rc;
     FILE *out;
@@ -409,16 +409,16 @@ static int classic_download_client_jar_linux(const char *url, const char *zip_pa
 
     DeleteFileA(zip_path);
     out = fopen(zip_path, "wb");
-    if (!out) { classic_install_fail("Could not create downloaded 1.2.5 client file"); return 0; }
+    if (!out) { pack_install_fail("Could not create downloaded 1.2.5 client file"); return 0; }
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl = curl_easy_init();
-    if (!curl) { fclose(out); classic_install_fail("Could not initialize internal downloader"); return 0; }
+    if (!curl) { fclose(out); pack_install_fail("Could not initialize internal downloader"); return 0; }
     memset(&write_ctx, 0, sizeof(write_ctx));
     write_ctx.f = out;
 #if LIBCURL_VERSION_NUM >= 0x072000
     memset(&progress_ctx, 0, sizeof(progress_ctx));
 #endif
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 1, "Connecting to Mojang...");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 1, "Connecting to Mojang...");
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
@@ -436,33 +436,33 @@ static int classic_download_client_jar_linux(const char *url, const char *zip_pa
     rc = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     fclose(out);
-    if (rc != CURLE_OK) { DeleteFileA(zip_path); classic_install_fail(curl_easy_strerror(rc)); return 0; }
-    if (write_ctx.downloaded < 1024) { DeleteFileA(zip_path); classic_install_fail("Downloaded 1.2.5 client.jar was empty"); return 0; }
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 85, "Downloaded 1.2.5 client.jar");
+    if (rc != CURLE_OK) { DeleteFileA(zip_path); pack_install_fail(curl_easy_strerror(rc)); return 0; }
+    if (write_ctx.downloaded < 1024) { DeleteFileA(zip_path); pack_install_fail("Downloaded 1.2.5 client.jar was empty"); return 0; }
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 85, "Downloaded 1.2.5 client.jar");
     return 1;
 }
 
-static int classic_extract_downloaded_pack_linux(const char *zip_path, const char *pack_dir) {
+static int pack_install_extract_archive_linux(const char *zip_path, const char *pack_dir) {
     char err[MAX_LABEL];
     err[0] = 0;
-    classic_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
+    pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
     if (!pxc_extract_zip_file(zip_path, pack_dir, err, sizeof(err))) {
-        classic_install_fail(err[0] ? err : "Could not extract 1.2.5 client.jar internally");
+        pack_install_fail(err[0] ? err : "Could not extract 1.2.5 client.jar internally");
         return 0;
     }
-    if (!classic_pack_installed() || classic_pack_missing_required_textures()) {
-        classic_install_fail("Extracted pack is missing required textures");
+    if (!pack_is_installed() || pack_missing_required_textures()) {
+        pack_install_fail("Extracted pack is missing required textures");
         return 0;
     }
     DeleteFileA(zip_path);
     return 1;
 }
 
-static DWORD WINAPI classic_sound_download_worker(LPVOID arg) {
+static DWORD WINAPI legacy_sound_download_worker(LPVOID arg) {
     ClassicSoundDownloadCtx *ctx = (ClassicSoundDownloadCtx *)arg;
     if (!ctx) return 0;
     for (;;) {
-        LONG idx = classic_atomic_inc(&ctx->next_index) - 1;
+        LONG idx = atomic_increment_int(&ctx->next_index) - 1;
         ClassicSoundAsset *asset;
         char out_path[MAX_PATHBUF];
         char url[256];
@@ -472,24 +472,24 @@ static DWORD WINAPI classic_sound_download_worker(LPVOID arg) {
         if (idx < 0 || idx >= ctx->count) break;
         if (InterlockedCompareExchange(&ctx->failed, 0, 0)) break;
         asset = &ctx->assets[idx];
-        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, classic_sound_output_rel(asset->path));
-        if (classic_file_size_bytes(out_path) != asset->size) {
+        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, legacy_sound_output_path(asset->path));
+        if (file_size_bytes(out_path) != asset->size) {
             snprintf(url, sizeof(url), "%s/%.2s/%s", CLASSIC_SOUND_OBJECT_URL_PREFIX, asset->hash, asset->hash);
-            if (!classic_download_url_to_file_simple(url, out_path, asset->size)) {
+            if (!http_download_to_file(url, out_path, asset->size)) {
                 InterlockedExchange(&ctx->failed, 1);
                 break;
             }
         }
-        done = (int)classic_atomic_inc(&ctx->completed);
+        done = (int)atomic_increment_int(&ctx->completed);
         pct = 5 + (int)(((unsigned long long)done * 90ULL) / (unsigned long long)(ctx->count > 0 ? ctx->count : 1));
         if (pct > 95) pct = 95;
         snprintf(st, sizeof(st), "Downloading Moog City 2");
-        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
+        pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
     }
     return 0;
 }
 
-static int classic_download_legacy_sounds(void) {
+static int legacy_sound_download_all(void) {
     char *json = NULL;
     size_t len = 0;
     ClassicSoundAsset *assets = NULL;
@@ -507,14 +507,14 @@ static int classic_download_legacy_sounds(void) {
     memset(threads, 0, sizeof(threads));
     memset(&ctx, 0, sizeof(ctx));
 
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Finding Moog City 2...");
-    if (!classic_download_url_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
-        classic_install_fail("Could not download legacy asset index");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Finding Moog City 2...");
+    if (!http_download_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
+        pack_install_fail("Could not download legacy asset index");
         return 0;
     }
-    if (!classic_parse_legacy_sounds(json, len, &assets, &count, &total)) {
+    if (!legacy_sound_parse_index(json, len, &assets, &count, &total)) {
         free(json);
-        classic_install_fail("Could not find Moog City 2 in legacy asset index");
+        pack_install_fail("Could not find Moog City 2 in legacy asset index");
         return 0;
     }
     free(json);
@@ -535,11 +535,11 @@ static int classic_download_legacy_sounds(void) {
     {
         char st[MAX_LABEL];
         snprintf(st, sizeof(st), "Downloading Moog City 2");
-        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 5, st);
+        pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 5, st);
     }
 
     for (int i = 0; i < worker_count; ++i) {
-        threads[i] = CreateThread(NULL, 0, classic_sound_download_worker, &ctx, 0, NULL);
+        threads[i] = CreateThread(NULL, 0, legacy_sound_download_worker, &ctx, 0, NULL);
         if (!threads[i]) {
             InterlockedExchange(&ctx.failed, 1);
             break;
@@ -555,7 +555,7 @@ static int classic_download_legacy_sounds(void) {
     downloaded = (int)InterlockedCompareExchange(&ctx.completed, 0, 0);
     if (InterlockedCompareExchange(&ctx.failed, 0, 0) || downloaded < count) {
         free(assets);
-        classic_install_fail("Could not download Moog City 2");
+        pack_install_fail("Could not download Moog City 2");
         return 0;
     }
 
@@ -566,77 +566,77 @@ static int classic_download_legacy_sounds(void) {
         ok = pxc_write_file_all(marker, (const unsigned char *)text, strlen(text));
     }
     free(assets);
-    if (!ok) { classic_install_fail("Could not write sound install marker"); return 0; }
+    if (!ok) { pack_install_fail("Could not write sound install marker"); return 0; }
     log_msg("Installed Moog City 2 with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
     pex_sound_rescan();
     return 1;
 }
 
 
-static DWORD WINAPI classic_install_worker(LPVOID unused) {
+static DWORD WINAPI pack_install_worker(LPVOID unused) {
     (void)unused;
     char zip_path[MAX_PATHBUF];
     char pack_dir[MAX_PATHBUF];
-    int need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    int need_textures = !pack_is_installed() || pack_missing_required_textures();
     int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
     ensure_dir(g_texpack_dir);
-    classic_pack_path(pack_dir, sizeof(pack_dir));
+    pack_asset_path(pack_dir, sizeof(pack_dir));
     snprintf(zip_path, sizeof(zip_path), "%s/minecraft_1_2_5_client.jar", g_mc_dir);
     if (need_textures) {
-        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading 1.2.5 client.jar...");
-        if (!classic_download_client_jar_linux(CLASSIC_PACK_URL, zip_path)) return 0;
-        if (!classic_extract_downloaded_pack_linux(zip_path, pack_dir)) return 0;
+        pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading 1.2.5 client.jar...");
+        if (!pack_install_download_client_jar_linux(CLASSIC_PACK_URL, zip_path)) return 0;
+        if (!pack_install_extract_archive_linux(zip_path, pack_dir)) return 0;
         log_msg("Installed Minecraft 1.2.5 release texture pack at %s", pack_dir);
     }
     if (need_sounds) {
-        if (!classic_download_legacy_sounds()) return 0;
+        if (!legacy_sound_download_all()) return 0;
     }
-    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
+    pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
     return 0;
 }
 
-static int release_resources_install_blocking(void) {
+static int pack_resources_install_blocking(void) {
     char zip_path[MAX_PATHBUF];
     char pack_dir[MAX_PATHBUF];
     int need_textures;
     int need_music;
     ensure_dir(g_texpack_dir);
-    classic_pack_path(pack_dir, sizeof(pack_dir));
+    pack_asset_path(pack_dir, sizeof(pack_dir));
     snprintf(zip_path, sizeof(zip_path), "%s/minecraft_1_2_5_client.jar", g_mc_dir);
 
-    need_textures = !classic_pack_installed() || classic_pack_missing_required_textures();
+    need_textures = !pack_is_installed() || pack_missing_required_textures();
     need_music = !classic_sounds_installed();
 
     if (!need_textures && !need_music) return 1;
     g_classic_install_error[0] = 0;
 
     if (need_textures) {
-        classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading 1.2.5 client.jar...");
-        if (!classic_download_client_jar_linux(CLASSIC_PACK_URL, zip_path)) return 0;
-        if (!classic_extract_downloaded_pack_linux(zip_path, pack_dir)) return 0;
+        pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading 1.2.5 client.jar...");
+        if (!pack_install_download_client_jar_linux(CLASSIC_PACK_URL, zip_path)) return 0;
+        if (!pack_install_extract_archive_linux(zip_path, pack_dir)) return 0;
         log_msg("Installed Minecraft 1.2.5 release texture pack at %s", pack_dir);
     }
 
     if (need_music) {
-        if (!classic_download_legacy_sounds()) return 0;
+        if (!legacy_sound_download_all()) return 0;
     }
 
-    classic_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
+    pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
     return 1;
 }
 
-static void start_classic_pack_install(void) {
+static void pack_install_start(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, CLASSIC_INSTALL_DOWNLOADING, CLASSIC_INSTALL_IDLE);
     if (state == CLASSIC_INSTALL_DOWNLOADING || state == CLASSIC_INSTALL_EXTRACTING) { set_screen(SCREEN_TEXPACK_INSTALL); return; }
     if (g_classic_install_thread) { CloseHandle(g_classic_install_thread); g_classic_install_thread = NULL; }
     g_classic_install_error[0] = 0;
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading Release resources...");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading Release resources...");
     set_screen(SCREEN_TEXPACK_INSTALL);
-    g_classic_install_thread = CreateThread(NULL, 0, classic_install_worker, NULL, 0, NULL);
-    if (!g_classic_install_thread) classic_install_fail("Could not start installer thread");
+    g_classic_install_thread = CreateThread(NULL, 0, pack_install_worker, NULL, 0, NULL);
+    if (!g_classic_install_thread) pack_install_fail("Could not start installer thread");
 }
 
-static void classic_pack_install_tick(void) {
+static void pack_install_tick(void) {
     LONG state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
     if (state == CLASSIC_INSTALL_DONE) {
         if (g_classic_install_thread) { WaitForSingleObject(g_classic_install_thread, 0); CloseHandle(g_classic_install_thread); g_classic_install_thread = NULL; }

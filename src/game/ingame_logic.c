@@ -35,12 +35,12 @@ static void player_die(const char *reason) {
     if (g_player_dead) return;
     g_player_dead = 1;
     g_player_death_time = 0;
-    if (g_player_health > 0) player_health_set_with_java_hearts(0);
+    if (g_player_health > 0) player_health_set_hearts(0);
     else g_player_health = 0;
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_motion_x = g_player_motion_z = 0.0f;
     g_player_motion_y = 0.10f; /* EntityPlayer.onDeath sets small upward motion. */
-    inventory_drop_all_items_on_death();
+    inventory_drop_death_items();
     if (g_mp_connected) {
         pex_net_send_player_state();
         pex_net_send_player_action(PEX_ACTION_DIED, 0, 0, 0, 0, death_reason_code_from_text(reason));
@@ -65,7 +65,7 @@ static void player_take_damage(int amount, const char *reason) {
     int raw_amount = amount;
     if (!g_mp_connected) amount = armor_apply_damage_reduction(amount);
     if (amount <= 0 && raw_amount > 0) {
-        player_health_damage_hearts_without_delta();
+        player_health_damage_hearts();
         g_player_hurt_time = g_player_max_hurt_time;
         pex_sound_play("random.hurt", 1.0f, 1.0f);
         g_save_dirty = 1;
@@ -73,7 +73,7 @@ static void player_take_damage(int amount, const char *reason) {
     }
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_attacked_at_yaw = 0.0f;
-    player_health_set_with_java_hearts(g_player_health - amount);
+    player_health_set_hearts(g_player_health - amount);
     pex_sound_play("random.hurt", 1.0f, 1.0f);
     player_add_exhaustion(player_damage_hunger_exhaustion(reason));
     pex_logf("player damage amount=%d reason=%s health=%d", amount, reason ? reason : "", g_player_health);
@@ -106,14 +106,14 @@ static void player_foodstats_update(void) {
 
     if (difficulty == 0 && player_should_heal() && (g_ingame_ticks % 20) == 0) {
         /* EntityPlayer.onLivingUpdate: peaceful heals one half-heart every 20 ticks. */
-        player_health_set_with_java_hearts(g_player_health + 1);
+        player_health_set_hearts(g_player_health + 1);
         g_save_dirty = 1;
     }
 
     if (g_player_food_level >= 18 && player_should_heal()) {
         g_player_food_timer++;
         if (g_player_food_timer >= 80) {
-            player_health_set_with_java_hearts(g_player_health + 1);
+            player_health_set_hearts(g_player_health + 1);
             g_player_food_timer = 0;
             g_save_dirty = 1;
         }
@@ -157,7 +157,7 @@ static void update_equipped_item(void) {
 static void player_respawn(void) {
     g_player_dead = 0;
     g_player_death_time = 0;
-    player_health_set_no_animation(20);
+    player_health_set_silent(20);
     player_food_reset();
     g_player_air = 300;
     player_xp_reset();
@@ -174,7 +174,7 @@ static void player_respawn(void) {
     if (g_mp_connected) {
         g_mp_pending_respawn_sync = 1;
         pex_net_send_player_state();
-        pex_net_request_chunks_around_player(1);
+        net_request_chunks_around_player(1);
     }
     set_screen(SCREEN_INGAME);
 }
@@ -302,7 +302,7 @@ static void player_render_begin_frame(void) {
 
 static void pex_update_time_light_bucket(void) {
     static int last_sub = -1;
-    int sub = flat_current_skylight_subtracted();
+    int sub = flat_skylight_subtracted();
     g_prof_skylight_subtracted_last = sub;
     if (last_sub < 0) {
         last_sub = sub;
@@ -314,13 +314,13 @@ static void pex_update_time_light_bucket(void) {
            Java skylightSubtracted bucket changes.  Keep old section meshes valid
            while replacements are prepared; this avoids the visible chunk reload
            that happened when the old path invalidated every renderer. */
-        mark_flat_render_sections_dirty_all_keep_valid();
+        flat_mark_all_sections_dirty();
         last_sub = sub;
     }
 }
 
 static void ingame_tick(void) {
-    double prof_ingame_start = pex_profile_begin();
+    double prof_ingame_start = profile_begin();
     double prof_part = 0.0;
     int input_active = (g_screen == SCREEN_INGAME && !g_player_dead);
 
@@ -330,41 +330,41 @@ static void ingame_tick(void) {
     if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
-    prof_part = pex_profile_begin();
+    prof_part = profile_begin();
     inventory_tick();
     update_equipped_item();
-    pex_profile_add(PROF_INVENTORY, prof_part);
-    prof_part = pex_profile_begin();
+    profile_add_time(PROF_INVENTORY, prof_part);
+    prof_part = profile_begin();
     furnace_tick_all();
-    pex_profile_add(PROF_FURNACE, prof_part);
+    profile_add_time(PROF_FURNACE, prof_part);
     if (g_player_hurt_time > 0) g_player_hurt_time--;
-    prof_part = pex_profile_begin();
+    prof_part = profile_begin();
     update_dropped_items();
-    pex_profile_add(PROF_DROPS, prof_part);
+    profile_add_time(PROF_DROPS, prof_part);
     update_passive_mobs();
-    prof_part = pex_profile_begin();
+    prof_part = profile_begin();
     update_dig_particles();
-    pex_profile_add(PROF_PARTICLES, prof_part);
+    profile_add_time(PROF_PARTICLES, prof_part);
     if (!g_mp_connected) {
-        prof_part = pex_profile_begin();
+        prof_part = profile_begin();
         update_falling_blocks();
-        pex_profile_add(PROF_FALLING, prof_part);
-        prof_part = pex_profile_begin();
+        profile_add_time(PROF_FALLING, prof_part);
+        prof_part = profile_begin();
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
 #else
         world_stream_service_ensure();
 #endif
-        pex_profile_add(PROF_WORLD_STREAM, prof_part);
-        prof_part = pex_profile_begin();
+        profile_add_time(PROF_WORLD_STREAM, prof_part);
+        prof_part = profile_begin();
         update_liquids();
-        pex_profile_add(PROF_LIQUIDS, prof_part);
+        profile_add_time(PROF_LIQUIDS, prof_part);
     }
-    prof_part = pex_profile_begin();
-    update_buttons_and_pressure_plates();
-    pex_profile_add(PROF_BUTTONS, prof_part);
-    double prof_player_logic_start = pex_profile_begin();
+    prof_part = profile_begin();
+    update_buttons_and_plates();
+    profile_add_time(PROF_BUTTONS, prof_part);
+    double prof_player_logic_start = profile_begin();
 
     if (g_player_dead) {
         g_player_death_time++;
@@ -374,16 +374,16 @@ static void ingame_tick(void) {
         }
         if (g_mp_connected) pex_net_send_player_state();
         player_render_publish_after_tick();
-        pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
-        pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
+        profile_add_time(PROF_PLAYER_LOGIC, prof_player_logic_start);
+        profile_add_time(PROF_INGAME_TOTAL, prof_ingame_start);
         return;
     }
 
 #if defined(PEX_PLATFORM_PSP)
     if (!psp_player_terrain_ready_or_hold()) {
         player_render_publish_after_tick();
-        pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
-        pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
+        profile_add_time(PROF_PLAYER_LOGIC, prof_player_logic_start);
+        profile_add_time(PROF_INGAME_TOTAL, prof_ingame_start);
         return;
     }
 #endif
@@ -784,8 +784,8 @@ static void ingame_tick(void) {
     }
     if (g_mp_connected) pex_net_send_player_state();
     player_render_publish_after_tick();
-    pex_profile_add(PROF_PLAYER_LOGIC, prof_player_logic_start);
-    pex_profile_add(PROF_INGAME_TOTAL, prof_ingame_start);
+    profile_add_time(PROF_PLAYER_LOGIC, prof_player_logic_start);
+    profile_add_time(PROF_INGAME_TOTAL, prof_ingame_start);
 }
 
 
@@ -802,7 +802,7 @@ static void ingame_tick(void) {
    time for interpolation.
    ------------------------------------------------------------------------- */
 
-static int ingame_tick_screen_allows_simulation(void) {
+static int ingame_screen_allows_tick(void) {
     return g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
            g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
            g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
@@ -859,7 +859,7 @@ static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
         if (now - tick_boundary_time > 0.25) tick_boundary_time = now;
         next_tick_time = tick_boundary_time + tick_dt;
 
-        if (!ingame_tick_screen_allows_simulation() || g_mp_connected || pex_net_is_connecting()) {
+        if (!ingame_screen_allows_tick() || g_mp_connected || pex_net_is_connecting()) {
             Sleep(1);
             continue;
         }
@@ -957,7 +957,7 @@ static float ingame_tick_async_render_partial(float fallback_partial) {
 #endif
 }
 
-static void ingame_tick_async_pump_main_thread(void) {
+static void ingame_pump_async_tick(void) {
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_needs_main_pump) return;
     g_ingame_tick_async_needs_main_pump = 0;

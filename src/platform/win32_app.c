@@ -39,7 +39,7 @@ static void apply_vsync_setting(void) {
     }
 }
 
-static void refresh_window_size_after_mode_change(void) {
+static void refresh_window_size_after_mode(void) {
     if (!g_hwnd) return;
     RECT rc;
     GetClientRect(g_hwnd, &rc);
@@ -110,7 +110,7 @@ static void set_fullscreen_enabled(int enabled) {
         g_fullscreen_active = 0;
     }
 
-    refresh_window_size_after_mode_change();
+    refresh_window_size_after_mode();
     save_options();
 }
 
@@ -279,7 +279,7 @@ static void save_world_state_for_exit(void) {
         pex_net_disconnect();
         return;
     }
-    save_current_world_state_sync();
+    save_world_state_sync();
 }
 
 static int g_timer_resolution_active = 0;
@@ -326,19 +326,19 @@ static void main_loop(void) {
     g_last_time = now_seconds();
     double tick_accum = 0.0;
     while (g_running) {
-        pex_profile_frame_begin();
-        double prof_start = pex_profile_begin();
+        profile_begin_frame();
+        double prof_start = profile_begin();
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) { g_running = 0; break; }
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
-        pex_profile_add(PROF_PUMP, prof_start);
+        profile_add_time(PROF_PUMP, prof_start);
         pex_gamepad_update();
         if (g_mp_connected || pex_net_is_connecting()) {
-            prof_start = pex_profile_begin();
+            prof_start = profile_begin();
             pex_net_poll();
-            pex_profile_add(PROF_NET_POLL, prof_start);
+            profile_add_time(PROF_NET_POLL, prof_start);
         }
         double frame_start_time = now_seconds();
         double t = frame_start_time;
@@ -349,30 +349,30 @@ static void main_loop(void) {
         tick_accum += dt * 20.0;
         int ticks_this_frame = 0;
         while (tick_accum >= 1.0 && ticks_this_frame < 3) {
-            double tick_start = pex_profile_begin();
+            double tick_start = profile_begin();
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
             if (g_screen == SCREEN_GENERATING) {
-                double t_worldgen = pex_profile_begin();
+                double t_worldgen = profile_begin();
                 worldgen_tick();
-                pex_profile_add(PROF_WORLDGEN_TICK, t_worldgen);
+                profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
-            if (g_screen == SCREEN_TEXPACK_INSTALL) classic_pack_install_tick();
+            if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
                 g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) ingame_tick_async_queue();
-            pex_profile_add(PROF_TICK_TOTAL, tick_start);
+            profile_add_time(PROF_TICK_TOTAL, tick_start);
             tick_accum -= 1.0;
             ticks_this_frame++;
         }
         if (ticks_this_frame >= 3 && tick_accum > 1.0) tick_accum = 1.0;
         float partial = ingame_tick_async_render_partial((float)tick_accum);
         if (g_mp_connected) pex_net_update_smoothing();
-        ingame_tick_async_pump_main_thread();
+        ingame_pump_async_tick();
         render(partial);
         sleep_for_max_fps(frame_start_time);
-        pex_profile_frame_end();
+        profile_end_frame();
     }
 }
 
@@ -401,7 +401,7 @@ static DWORD WINAPI pex_startup_download_worker(LPVOID arg) {
     PexStartupDownloadDialog *ctx = (PexStartupDownloadDialog *)arg;
     int ok;
     pex_logf("Startup Release resource download worker started");
-    ok = release_resources_install_blocking();
+    ok = pack_resources_install_blocking();
     InterlockedExchange(&ctx->ok, ok ? 1 : 0);
     InterlockedExchange(&ctx->finished, 1);
     InterlockedExchange(&ctx->active, 0);
@@ -421,7 +421,7 @@ static void pex_startup_download_update_ui(PexStartupDownloadDialog *ctx) {
     LONG progress;
     if (!ctx || !ctx->hwnd) return;
 
-    classic_resource_size_format(size_text, sizeof(size_text));
+    format_download_size(size_text, sizeof(size_text));
     SetWindowTextA(ctx->size_text, size_text);
 
     state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
@@ -436,8 +436,8 @@ static void pex_startup_download_update_ui(PexStartupDownloadDialog *ctx) {
         SetWindowTextA(ctx->status_text, status);
         SetWindowTextA(ctx->download_button, "Downloading...");
         EnableWindow(ctx->download_button, FALSE);
-        SetWindowTextA(ctx->quit_button, classic_install_cancel_requested() ? "Cancelling..." : "Quit");
-        EnableWindow(ctx->quit_button, classic_install_cancel_requested() ? FALSE : TRUE);
+        SetWindowTextA(ctx->quit_button, pack_install_is_cancelled() ? "Cancelling..." : "Quit");
+        EnableWindow(ctx->quit_button, pack_install_is_cancelled() ? FALSE : TRUE);
     } else if (state == CLASSIC_INSTALL_ERROR) {
         snprintf(status, sizeof(status), "Failed: %s", g_classic_install_error[0] ? g_classic_install_error : "Unknown error. See log.txt.");
         SetWindowTextA(ctx->status_text, status);
@@ -468,25 +468,25 @@ static void pex_startup_download_start(PexStartupDownloadDialog *ctx) {
         CloseHandle(ctx->worker);
         ctx->worker = NULL;
     }
-    classic_install_reset_cancel();
+    pack_install_reset_cancel();
     g_classic_install_error[0] = 0;
-    classic_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Preparing download...");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Preparing download...");
     InterlockedExchange(&ctx->finished, 0);
     InterlockedExchange(&ctx->ok, 0);
     InterlockedExchange(&ctx->active, 1);
     ctx->worker = CreateThread(NULL, 0, pex_startup_download_worker, ctx, 0, NULL);
     if (!ctx->worker) {
         InterlockedExchange(&ctx->active, 0);
-        classic_log_win_error("CreateThread startup resource downloader");
-        classic_install_fail("Could not start resource downloader");
+        log_windows_error("CreateThread startup resource downloader");
+        pack_install_fail("Could not start resource downloader");
     }
     pex_startup_download_update_ui(ctx);
 }
 
-static void pex_startup_download_request_quit(PexStartupDownloadDialog *ctx) {
+static void startup_download_request_quit(PexStartupDownloadDialog *ctx) {
     if (!ctx || !ctx->hwnd) return;
     if (InterlockedCompareExchange(&ctx->active, 0, 0)) {
-        classic_install_request_cancel();
+        pack_install_request_cancel();
         SetWindowTextA(ctx->status_text, "Cancelling download...");
         SetWindowTextA(ctx->quit_button, "Cancelling...");
         EnableWindow(ctx->quit_button, FALSE);
@@ -525,7 +525,7 @@ static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wpa
             pex_startup_download_set_font(ctx->status_text, font);
             pex_startup_download_set_font(ctx->download_button, font);
             pex_startup_download_set_font(ctx->quit_button, font);
-            classic_resource_size_start_fetch();
+            pack_install_start_size_fetch();
             SetTimer(hwnd, PEX_STARTUP_DL_TIMER, 100, NULL);
             pex_startup_download_update_ui(ctx);
             return 0;
@@ -536,7 +536,7 @@ static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wpa
                 return 0;
             }
             if (LOWORD(wparam) == PEX_STARTUP_DL_BUTTON_QUIT) {
-                pex_startup_download_request_quit(ctx);
+                startup_download_request_quit(ctx);
                 return 0;
             }
             break;
@@ -555,7 +555,7 @@ static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wpa
                 if (wparam) {
                     ctx->result = 1;
                     DestroyWindow(hwnd);
-                } else if (classic_install_cancel_requested()) {
+                } else if (pack_install_is_cancelled()) {
                     ctx->result = 0;
                     DestroyWindow(hwnd);
                 } else {
@@ -586,7 +586,7 @@ static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wpa
             return 0;
         }
         case WM_CLOSE:
-            pex_startup_download_request_quit(ctx);
+            startup_download_request_quit(ctx);
             return 0;
         case WM_DESTROY:
             KillTimer(hwnd, PEX_STARTUP_DL_TIMER);
@@ -603,7 +603,7 @@ static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wpa
     return DefWindowProcA(hwnd, msg, wparam, lparam);
 }
 
-static int pex_show_release_resources_downloader(HINSTANCE inst) {
+static int show_resource_downloader(HINSTANCE inst) {
     WNDCLASSA wc;
     HWND hwnd;
     RECT rc;
@@ -612,7 +612,7 @@ static int pex_show_release_resources_downloader(HINSTANCE inst) {
     PexStartupDownloadDialog ctx;
     MSG msg;
 
-    if (!release_resources_need_download()) {
+    if (!pack_resources_need_download()) {
         pex_logf("Release resources already installed; startup downloader skipped");
         return 1;
     }
@@ -639,7 +639,7 @@ static int pex_show_release_resources_downloader(HINSTANCE inst) {
     hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME, wc.lpszClassName, "PexCraft 1.2.5 Resources",
         WS_CAPTION | WS_SYSMENU | WS_VISIBLE, x, y, w, h, NULL, NULL, inst, &ctx);
     if (!hwnd) {
-        classic_log_win_error("CreateWindow startup resource downloader");
+        log_windows_error("CreateWindow startup resource downloader");
         MessageBoxA(NULL, "PexCraft could not open the resource downloader window.", APP_TITLE, MB_ICONERROR | MB_OK);
         return 0;
     }
@@ -665,7 +665,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     init_dirs();
     srand((unsigned int)time(NULL));
     load_options();
-    if (!pex_show_release_resources_downloader(hInstance)) {
+    if (!show_resource_downloader(hInstance)) {
         pex_logf("WinMain exit: Release resources unavailable");
         end_high_res_timer();
         pex_log_shutdown();
@@ -724,7 +724,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
         return 3;
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
-    if (should_show_classic_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
+    if (should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else if (g_renderer_backend_unavailable_notice) {
         char line[MAX_LABEL];
