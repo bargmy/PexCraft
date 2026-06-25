@@ -297,7 +297,7 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
-        if (argv[i] && !strcmp(argv[i], "--loggy")) g_loggy_enabled = 1;
+        if (argv[i] && (!strcmp(argv[i], "--loggy") || !strcmp(argv[i], "--logger") || !strcmp(argv[i], "--diagnostics"))) g_loggy_enabled = 1;
     }
     pex_log_init();
     pex_install_crash_handlers();

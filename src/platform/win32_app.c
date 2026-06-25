@@ -718,7 +718,11 @@ static int show_resource_downloader(HINSTANCE inst) {
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrev;
-    if (loggy_cmdline_has_flag(lpCmdLine, "--loggy")) g_loggy_enabled = 1;
+    if (loggy_cmdline_has_flag(lpCmdLine, "--loggy") ||
+        loggy_cmdline_has_flag(lpCmdLine, "--logger") ||
+        loggy_cmdline_has_flag(lpCmdLine, "--diagnostics")) {
+        g_loggy_enabled = 1;
+    }
     pex_log_init();
     pex_install_crash_handlers();
     pex_logf("WinMain enter: %s", APP_TITLE);

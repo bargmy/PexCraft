@@ -1,4 +1,4 @@
-/* Native Win32 diagnostic side-window. Enabled with --loggy on Windows.
+/* Native Win32 diagnostic side-window. Enabled with --loggy/--logger on Windows.
    This is intentionally not SDL based: it uses a normal HWND + EDIT control
    so the Windows build gets a real separate diagnostics window. */
 
@@ -465,6 +465,7 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "  ACCOUNTING top_level is the useful value. all_bucket_sum double-counts nested render/world buckets.\n");
     loggy_appendf(&out, &left, "  If frame is 80-100 FPS but render_total/present are tiny, the root is CPU, controller polling, frame cap, Loggy overhead, or UNKNOWN main-loop code.\n");
     loggy_appendf(&out, &left, "  This still cannot magically hook every C function; unknown>1ms means add profile wrappers around the remaining code path.\n");
+    loggy_appendf(&out, &left, "  Launch flags accepted on Windows: --loggy, --logger, --diagnostics. Window is topmost/no-activate so it stays visible without stealing game focus.\n");
     *out = '\0';
     loggy_count_lines();
 }
@@ -561,7 +562,7 @@ static LRESULT CALLBACK loggy_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                                FIXED_PITCH | FF_MODERN, "Consolas");
             if (!font) font = (HFONT)GetStockObject(ANSI_FIXED_FONT);
             g_loggy.mono_font = font;
-            g_loggy.label = CreateWindowExA(0, "STATIC", "LOGGY LIVE - native Windows window",
+            g_loggy.label = CreateWindowExA(0, "STATIC", "LOGGY LIVE - native Windows window (--loggy / --logger)",
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 500, 22, hwnd, NULL, g_inst, NULL);
             g_loggy.copy_button = CreateWindowExA(0, "BUTTON", "Copy",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 600, 8, 86, 26,
@@ -640,8 +641,11 @@ static int loggy_init(void) {
     }
 
     /* Do not activate Loggy.  If the diagnostic window steals foreground focus,
-       DWM/DXGI may throttle PexCraft's Present() and make the profiler lie. */
-    g_loggy.hwnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, "PexCraft Loggy",
+       DWM/DXGI may throttle PexCraft's Present() and make the profiler lie.
+       Keep it TOPMOST though: on 1080p desktops the game window can be wider
+       than the free area beside it, and SetForegroundWindow(g_hwnd) would hide
+       a normal no-activate diagnostic window behind the game. */
+    g_loggy.hwnd = CreateWindowExA(WS_EX_APPWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, wc.lpszClassName, "PexCraft Loggy",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, w, h, NULL, NULL, g_inst, NULL);
     if (!g_loggy.hwnd) {
         log_windows_error("CreateWindow native loggy");
@@ -649,8 +653,9 @@ static int loggy_init(void) {
         return 0;
     }
     ShowWindow(g_loggy.hwnd, SW_SHOWNOACTIVATE);
-    SetWindowPos(g_loggy.hwnd, HWND_TOP, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(g_loggy.hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     UpdateWindow(g_loggy.hwnd);
+    /* Return keyboard/mouse focus to the game, but keep Loggy visible above it. */
     if (g_hwnd) SetForegroundWindow(g_hwnd);
     return 1;
 }
