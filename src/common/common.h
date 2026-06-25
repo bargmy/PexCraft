@@ -1562,6 +1562,19 @@ static PEX_THREAD_LOCAL int g_pex_profile_thread_role = PEX_PROFILE_ROLE_MAIN;
 static double g_prof_async_tick_last_ms = 0.0;
 static double g_prof_async_tick_avg_ms = 0.0;
 static int g_prof_async_tick_samples = 0;
+static double g_prof_stream_worker_last_ms = 0.0;
+static double g_prof_stream_worker_avg_ms = 0.0;
+static int g_prof_stream_worker_samples = 0;
+static double g_prof_light_worker_last_ms = 0.0;
+static double g_prof_light_worker_avg_ms = 0.0;
+static int g_prof_light_worker_samples = 0;
+static double g_prof_mesh_worker_last_ms = 0.0;
+static double g_prof_mesh_worker_avg_ms = 0.0;
+static int g_prof_mesh_worker_samples = 0;
+static double g_prof_mesh_upload_worker_last_ms = 0.0;
+static double g_prof_mesh_upload_worker_avg_ms = 0.0;
+static int g_prof_mesh_upload_worker_samples = 0;
+static int g_prof_skylight_subtracted_last = 0;
 
 static int g_prof_packets_last = 0;
 static int g_prof_chunks_last = 0;
@@ -1582,6 +1595,7 @@ static void third_person_view_cycle(void) {
 
 static int g_debug_menu_shown = 0;
 static int g_debug_chunk_info_shown = 0;
+static int g_debug_task_info_shown = 0;
 static int g_mouse_grabbed = 0;
 static int g_cursor_hidden = 0;
 static int g_recentering_mouse = 0;

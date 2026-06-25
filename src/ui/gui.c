@@ -219,6 +219,84 @@ static void draw_debug_chunk_info_panel(int x, int *y) {
     draw_debug_chunk_info_line(x, y, line, 14737632);
 }
 
+static void draw_debug_task_profile_panel(void) {
+    char line[256];
+    int fps = g_debug_fps;
+    int min_fps = g_debug_min_fps ? g_debug_min_fps : fps;
+    int max_fps = g_debug_max_fps ? g_debug_max_fps : fps;
+    int y = g_opts.show_fps ? 22 : 12;
+    int x = 2;
+    int right_x = g_gui_w / 2;
+    if (right_x < 430) right_x = 430;
+
+    draw_text("Task profiler (F3+J)", x, y, 0xE0E0E0); y += 10;
+    snprintf(line, sizeof(line), "FPS %d/%d/%d  Frame %.2fms avg %.2fms p95 %.2f p99 %.2f worst %.2f",
+             fps, min_fps, max_fps, g_ft_last_frame_ms, g_prof_display_frame_ms,
+             g_ft_p95_ms, g_ft_p99_ms, g_ft_worst_ms);
+    draw_text(line, x, y, 14737632); y += 10;
+    snprintf(line, sizeof(line), "Backend %s  render %.2fms  sleep %.2fms  skylightSub %d",
+             renderer_backend_label(g_runtime_renderer_backend), g_render_ms_last,
+             g_sleep_ms_last, g_prof_skylight_subtracted_last);
+    draw_text(line, x, y, 14737632); y += 12;
+
+    draw_text("Main/render thread tasks:", x, y, 0xE0E0E0); y += 10;
+    for (int pi = 0; pi < PROF_COUNT; ++pi) {
+        double ms = g_prof_display_ms[pi];
+        snprintf(line, sizeof(line), "%02d %-18s %6.2fms %5.1f%%",
+                 pi, g_prof_names[pi], ms, pex_profile_pct(ms));
+        draw_text(line, x, y, ms >= 1.0 ? 0xFFFF80 : 14737632);
+        y += 10;
+        if (y > g_gui_h - 12) break;
+    }
+
+    int ry = g_opts.show_fps ? 22 : 12;
+    draw_text("Worker / queue tasks:", right_x, ry, 0xE0E0E0); ry += 10;
+    snprintf(line, sizeof(line), "Async tick       last %.2fms avg %.2fms pending %d busy %d dropped %d",
+             ingame_tick_async_last_ms(), ingame_tick_async_avg_ms(),
+             ingame_tick_async_pending_count(), ingame_tick_async_busy(),
+             ingame_tick_async_dropped_count());
+    draw_text(line, right_x, ry, 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Stream service   last %.2fms avg %.2fms busy %d pending %d",
+             g_prof_stream_worker_last_ms, g_prof_stream_worker_avg_ms,
+             g_world_stream_service_busy, g_prof_stream_pending_last);
+    draw_text(line, right_x, ry, g_prof_stream_worker_avg_ms >= 2.0 ? 0xFFFF80 : 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Lighting worker  last %.2fms avg %.2fms dirty %d busy %d",
+             g_prof_light_worker_last_ms, g_prof_light_worker_avg_ms,
+             flat_lighting_pending_dirty(), g_flat_lighting_worker_busy);
+    draw_text(line, right_x, ry, g_prof_light_worker_avg_ms >= 2.0 ? 0xFFFF80 : 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Mesh worker      last %.2fms avg %.2fms jobs %d results %d",
+             g_prof_mesh_worker_last_ms, g_prof_mesh_worker_avg_ms,
+             g_prof_mesh_jobs_last, g_prof_mesh_results_last);
+    draw_text(line, right_x, ry, g_prof_mesh_worker_avg_ms >= 2.0 ? 0xFFFF80 : 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Mesh upload/pre  last %.2fms avg %.2fms uploads %d",
+             g_prof_mesh_upload_worker_last_ms, g_prof_mesh_upload_worker_avg_ms,
+             g_prof_mesh_uploads_last);
+    draw_text(line, right_x, ry, g_prof_mesh_upload_worker_avg_ms >= 2.0 ? 0xFFFF80 : 14737632); ry += 12;
+
+    draw_text("Queues / renderer state:", right_x, ry, 0xE0E0E0); ry += 10;
+    snprintf(line, sizeof(line), "Stream queue %d index %d installed %d active %d",
+             g_stream_gen_queue_count, g_stream_gen_queue_index,
+             g_stream_gen_queue_installed_count, stream_generation_active());
+    draw_text(line, right_x, ry, 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Stream async workers %d jobs %d active %d results %d",
+             g_stream_async_worker_count, g_stream_async_job_count,
+             g_stream_async_active_count, g_stream_async_result_count);
+    draw_text(line, right_x, ry, 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Mesh queues jobs %d uploads %d results %d",
+             g_prof_mesh_jobs_last, g_prof_mesh_uploads_last, g_prof_mesh_results_last);
+    draw_text(line, right_x, ry, 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Generated preload batch %d %d/%d light settle %d/%d/%d p%d",
+             g_stream_initial_batch_running, g_stream_initial_batch_done_units,
+             g_stream_initial_batch_total_units, g_stream_initial_light_settle_requested,
+             g_stream_initial_light_settle_running, g_stream_initial_light_settle_done,
+             g_stream_initial_light_settle_progress);
+    draw_text(line, right_x, ry, 14737632); ry += 10;
+    snprintf(line, sizeof(line), "Falling active %d wakeups %d spawned %d",
+             g_prof_falling_active_last, g_prof_falling_cells_last,
+             g_prof_falling_spawns_last);
+    draw_text(line, right_x, ry, 14737632);
+}
+
 
 static void draw_hud(void) {
     int w = g_gui_w;
@@ -348,7 +426,9 @@ static void draw_hud(void) {
     for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
 
     draw_text(VERSION_TEXT, 2, 2, 16777215);
-    if (g_debug_menu_shown) {
+    if (g_debug_menu_shown && g_debug_task_info_shown) {
+        draw_debug_task_profile_panel();
+    } else if (g_debug_menu_shown) {
         char line[160];
         int fps = g_debug_fps;
         int min_fps = g_debug_min_fps ? g_debug_min_fps : fps;
@@ -418,7 +498,7 @@ static void draw_hud(void) {
         if (g_debug_chunk_info_shown) {
             draw_debug_chunk_info_panel(right_x, &ry);
         } else {
-            draw_text("F3+V: chunk info off", right_x, ry, 0xA0A0A0);
+            draw_text("F3+V: chunk info off  F3+J: task profiler", right_x, ry, 0xA0A0A0);
         }
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);

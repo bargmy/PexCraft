@@ -303,13 +303,20 @@ static void player_render_begin_frame(void) {
 static void pex_update_time_light_bucket(void) {
     static int last_sub = -1;
     int sub = flat_current_skylight_subtracted();
+    g_prof_skylight_subtracted_last = sub;
     if (last_sub < 0) {
         last_sub = sub;
         return;
     }
     if (sub != last_sub) {
+        /* Java 1.2.5 updates World.skylightSubtracted during World.tick(), but it
+           does not call RenderGlobal.loadRenderers() or mark every WorldRenderer
+           dirty just because day/night changed.  EntityRenderer.updateLightmap()
+           updates the 16x16 lightmap texture instead.  This C renderer currently
+           bakes stable sky/block vertex colors into cached section meshes, so
+           rebuilding all chunks here only causes the visible "world reload" while
+           night falls and does not make the world correctly darker. */
         last_sub = sub;
-        mark_flat_render_chunks_dirty_all();
     }
 }
 

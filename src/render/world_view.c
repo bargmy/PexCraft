@@ -4952,6 +4952,7 @@ static DWORD WINAPI async_section_mesh_upload_worker_proc(LPVOID unused) {
             LeaveCriticalSection(&g_async_section_mesh_cs);
             if (!have_job) break;
 
+            double upload_worker_start = now_seconds();
             if (pex_using_d3d11()) {
                 int ok0 = 1, ok1 = 1;
                 if (!r.skip0 && r.mb0.vcount > 0 && r.mb0.icount > 0) {
@@ -4983,6 +4984,14 @@ static DWORD WINAPI async_section_mesh_upload_worker_proc(LPVOID unused) {
             }
 
             async_section_mesh_push_result_blocking(&r);
+            {
+                double upload_ms = (now_seconds() - upload_worker_start) * 1000.0;
+                if (upload_ms < 0.0) upload_ms = 0.0;
+                g_prof_mesh_upload_worker_last_ms = upload_ms;
+                if (g_prof_mesh_upload_worker_samples <= 0) g_prof_mesh_upload_worker_avg_ms = upload_ms;
+                else g_prof_mesh_upload_worker_avg_ms = g_prof_mesh_upload_worker_avg_ms * 0.90 + upload_ms * 0.10;
+                g_prof_mesh_upload_worker_samples++;
+            }
 
             EnterCriticalSection(&g_async_section_mesh_cs);
             g_async_section_mesh_upload_busy = 0;
@@ -5041,7 +5050,16 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             g_flat_direct_capture_skip0 = &skip0;
             g_flat_direct_capture_skip1 = &skip1;
             g_flat_direct_capture_success = 0;
+            double mesh_worker_start = now_seconds();
             rebuild_flat_world_section_mesh_direct(job.sy, job.cx, job.cz);
+            {
+                double mesh_ms = (now_seconds() - mesh_worker_start) * 1000.0;
+                if (mesh_ms < 0.0) mesh_ms = 0.0;
+                g_prof_mesh_worker_last_ms = mesh_ms;
+                if (g_prof_mesh_worker_samples <= 0) g_prof_mesh_worker_avg_ms = mesh_ms;
+                else g_prof_mesh_worker_avg_ms = g_prof_mesh_worker_avg_ms * 0.90 + mesh_ms * 0.10;
+                g_prof_mesh_worker_samples++;
+            }
             int success = g_flat_direct_capture_success;
             async_section_mesh_clear_tls();
 

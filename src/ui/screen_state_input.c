@@ -750,7 +750,7 @@ static void pex_set_world_time_to_day_tick(long long day_tick) {
     if (g_world_time < 0 && (g_world_time % 24000LL) != 0) day--;
     g_world_time = day * 24000LL + day_tick;
     if (g_world_time < 0) g_world_time = day_tick;
-    mark_flat_render_chunks_dirty_all();
+    g_prof_skylight_subtracted_last = flat_current_skylight_subtracted();
     g_save_dirty = 1;
 }
 
@@ -842,7 +842,14 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_ESCAPE) { set_screen(SCREEN_PAUSE); return; }
         if (vk == 'V' && key_down_vk(VK_F3)) {
             g_debug_menu_shown = 1;
+            g_debug_task_info_shown = 0;
             g_debug_chunk_info_shown = !g_debug_chunk_info_shown;
+            return;
+        }
+        if (vk == 'J' && key_down_vk(VK_F3)) {
+            g_debug_menu_shown = 1;
+            g_debug_chunk_info_shown = 0;
+            g_debug_task_info_shown = !g_debug_task_info_shown;
             return;
         }
         if (vk == VK_F3) { g_debug_menu_shown = !g_debug_menu_shown; return; }

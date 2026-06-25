@@ -6320,7 +6320,16 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
             }
 
             int before_pending = flat_lighting_pending_dirty();
+            double light_worker_start = now_seconds();
             flat_flush_pending_lighting();
+            if (before_pending) {
+                double light_ms = (now_seconds() - light_worker_start) * 1000.0;
+                if (light_ms < 0.0) light_ms = 0.0;
+                g_prof_light_worker_last_ms = light_ms;
+                if (g_prof_light_worker_samples <= 0) g_prof_light_worker_avg_ms = light_ms;
+                else g_prof_light_worker_avg_ms = g_prof_light_worker_avg_ms * 0.90 + light_ms * 0.10;
+                g_prof_light_worker_samples++;
+            }
             if (!before_pending || !flat_lighting_pending_dirty()) break;
         }
         EnterCriticalSection(&g_flat_lighting_worker_cs);
@@ -7544,11 +7553,14 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
         LeaveCriticalSection(&g_world_stream_service_cs);
         if (stop) break;
 
+        double stream_worker_start = now_seconds();
+        int stream_worker_sample = 0;
         if (!g_mp_connected && g_screen == SCREEN_GENERATING && g_worldgen.active && g_stream_generation_keep_completed) {
             /* Loading-screen preload uses the same worker-backed stream path as
                gameplay, but worldgen_tick only polls progress.  This keeps the
                dirt/progress screen responsive instead of blocking inside chunk
                generation like the failed main-thread preload path did. */
+            stream_worker_sample = 1;
             if (stream_generation_active()) {
                 process_stream_generation_queue();
             } else if (g_stream_initial_light_settle_requested && !g_stream_initial_light_settle_done) {
@@ -7558,9 +7570,18 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
             if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
         } else if (g_screen == SCREEN_INGAME && !g_mp_connected) {
             /* Keep desktop gameplay streaming off the main tick. */
+            stream_worker_sample = 1;
             update_infinite_world_streaming();
             flat_lighting_worker_wake();
             if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
+        }
+        if (stream_worker_sample) {
+            double stream_ms = (now_seconds() - stream_worker_start) * 1000.0;
+            if (stream_ms < 0.0) stream_ms = 0.0;
+            g_prof_stream_worker_last_ms = stream_ms;
+            if (g_prof_stream_worker_samples <= 0) g_prof_stream_worker_avg_ms = stream_ms;
+            else g_prof_stream_worker_avg_ms = g_prof_stream_worker_avg_ms * 0.90 + stream_ms * 0.10;
+            g_prof_stream_worker_samples++;
         }
 
         EnterCriticalSection(&g_world_stream_service_cs);
