@@ -1016,7 +1016,7 @@ static int handle_traceplace_command(int argc, char **argv) {
         return 1;
     }
     if (g_world_type != 1) {
-        hud_add_chat("/traceplace needs default Java-1.2.5 worldgen mode.");
+        hud_add_chat("/traceplace needs Default world generator mode.");
         return 1;
     }
     const char *kind = NULL;
@@ -1035,15 +1035,20 @@ static int handle_traceplace_command(int argc, char **argv) {
         return 1;
     }
 
-    /* Recenter and synchronously regenerate around the destination. This makes
-       the command deterministic and safe even if the stream thread has not yet
-       visited those chunks. */
+    if ((target.kind == 1 || target.kind == 2 || target.kind == 3) && !g_world_map_features) {
+        hud_add_chat("Generate Structures is OFF for this world.");
+        return 1;
+    }
+
+    /* Recenter and synchronously build a small destination neighborhood.  Do not
+       call the normal spawn preload reset here: that path is queue-based, and
+       marking an empty window as generated made /traceplace village land on
+       terrain with no generated village blocks. */
     g_player_x = g_player_prev_x = (float)target.blockX + 0.5f;
     g_player_z = g_player_prev_z = (float)target.blockZ + 0.5f;
     g_player_y = g_player_prev_y = (float)target.footY + 1.62f;
     flat_center_origin_near(g_player_x, g_player_z);
-    flat_generate_origin_blocks();
-    flat_mark_all_chunks_dirty();
+    flat_generate_traceplace_area(target.chunkX, target.chunkZ, target.kind == 2 ? 6 : 4);
 
     int sx = target.blockX, sy = target.footY, sz = target.blockZ;
     int safe = target.surface ? traceplace_find_safe_surface_near(target.blockX, target.blockZ, &sx, &sy, &sz)

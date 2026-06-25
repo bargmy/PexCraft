@@ -249,3 +249,10 @@ cc -std=c99 -O2 tools/worldgen_dump.c -lm -o worldgen_dump
 | Nether fortress parity | Fortress blocks exist with useful testing coverage, but the full `MapGenNetherBridge` piece graph is not fully ported yet. |
 | End entity side effects | End terrain/spike blocks exist; dragon and Ender Crystal entity side effects remain intentionally skipped. |
 | Golden hashes | The compare script exists, but Java 1.2.5 golden CSV generation must still be run outside this container before any 1:1 claim. |
+
+## Runtime Fix Pass: traceplace + walking hitch mitigation
+
+- Fixed the in-game chunk generator path so structure placement runs in normal runtime chunk generation, not only in the offline chunk-dump path.
+- Fixed `/traceplace` to generate a real destination neighborhood around the target instead of calling the normal queued spawn preload reset, which could mark chunks as generated before village/structure blocks had been copied in.
+- Added a structures-off guard to `/traceplace` so it does not claim to locate generated structures in worlds created with MapFeatures disabled.
+- Reduced runtime chunk commit pressure: gameplay now installs one ready streamed chunk per service pass and limits generator worker/backlog pressure to reduce sudden hitches while walking.

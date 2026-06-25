@@ -1502,6 +1502,11 @@ static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *ou
                     generate_canvas_chunk(tp, &cv, cv.minCx + dx, cv.minCz + dz);
                 }
             }
+            /* Structures are part of the chunk provider, not only the offline
+               hash/dump path.  Missing this call made /traceplace locate a
+               legal village/stronghold start while normal in-game chunks had
+               only terrain and decoration. */
+            worldgen_place_structure_blocks(tp, &cv, cx, cz);
             for (int pz = cz - 1; pz <= cz; pz++) {
                 for (int px = cx - 1; px <= cx; px++) {
                     qm_populate_canvas(tp, &cv, px, pz);
@@ -2681,6 +2686,68 @@ static void flat_generate_origin_blocks(void) {
     }
 
     flat_mark_all_chunks_dirty();
+}
+
+
+/* Debug/QA teleport helper: build only the destination neighborhood instead of
+   calling flat_generate_origin_blocks().  The normal world-type-1 preload path is
+   intentionally queue based; forcing that path from /traceplace left the window
+   marked as generated before any real terrain/structures were copied in, so the
+   command could land the player in an empty/flat-looking area with no village. */
+static void flat_generate_traceplace_area(int center_wcx, int center_wcz, int radius_chunks) {
+    if (radius_chunks < 2) radius_chunks = 2;
+    if (radius_chunks > 6) radius_chunks = 6;
+
+    memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
+    memset(g_flat_meta, 0, sizeof(g_flat_meta));
+    memset(g_flat_levels, 0, sizeof(g_flat_levels));
+    memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
+    memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+    g_flat_light_dirty = 0;
+    memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
+    memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
+    memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
+    memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
+    stream_reset_initial_batch();
+    stream_generation_queue_clear();
+
+    int min_cx = center_wcx - radius_chunks;
+    int max_cx = center_wcx + radius_chunks;
+    int min_cz = center_wcz - radius_chunks;
+    int max_cz = center_wcz + radius_chunks;
+    int base_cx = floor_div16(g_flat_world_origin_x);
+    int base_cz = floor_div16(g_flat_world_origin_z);
+    int window_max_cx = base_cx + FLAT_RENDER_CHUNKS - 1;
+    int window_max_cz = base_cz + FLAT_RENDER_CHUNKS - 1;
+    if (min_cx < base_cx) min_cx = base_cx;
+    if (min_cz < base_cz) min_cz = base_cz;
+    if (max_cx > window_max_cx) max_cx = window_max_cx;
+    if (max_cz > window_max_cz) max_cz = window_max_cz;
+
+    unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+    TerrainProvider *reuse = NULL;
+#if !(defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII))
+    reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
+#endif
+    if (buf && meta) {
+        for (int cz = min_cz; cz <= max_cz; ++cz) {
+            for (int cx = min_cx; cx <= max_cx; ++cx) {
+                flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse);
+                flat_load_chunk_delta_for_dir(g_loaded_world_dir, cx, cz, buf, meta);
+                flat_copy_chunk_buffers(cx, cz, buf, meta);
+                stream_mark_chunk_generated(stream_local_chunk_x(cx), stream_local_chunk_z(cz));
+            }
+        }
+    }
+    free(buf);
+    free(meta);
+
+    flat_mark_all_chunks_dirty();
+    flat_lighting_worker_wake();
 }
 
 static void flat_world_reset_blocks(void) {
@@ -6823,9 +6890,12 @@ static int stream_async_choose_worker_count(void) {
 #else
     int cpu = stream_async_cpu_count();
     if (cpu <= 2) return 1;
-    if (cpu <= 4) return 2;
-    if (cpu <= 6) return 3;
-    return STREAM_ASYNC_MAX_WORKERS;
+    /* World generation is already heavy and the render thread still has to adopt
+       meshes while the player walks.  Four generator workers could saturate a
+       desktop CPU/GPU driver and show up as sudden frame freezes even though the
+       work was "async".  Keep runtime generation conservative; initial preload
+       still queues ahead and streams in the background. */
+    return 2;
 #endif
 }
 
@@ -7025,7 +7095,7 @@ static void stream_async_submit_next(void) {
     if (!g_stream_async_event || g_stream_async_worker_count <= 0) return;
 
     int submitted = 0;
-    int job_backlog_limit = g_stream_generation_keep_completed ? STREAM_ASYNC_JOB_RING : g_stream_async_worker_count * 3;
+    int job_backlog_limit = g_stream_generation_keep_completed ? STREAM_ASYNC_JOB_RING : g_stream_async_worker_count * 2;
     if (job_backlog_limit < g_stream_async_worker_count) job_backlog_limit = g_stream_async_worker_count;
     if (job_backlog_limit > STREAM_ASYNC_JOB_RING) job_backlog_limit = STREAM_ASYNC_JOB_RING;
     EnterCriticalSection(&g_stream_async_cs);
@@ -7817,7 +7887,7 @@ static void process_stream_generation_queue(void) {
     int allow_install = 1;
     (void)s_stream_install_tick;
     if (allow_install) {
-        int max_install = initial_load ? 16 : 4;
+        int max_install = initial_load ? 16 : 1;
         pex_logf_trace("chunk stream async install tick queue=%d/%d budget=%d", g_stream_gen_queue_index, g_stream_gen_queue_count, max_install);
         stream_async_install_ready(max_install);
     }
