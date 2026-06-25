@@ -403,20 +403,36 @@ static void release_panorama_blur_pass(void) {
 }
 
 static void draw_release_skybox(float partial) {
+    static double s_last_panorama_update = -1000.0;
+    static int s_have_panorama_frame = 0;
+    static int s_cached_panorama_size = 0;
+
     panorama_reset_gl_state();
     ensure_panorama_viewport_texture();
 
-    /* Java GuiMainMenu.renderSkybox: fixed 256x256 panorama target first. */
+    /* Java GuiMainMenu.renderSkybox is extremely expensive in this fixed-function
+       compatibility renderer because it performs 64 panorama samples and 8
+       framebuffer-copy blur passes.  Preserve the look, but build the blurred
+       256x256 feedback texture at a sane animation rate and reuse it for the
+       uncapped menu draw frames. */
     int target_size = release_panorama_target_size();
-    glViewport(0, release_panorama_viewport_y(target_size), target_size, target_size);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    draw_release_panorama_cube(partial);
-    glDisable(GL_TEXTURE_2D);
-    glEnable(GL_TEXTURE_2D);
-    for (int i = 0; i < 8; ++i) release_panorama_blur_pass();
+    double now = now_seconds();
+    int rebuild_panorama = !s_have_panorama_frame || s_cached_panorama_size != target_size ||
+                           (now - s_last_panorama_update) >= (1.0 / 30.0);
+    if (rebuild_panorama) {
+        glViewport(0, release_panorama_viewport_y(target_size), target_size, target_size);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        draw_release_panorama_cube(partial);
+        glDisable(GL_TEXTURE_2D);
+        glEnable(GL_TEXTURE_2D);
+        for (int i = 0; i < 8; ++i) release_panorama_blur_pass();
+        s_last_panorama_update = now;
+        s_have_panorama_frame = 1;
+        s_cached_panorama_size = target_size;
+    }
 
-    /* Then restore the actual window viewport and draw the 256 texture through
-       the normal GUI projection, just like the Java ScaledResolution path. */
+    /* Then restore the actual window viewport and draw the cached 256 texture
+       through the normal GUI projection, just like the Java ScaledResolution path. */
     glViewport(0, 0, g_render_w, g_render_h);
     setup_gui_projection();
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);

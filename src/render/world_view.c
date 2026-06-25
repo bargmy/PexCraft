@@ -542,13 +542,23 @@ static void cloud_tex_vertex(float x, float y, float z, float u, float v) {
 }
 
 static int cloud_texture_has_cutout_alpha(void) {
+    static const unsigned char *cached_rgba = NULL;
+    static int cached_w = 0, cached_h = 0, cached_result = 0, cached_ready = 0;
     if (!tex_clouds.rgba || tex_clouds.w <= 0 || tex_clouds.h <= 0) return 0;
+    if (cached_ready && cached_rgba == tex_clouds.rgba && cached_w == tex_clouds.w && cached_h == tex_clouds.h) {
+        return cached_result;
+    }
     int n = tex_clouds.w * tex_clouds.h;
+    cached_result = 0;
     for (int i = 0; i < n; ++i) {
         unsigned char a = tex_clouds.rgba[i * 4 + 3];
-        if (a < 250) return 1;
+        if (a < 250) { cached_result = 1; break; }
     }
-    return 0;
+    cached_rgba = tex_clouds.rgba;
+    cached_w = tex_clouds.w;
+    cached_h = tex_clouds.h;
+    cached_ready = 1;
+    return cached_result;
 }
 
 static void draw_source_fast_clouds(float partial) {
@@ -1102,31 +1112,90 @@ static int colorizer_lookup(Texture *tex, float temp, float humid, int fallback_
     return ((int)p[0] << 16) | ((int)p[1] << 8) | (int)p[2];
 }
 
-static void biome_temp_humid_at(int x, int z, float *temp, float *humid) {
-    static PEX_THREAD_LOCAL BiomeManager mgr;
-    static PEX_THREAD_LOCAL int ready = 0;
-    static PEX_THREAD_LOCAL long long seed = 0;
-    if (!ready || seed != g_world_seed) {
-        if (ready) { free(mgr.temp); memset(&mgr, 0, sizeof(mgr)); }
-        biome_manager_init(&mgr, g_world_seed);
-        seed = g_world_seed;
-        ready = 1;
+typedef struct WorldBiomeColorCache {
+    BiomeManager mgr;
+    int mgr_ready;
+    long long seed;
+    int chunk_x;
+    int chunk_z;
+    unsigned char valid[16 * 16];
+    int grass[16 * 16];
+    int foliage[16 * 16];
+    float temp[16 * 16];
+    float humid[16 * 16];
+} WorldBiomeColorCache;
+
+static PEX_THREAD_LOCAL WorldBiomeColorCache g_world_biome_color_cache;
+
+static void world_biome_color_cache_reset_chunk(WorldBiomeColorCache *c, int chunk_x, int chunk_z) {
+    c->chunk_x = chunk_x;
+    c->chunk_z = chunk_z;
+    memset(c->valid, 0, sizeof(c->valid));
+}
+
+static void world_biome_color_cache_prepare(WorldBiomeColorCache *c, int x, int z) {
+    int cx = floor_div16(x);
+    int cz = floor_div16(z);
+    if (!c->mgr_ready || c->seed != g_world_seed) {
+        if (c->mgr_ready) { free(c->mgr.temp); memset(&c->mgr, 0, sizeof(c->mgr)); }
+        biome_manager_init(&c->mgr, g_world_seed);
+        c->seed = g_world_seed;
+        c->mgr_ready = 1;
+        c->chunk_x = 0x7fffffff;
+        c->chunk_z = 0x7fffffff;
+        memset(c->valid, 0, sizeof(c->valid));
     }
-    WorldBiome b = biome_manager_get(&mgr, x, z, 1, 1)[0];
-    *temp = b.temperature;
-    *humid = b.rainfall;
+    if (c->chunk_x != cx || c->chunk_z != cz) {
+        world_biome_color_cache_reset_chunk(c, cx, cz);
+    }
+}
+
+static void biome_temp_humid_at(int x, int z, float *temp, float *humid) {
+    WorldBiomeColorCache *c = &g_world_biome_color_cache;
+    world_biome_color_cache_prepare(c, x, z);
+    int lx = x - c->chunk_x * 16;
+    int lz = z - c->chunk_z * 16;
+    int idx = lz * 16 + lx;
+    if (!c->valid[idx]) {
+        WorldBiome *biomes = biome_manager_get(&c->mgr, c->chunk_x * 16, c->chunk_z * 16, 16, 16);
+        for (int i = 0; i < 16 * 16; ++i) {
+            float t = biomes[i].temperature;
+            float h = biomes[i].rainfall;
+            c->temp[i] = t;
+            c->humid[i] = h;
+            c->grass[i] = colorizer_lookup(&tex_grasscolor, t, h, 0x6FAD3A);
+            c->foliage[i] = colorizer_lookup(&tex_foliagecolor, t, h, 0x59A83A);
+            c->valid[i] = 1;
+        }
+    }
+    *temp = c->temp[idx];
+    *humid = c->humid[idx];
 }
 
 static int java_grass_color_at(int x, int z) {
-    float t = 0.8f, h = 0.4f;
-    biome_temp_humid_at(x, z, &t, &h);
-    return colorizer_lookup(&tex_grasscolor, t, h, 0x6FAD3A);
+    WorldBiomeColorCache *c = &g_world_biome_color_cache;
+    world_biome_color_cache_prepare(c, x, z);
+    int lx = x - c->chunk_x * 16;
+    int lz = z - c->chunk_z * 16;
+    int idx = lz * 16 + lx;
+    if (!c->valid[idx]) {
+        float t, h;
+        biome_temp_humid_at(x, z, &t, &h);
+    }
+    return c->grass[idx];
 }
 
 static int java_foliage_color_at(int x, int z) {
-    float t = 0.8f, h = 0.4f;
-    biome_temp_humid_at(x, z, &t, &h);
-    return colorizer_lookup(&tex_foliagecolor, t, h, 0x59A83A);
+    WorldBiomeColorCache *c = &g_world_biome_color_cache;
+    world_biome_color_cache_prepare(c, x, z);
+    int lx = x - c->chunk_x * 16;
+    int lz = z - c->chunk_z * 16;
+    int idx = lz * 16 + lx;
+    if (!c->valid[idx]) {
+        float t, h;
+        biome_temp_humid_at(x, z, &t, &h);
+    }
+    return c->foliage[idx];
 }
 
 static int flat_direct_reserve(FlatDirectMeshBuilder *b, uint32_t add_v, uint32_t add_i) {
@@ -1356,6 +1425,23 @@ static void flat_cpu_mesh_remap_shift(int old_origin_x, int old_origin_z,
 static void flat_gl_cpu_mesh_check_origin(void) {
     if (g_flat_gl_cpu_mesh_origin_x == g_flat_world_origin_x &&
         g_flat_gl_cpu_mesh_origin_z == g_flat_world_origin_z) return;
+
+    /* Keep the OpenGL CPU/display-list section meshes that still belong to
+       chunks inside the active world window.  The old path freed every GL mesh
+       on each origin slide and dirtied the whole render cache; walking across a
+       stream boundary then forced a visible-world rebuild/install storm.  New
+       strips are already marked invalid by stream_remap_render_chunks(), so only
+       the first initialization still needs the full invalidate fallback. */
+    if (!flat_direct_backend() &&
+        g_flat_gl_cpu_mesh_origin_x != 0x7fffffff &&
+        g_flat_gl_cpu_mesh_origin_z != 0x7fffffff) {
+        flat_cpu_mesh_remap_shift(g_flat_gl_cpu_mesh_origin_x,
+                                  g_flat_gl_cpu_mesh_origin_z,
+                                  g_flat_world_origin_x,
+                                  g_flat_world_origin_z);
+        return;
+    }
+
     flat_cpu_mesh_free_all();
     g_flat_gl_cpu_mesh_origin_x = g_flat_world_origin_x;
     g_flat_gl_cpu_mesh_origin_z = g_flat_world_origin_z;

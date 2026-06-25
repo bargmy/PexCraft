@@ -1969,11 +1969,37 @@ static void flat_mark_generated_section(int lcx, int lcz, int sy) {
     }
 }
 
-static void stream_mark_neighbor_dirty(int cx, int cz, int sy) {
-    if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
-    if (!g_flat_world_chunk_generated[cz][cx]) return;
-    if (!flat_section_has_blocks(cx, cz, sy)) return;
-    flat_mark_section_dirty(cx, cz, sy);
+static int stream_generated_border_has_blocks(int cx, int cz, int sy, int dir) {
+    if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return 0;
+    int x0 = cx * FLAT_RENDER_CHUNK;
+    int z0 = cz * FLAT_RENDER_CHUNK;
+    int y0 = sy * FLAT_SECTION_HEIGHT;
+    int y1 = y0 + FLAT_SECTION_HEIGHT;
+    if (y1 > FLAT_WORLD_HEIGHT) y1 = FLAT_WORLD_HEIGHT;
+
+    int bx0 = x0, bx1 = x0 + FLAT_RENDER_CHUNK;
+    int bz0 = z0, bz1 = z0 + FLAT_RENDER_CHUNK;
+    if (dir == 0) { bx0 = x0; bx1 = x0 + 1; }
+    else if (dir == 1) { bx0 = x0 + FLAT_RENDER_CHUNK - 1; bx1 = x0 + FLAT_RENDER_CHUNK; }
+    else if (dir == 2) { bz0 = z0; bz1 = z0 + 1; }
+    else { bz0 = z0 + FLAT_RENDER_CHUNK - 1; bz1 = z0 + FLAT_RENDER_CHUNK; }
+
+    for (int y = y0; y < y1; ++y) {
+        for (int z = bz0; z < bz1; ++z) {
+            for (int x = bx0; x < bx1; ++x) {
+                if (g_flat_blocks[y][z][x] != 0) return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void stream_mark_neighbor_dirty_if_border_changed(int src_cx, int src_cz, int nx, int nz, int sy, int dir) {
+    if (!flat_local_chunk_valid(nx, nz) || !flat_section_index_valid(sy)) return;
+    if (!g_flat_world_chunk_generated[nz][nx]) return;
+    if (!flat_section_has_blocks(nx, nz, sy)) return;
+    if (!stream_generated_border_has_blocks(src_cx, src_cz, sy, dir)) return;
+    flat_mark_section_dirty(nx, nz, sy);
 }
 
 static void stream_mark_chunk_generated(int lcx, int lcz) {
@@ -2011,10 +2037,10 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
         flat_mark_generated_section(lcx, lcz, sy);
         if (mask & (unsigned short)(1u << sy)) {
-            stream_mark_neighbor_dirty(lcx - 1, lcz, sy);
-            stream_mark_neighbor_dirty(lcx + 1, lcz, sy);
-            stream_mark_neighbor_dirty(lcx, lcz - 1, sy);
-            stream_mark_neighbor_dirty(lcx, lcz + 1, sy);
+            stream_mark_neighbor_dirty_if_border_changed(lcx, lcz, lcx - 1, lcz, sy, 0);
+            stream_mark_neighbor_dirty_if_border_changed(lcx, lcz, lcx + 1, lcz, sy, 1);
+            stream_mark_neighbor_dirty_if_border_changed(lcx, lcz, lcx, lcz - 1, sy, 2);
+            stream_mark_neighbor_dirty_if_border_changed(lcx, lcz, lcx, lcz + 1, sy, 3);
         }
     }
 }

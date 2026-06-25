@@ -592,6 +592,7 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
         player_turn_from_mouse((int)(p->rx * look), (int)(-p->ry * look));
     }
 #ifdef PEX_PLATFORM_PSP
+    if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lb && !p->prev_lb) mouse_right_down(g_gui_w / 2, g_gui_h / 2); /* L = place/use */
     if (p->dpad_up && !p->prev_dpad_up) { set_screen(SCREEN_INVENTORY); return; }
 
@@ -612,6 +613,7 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #else
+    if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lt > 0.35f && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
     if (p->y && !p->prev_y) { set_screen(SCREEN_INVENTORY); return; }
     if (p->x && !p->prev_x) inventory_drop_selected_one();
