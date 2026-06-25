@@ -1127,6 +1127,33 @@ static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
    glBegin(GL_QUADS) block. */
 typedef struct PassiveFastVec3 { float x, y, z; } PassiveFastVec3;
 
+static float g_passive_fast_uv_w = 64.0f;
+static float g_passive_fast_uv_h = 32.0f;
+static float g_passive_fast_tint_r = 1.0f;
+static float g_passive_fast_tint_g = 1.0f;
+static float g_passive_fast_tint_b = 1.0f;
+
+static void passive_fast_set_texture_dims(const Texture *tex) {
+    g_passive_fast_uv_w = (tex && tex->w > 0) ? (float)tex->w : 64.0f;
+    g_passive_fast_uv_h = (tex && tex->h > 0) ? (float)tex->h : 32.0f;
+}
+
+static void passive_fast_set_tint(float r, float g, float b) {
+    g_passive_fast_tint_r = r;
+    g_passive_fast_tint_g = g;
+    g_passive_fast_tint_b = b;
+}
+
+static void passive_fast_color_for_normal(float nx, float ny, float nz) {
+    float shade = 0.82f;
+    if (ny < -0.5f) shade = 1.0f;
+    else if (ny > 0.5f) shade = 0.55f;
+    else if (nz > 0.5f) shade = 0.92f;
+    else if (nz < -0.5f) shade = 0.70f;
+    else if (nx != 0.0f) shade = 0.76f;
+    glColor4f(shade * g_passive_fast_tint_r, shade * g_passive_fast_tint_g, shade * g_passive_fast_tint_b, 1.0f);
+}
+
 static void passive_fast_rotate_xyz(float *x, float *y, float *z,
                                     float rx_deg, float ry_deg, float rz_deg) {
     if (rx_deg != 0.0f) {
@@ -1164,14 +1191,14 @@ static PassiveFastVec3 passive_fast_part_vertex(float x, float y, float z,
 }
 
 static void passive_fast_vertex(const PassiveFastVec3 *p, float u, float v) {
-    glTexCoord2f(u / g_steve_uv_w, v / g_steve_uv_h);
+    glTexCoord2f(u / g_passive_fast_uv_w, v / g_passive_fast_uv_h);
     glVertex3f(p->x * 0.0625f, p->y * 0.0625f, p->z * 0.0625f);
 }
 
 static void passive_fast_quad(PassiveFastVec3 a, PassiveFastVec3 b, PassiveFastVec3 c, PassiveFastVec3 d,
                               float u0, float v0, float u1, float v1,
                               float nx, float ny, float nz) {
-    steve_color_for_normal(nx, ny, nz);
+    passive_fast_color_for_normal(nx, ny, nz);
     passive_fast_vertex(&a, u1, v0);
     passive_fast_vertex(&b, u0, v0);
     passive_fast_vertex(&c, u0, v1);
@@ -1330,9 +1357,9 @@ static void draw_passive_mobs(float partial) {
 
         glPushMatrix();
         glBindTexture(GL_TEXTURE_2D, t->id);
-        steve_set_texture_dims(t);
-        if (e->hurt) steve_set_tint(1.0f, 0.35f, 0.35f);
-        else steve_set_tint(1.0f, 1.0f, 1.0f);
+        passive_fast_set_texture_dims(t);
+        if (e->hurt) passive_fast_set_tint(1.0f, 0.35f, 0.35f);
+        else passive_fast_set_tint(1.0f, 1.0f, 1.0f);
         glTranslatef(e->x, e->y, e->z);
         glRotatef(180.0f - e->yaw, 0.0f, 1.0f, 0.0f);
         if (e->death_time > 0.0f) {
@@ -1355,14 +1382,14 @@ static void draw_passive_mobs(float partial) {
             glEnd();
             if (e->detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_sheep_fur.id);
-                steve_set_texture_dims(&tex_mob_sheep_fur);
+                passive_fast_set_texture_dims(&tex_mob_sheep_fur);
                 glBegin(GL_QUADS);
                 passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
                 glEnd();
             }
             if (e->detail && e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
-                steve_set_texture_dims(&tex_mob_saddle);
+                passive_fast_set_texture_dims(&tex_mob_saddle);
                 glBegin(GL_QUADS);
                 passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, 0.0f);
                 glEnd();
@@ -1372,7 +1399,7 @@ static void draw_passive_mobs(float partial) {
     }
 
     glDisable(GL_ALPHA_TEST);
-    steve_set_tint(1.0f, 1.0f, 1.0f);
+    passive_fast_set_tint(1.0f, 1.0f, 1.0f);
     glColor4f(1, 1, 1, 1);
     glPopMatrix();
 }
