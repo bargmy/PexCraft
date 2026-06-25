@@ -1618,6 +1618,11 @@ static void flat_mark_section_dirty_keep_valid(int cx, int cz, int sy) {
 
 static void mark_flat_render_sections_dirty_around_block(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return;
+    /* A player/block edit should be visible quickly.  Java adds the touched
+       WorldRenderer(s) to worldRenderersToUpdate immediately; keep the heavy
+       mesh rebuild off-thread, but tell the render side to prioritize adopting
+       nearby completed edit meshes over background streaming results. */
+    g_flat_recent_block_mesh_dirty_tick = g_ingame_ticks;
     int fx = flat_index(x);
     int fz = flat_z_index(z);
     int cx0 = fx / FLAT_RENDER_CHUNK;

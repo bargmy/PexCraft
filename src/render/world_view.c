@@ -4797,6 +4797,7 @@ typedef struct AsyncSectionMeshJob {
     int origin_x, origin_z;
     unsigned int version;
     unsigned int light_version;
+    int priority;
     unsigned char blocks[ASYNC_SECTION_MESH_BYTES];
     unsigned char meta[ASYNC_SECTION_MESH_BYTES];
     unsigned char levels[ASYNC_SECTION_MESH_BYTES];
@@ -4810,6 +4811,7 @@ typedef struct AsyncSectionMeshResult {
     int origin_x, origin_z;
     unsigned int version;
     unsigned int light_version;
+    int priority;
     FlatDirectMeshBuilder mb0, mb1;
     int skip0, skip1;
     /* D3D11 can pre-create terrain section GPU buffers on the worker using the
@@ -4892,9 +4894,14 @@ static int async_section_mesh_push_upload_job_blocking(AsyncSectionMeshResult *r
             return 0;
         }
         if (g_async_section_mesh_upload_count < ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX) {
-            g_async_section_mesh_upload_jobs[g_async_section_mesh_upload_tail] = *r;
+            if (r->priority) {
+                g_async_section_mesh_upload_head = (g_async_section_mesh_upload_head - 1 + ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX) % ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX;
+                g_async_section_mesh_upload_jobs[g_async_section_mesh_upload_head] = *r;
+            } else {
+                g_async_section_mesh_upload_jobs[g_async_section_mesh_upload_tail] = *r;
+                g_async_section_mesh_upload_tail = (g_async_section_mesh_upload_tail + 1) % ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX;
+            }
             memset(r, 0, sizeof(*r));
-            g_async_section_mesh_upload_tail = (g_async_section_mesh_upload_tail + 1) % ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX;
             g_async_section_mesh_upload_count++;
             LeaveCriticalSection(&g_async_section_mesh_cs);
             if (g_async_section_mesh_upload_event) SetEvent(g_async_section_mesh_upload_event);
@@ -4914,9 +4921,14 @@ static int async_section_mesh_push_result_blocking(AsyncSectionMeshResult *r) {
             return 0;
         }
         if (g_async_section_mesh_result_count < ASYNC_SECTION_MESH_RESULT_QUEUE_MAX) {
-            g_async_section_mesh_results[g_async_section_mesh_result_tail] = *r;
+            if (r->priority) {
+                g_async_section_mesh_result_head = (g_async_section_mesh_result_head - 1 + ASYNC_SECTION_MESH_RESULT_QUEUE_MAX) % ASYNC_SECTION_MESH_RESULT_QUEUE_MAX;
+                g_async_section_mesh_results[g_async_section_mesh_result_head] = *r;
+            } else {
+                g_async_section_mesh_results[g_async_section_mesh_result_tail] = *r;
+                g_async_section_mesh_result_tail = (g_async_section_mesh_result_tail + 1) % ASYNC_SECTION_MESH_RESULT_QUEUE_MAX;
+            }
             memset(r, 0, sizeof(*r));
-            g_async_section_mesh_result_tail = (g_async_section_mesh_result_tail + 1) % ASYNC_SECTION_MESH_RESULT_QUEUE_MAX;
             g_async_section_mesh_result_count++;
             LeaveCriticalSection(&g_async_section_mesh_cs);
             return 1;
@@ -5074,6 +5086,7 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
                 r.origin_z = job.origin_z;
                 r.version = job.version;
                 r.light_version = job.light_version;
+                r.priority = job.priority;
                 r.skip0 = skip0;
                 r.skip1 = skip1;
                 r.mb0 = mb0;
@@ -5158,6 +5171,7 @@ static int async_section_mesh_submit_ex(int sy, int cx, int cz, int priority) {
     job.origin_z = g_flat_world_origin_z;
     job.version = g_flat_section_mesh_version[sy][cz][cx];
     job.light_version = g_flat_chunk_light_version[cz][cx];
+    job.priority = priority ? 1 : 0;
     int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
     int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
     int sz0 = job.origin_z + cz * FLAT_RENDER_CHUNK - 1;
@@ -5469,17 +5483,24 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     }
 
     flat_self_heal_visible_sections(refs, count);
-    int rebuilds_left = direct ? 4 : 4;
-    if (streaming) rebuilds_left = direct ? 1 : 2;
-    double deadline = now_seconds() + (streaming ? 0.0015 : 0.0030);
+    int recent_edit = (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) >= 0 &&
+                      (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) <= 12;
+    int rebuilds_left = recent_edit ? 6 : 4;
+    if (streaming && !recent_edit) rebuilds_left = direct ? 1 : 2;
+    double deadline = now_seconds() + (recent_edit ? 0.0060 : (streaming ? 0.0015 : 0.0030));
 
 #if defined(PEX_PLATFORM_PSP)
     if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
 #else
-    /* One completed section install per frame keeps the F3 "Mesh install" slice
-       from turning two ~2 ms GPU/CPU adopts into a 4 ms hitch.  Priority submit
-       below keeps nearby block/light edits at the front of the build queue. */
-    if (async_mesh) async_section_mesh_install_ready(1);
+    /* Java's RenderGlobal keeps block edits at the front of worldRenderersToUpdate.
+       The C renderer builds meshes off-thread, so the equivalent is to adopt a few
+       already-finished priority edit meshes before background stream results.
+       Keep the normal budget low to avoid frame hitches. */
+    if (async_mesh) {
+        int install_budget = recent_edit ? 4 : 1;
+        if (!recent_edit && !streaming && g_prof_mesh_results_last > 12) install_budget = 2;
+        async_section_mesh_install_ready(install_budget);
+    }
 #endif
 
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
@@ -7011,10 +7032,58 @@ static void draw_first_person_hand(void) {
     glColor4f(1,1,1,1);
 }
 
+static float java125_world_time_dark_overlay_alpha(void) {
+    /* Temporary fixed-function equivalent for Java EntityRenderer.updateLightmap().
+       Terrain meshes are intentionally compiled with a stable daytime lightmap so
+       dusk/night no longer forces every section to rebuild.  Until the renderer
+       carries packed sky/block light into a real 16x16 lightmap texture, apply the
+       time-of-day part as a render-time full-world darkening pass.  This keeps
+       day/night dynamic without "reloading" chunk meshes. */
+    float cr, cg, cb;
+    float sr, sg, sb;
+    int old_stable = g_flat_bake_stable_mesh_light;
+    g_flat_bake_stable_mesh_light = 0;
+    flat_lightmap_color_from_packed((15 << 20), &cr, &cg, &cb);
+    g_flat_bake_stable_mesh_light = 1;
+    flat_lightmap_color_from_packed((15 << 20), &sr, &sg, &sb);
+    g_flat_bake_stable_mesh_light = old_stable;
+
+    float current = cr * 0.30f + cg * 0.59f + cb * 0.11f;
+    float stable = sr * 0.30f + sg * 0.59f + sb * 0.11f;
+    if (stable <= 0.001f) return 0.0f;
+    float alpha = 1.0f - current / stable;
+    if (alpha < 0.0f) alpha = 0.0f;
+    if (alpha > 0.76f) alpha = 0.76f;
+    return alpha;
+}
+
+static void draw_java125_world_time_dark_overlay(void) {
+    float alpha = java125_world_time_dark_overlay_alpha();
+    if (alpha <= 0.005f) return;
+
+    setup_gui_projection();
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(0.0f, 0.0f, 0.0f, alpha);
+    glBegin(GL_QUADS);
+    glVertex3f(0.0f, (float)g_gui_h, 0.0f);
+    glVertex3f((float)g_gui_w, (float)g_gui_h, 0.0f);
+    glVertex3f((float)g_gui_w, 0.0f, 0.0f);
+    glVertex3f(0.0f, 0.0f, 0.0f);
+    glEnd();
+    glColor4f(1,1,1,1);
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_ALPHA_TEST);
+}
+
 static void draw_ingame_world_view(int with_hand) {
     draw_sky_only();
     draw_flat_test_world();
     if (with_hand && !g_third_person_view) draw_first_person_hand();
     draw_in_block_overlay();
+    draw_java125_world_time_dark_overlay();
     setup_gui_projection();
 }

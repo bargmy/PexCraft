@@ -285,6 +285,13 @@ static void draw_debug_task_profile_panel(void) {
     snprintf(line, sizeof(line), "Mesh queues jobs %d uploads %d results %d",
              g_prof_mesh_jobs_last, g_prof_mesh_uploads_last, g_prof_mesh_results_last);
     draw_text(line, right_x, ry, 14737632); ry += 10;
+    {
+        int edit_age = g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick;
+        if (edit_age < 0 || edit_age > 999) edit_age = 999;
+        snprintf(line, sizeof(line), "Edit mesh boost age %d  night overlay %.2f",
+                 edit_age, java125_world_time_dark_overlay_alpha());
+        draw_text(line, right_x, ry, edit_age <= 12 ? 0xFFFF80 : 14737632); ry += 10;
+    }
     snprintf(line, sizeof(line), "Generated preload batch %d %d/%d light settle %d/%d/%d p%d",
              g_stream_initial_batch_running, g_stream_initial_batch_done_units,
              g_stream_initial_batch_total_units, g_stream_initial_light_settle_requested,

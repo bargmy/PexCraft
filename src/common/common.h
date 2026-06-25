@@ -1193,6 +1193,7 @@ static unsigned char g_flat_block_light[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT
    vertex colors, so mesh compilation must not sample g_world_time or chunks
    rebuilt later will become brighter/darker than old chunks. */
 static PEX_THREAD_LOCAL int g_flat_bake_stable_mesh_light = 0;
+static int g_flat_recent_block_mesh_dirty_tick = -1000000;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_blocks = NULL;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_meta = NULL;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_levels = NULL;
