@@ -183,7 +183,7 @@ static void loggy_build_text(void) {
                   g_loggy_mesh_submit_calls, g_loggy_mesh_submit_snapshot_cells,
                   g_loggy_mesh_installs, g_loggy_mesh_install_vertices, g_loggy_mesh_install_indices,
                   g_loggy_mesh_stale_results);
-    loggy_appendf(&out, &left, "  self_heal_refs=%d self_heal_missing=%d skylight_sub=%d light_dirty=%d light_ready=%d\n",
+    loggy_appendf(&out, &left, "  self_heal_probes=%d self_heal_missing=%d skylight_sub=%d light_dirty=%d light_ready=%d\n",
                   g_loggy_mesh_self_heal_refs, g_loggy_mesh_self_heal_missing,
                   g_prof_skylight_subtracted_last, light_dirty, g_flat_light_dirty_cs_initialized ? 1 : 0);
 

@@ -209,7 +209,11 @@ static void loggy_append_root_hints(char **out, size_t *left, double top_account
                       g_prof_display_ms[PROF_LOGGY_REFRESH], g_loggy_edit_refresh_last_ms);
         hints++;
     }
-    if (g_screen == SCREEN_INGAME && g_prof_display_ms[PROF_MESH_MAIN] > 2.0) {
+    if (g_prof_display_ms[PROF_MESH_SELF_HEAL] > 1.0) {
+        loggy_appendf(out, left, "  [MESH SELF-HEAL] Self-heal safety scan costs %.3fms. It should be near 0 unless it is actively repairing missing meshes.\n", g_prof_display_ms[PROF_MESH_SELF_HEAL]);
+        hints++;
+    }
+    if (g_prof_display_ms[PROF_MESH_MAIN] > 2.0) {
         loggy_appendf(out, left, "  [MESH MAIN] Mesh install/rebuild path costs %.3fms on main thread. Check mesh result install/self-heal/snapshot queues.\n", g_prof_display_ms[PROF_MESH_MAIN]);
         hints++;
     }
@@ -377,7 +381,7 @@ static void loggy_build_text(void) {
                   g_loggy_mesh_submit_calls, g_loggy_mesh_submit_snapshot_cells,
                   g_loggy_mesh_installs, g_loggy_mesh_install_vertices, g_loggy_mesh_install_indices,
                   g_loggy_mesh_stale_results);
-    loggy_appendf(&out, &left, "  self_heal_refs=%d self_heal_missing=%d skylight_sub=%d light_dirty=%d light_ready=%d\n",
+    loggy_appendf(&out, &left, "  self_heal_probes=%d self_heal_missing=%d skylight_sub=%d light_dirty=%d light_ready=%d\n",
                   g_loggy_mesh_self_heal_refs, g_loggy_mesh_self_heal_missing,
                   g_prof_skylight_subtracted_last, light_dirty, g_flat_light_dirty_cs_initialized ? 1 : 0);
 

@@ -5683,75 +5683,136 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
 
 static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
     double self_heal_start = profile_begin();
-    if (g_loggy_enabled) g_loggy_mesh_self_heal_refs += count;
+    if (!refs || count <= 0) {
+        profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
+        return;
+    }
+
     int direct = flat_direct_backend() ? 1 : 0;
     int async_mesh = flat_async_section_mesh_enabled() ? 1 : 0;
-    /* The lighting safety net used to rescan every visible chunk once per game
-       tick.  At render distance 11 that is hundreds of chunks * 36 sampled
-       columns * world height inside the main-thread "Mesh install" phase, which
-       is why F3 could show 80-100 ms spikes even when no mesh jobs were queued.
-       Chunk light now shifts with the stream window and generated chunks bring
-       precomputed light, so keep this only as a tiny rotating repair budget for
-       old/bad saves instead of a full visible-world scan. */
-    enum { LIGHT_REPAIR_MAX_CHUNKS_PER_FRAME = 2, LIGHT_REPAIR_MAX_REF_PROBES = 48 };
+    int recent_edit = (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) >= 0 &&
+                      (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) <= 12;
+    int streaming = stream_generation_active() ? 1 : 0;
+    int active_mesh_work = streaming || recent_edit || g_flat_renderer_sort_dirty ||
+                           g_prof_mesh_jobs_last > 0 || g_prof_mesh_results_last > 0 ||
+                           g_prof_mesh_uploads_last > 0;
+    int world_overlay = (g_screen != SCREEN_INGAME);
+
+    /* This function used to scan every visible section every frame and call
+       flat_section_has_blocks() for each one.  With 324 visible sections that
+       means 324 * 4096 block probes during PAUSE, even when self_heal_missing=0.
+       Keep self-heal as a safety net only: tiny rotating probes, aggressive
+       backoff on clean frames, and no full-section block scan unless a section
+       is already suspicious.  The normal dirty queue below still submits real
+       rebuild work for edited/streamed sections. */
+    enum {
+        SELF_HEAL_PROBES_IDLE = 4,
+        SELF_HEAL_PROBES_ACTIVE = 16,
+        SELF_HEAL_PROBES_EDIT = 48,
+        SELF_HEAL_PROBES_PAUSE = 4,
+        SELF_HEAL_IDLE_BACKOFF_FRAMES = 30,
+        SELF_HEAL_PAUSE_BACKOFF_FRAMES = 12,
+        LIGHT_REPAIR_MAX_CHUNKS_PER_FRAME = 1,
+        LIGHT_REPAIR_MAX_REF_PROBES = 16
+    };
+    static int s_probe_cursor = 0;
+    static int s_idle_backoff = 0;
     static unsigned int s_light_repair_epoch[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    static int s_light_repair_cursor = 0;
     static unsigned int s_light_repair_epoch_counter = 1;
+
+    if (!active_mesh_work) {
+        int backoff = world_overlay ? SELF_HEAL_PAUSE_BACKOFF_FRAMES : SELF_HEAL_IDLE_BACKOFF_FRAMES;
+        if (s_idle_backoff++ < backoff) {
+            profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
+            return;
+        }
+        s_idle_backoff = 0;
+    } else if (world_overlay && !recent_edit && !streaming) {
+        if (s_idle_backoff++ < SELF_HEAL_PAUSE_BACKOFF_FRAMES) {
+            profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
+            return;
+        }
+        s_idle_backoff = 0;
+    } else {
+        s_idle_backoff = 0;
+    }
+
+    int probe_budget = recent_edit ? SELF_HEAL_PROBES_EDIT : (active_mesh_work ? SELF_HEAL_PROBES_ACTIVE : SELF_HEAL_PROBES_IDLE);
+    if (world_overlay && probe_budget > SELF_HEAL_PROBES_PAUSE) probe_budget = SELF_HEAL_PROBES_PAUSE;
+    if (probe_budget > count) probe_budget = count;
+    if (probe_budget <= 0) {
+        profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
+        return;
+    }
+
     unsigned int light_epoch = s_light_repair_epoch_counter++;
     if (s_light_repair_epoch_counter == 0) s_light_repair_epoch_counter = 1;
     int light_budget = LIGHT_REPAIR_MAX_CHUNKS_PER_FRAME;
     int light_probes = 0;
-    int start = (count > 0) ? (s_light_repair_cursor % count) : 0;
-    if (count > 0) s_light_repair_cursor = (start + 1) % count;
+    int probes_done = 0;
+    int start = s_probe_cursor % count;
+    s_probe_cursor = (start + probe_budget) % count;
 
-    for (int i = 0; i < count; i++) {
-        int ri = (count > 0) ? ((start + i) % count) : i;
+    for (int i = 0; i < probe_budget; i++) {
+        int ri = (start + i) % count;
         int cx = refs[ri].cx, cz = refs[ri].cz, sy = refs[ri].sy;
         if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) continue;
         if (!g_flat_world_chunk_generated[cz][cx]) continue;
+        probes_done++;
+
         if (light_budget > 0 && light_probes < LIGHT_REPAIR_MAX_REF_PROBES &&
             s_light_repair_epoch[cz][cx] != light_epoch) {
             s_light_repair_epoch[cz][cx] = light_epoch;
             light_probes++;
-            if (flat_repair_missing_light(cx, cz)) light_budget--;
-            else light_budget--;
+            (void)flat_repair_missing_light(cx, cz);
+            light_budget--;
         }
+
+        int dirty_or_invalid = (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]);
+        int payload_missing = 0;
+
+        if (!dirty_or_invalid) {
+            if (direct) {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) payload_missing = 1;
+                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) payload_missing = 1;
+            } else if (async_mesh) {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) payload_missing = 1;
+                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) payload_missing = 1;
+            } else {
+                if (!g_flat_section_skip_pass[sy][cz][cx][0] && g_flat_section_lists[sy][cz][cx][0] == 0) payload_missing = 1;
+                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && g_flat_section_lists[sy][cz][cx][1] == 0) payload_missing = 1;
+            }
+        }
+
+        if (!dirty_or_invalid && !payload_missing) continue;
+
+        /* Only suspicious sections pay the expensive full-section block scan. */
         if (!flat_section_has_blocks(cx, cz, sy)) {
-            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
+            if (dirty_or_invalid) {
                 flat_mark_generated_section(cx, cz, sy);
                 pex_logf_trace("chunk render self-heal empty section local=%d,%d sy=%d", cx, cz, sy);
             }
             continue;
         }
 
-        int missing = (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]);
-        if (!missing) {
-            if (direct) {
-                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) missing = 1;
-                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) missing = 1;
-            } else if (async_mesh) {
-                if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) missing = 1;
-                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) missing = 1;
-            } else {
-                if (!g_flat_section_skip_pass[sy][cz][cx][0] && g_flat_section_lists[sy][cz][cx][0] == 0) missing = 1;
-                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && g_flat_section_lists[sy][cz][cx][1] == 0) missing = 1;
-            }
-        }
-        if (missing && !g_flat_section_dirty[sy][cz][cx]) {
+        if (payload_missing && !g_flat_section_dirty[sy][cz][cx]) {
             g_flat_section_dirty[sy][cz][cx] = 1;
             g_flat_world_chunk_dirty[cz][cx] = 1;
             g_flat_renderer_sort_dirty = 1;
             if (g_loggy_enabled) g_loggy_mesh_self_heal_missing++;
             pex_logf_trace("chunk render self-heal missing mesh local=%d,%d sy=%d valid=%d direct=%d async=%d", cx, cz, sy, g_flat_section_valid[sy][cz][cx], direct, async_mesh);
         }
-        if (missing && g_flat_section_mesh_building[sy][cz][cx] && (g_ingame_ticks % 100) == 0) {
+
+        if ((dirty_or_invalid || payload_missing) &&
+            g_flat_section_mesh_building[sy][cz][cx] && (g_ingame_ticks % 100) == 0) {
             g_flat_section_mesh_building[sy][cz][cx] = 0;
             pex_logf_trace("chunk render self-heal cleared stuck build flag local=%d,%d sy=%d", cx, cz, sy);
         }
     }
+
+    if (g_loggy_enabled) g_loggy_mesh_self_heal_refs += probes_done;
     profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
 }
-
 static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int count) {
     flat_gl_cpu_mesh_check_origin();
     int direct = flat_direct_backend() ? 1 : 0;
