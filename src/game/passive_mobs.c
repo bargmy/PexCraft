@@ -1183,6 +1183,7 @@ static void draw_passive_mobs(float partial) {
     passive_mobs_submit_render_job(partial);
     PassiveMobRenderEntry entries[PEX_PASSIVE_RENDER_LIMIT];
     int entry_count = passive_mobs_fetch_render_list(entries, PEX_PASSIVE_RENDER_LIMIT);
+    if (g_loggy_enabled) g_loggy_entity_passive_entries = entry_count;
     if (entry_count <= 0) return;
 
     glPushMatrix();

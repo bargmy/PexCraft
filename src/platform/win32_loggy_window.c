@@ -207,6 +207,15 @@ static void loggy_append_root_hints(char **out, size_t *left, double top_account
                       g_prof_display_ms[PROF_WORLD_CLOUDS]);
         hints++;
     }
+    if (g_prof_display_ms[PROF_WORLD_ENTITIES] > 1.0) {
+        loggy_appendf(out, left, "  [ENTITIES] World entities cost %.3fms avg. sub: local=%.3f remote=%.3f matrix=%.3f falling=%.3f passive=%.3f matrix_reads=%d skips=%d passive_entries=%d remote_players=%d.\n",
+                      g_prof_display_ms[PROF_WORLD_ENTITIES], g_prof_display_ms[PROF_ENTITY_LOCAL_PLAYER],
+                      g_prof_display_ms[PROF_ENTITY_REMOTE_PLAYERS], g_prof_display_ms[PROF_ENTITY_MATRIX_READBACK],
+                      g_prof_display_ms[PROF_ENTITY_FALLING_BLOCKS], g_prof_display_ms[PROF_ENTITY_PASSIVE_MOBS],
+                      g_loggy_entity_matrix_reads, g_loggy_entity_matrix_skips, g_loggy_entity_passive_entries,
+                      g_loggy_entity_remote_players);
+        hints++;
+    }
     if (g_loggy_gui_text_calls > 1000 || g_loggy_gui_quads > 20000 || g_loggy_gui_buttons > 1000) {
         loggy_appendf(out, left, "  [GUI SPAM] This frame emits text_calls=%d quads=%d buttons=%d. If this stays high after reset, menu UI is rebuilding/drawing too much.\n",
                       g_loggy_gui_text_calls, g_loggy_gui_quads, g_loggy_gui_buttons);
@@ -370,6 +379,11 @@ static void loggy_build_text(void) {
                   g_prof_display_ms[PROF_WORLD_ENTITIES], g_prof_display_ms[PROF_WORLD_PARTICLES],
                   g_prof_display_ms[PROF_WORLD_TRANSLUCENT], g_prof_display_ms[PROF_WORLD_OVERLAYS],
                   g_prof_display_ms[PROF_WORLD_CLOUDS], g_prof_display_ms[PROF_HUD_GUI]);
+    loggy_appendf(&out, &left, "  entity_detail: local=%.3f remote=%.3f matrix_readback=%.3f falling=%.3f passive=%.3f matrix_reads=%d matrix_skips=%d remote_players=%d passive_entries=%d\n",
+                  g_prof_display_ms[PROF_ENTITY_LOCAL_PLAYER], g_prof_display_ms[PROF_ENTITY_REMOTE_PLAYERS],
+                  g_prof_display_ms[PROF_ENTITY_MATRIX_READBACK], g_prof_display_ms[PROF_ENTITY_FALLING_BLOCKS],
+                  g_prof_display_ms[PROF_ENTITY_PASSIVE_MOBS], g_loggy_entity_matrix_reads,
+                  g_loggy_entity_matrix_skips, g_loggy_entity_remote_players, g_loggy_entity_passive_entries);
 
     loggy_appendf(&out, &left, "\nD3D11 PRESENT STATE:\n");
     loggy_appendf(&out, &left, "  active=%d allow_tearing=%d swap_flags=0x%x present_flags=0x%x present_hr=0x%08lx failures=%d buffers=%d frame_latency=%d latency_set=%d stall_warn=%d\n",

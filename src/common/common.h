@@ -1686,6 +1686,11 @@ typedef enum PexMainThreadProfileId {
     PROF_CULL_SORT,
     PROF_WORLD_DRAW,
     PROF_WORLD_ENTITIES,
+    PROF_ENTITY_LOCAL_PLAYER,
+    PROF_ENTITY_REMOTE_PLAYERS,
+    PROF_ENTITY_MATRIX_READBACK,
+    PROF_ENTITY_FALLING_BLOCKS,
+    PROF_ENTITY_PASSIVE_MOBS,
     PROF_WORLD_PARTICLES,
     PROF_WORLD_TRANSLUCENT,
     PROF_WORLD_OVERLAYS,
@@ -1736,6 +1741,11 @@ static const char *g_prof_names[PROF_COUNT] = {
     "Cull/sort",
     "World draw solid",
     "World entities",
+    "Entity local player",
+    "Entity remote players",
+    "Entity matrix readback",
+    "Entity falling blocks",
+    "Entity passive mobs",
     "World particles",
     "World translucent",
     "World overlays",
@@ -1865,6 +1875,10 @@ static int g_loggy_d3d11_buffer_count = 0;
 static int g_loggy_d3d11_frame_latency = 0;
 static int g_loggy_d3d11_frame_latency_set = 0;
 static int g_loggy_d3d11_present_stall_warning = 0;
+static int g_loggy_entity_remote_players = 0;
+static int g_loggy_entity_matrix_reads = 0;
+static int g_loggy_entity_matrix_skips = 0;
+static int g_loggy_entity_passive_entries = 0;
 
 static int g_third_person_view = 0; /* Java 1.2.5 GameSettings.thirdPersonView: 0=first, 1=back, 2=front. */
 static void third_person_view_cycle(void) {

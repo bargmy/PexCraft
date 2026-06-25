@@ -33,6 +33,10 @@ static void profile_begin_frame(void) {
         g_loggy_mesh_stale_results = 0;
         g_loggy_mesh_self_heal_refs = 0;
         g_loggy_mesh_self_heal_missing = 0;
+        g_loggy_entity_remote_players = 0;
+        g_loggy_entity_matrix_reads = 0;
+        g_loggy_entity_matrix_skips = 0;
+        g_loggy_entity_passive_entries = 0;
         g_loggy_frame_no++;
     }
     g_prof_frame_start_time = now_seconds();

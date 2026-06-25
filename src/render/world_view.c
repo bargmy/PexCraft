@@ -6461,6 +6461,18 @@ static GLdouble g_name_projection[16];
 static GLint g_name_viewport[4];
 static int g_name_matrices_valid = 0;
 
+static int multiplayer_renderable_remote_player_count(void) {
+    if (!g_mp_connected) return 0;
+    int count = 0;
+    for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
+        PexNetRenderPlayerState *r = &g_mp_render_players[i];
+        if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
+        if (r->health <= 0) continue;
+        count++;
+    }
+    return count;
+}
+
 static void draw_multiplayer_remote_players(void) {
     if (!g_mp_connected || !tex_steve.id) return;
 
@@ -7118,14 +7130,41 @@ static void draw_flat_test_world(void) {
     profile_add_time(PROF_WORLD_DRAW, prof_part);
 
     prof_part = profile_begin();
+    double entity_part = profile_begin();
     draw_third_person_player();
+    profile_add_time(PROF_ENTITY_LOCAL_PLAYER, entity_part);
+
+    int remote_player_count = multiplayer_renderable_remote_player_count();
+    if (g_loggy_enabled) g_loggy_entity_remote_players = remote_player_count;
+
+    entity_part = profile_begin();
     draw_multiplayer_remote_players();
-    glGetDoublev(GL_MODELVIEW_MATRIX, g_name_modelview);
-    glGetDoublev(GL_PROJECTION_MATRIX, g_name_projection);
-    glGetIntegerv(GL_VIEWPORT, g_name_viewport);
-    g_name_matrices_valid = 1;
+    profile_add_time(PROF_ENTITY_REMOTE_PLAYERS, entity_part);
+
+    /* glGet* readbacks can hard-stall D3D11/GL compatibility backends.  The
+       matrices are only needed for multiplayer name tags, so do not read GPU
+       state in normal single-player entity rendering. */
+    if (remote_player_count > 0) {
+        entity_part = profile_begin();
+        glGetDoublev(GL_MODELVIEW_MATRIX, g_name_modelview);
+        glGetDoublev(GL_PROJECTION_MATRIX, g_name_projection);
+        glGetIntegerv(GL_VIEWPORT, g_name_viewport);
+        g_name_matrices_valid = 1;
+        if (g_loggy_enabled) g_loggy_entity_matrix_reads += 3;
+        profile_add_time(PROF_ENTITY_MATRIX_READBACK, entity_part);
+    } else {
+        g_name_matrices_valid = 0;
+        if (g_loggy_enabled) g_loggy_entity_matrix_skips++;
+    }
+
+    entity_part = profile_begin();
     draw_falling_blocks(g_frame_partial);
+    profile_add_time(PROF_ENTITY_FALLING_BLOCKS, entity_part);
+
+    entity_part = profile_begin();
     draw_passive_mobs(g_frame_partial);
+    profile_add_time(PROF_ENTITY_PASSIVE_MOBS, entity_part);
+
     profile_add_time(PROF_WORLD_ENTITIES, prof_part);
 
     prof_part = profile_begin();
