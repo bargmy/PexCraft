@@ -754,6 +754,144 @@ static void pex_set_world_time_to_day_tick(long long day_tick) {
     g_save_dirty = 1;
 }
 
+
+static int pex_chat_parse_int(const char *s, int *out) {
+    if (!s || !*s || !out) return 0;
+    int neg = 0; long v = 0; const char *p = s;
+    if (*p == '-') { neg = 1; ++p; }
+    if (!*p) return 0;
+    while (*p) {
+        if (*p < '0' || *p > '9') return 0;
+        v = v * 10 + (*p - '0');
+        if (v > 1000000L) return 0;
+        ++p;
+    }
+    *out = neg ? -(int)v : (int)v;
+    return 1;
+}
+
+static int traceplace_is_airish(int id) {
+    return id == 0 || id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH || id == BLOCK_SNOW_LAYER ||
+           id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE || id == BLOCK_BROWN_MUSHROOM ||
+           id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH || id == BLOCK_VINE || id == BLOCK_RAILS;
+}
+
+static int traceplace_feet_safe_at(int x, int feet_y, int z) {
+    if (feet_y < FLAT_WORLD_Y_MIN + 1 || feet_y > FLAT_WORLD_Y_MAX - 2) return 0;
+    int below = flat_get_block(x, feet_y - 1, z);
+    if (!flat_block_is_solid(below) || block_is_liquid(below)) return 0;
+    if (!traceplace_is_airish(flat_get_block(x, feet_y, z))) return 0;
+    if (!traceplace_is_airish(flat_get_block(x, feet_y + 1, z))) return 0;
+    return !flat_player_aabb_collides((float)x + 0.5f, (float)feet_y + 1.62f, (float)z + 0.5f);
+}
+
+static int traceplace_find_safe_surface_near(int tx, int tz, int *out_x, int *out_y, int *out_z) {
+    for (int r = 0; r <= 12; ++r) {
+        for (int dz = -r; dz <= r; ++dz) {
+            for (int dx = -r; dx <= r; ++dx) {
+                if (abs(dx) != r && abs(dz) != r) continue;
+                int x = tx + dx, z = tz + dz;
+                for (int y = FLAT_WORLD_Y_MAX - 1; y >= FLAT_WORLD_Y_MIN + 1; --y) {
+                    if (traceplace_feet_safe_at(x, y, z)) {
+                        *out_x = x; *out_y = y; *out_z = z;
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int traceplace_find_safe_underground_near(int tx, int ty, int tz, int *out_x, int *out_y, int *out_z) {
+    for (int r = 0; r <= 8; ++r) {
+        for (int dy = -2; dy <= 4; ++dy) {
+            for (int dz = -r; dz <= r; ++dz) {
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (abs(dx) != r && abs(dz) != r) continue;
+                    int x = tx + dx, y = ty + dy, z = tz + dz;
+                    if (traceplace_feet_safe_at(x, y, z)) {
+                        *out_x = x; *out_y = y; *out_z = z;
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static void traceplace_commit_teleport(int x, int feet_y, int z) {
+    g_player_x = g_player_prev_x = (float)x + 0.5f;
+    g_player_y = g_player_prev_y = (float)feet_y + 1.62f;
+    g_player_z = g_player_prev_z = (float)z + 0.5f;
+    g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+    g_player_fall_distance = 0.0f;
+    g_player_on_ground = 1;
+    g_player_dead = 0;
+    g_suffocation_damage_timer = 0;
+    g_distance_walked = g_prev_distance_walked = 0.0f;
+    g_limb_swing = g_prev_limb_swing = 0.0f;
+    g_limb_swing_amount = g_prev_limb_swing_amount = 0.0f;
+    g_camera_yaw = g_prev_camera_yaw = 0.0f;
+    g_camera_pitch = g_prev_camera_pitch = 0.0f;
+    g_save_dirty = 1;
+}
+
+static int handle_traceplace_command(int argc, char **argv) {
+    if (argc < 2) {
+        hud_add_chat("Usage: /traceplace <village|stronghold|mineshaft> [stronghold 1-3]");
+        return 1;
+    }
+    if (g_mp_connected) {
+        hud_add_chat("/traceplace is local-world debug only.");
+        return 1;
+    }
+    if (g_world_type != 1) {
+        hud_add_chat("/traceplace needs default Java-1.2.5 worldgen mode.");
+        return 1;
+    }
+    const char *kind = NULL;
+    if (pex_chat_word_equals_ci(argv[1], "village")) kind = "village";
+    else if (pex_chat_word_equals_ci(argv[1], "stronghold") || pex_chat_word_equals_ci(argv[1], "portalroom")) kind = "stronghold";
+    else if (pex_chat_word_equals_ci(argv[1], "mineshaft") || pex_chat_word_equals_ci(argv[1], "mine")) kind = "mineshaft";
+    else {
+        hud_add_chat("Usage: /traceplace <village|stronghold|mineshaft> [stronghold 1-3]");
+        return 1;
+    }
+    int index = 0;
+    if (argc >= 3 && !pex_chat_parse_int(argv[2], &index)) index = 0;
+    WorldgenTraceTarget125 target;
+    if (!worldgen_125_trace_target(g_world_seed, kind, (int)floorf(g_player_x), (int)floorf(g_player_z), index, &target)) {
+        hud_add_chat("No matching structure found nearby.");
+        return 1;
+    }
+
+    /* Recenter and synchronously regenerate around the destination. This makes
+       the command deterministic and safe even if the stream thread has not yet
+       visited those chunks. */
+    g_player_x = g_player_prev_x = (float)target.blockX + 0.5f;
+    g_player_z = g_player_prev_z = (float)target.blockZ + 0.5f;
+    g_player_y = g_player_prev_y = (float)target.footY + 1.62f;
+    flat_center_origin_near(g_player_x, g_player_z);
+    flat_generate_origin_blocks();
+    flat_mark_all_chunks_dirty();
+
+    int sx = target.blockX, sy = target.footY, sz = target.blockZ;
+    int safe = target.surface ? traceplace_find_safe_surface_near(target.blockX, target.blockZ, &sx, &sy, &sz)
+                              : traceplace_find_safe_underground_near(target.blockX, target.footY, target.blockZ, &sx, &sy, &sz);
+    if (!safe) safe = traceplace_find_safe_surface_near(target.blockX, target.blockZ, &sx, &sy, &sz);
+    if (!safe) {
+        hud_add_chat("Located structure, but could not find a safe landing spot.");
+        return 1;
+    }
+    traceplace_commit_teleport(sx, sy, sz);
+    char msg[180];
+    snprintf(msg, sizeof(msg), "Traceplaced to %s at chunk %d,%d (%d,%d,%d).", target.label, target.chunkX, target.chunkZ, sx, sy, sz);
+    hud_add_chat(msg);
+    return 1;
+}
+
 static int handle_local_chat_command(const char *text) {
     if (!text || text[0] != '/') return 0;
     char cmd[128];
@@ -768,6 +906,7 @@ static int handle_local_chat_command(const char *text) {
         while (*p && *p != ' ') ++p;
         if (*p) *p++ = 0;
     }
+    if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "traceplace")) return handle_traceplace_command(argc, argv);
     if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "time")) {
         if (argc == 1) {
             char msg[96];

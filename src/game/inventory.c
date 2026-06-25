@@ -22,10 +22,12 @@ static int stack_limit_for_id(int id) {
         id == ITEM_MINECART || id == ITEM_MINECART_CRATE || id == ITEM_MINECART_POWERED || id == ITEM_BOAT ||
         id == ITEM_SADDLE || id == ITEM_WOOD_DOOR || id == ITEM_IRON_DOOR || id == ITEM_SIGN ||
         id == ITEM_BUCKET_EMPTY || id == ITEM_WATER_BUCKET || id == ITEM_LAVA_BUCKET || id == ITEM_MILK ||
-        id == ITEM_APPLE_RED || id == ITEM_MUSHROOM_STEW || id == ITEM_BREAD || id == ITEM_APPLE_GOLD ||
-        id == ITEM_PORK_RAW || id == ITEM_PORK_COOKED || id == ITEM_FISH_RAW || id == ITEM_FISH_COOKED ||
-        id == ITEM_RECORD13 || id == ITEM_RECORD_CAT) return 1;
-    if (id == ITEM_SNOWBALL || id == ITEM_EGG) return 16;
+        id == ITEM_MUSHROOM_STEW || id == ITEM_CAKE || id == ITEM_BED || id == ITEM_MAP ||
+        id == ITEM_SHEARS || id == ITEM_POTION || id == ITEM_EXP_BOTTLE ||
+        id == ITEM_RECORD13 || id == ITEM_RECORD_CAT || id == ITEM_RECORD_BLOCKS || id == ITEM_RECORD_CHIRP ||
+        id == ITEM_RECORD_FAR || id == ITEM_RECORD_MALL || id == ITEM_RECORD_MELLOHI || id == ITEM_RECORD_STAL ||
+        id == ITEM_RECORD_STRAD || id == ITEM_RECORD_WARD || id == ITEM_RECORD_11) return 1;
+    if (id == ITEM_SNOWBALL || id == ITEM_EGG || id == ITEM_ENDER_PEARL) return 16;
     (void)id;
     return ITEM_MAX_STACK;
 }
@@ -385,8 +387,9 @@ static int flat_light_opacity_for_id(int id) {
        not block light, leaves block one level, and water/ice block three levels. */
     if (id == 0) return 0;
     if (id == BLOCK_WATER || id == BLOCK_STILL_WATER || id == BLOCK_ICE) return 3;
-    if (id == BLOCK_LEAVES) return 1;
-    if (id == BLOCK_GLASS || id == BLOCK_SNOW_LAYER) return 0;
+    if (id == BLOCK_LEAVES || id == BLOCK_WEB) return 1;
+    if (id == BLOCK_GLASS || id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS ||
+        id == BLOCK_SNOW_LAYER || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME) return 0;
     if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
         id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REDSTONE_TORCH_OFF ||
@@ -394,8 +397,11 @@ static int flat_light_opacity_for_id(int id) {
         id == BLOCK_RAILS || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
         id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON || id == BLOCK_WOOD_DOOR ||
         id == BLOCK_IRON_DOOR || id == BLOCK_PORTAL || id == BLOCK_CROPS ||
-        id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE ||
-        id == BLOCK_CHEST || id == BLOCK_FENCE || id == BLOCK_CACTUS) return 0;
+        id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH || id == BLOCK_VINE ||
+        id == BLOCK_LILY_PAD || id == BLOCK_NETHER_WART || id == BLOCK_PUMPKIN_STEM ||
+        id == BLOCK_MELON_STEM || id == BLOCK_STONE_PRESSURE_PLATE ||
+        id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_CHEST || id == BLOCK_FENCE ||
+        id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_FENCE_GATE || id == BLOCK_CACTUS) return 0;
     /* Java slabs/stairs/farmland still have lightOpacity 255; they get smooth
        visible light from Block.useNeighborBrightness instead of opacity hacks. */
     return 255;
@@ -409,6 +415,9 @@ static int flat_block_light_value_for_id(int id) {
         case BLOCK_FIRE:
         case BLOCK_GLOWSTONE:
         case BLOCK_JACK_O_LANTERN:
+        case BLOCK_LOCKED_CHEST:
+        case BLOCK_END_PORTAL:
+        case BLOCK_REDSTONE_LAMP_ON:
             return 15;
         case BLOCK_TORCH:
             return 14; /* 15/16 */
@@ -417,10 +426,14 @@ static int flat_block_light_value_for_id(int id) {
         case BLOCK_REDSTONE_TORCH_ON:
             return 7;  /* 1/2 */
         case BLOCK_REDSTONE_ORE_GLOWING:
+        case BLOCK_REDSTONE_REPEATER_ON:
             return 9;  /* 10/16 */
         case BLOCK_PORTAL:
             return 11; /* 12/16 */
         case BLOCK_BROWN_MUSHROOM:
+        case BLOCK_BREWING_STAND:
+        case BLOCK_END_PORTAL_FRAME:
+        case BLOCK_DRAGON_EGG:
             return 1;  /* 2/16 */
         default:
             return 0;
@@ -1431,9 +1444,10 @@ static int psp_safe_height_at(int x, int z, long long seed) {
 }
 #endif
 
-static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp) {
+static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *out, unsigned char *out_meta, int world_type, long long seed, TerrainProvider *reuse_tp) {
     if (!out) return;
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
+    if (out_meta) memset(out_meta, 0, FLAT_CHUNK_BLOCK_COUNT);
 
     if (world_type == 1) {
 #if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
@@ -1464,6 +1478,7 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
            on the heap so PSP worker threads do not lose half their stack to a
            32KB local array. */
         unsigned char *beta_blocks = (unsigned char*)calloc(32768u, 1);
+        unsigned char *beta_data = out_meta ? (unsigned char*)calloc(16384u, 1) : NULL;
 
         TerrainProvider *local_tp = NULL;
         TerrainProvider *tp = reuse_tp;
@@ -1480,6 +1495,7 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
         cv.minCz = cz - 1;
         cv.chunks = 3;
         cv.blocks = (beta_blocks && tp) ? (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1) : NULL;
+        cv.meta = (cv.blocks && out_meta) ? (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1) : NULL;
         if (cv.blocks) {
             for (int dz = 0; dz < cv.chunks; dz++) {
                 for (int dx = 0; dx < cv.chunks; dx++) {
@@ -1491,8 +1507,9 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
                     qm_populate_canvas(tp, &cv, px, pz);
                 }
             }
-            extract_canvas_chunk(&cv, cx, cz, beta_blocks);
+            extract_canvas_chunk(&cv, cx, cz, beta_blocks, beta_data);
             free(cv.blocks);
+            free(cv.meta);
         }
         if (local_tp) { terrain_provider_free(local_tp); free(local_tp); }
 
@@ -1503,7 +1520,13 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
                     if (beta_blocks && y < 128) {
                         id = get_block_local(beta_blocks, lx, y, lz);
                     }
-                    out[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
+                    int bi = flat_chunk_buf_index(lx, y, lz);
+                    out[bi] = (unsigned char)id;
+                    if (out_meta && beta_data && y < 128) {
+                        int idx = chunk_index(lx, y, lz);
+                        unsigned char packed = beta_data[idx >> 1];
+                        out_meta[bi] = (unsigned char)((idx & 1) ? ((packed >> 4) & 15) : (packed & 15));
+                    }
                 }
                 if (out[flat_chunk_buf_index(lx, 0, lz)] == 0) {
                     out[flat_chunk_buf_index(lx, 0, lz)] = BLOCK_BEDROCK;
@@ -1511,6 +1534,7 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
             }
         }
         free(beta_blocks);
+        free(beta_data);
 #endif
     } else {
         for (int lx = 0; lx < 16; lx++) {
@@ -1522,6 +1546,10 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
             }
         }
     }
+}
+
+static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp) {
+    flat_generate_chunk_base_with_meta(cx, cz, out, NULL, world_type, seed, reuse_tp);
 }
 
 static void flat_generate_chunk_base_to_buffer(int cx, int cz, unsigned char *out) {
@@ -2202,12 +2230,16 @@ static int beta_preview_copy_chunk_to_flat(int cx, int cz) {
     return wii_copy_chunk_to_flat(cx, cz);
 #endif
     unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
-    if (!buf) return 0;
-    flat_generate_chunk_base_to_buffer(cx, cz, buf);
-    flat_copy_chunk_buffer(cx, cz, buf);
-    free(buf);
+    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+    if (!buf || !meta) { free(buf); free(meta); return 0; }
+    TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
+    flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse);
+    flat_copy_chunk_buffers(cx, cz, buf, meta);
     /* Overlay only gameplay edits.  Unchanged chunks live only as seed + coords. */
-    flat_load_chunk_delta(cx, cz);
+    flat_load_chunk_delta_for_dir(g_loaded_world_dir, cx, cz, buf, meta);
+    flat_copy_chunk_buffers(cx, cz, buf, meta);
+    free(buf);
+    free(meta);
     return 1;
 }
 
@@ -2257,9 +2289,11 @@ static void beta_preview_generate_world(void) {
     int chunks_z = (max_cz - min_cz + 1) + 2;
     cv.chunks = chunks_x; /* active window is square, so one dimension field is enough here */
     cv.blocks = NULL;
+    cv.meta = NULL;
 
     if (chunks_x == chunks_z) {
         cv.blocks = (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1);
+        cv.meta = cv.blocks ? (unsigned char*)calloc((size_t)cv.chunks * (size_t)cv.chunks * 32768u, 1) : NULL;
     }
 
     if (cv.blocks) {
@@ -2276,10 +2310,12 @@ static void beta_preview_generate_world(void) {
         }
 
         static unsigned char beta_blocks[32768];
+        static unsigned char beta_data[16384];
         for (int cz = min_cz; cz <= max_cz; cz++) {
             for (int cx = min_cx; cx <= max_cx; cx++) {
                 memset(beta_blocks, 0, sizeof(beta_blocks));
-                extract_canvas_chunk(&cv, cx, cz, beta_blocks);
+                memset(beta_data, 0, sizeof(beta_data));
+                extract_canvas_chunk(&cv, cx, cz, beta_blocks, beta_data);
                 for (int lx = 0; lx < 16; lx++) {
                     int wx = cx * 16 + lx;
                     if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
@@ -2291,6 +2327,12 @@ static void beta_preview_generate_world(void) {
                         for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                             int id = (y < 128) ? get_block_local(beta_blocks, lx, y, lz) : 0;
                             g_flat_blocks[flat_y_index(y)][fz][fx] = (unsigned char)id;
+                            if (y < 128) {
+                                int idx = chunk_index(lx, y, lz);
+                                unsigned char packed = beta_data[idx >> 1];
+                                g_flat_meta[flat_y_index(y)][fz][fx] = (unsigned char)((idx & 1) ? ((packed >> 4) & 15) : (packed & 15));
+                                g_flat_levels[flat_y_index(y)][fz][fx] = block_is_liquid(id) ? (g_flat_meta[flat_y_index(y)][fz][fx] & 15) : 0;
+                            }
                         }
                         if (g_flat_blocks[flat_y_index(0)][fz][fx] == 0) g_flat_blocks[flat_y_index(0)][fz][fx] = BLOCK_BEDROCK;
                     }
@@ -2302,6 +2344,7 @@ static void beta_preview_generate_world(void) {
             }
         }
         free(cv.blocks);
+        free(cv.meta);
     } else {
         /* Low-memory fallback keeps the old safe path. */
         for (int cz = min_cz; cz <= max_cz; cz++) {
@@ -2459,6 +2502,7 @@ typedef struct StreamInitialBetaBatchState {
     int extract_index;
     TerrainProvider *tp;
     unsigned char *beta_blocks;
+    unsigned char *beta_data;
     unsigned char *buf;
     unsigned char *meta;
     GenCanvas cv;
@@ -2473,7 +2517,9 @@ static void stream_initial_beta_batch_free(void) {
         free(s->tp);
     }
     free(s->cv.blocks);
+    free(s->cv.meta);
     free(s->beta_blocks);
+    free(s->beta_data);
     free(s->buf);
     free(s->meta);
     memset(s, 0, sizeof(*s));
@@ -2691,7 +2737,10 @@ static int block_material_blocks_liquid(int id) {
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
         id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_REDSTONE_TORCH_OFF ||
         id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_SNOW_LAYER || id == BLOCK_CROPS ||
-        id == BLOCK_RAILS || id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON ||
+        id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH || id == BLOCK_VINE ||
+        id == BLOCK_LILY_PAD || id == BLOCK_NETHER_WART || id == BLOCK_PUMPKIN_STEM ||
+        id == BLOCK_MELON_STEM || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL ||
+        id == BLOCK_DETECTOR_RAIL || id == BLOCK_LEVER || id == BLOCK_STONE_BUTTON ||
         id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) return 0;
     return 1;
 }
@@ -2746,8 +2795,13 @@ static int flat_block_is_solid(int id) {
            id != BLOCK_TORCH && id != BLOCK_FIRE && id != BLOCK_REDSTONE_WIRE &&
            id != BLOCK_REDSTONE_TORCH_OFF && id != BLOCK_REDSTONE_TORCH_ON &&
            id != BLOCK_REEDS && id != BLOCK_SNOW_LAYER && id != BLOCK_LADDER &&
-           id != BLOCK_RAILS && id != BLOCK_LEVER && id != BLOCK_STONE_BUTTON &&
+           id != BLOCK_TALL_GRASS && id != BLOCK_DEAD_BUSH && id != BLOCK_VINE &&
+           id != BLOCK_LILY_PAD && id != BLOCK_NETHER_WART && id != BLOCK_PUMPKIN_STEM &&
+           id != BLOCK_MELON_STEM && id != BLOCK_RAILS && id != BLOCK_POWERED_RAIL &&
+           id != BLOCK_DETECTOR_RAIL && id != BLOCK_LEVER && id != BLOCK_STONE_BUTTON &&
            id != BLOCK_STONE_PRESSURE_PLATE && id != BLOCK_WOOD_PRESSURE_PLATE &&
+           id != BLOCK_GLASS_PANE && id != BLOCK_IRON_BARS && id != BLOCK_END_PORTAL &&
+           id != BLOCK_BREWING_STAND && id != BLOCK_CAULDRON && id != BLOCK_TRAPDOOR &&
            id != BLOCK_SIGN_POST && id != BLOCK_WALL_SIGN && !block_is_door_id(id);
 }
 
@@ -2791,12 +2845,15 @@ static int ladder_thin_aabb_intersects(float minx, float maxx, float miny, float
     return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x0, (float)y, z0, x1, (float)(y + 1), z1);
 }
 
+static int flat_block_occludes_for_support(int id);
+
 static int block_custom_collision_intersects(int id, float minx, float maxx, float miny, float maxy, float minz, float maxz, int x, int y, int z) {
     if (id == BLOCK_LADDER) return ladder_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z, 0.0f);
     if (id == BLOCK_SLAB) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f);
     if (id == BLOCK_CHEST) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 14.0f/16.0f, z + 15.0f/16.0f);
     if (id == BLOCK_CACTUS) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 1.0f, z + 15.0f/16.0f);
-    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
+    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS ||
+        id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) {
         if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f)) return 1;
         int dir = flat_get_meta(x, y, z) & 3;
         /* Beta BlockStairs metadata collision: 0=east half tall,
@@ -2806,24 +2863,44 @@ static int block_custom_collision_intersects(int id, float minx, float maxx, flo
         if (dir == 2) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y + 0.5f, z + 0.5f, x + 1.0f, y + 1.0f, z + 1.0f);
         return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 0.5f);
     }
-    if (id == BLOCK_FENCE) {
+    if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) {
         if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z + 0.375f, x + 0.625f, y + 1.5f, z + 0.625f)) return 1;
-        if (flat_block_is_solid(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE || flat_get_block(x - 1, y, z) == BLOCK_NETHER_BRICK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z + 0.375f, x + 0.5f, y + 1.5f, z + 0.625f)) return 1;
-        if (flat_block_is_solid(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE || flat_get_block(x + 1, y, z) == BLOCK_NETHER_BRICK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.5f, y, z + 0.375f, x + 1.0f, y + 1.5f, z + 0.625f)) return 1;
-        if (flat_block_is_solid(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE || flat_get_block(x, y, z - 1) == BLOCK_NETHER_BRICK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z, x + 0.625f, y + 1.5f, z + 0.5f)) return 1;
-        if (flat_block_is_solid(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
+        if (flat_block_is_solid(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE || flat_get_block(x, y, z + 1) == BLOCK_NETHER_BRICK_FENCE)
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z + 0.5f, x + 0.625f, y + 1.5f, z + 1.0f)) return 1;
         return 0;
     }
+    if (id == BLOCK_WEB) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
+    if (id == BLOCK_LILY_PAD) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 0.0625f, z + 1.0f);
+    if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) {
+        if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.4375f, y, z + 0.4375f, x + 0.5625f, y + 1.0f, z + 0.5625f)) return 1;
+        if (flat_block_occludes_for_support(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == id)
+            if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z + 0.4375f, x + 0.5f, y + 1.0f, z + 0.5625f)) return 1;
+        if (flat_block_occludes_for_support(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == id)
+            if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.5f, y, z + 0.4375f, x + 1.0f, y + 1.0f, z + 0.5625f)) return 1;
+        if (flat_block_occludes_for_support(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == id)
+            if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.4375f, y, z, x + 0.5625f, y + 1.0f, z + 0.5f)) return 1;
+        if (flat_block_occludes_for_support(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == id)
+            if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.4375f, y, z + 0.5f, x + 0.5625f, y + 1.0f, z + 1.0f)) return 1;
+        return 0;
+    }
+    if (id == BLOCK_END_PORTAL_FRAME) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 13.0f/16.0f, z + 1.0f);
+    if (id == BLOCK_TRAPDOOR) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 3.0f/16.0f, z + 1.0f);
     return 0;
 }
 
 static int block_has_custom_collision(int id) {
     return id == BLOCK_LADDER || id == BLOCK_SLAB || id == BLOCK_CHEST || id == BLOCK_CACTUS ||
-           id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_FENCE;
+           id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS ||
+           id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
+           id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE ||
+           id == BLOCK_IRON_BARS || id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL_FRAME ||
+           id == BLOCK_WEB || id == BLOCK_TRAPDOOR;
 }
 
 static int flat_player_in_ladder(void) {
@@ -4802,11 +4879,17 @@ static int block_is_button_or_lever(int id) {
 
 static int flat_block_occludes_for_support(int id) {
     if (id == 0 || block_is_liquid(id)) return 0;
-    if (id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_FENCE ||
-        id == BLOCK_CACTUS || block_is_door_id(id) || id == BLOCK_LADDER || id == BLOCK_RAILS ||
-        block_is_pressure_plate(id) || id == BLOCK_STONE_BUTTON || id == BLOCK_LEVER ||
-        id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON ||
-        id == BLOCK_SNOW_LAYER || id == BLOCK_REDSTONE_WIRE || id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN) return 0;
+    if (id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS ||
+        id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
+        id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE ||
+        id == BLOCK_IRON_BARS || id == BLOCK_CACTUS || block_is_door_id(id) ||
+        id == BLOCK_LADDER || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL ||
+        id == BLOCK_DETECTOR_RAIL || block_is_pressure_plate(id) || id == BLOCK_STONE_BUTTON ||
+        id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF ||
+        id == BLOCK_REDSTONE_TORCH_ON || id == BLOCK_SNOW_LAYER || id == BLOCK_REDSTONE_WIRE ||
+        id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH || id == BLOCK_VINE ||
+        id == BLOCK_LILY_PAD || id == BLOCK_NETHER_WART || id == BLOCK_END_PORTAL ||
+        id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN) return 0;
     return 1;
 }
 
@@ -6835,7 +6918,7 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
                 }
                 reuse = worker_tp_valid ? worker_tp : NULL;
             }
-            flat_generate_chunk_base(job.cx, job.cz, r.buf, job.type, job.seed, reuse);
+            flat_generate_chunk_base_with_meta(job.cx, job.cz, r.buf, r.meta, job.type, job.seed, reuse);
             flat_load_chunk_delta_for_dir(job.world_dir, job.cx, job.cz, r.buf, r.meta);
             flat_compute_chunk_light(r.buf, r.sky, r.blocklight);
         } else {
@@ -7559,14 +7642,16 @@ static int stream_generate_initial_batch(void) {
         s->canvas_chunks = canvas_chunks;
         s->tp = (TerrainProvider*)calloc(1, sizeof(*s->tp));
         s->beta_blocks = (unsigned char*)calloc(32768u, 1);
+        s->beta_data = (unsigned char*)calloc(16384u, 1);
         s->buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
         s->meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
         s->cv.minCx = min_cx - 1;
         s->cv.minCz = min_cz - 1;
         s->cv.chunks = canvas_chunks;
         s->cv.blocks = (unsigned char*)calloc((size_t)s->cv.chunks * (size_t)s->cv.chunks * 32768u, 1);
+        s->cv.meta = s->cv.blocks ? (unsigned char*)calloc((size_t)s->cv.chunks * (size_t)s->cv.chunks * 32768u, 1) : NULL;
 
-        if (!s->tp || !s->beta_blocks || !s->buf || !s->meta || !s->cv.blocks) {
+        if (!s->tp || !s->beta_blocks || !s->beta_data || !s->buf || !s->meta || !s->cv.blocks || !s->cv.meta) {
             stream_reset_initial_batch();
             return 0;
         }
@@ -7648,14 +7733,21 @@ static int stream_generate_initial_batch(void) {
             }
 
             memset(s->beta_blocks, 0, 32768u);
+            memset(s->beta_data, 0, 16384u);
             memset(s->buf, 0, FLAT_CHUNK_BLOCK_COUNT);
             memset(s->meta, 0, FLAT_CHUNK_BLOCK_COUNT);
-            extract_canvas_chunk(&s->cv, wcx, wcz, s->beta_blocks);
+            extract_canvas_chunk(&s->cv, wcx, wcz, s->beta_blocks, s->beta_data);
             for (int lx = 0; lx < 16; ++lx) {
                 for (int lz = 0; lz < 16; ++lz) {
                     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
                         int id = (y < 128) ? get_block_local(s->beta_blocks, lx, y, lz) : 0;
-                        s->buf[flat_chunk_buf_index(lx, y, lz)] = (unsigned char)id;
+                        int bi = flat_chunk_buf_index(lx, y, lz);
+                        s->buf[bi] = (unsigned char)id;
+                        if (y < 128) {
+                            int idx = chunk_index(lx, y, lz);
+                            unsigned char packed = s->beta_data[idx >> 1];
+                            s->meta[bi] = (unsigned char)((idx & 1) ? ((packed >> 4) & 15) : (packed & 15));
+                        }
                     }
                     if (s->buf[flat_chunk_buf_index(lx, 0, lz)] == 0) {
                         s->buf[flat_chunk_buf_index(lx, 0, lz)] = BLOCK_BEDROCK;

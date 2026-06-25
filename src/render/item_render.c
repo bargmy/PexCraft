@@ -1,108 +1,155 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
 static int item_icon_tile(int id) {
-    if (id == ITEM_SHOVEL_IRON) return 82;
-    if (id == ITEM_PICKAXE_IRON) return 98;
-    if (id == ITEM_AXE_IRON) return 114;
-    if (id == ITEM_FLINT_AND_IRON) return 5;
-    if (id == ITEM_APPLE_RED) return 10;
-    if (id == ITEM_BOW) return 21;
-    if (id == ITEM_ARROW) return 37;
-    if (id == ITEM_COAL) return 7;
-    if (id == ITEM_DIAMOND) return 55;
-    if (id == ITEM_INGOT_IRON) return 23;
-    if (id == ITEM_INGOT_GOLD) return 39;
-    if (id == ITEM_SWORD_IRON) return 66;
-    if (id == ITEM_WOODEN_SWORD) return 64;
-    if (id == ITEM_WOODEN_SHOVEL) return 80;
-    if (id == ITEM_WOODEN_PICKAXE) return 96;
-    if (id == ITEM_WOODEN_AXE) return 112;
-    if (id == ITEM_STONE_SWORD) return 65;
-    if (id == ITEM_STONE_SHOVEL) return 81;
-    if (id == ITEM_STONE_PICKAXE) return 97;
-    if (id == ITEM_STONE_AXE) return 113;
-    if (id == ITEM_SWORD_DIAMOND) return 67;
-    if (id == ITEM_SHOVEL_DIAMOND) return 83;
-    if (id == ITEM_PICKAXE_DIAMOND) return 99;
-    if (id == ITEM_AXE_DIAMOND) return 115;
-    if (id == ITEM_STICK) return 53;
-    if (id == ITEM_BOWL_EMPTY) return 71;
-    if (id == ITEM_BOWL_SOUP) return 72;
-    if (id == ITEM_SWORD_GOLD) return 68;
-    if (id == ITEM_SHOVEL_GOLD) return 84;
-    if (id == ITEM_PICKAXE_GOLD) return 100;
-    if (id == ITEM_AXE_GOLD) return 116;
-    if (id == ITEM_STRING) return 8;
-    if (id == ITEM_FEATHER) return 24;
-    if (id == ITEM_GUNPOWDER) return 40;
-    if (id == ITEM_HOE_WOOD) return 128;
-    if (id == ITEM_HOE_STONE) return 129;
-    if (id == ITEM_HOE_IRON) return 130;
-    if (id == ITEM_HOE_DIAMOND) return 131;
-    if (id == ITEM_HOE_GOLD) return 132;
-    if (id == ITEM_SEEDS) return 9;
-    if (id == ITEM_WHEAT) return 25;
-    if (id == ITEM_BREAD) return 41;
-    if (id == ITEM_HELMET_LEATHER) return 0;
-    if (id == ITEM_PLATE_LEATHER) return 16;
-    if (id == ITEM_LEGS_LEATHER) return 32;
-    if (id == ITEM_BOOTS_LEATHER) return 48;
-    if (id == ITEM_HELMET_CHAIN) return 1;
-    if (id == ITEM_PLATE_CHAIN) return 17;
-    if (id == ITEM_LEGS_CHAIN) return 33;
-    if (id == ITEM_BOOTS_CHAIN) return 49;
-    if (id == ITEM_HELMET_IRON) return 2;
-    if (id == ITEM_PLATE_IRON) return 18;
-    if (id == ITEM_LEGS_IRON) return 34;
-    if (id == ITEM_BOOTS_IRON) return 50;
-    if (id == ITEM_HELMET_DIAMOND) return 3;
-    if (id == ITEM_PLATE_DIAMOND) return 19;
-    if (id == ITEM_LEGS_DIAMOND) return 35;
-    if (id == ITEM_BOOTS_DIAMOND) return 51;
-    if (id == ITEM_HELMET_GOLD) return 4;
-    if (id == ITEM_PLATE_GOLD) return 20;
-    if (id == ITEM_LEGS_GOLD) return 36;
-    if (id == ITEM_BOOTS_GOLD) return 52;
-    if (id == ITEM_FLINT) return 6;
-    if (id == ITEM_PORK_RAW) return 87;
-    if (id == ITEM_PORK_COOKED) return 88;
-    if (id == ITEM_PAINTING) return 26;
-    if (id == ITEM_APPLE_GOLD) return 11;
-    if (id == ITEM_SIGN) return 42;
-    if (id == ITEM_DOOR_WOOD) return 43;
-    if (id == ITEM_BUCKET_EMPTY) return 74;
-    if (id == ITEM_BUCKET_WATER) return 75;
-    if (id == ITEM_BUCKET_LAVA) return 76;
-    if (id == ITEM_MINECART_EMPTY) return 135;
-    if (id == ITEM_SADDLE) return 104;
-    if (id == ITEM_DOOR_IRON) return 44;
-    if (id == ITEM_REDSTONE) return 56;
-    if (id == ITEM_SNOWBALL) return 14;
-    if (id == ITEM_BOAT) return 136;
-    if (id == ITEM_LEATHER) return 103;
-    if (id == ITEM_BUCKET_MILK) return 77;
-    if (id == ITEM_BRICK) return 22;
-    if (id == ITEM_CLAY) return 57;
-    if (id == ITEM_REED) return 27;
-    if (id == ITEM_PAPER) return 58;
-    if (id == ITEM_BOOK) return 59;
-    if (id == ITEM_SLIME_BALL) return 30;
-    if (id == ITEM_MINECART_CRATE) return 151;
-    if (id == ITEM_MINECART_POWERED) return 167;
-    if (id == ITEM_EGG) return 12;
-    if (id == ITEM_COMPASS) return 54;
-    if (id == ITEM_FISHING_ROD) return 69;
-    if (id == ITEM_CLOCK) return 70;
-    if (id == ITEM_GLOWSTONE_DUST) return 73;
-    if (id == ITEM_FISH_RAW) return 89;
-    if (id == ITEM_FISH_COOKED) return 90;
-    if (id == ITEM_RECORD13) return 240;
-    if (id == ITEM_RECORD_CAT) return 241;
-    return 0;
+    /* gui/items.png tile numbers match Java 1.2.5 Item.setIconCoord(x,y). */
+    switch (id) {
+        case ITEM_SHOVEL_IRON: return 82;
+        case ITEM_PICKAXE_IRON: return 98;
+        case ITEM_AXE_IRON: return 114;
+        case ITEM_FLINT_AND_IRON: return 5;
+        case ITEM_APPLE_RED: return 10;
+        case ITEM_BOW: return 21;
+        case ITEM_ARROW: return 37;
+        case ITEM_COAL: return 7;
+        case ITEM_DIAMOND: return 55;
+        case ITEM_INGOT_IRON: return 23;
+        case ITEM_INGOT_GOLD: return 39;
+        case ITEM_SWORD_IRON: return 66;
+        case ITEM_WOODEN_SWORD: return 64;
+        case ITEM_WOODEN_SHOVEL: return 80;
+        case ITEM_WOODEN_PICKAXE: return 96;
+        case ITEM_WOODEN_AXE: return 112;
+        case ITEM_STONE_SWORD: return 65;
+        case ITEM_STONE_SHOVEL: return 81;
+        case ITEM_STONE_PICKAXE: return 97;
+        case ITEM_STONE_AXE: return 113;
+        case ITEM_SWORD_DIAMOND: return 67;
+        case ITEM_SHOVEL_DIAMOND: return 83;
+        case ITEM_PICKAXE_DIAMOND: return 99;
+        case ITEM_AXE_DIAMOND: return 115;
+        case ITEM_STICK: return 53;
+        case ITEM_BOWL_EMPTY: return 71;
+        case ITEM_BOWL_SOUP: return 72;
+        case ITEM_SWORD_GOLD: return 68;
+        case ITEM_SHOVEL_GOLD: return 84;
+        case ITEM_PICKAXE_GOLD: return 100;
+        case ITEM_AXE_GOLD: return 116;
+        case ITEM_STRING: return 8;
+        case ITEM_FEATHER: return 24;
+        case ITEM_GUNPOWDER: return 40;
+        case ITEM_HOE_WOOD: return 128;
+        case ITEM_HOE_STONE: return 129;
+        case ITEM_HOE_IRON: return 130;
+        case ITEM_HOE_DIAMOND: return 131;
+        case ITEM_HOE_GOLD: return 132;
+        case ITEM_SEEDS: return 9;
+        case ITEM_WHEAT: return 25;
+        case ITEM_BREAD: return 41;
+        case ITEM_HELMET_LEATHER: return 0;
+        case ITEM_PLATE_LEATHER: return 16;
+        case ITEM_LEGS_LEATHER: return 32;
+        case ITEM_BOOTS_LEATHER: return 48;
+        case ITEM_HELMET_CHAIN: return 1;
+        case ITEM_PLATE_CHAIN: return 17;
+        case ITEM_LEGS_CHAIN: return 33;
+        case ITEM_BOOTS_CHAIN: return 49;
+        case ITEM_HELMET_IRON: return 2;
+        case ITEM_PLATE_IRON: return 18;
+        case ITEM_LEGS_IRON: return 34;
+        case ITEM_BOOTS_IRON: return 50;
+        case ITEM_HELMET_DIAMOND: return 3;
+        case ITEM_PLATE_DIAMOND: return 19;
+        case ITEM_LEGS_DIAMOND: return 35;
+        case ITEM_BOOTS_DIAMOND: return 51;
+        case ITEM_HELMET_GOLD: return 4;
+        case ITEM_PLATE_GOLD: return 20;
+        case ITEM_LEGS_GOLD: return 36;
+        case ITEM_BOOTS_GOLD: return 52;
+        case ITEM_FLINT: return 6;
+        case ITEM_PORK_RAW: return 87;
+        case ITEM_PORK_COOKED: return 88;
+        case ITEM_PAINTING: return 26;
+        case ITEM_APPLE_GOLD: return 11;
+        case ITEM_SIGN: return 42;
+        case ITEM_DOOR_WOOD: return 43;
+        case ITEM_BUCKET_EMPTY: return 74;
+        case ITEM_BUCKET_WATER: return 75;
+        case ITEM_BUCKET_LAVA: return 76;
+        case ITEM_MINECART_EMPTY: return 135;
+        case ITEM_SADDLE: return 104;
+        case ITEM_DOOR_IRON: return 44;
+        case ITEM_REDSTONE: return 56;
+        case ITEM_SNOWBALL: return 14;
+        case ITEM_BOAT: return 136;
+        case ITEM_LEATHER: return 103;
+        case ITEM_BUCKET_MILK: return 77;
+        case ITEM_BRICK: return 22;
+        case ITEM_CLAY: return 57;
+        case ITEM_REED: return 27;
+        case ITEM_PAPER: return 58;
+        case ITEM_BOOK: return 59;
+        case ITEM_SLIME_BALL: return 30;
+        case ITEM_MINECART_CRATE: return 151;
+        case ITEM_MINECART_POWERED: return 167;
+        case ITEM_EGG: return 12;
+        case ITEM_COMPASS: return 54;
+        case ITEM_FISHING_ROD: return 69;
+        case ITEM_CLOCK: return 70;
+        case ITEM_GLOWSTONE_DUST: return 73;
+        case ITEM_FISH_RAW: return 89;
+        case ITEM_FISH_COOKED: return 90;
+        case ITEM_DYE_POWDER: return 78;
+        case ITEM_BONE: return 28;
+        case ITEM_SUGAR: return 13;
+        case ITEM_CAKE: return 29;
+        case ITEM_BED: return 45;
+        case ITEM_REDSTONE_REPEATER: return 86;
+        case ITEM_COOKIE: return 92;
+        case ITEM_MAP: return 60;
+        case ITEM_SHEARS: return 93;
+        case ITEM_MELON: return 109;
+        case ITEM_PUMPKIN_SEEDS: return 61;
+        case ITEM_MELON_SEEDS: return 62;
+        case ITEM_BEEF_RAW: return 105;
+        case ITEM_BEEF_COOKED: return 106;
+        case ITEM_CHICKEN_RAW: return 121;
+        case ITEM_CHICKEN_COOKED: return 122;
+        case ITEM_ROTTEN_FLESH: return 91;
+        case ITEM_ENDER_PEARL: return 107;
+        case ITEM_BLAZE_ROD: return 108;
+        case ITEM_GHAST_TEAR: return 123;
+        case ITEM_GOLD_NUGGET: return 124;
+        case ITEM_NETHER_WART: return 125;
+        case ITEM_POTION: return 141;
+        case ITEM_GLASS_BOTTLE: return 140;
+        case ITEM_SPIDER_EYE: return 139;
+        case ITEM_FERMENTED_SPIDER_EYE: return 138;
+        case ITEM_BLAZE_POWDER: return 157;
+        case ITEM_MAGMA_CREAM: return 173;
+        case ITEM_BREWING_STAND: return 172;
+        case ITEM_CAULDRON: return 156;
+        case ITEM_EYE_OF_ENDER: return 155;
+        case ITEM_SPECKLED_MELON: return 137;
+        case ITEM_MONSTER_PLACER: return 153;
+        case ITEM_EXP_BOTTLE: return 171;
+        case ITEM_FIREBALL_CHARGE: return 46;
+        case ITEM_RECORD13: return 240;
+        case ITEM_RECORD_CAT: return 241;
+        case ITEM_RECORD_BLOCKS: return 242;
+        case ITEM_RECORD_CHIRP: return 243;
+        case ITEM_RECORD_FAR: return 244;
+        case ITEM_RECORD_MALL: return 245;
+        case ITEM_RECORD_MELLOHI: return 246;
+        case ITEM_RECORD_STAL: return 247;
+        case ITEM_RECORD_STRAD: return 248;
+        case ITEM_RECORD_WARD: return 249;
+        case ITEM_RECORD_11: return 250;
+        default: return 0;
+    }
 }
 
 static int item_is_block_id(int id) {
-    return (id >= 1 && id <= 91);
+    return (id >= 1 && id <= BLOCK_REDSTONE_LAMP_ON);
 }
 
 static int item_max_damage(int id) {
@@ -124,6 +171,7 @@ static int item_max_damage(int id) {
 
     if (id == ITEM_BOW || id == ITEM_FISHING_ROD) return 385;
     if (id == ITEM_FLINT_AND_IRON) return 65;
+    if (id == ITEM_SHEARS) return 238;
 
     int armor_max = armor_stack_max_damage(id);
     return armor_max > 0 ? armor_max : 0;
@@ -134,13 +182,19 @@ static int block_item_is_3d(int id) {
     /* Keep the Java 3-D inventory path for normal cube-like blocks, but also
        force chests down the model renderer so the inventory icon matches the
        in-world chest silhouette instead of falling back to a flat sprite. */
-    if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+    if (block_is_liquid(id) ||
+        id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
         id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_CROPS ||
         id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN || id == BLOCK_WOOD_DOOR ||
         id == BLOCK_IRON_DOOR || id == BLOCK_LADDER || id == BLOCK_RAILS ||
+        id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL ||
         id == BLOCK_LEVER || id == BLOCK_REEDS || id == BLOCK_STONE_BUTTON ||
-        id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) return 0;
+        id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE ||
+        id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH || id == BLOCK_VINE ||
+        id == BLOCK_LILY_PAD || id == BLOCK_NETHER_WART || id == BLOCK_PUMPKIN_STEM ||
+        id == BLOCK_MELON_STEM || id == BLOCK_REDSTONE_REPEATER_OFF ||
+        id == BLOCK_REDSTONE_REPEATER_ON || id == BLOCK_END_PORTAL) return 0;
     return 1;
 }
 
@@ -411,86 +465,137 @@ static int item_water_tile(void) { return item_terrain_tile_has_pixels(205) ? 20
 static int item_lava_tile(void) { return item_terrain_tile_has_pixels(237) ? 237 : 30; }
 
 static int block_item_tile_for_id(int id) {
-    if (id == BLOCK_STONE) return 1;
-    if (id == BLOCK_GRASS) return 0;
-    if (id == BLOCK_DIRT) return 2;
-    if (id == BLOCK_COBBLESTONE) return 16;
-    if (id == BLOCK_PLANKS) return 4;
-    if (id == BLOCK_SAPLING) return 15;
-    if (id == BLOCK_BEDROCK) return 17;
-    if (id == BLOCK_WATER) return item_water_tile();
-    if (id == BLOCK_STILL_WATER) return item_water_tile();
-    if (id == BLOCK_LAVA) return item_lava_tile();
-    if (id == BLOCK_STILL_LAVA) return item_lava_tile();
-    if (id == BLOCK_SAND) return 18;
-    if (id == BLOCK_GRAVEL) return 19;
-    if (id == BLOCK_GOLD_ORE) return 32;
-    if (id == BLOCK_IRON_ORE) return 33;
-    if (id == BLOCK_COAL_ORE) return 34;
-    if (id == BLOCK_LOG) return 20;
-    if (id == BLOCK_LEAVES) return g_opts.fancy_graphics ? 52 : 53;
-    if (id == BLOCK_SPONGE) return 48;
-    if (id == BLOCK_GLASS) return 49;
-    if (id == BLOCK_WOOL) return 64;
-    if (id == BLOCK_YELLOW_FLOWER) return 13;
-    if (id == BLOCK_RED_ROSE) return 12;
-    if (id == BLOCK_BROWN_MUSHROOM) return 29;
-    if (id == BLOCK_RED_MUSHROOM) return 28;
-    if (id == BLOCK_GOLD_BLOCK) return 39;
-    if (id == BLOCK_IRON_BLOCK) return 38;
-    if (id == BLOCK_DOUBLE_SLAB) return 6;
-    if (id == BLOCK_SLAB) return 6;
-    if (id == BLOCK_BRICK) return 7;
-    if (id == BLOCK_TNT) return 8;
-    if (id == BLOCK_BOOKSHELF) return 35;
-    if (id == BLOCK_MOSSY_COBBLESTONE) return 36;
-    if (id == BLOCK_OBSIDIAN) return 37;
-    if (id == BLOCK_TORCH) return 80;
-    if (id == BLOCK_FIRE) return 31;
-    if (id == BLOCK_MOB_SPAWNER) return 65;
-    if (id == BLOCK_WOOD_STAIRS) return 4;
-    if (id == BLOCK_CHEST) return item_chest_icon_tile();
-    if (id == BLOCK_REDSTONE_WIRE) return 84;
-    if (id == BLOCK_DIAMOND_ORE) return 50;
-    if (id == BLOCK_DIAMOND_BLOCK) return 40;
-    if (id == BLOCK_CRAFTING_TABLE) return 59;
-    if (id == BLOCK_CROPS) return 88;
-    if (id == BLOCK_FARMLAND) return 87;
-    if (id == BLOCK_FURNACE) return furnace_front_tile();
-    if (id == BLOCK_FURNACE_LIT) return furnace_front_lit_tile();
-    if (id == BLOCK_SIGN_POST) return 4;
-    if (id == BLOCK_WOOD_DOOR) return 97;
-    if (id == BLOCK_LADDER) return 83;
-    if (id == BLOCK_RAILS) return 128;
-    if (id == BLOCK_COBBLE_STAIRS) return 16;
-    if (id == BLOCK_WALL_SIGN) return 4;
-    if (id == BLOCK_LEVER) return 96;
-    if (id == BLOCK_STONE_PRESSURE_PLATE) return 1;
-    if (id == BLOCK_IRON_DOOR) return 98;
-    if (id == BLOCK_WOOD_PRESSURE_PLATE) return 4;
-    if (id == BLOCK_REDSTONE_ORE) return 51;
-    if (id == BLOCK_REDSTONE_ORE_GLOWING) return 51;
-    if (id == BLOCK_REDSTONE_TORCH_OFF) return 115;
-    if (id == BLOCK_REDSTONE_TORCH_ON) return 99;
-    if (id == BLOCK_STONE_BUTTON) return 1;
-    if (id == BLOCK_SNOW_LAYER) return 66;
-    if (id == BLOCK_ICE) return 67;
-    if (id == BLOCK_SNOW_BLOCK) return 66;
-    if (id == BLOCK_CACTUS) return 70;
-    if (id == BLOCK_CLAY) return 72;
-    if (id == BLOCK_REEDS) return 73;
-    if (id == BLOCK_JUKEBOX) return 74;
-    if (id == BLOCK_FENCE) return 4;
-    if (id == BLOCK_PUMPKIN) return 102;
-    if (id == BLOCK_NETHERRACK) return 103;
-    if (id == BLOCK_SOUL_SAND) return 104;
-    if (id == BLOCK_GLOWSTONE) return 105;
-    if (id == BLOCK_PORTAL) return 14;
-    if (id == BLOCK_JACK_O_LANTERN) return 102;
-    if (id == BLOCK_LAPIS_ORE) return 38;
-    if (id == BLOCK_LAPIS_BLOCK) return 39;
-    return 1;
+    /* Representative terrain.png tile for every Java 1.2.5 block ID.  Face- and
+       metadata-specific rendering still happens in the 3-D item/world paths. */
+    switch (id) {
+        case BLOCK_STONE: return 1;
+        case BLOCK_GRASS: return 0;
+        case BLOCK_DIRT: return 2;
+        case BLOCK_COBBLESTONE: return 16;
+        case BLOCK_PLANKS: return 4;
+        case BLOCK_SAPLING: return 15;
+        case BLOCK_BEDROCK: return 17;
+        case BLOCK_WATER:
+        case BLOCK_STILL_WATER: return item_water_tile();
+        case BLOCK_LAVA:
+        case BLOCK_STILL_LAVA: return item_lava_tile();
+        case BLOCK_SAND: return 18;
+        case BLOCK_GRAVEL: return 19;
+        case BLOCK_GOLD_ORE: return 32;
+        case BLOCK_IRON_ORE: return 33;
+        case BLOCK_COAL_ORE: return 34;
+        case BLOCK_LOG: return 20;
+        case BLOCK_LEAVES: return g_opts.fancy_graphics ? 52 : 53;
+        case BLOCK_SPONGE: return 48;
+        case BLOCK_GLASS: return 49;
+        case BLOCK_LAPIS_ORE: return 160;
+        case BLOCK_LAPIS_BLOCK: return 144;
+        case BLOCK_DISPENSER: return 46;
+        case BLOCK_SANDSTONE: return 192;
+        case BLOCK_NOTE_BLOCK: return 75;
+        case BLOCK_BED: return 134;
+        case BLOCK_POWERED_RAIL: return 179;
+        case BLOCK_DETECTOR_RAIL: return 195;
+        case BLOCK_STICKY_PISTON: return 106;
+        case BLOCK_WEB: return 11;
+        case BLOCK_TALL_GRASS: return 39;
+        case BLOCK_DEAD_BUSH: return 55;
+        case BLOCK_PISTON: return 107;
+        case BLOCK_PISTON_EXTENSION: return 107;
+        case BLOCK_WOOL: return 113;
+        case BLOCK_PISTON_MOVING: return 107;
+        case BLOCK_YELLOW_FLOWER: return 13;
+        case BLOCK_RED_ROSE: return 12;
+        case BLOCK_BROWN_MUSHROOM: return 29;
+        case BLOCK_RED_MUSHROOM: return 28;
+        case BLOCK_GOLD_BLOCK: return 23;
+        case BLOCK_IRON_BLOCK: return 22;
+        case BLOCK_DOUBLE_SLAB:
+        case BLOCK_SLAB: return 6;
+        case BLOCK_BRICK: return 7;
+        case BLOCK_TNT: return 8;
+        case BLOCK_BOOKSHELF: return 35;
+        case BLOCK_MOSSY_COBBLESTONE: return 36;
+        case BLOCK_OBSIDIAN: return 37;
+        case BLOCK_TORCH: return 80;
+        case BLOCK_FIRE: return 31;
+        case BLOCK_MOB_SPAWNER: return 65;
+        case BLOCK_WOOD_STAIRS: return 4;
+        case BLOCK_CHEST: return item_chest_icon_tile();
+        case BLOCK_REDSTONE_WIRE: return 164;
+        case BLOCK_DIAMOND_ORE: return 50;
+        case BLOCK_DIAMOND_BLOCK: return 24;
+        case BLOCK_CRAFTING_TABLE: return 59;
+        case BLOCK_CROPS: return 88;
+        case BLOCK_FARMLAND: return 87;
+        case BLOCK_FURNACE: return furnace_front_tile();
+        case BLOCK_FURNACE_LIT: return furnace_front_lit_tile();
+        case BLOCK_SIGN_POST:
+        case BLOCK_WALL_SIGN: return 4;
+        case BLOCK_WOOD_DOOR: return 97;
+        case BLOCK_LADDER: return 83;
+        case BLOCK_RAILS: return 128;
+        case BLOCK_COBBLE_STAIRS: return 16;
+        case BLOCK_LEVER: return 96;
+        case BLOCK_STONE_PRESSURE_PLATE: return 1;
+        case BLOCK_IRON_DOOR: return 98;
+        case BLOCK_WOOD_PRESSURE_PLATE: return 4;
+        case BLOCK_REDSTONE_ORE:
+        case BLOCK_REDSTONE_ORE_GLOWING: return 51;
+        case BLOCK_REDSTONE_TORCH_OFF: return 115;
+        case BLOCK_REDSTONE_TORCH_ON: return 99;
+        case BLOCK_STONE_BUTTON: return 1;
+        case BLOCK_SNOW_LAYER: return 66;
+        case BLOCK_ICE: return 67;
+        case BLOCK_SNOW_BLOCK: return 66;
+        case BLOCK_CACTUS: return 70;
+        case BLOCK_CLAY: return 72;
+        case BLOCK_REEDS: return 73;
+        case BLOCK_JUKEBOX: return 74;
+        case BLOCK_FENCE: return 4;
+        case BLOCK_PUMPKIN: return 118;
+        case BLOCK_NETHERRACK: return 103;
+        case BLOCK_SOUL_SAND: return 104;
+        case BLOCK_GLOWSTONE: return 105;
+        case BLOCK_PORTAL: return 14;
+        case BLOCK_JACK_O_LANTERN: return 119;
+        case BLOCK_CAKE: return 121;
+        case BLOCK_REDSTONE_REPEATER_OFF: return 131;
+        case BLOCK_REDSTONE_REPEATER_ON: return 147;
+        case BLOCK_LOCKED_CHEST: return item_chest_icon_tile();
+        case BLOCK_TRAPDOOR: return 84;
+        case BLOCK_SILVERFISH: return 1;
+        case BLOCK_STONE_BRICK: return 54;
+        case BLOCK_BROWN_MUSHROOM_CAP:
+        case BLOCK_RED_MUSHROOM_CAP: return 142;
+        case BLOCK_IRON_BARS: return 85;
+        case BLOCK_GLASS_PANE: return 49;
+        case BLOCK_MELON: return 136;
+        case BLOCK_PUMPKIN_STEM: return 19;
+        case BLOCK_MELON_STEM: return 19;
+        case BLOCK_VINE: return 143;
+        case BLOCK_FENCE_GATE: return 4;
+        case BLOCK_BRICK_STAIRS: return 7;
+        case BLOCK_STONE_BRICK_STAIRS: return 54;
+        case BLOCK_MYCELIUM: return 78;
+        case BLOCK_LILY_PAD: return 76;
+        case BLOCK_NETHER_BRICK:
+        case BLOCK_NETHER_BRICK_FENCE:
+        case BLOCK_NETHER_BRICK_STAIRS: return 224;
+        case BLOCK_NETHER_WART: return 226;
+        case BLOCK_ENCHANTMENT_TABLE: return 166;
+        case BLOCK_BREWING_STAND: return 157;
+        case BLOCK_CAULDRON: return 154;
+        case BLOCK_END_PORTAL: return 15;
+        case BLOCK_END_PORTAL_FRAME: return 158;
+        case BLOCK_END_STONE: return 175;
+        case BLOCK_DRAGON_EGG: return 167;
+        case BLOCK_REDSTONE_LAMP_OFF: return 211;
+        case BLOCK_REDSTONE_LAMP_ON: return 212;
+        default: return 1;
+    }
 }
+
 
 static void draw_block_item_icon_gui(int id, int x, int y) {
     if (!tex_terrain.id) return;
@@ -589,9 +694,52 @@ static const char *item_display_name(int id) {
     if (id == BLOCK_SOUL_SAND) return "Soul Sand";
     if (id == BLOCK_GLOWSTONE) return "Glowstone";
     if (id == BLOCK_PORTAL) return "Portal";
-    if (id == BLOCK_JACK_O_LANTERN) return "Pumpkin";
+    if (id == BLOCK_JACK_O_LANTERN) return "Jack o'Lantern";
     if (id == BLOCK_LAPIS_ORE) return "Lapis Lazuli Ore";
     if (id == BLOCK_LAPIS_BLOCK) return "Lapis Lazuli Block";
+    if (id == BLOCK_DISPENSER) return "Dispenser";
+    if (id == BLOCK_SANDSTONE) return "Sandstone";
+    if (id == BLOCK_NOTE_BLOCK) return "Note Block";
+    if (id == BLOCK_BED) return "Bed";
+    if (id == BLOCK_POWERED_RAIL) return "Powered Rail";
+    if (id == BLOCK_DETECTOR_RAIL) return "Detector Rail";
+    if (id == BLOCK_STICKY_PISTON) return "Sticky Piston";
+    if (id == BLOCK_WEB) return "Web";
+    if (id == BLOCK_TALL_GRASS) return "Tall Grass";
+    if (id == BLOCK_DEAD_BUSH) return "Dead Bush";
+    if (id == BLOCK_PISTON) return "Piston";
+    if (id == BLOCK_PISTON_EXTENSION) return "Piston Extension";
+    if (id == BLOCK_PISTON_MOVING) return "Moving Piston";
+    if (id == BLOCK_CAKE) return "Cake";
+    if (id == BLOCK_REDSTONE_REPEATER_OFF || id == BLOCK_REDSTONE_REPEATER_ON) return "Redstone Repeater";
+    if (id == BLOCK_LOCKED_CHEST) return "Locked Chest";
+    if (id == BLOCK_TRAPDOOR) return "Trapdoor";
+    if (id == BLOCK_SILVERFISH) return "Monster Egg";
+    if (id == BLOCK_STONE_BRICK) return "Stone Bricks";
+    if (id == BLOCK_BROWN_MUSHROOM_CAP || id == BLOCK_RED_MUSHROOM_CAP) return "Mushroom Cap";
+    if (id == BLOCK_IRON_BARS) return "Iron Bars";
+    if (id == BLOCK_GLASS_PANE) return "Glass Pane";
+    if (id == BLOCK_MELON) return "Melon";
+    if (id == BLOCK_PUMPKIN_STEM) return "Pumpkin Stem";
+    if (id == BLOCK_MELON_STEM) return "Melon Stem";
+    if (id == BLOCK_VINE) return "Vines";
+    if (id == BLOCK_FENCE_GATE) return "Fence Gate";
+    if (id == BLOCK_BRICK_STAIRS) return "Brick Stairs";
+    if (id == BLOCK_STONE_BRICK_STAIRS) return "Stone Brick Stairs";
+    if (id == BLOCK_MYCELIUM) return "Mycelium";
+    if (id == BLOCK_LILY_PAD) return "Lily Pad";
+    if (id == BLOCK_NETHER_BRICK) return "Nether Brick";
+    if (id == BLOCK_NETHER_BRICK_FENCE) return "Nether Brick Fence";
+    if (id == BLOCK_NETHER_BRICK_STAIRS) return "Nether Brick Stairs";
+    if (id == BLOCK_NETHER_WART) return "Nether Wart";
+    if (id == BLOCK_ENCHANTMENT_TABLE) return "Enchantment Table";
+    if (id == BLOCK_BREWING_STAND) return "Brewing Stand";
+    if (id == BLOCK_CAULDRON) return "Cauldron";
+    if (id == BLOCK_END_PORTAL) return "End Portal";
+    if (id == BLOCK_END_PORTAL_FRAME) return "End Portal Frame";
+    if (id == BLOCK_END_STONE) return "End Stone";
+    if (id == BLOCK_DRAGON_EGG) return "Dragon Egg";
+    if (id == BLOCK_REDSTONE_LAMP_OFF || id == BLOCK_REDSTONE_LAMP_ON) return "Redstone Lamp";
     if (id == ITEM_SHOVEL_IRON) return "Iron Shovel";
     if (id == ITEM_PICKAXE_IRON) return "Iron Pickaxe";
     if (id == ITEM_AXE_IRON) return "Iron Axe";
@@ -687,8 +835,45 @@ static const char *item_display_name(int id) {
     if (id == ITEM_GLOWSTONE_DUST) return "Glowstone Dust";
     if (id == ITEM_FISH_RAW) return "Raw Fish";
     if (id == ITEM_FISH_COOKED) return "Cooked Fish";
-    if (id == ITEM_RECORD13) return "Music Disc";
-    if (id == ITEM_RECORD_CAT) return "Music Disc";
+    if (id == ITEM_DYE_POWDER) return "Dye";
+    if (id == ITEM_BONE) return "Bone";
+    if (id == ITEM_SUGAR) return "Sugar";
+    if (id == ITEM_CAKE) return "Cake";
+    if (id == ITEM_BED) return "Bed";
+    if (id == ITEM_REDSTONE_REPEATER) return "Redstone Repeater";
+    if (id == ITEM_COOKIE) return "Cookie";
+    if (id == ITEM_MAP) return "Map";
+    if (id == ITEM_SHEARS) return "Shears";
+    if (id == ITEM_MELON) return "Melon";
+    if (id == ITEM_PUMPKIN_SEEDS) return "Pumpkin Seeds";
+    if (id == ITEM_MELON_SEEDS) return "Melon Seeds";
+    if (id == ITEM_BEEF_RAW) return "Raw Beef";
+    if (id == ITEM_BEEF_COOKED) return "Steak";
+    if (id == ITEM_CHICKEN_RAW) return "Raw Chicken";
+    if (id == ITEM_CHICKEN_COOKED) return "Cooked Chicken";
+    if (id == ITEM_ROTTEN_FLESH) return "Rotten Flesh";
+    if (id == ITEM_ENDER_PEARL) return "Ender Pearl";
+    if (id == ITEM_BLAZE_ROD) return "Blaze Rod";
+    if (id == ITEM_GHAST_TEAR) return "Ghast Tear";
+    if (id == ITEM_GOLD_NUGGET) return "Gold Nugget";
+    if (id == ITEM_NETHER_WART) return "Nether Wart";
+    if (id == ITEM_POTION) return "Potion";
+    if (id == ITEM_GLASS_BOTTLE) return "Glass Bottle";
+    if (id == ITEM_SPIDER_EYE) return "Spider Eye";
+    if (id == ITEM_FERMENTED_SPIDER_EYE) return "Fermented Spider Eye";
+    if (id == ITEM_BLAZE_POWDER) return "Blaze Powder";
+    if (id == ITEM_MAGMA_CREAM) return "Magma Cream";
+    if (id == ITEM_BREWING_STAND) return "Brewing Stand";
+    if (id == ITEM_CAULDRON) return "Cauldron";
+    if (id == ITEM_EYE_OF_ENDER) return "Eye of Ender";
+    if (id == ITEM_SPECKLED_MELON) return "Glistering Melon";
+    if (id == ITEM_MONSTER_PLACER) return "Spawn Egg";
+    if (id == ITEM_EXP_BOTTLE) return "Bottle o' Enchanting";
+    if (id == ITEM_FIREBALL_CHARGE) return "Fire Charge";
+    if (id == ITEM_RECORD13 || id == ITEM_RECORD_CAT || id == ITEM_RECORD_BLOCKS ||
+        id == ITEM_RECORD_CHIRP || id == ITEM_RECORD_FAR || id == ITEM_RECORD_MALL ||
+        id == ITEM_RECORD_MELLOHI || id == ITEM_RECORD_STAL || id == ITEM_RECORD_STRAD ||
+        id == ITEM_RECORD_WARD || id == ITEM_RECORD_11) return "Music Disc";
     return "";
 }
 

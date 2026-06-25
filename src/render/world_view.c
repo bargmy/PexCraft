@@ -2433,7 +2433,7 @@ static void draw_java_entity_shadow(float x, float y, float z, float shadow_size
 
 
 static int render_item_as_block_id(int id) {
-    if (id < 1 || id > 91) return 0;
+    if (id < 1 || id > BLOCK_REDSTONE_LAMP_ON) return 0;
     if (block_is_liquid(id)) return 0;
     if (id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
@@ -2441,34 +2441,53 @@ static int render_item_as_block_id(int id) {
         id == BLOCK_REDSTONE_WIRE || id == BLOCK_CROPS || id == BLOCK_SIGN_POST ||
         id == BLOCK_WALL_SIGN || id == BLOCK_WOOD_DOOR || id == BLOCK_IRON_DOOR ||
         id == BLOCK_LADDER || id == BLOCK_RAILS || id == BLOCK_LEVER || id == BLOCK_REEDS ||
-        id == BLOCK_PORTAL) return 0;
+        id == BLOCK_PORTAL || id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH ||
+        id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_VINE ||
+        id == BLOCK_LILY_PAD || id == BLOCK_NETHER_WART || id == BLOCK_PUMPKIN_STEM ||
+        id == BLOCK_MELON_STEM || id == BLOCK_REDSTONE_REPEATER_OFF ||
+        id == BLOCK_REDSTONE_REPEATER_ON || id == BLOCK_END_PORTAL) return 0;
     return 1;
 }
 
 static int world_item_is_block_id(int id) {
-    return id >= 1 && id <= 91;
+    return id >= 1 && id <= BLOCK_REDSTONE_LAMP_ON;
 }
 
 static int world_block_item_tile(int id) {
-    if (id == BLOCK_SAPLING) return 15;
-    if (id == BLOCK_YELLOW_FLOWER) return 13;
-    if (id == BLOCK_RED_ROSE) return 12;
-    if (id == BLOCK_BROWN_MUSHROOM) return 29;
-    if (id == BLOCK_RED_MUSHROOM) return 28;
-    if (id == BLOCK_TORCH) return 80;
-    if (id == BLOCK_FIRE) return 31;
-    if (id == BLOCK_REDSTONE_WIRE) return 84;
-    if (id == BLOCK_CROPS) return 88;
-    if (id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN) return 4;
-    if (id == BLOCK_WOOD_DOOR) return 97;
-    if (id == BLOCK_IRON_DOOR) return 98;
-    if (id == BLOCK_LADDER) return 83;
-    if (id == BLOCK_RAILS) return 128;
-    if (id == BLOCK_LEVER) return 96;
-    if (id == BLOCK_REEDS) return 73;
-    if (id == BLOCK_REDSTONE_TORCH_OFF) return 115;
-    if (id == BLOCK_REDSTONE_TORCH_ON) return 99;
-    return 1;
+    switch (id) {
+        case BLOCK_SAPLING: return 15;
+        case BLOCK_YELLOW_FLOWER: return 13;
+        case BLOCK_RED_ROSE: return 12;
+        case BLOCK_BROWN_MUSHROOM: return 29;
+        case BLOCK_RED_MUSHROOM: return 28;
+        case BLOCK_TORCH: return 80;
+        case BLOCK_FIRE: return 31;
+        case BLOCK_REDSTONE_WIRE: return 164;
+        case BLOCK_CROPS: return 88;
+        case BLOCK_SIGN_POST:
+        case BLOCK_WALL_SIGN: return 4;
+        case BLOCK_WOOD_DOOR: return 97;
+        case BLOCK_IRON_DOOR: return 98;
+        case BLOCK_LADDER: return 83;
+        case BLOCK_RAILS: return 128;
+        case BLOCK_POWERED_RAIL: return 179;
+        case BLOCK_DETECTOR_RAIL: return 195;
+        case BLOCK_LEVER: return 96;
+        case BLOCK_REEDS: return 73;
+        case BLOCK_REDSTONE_TORCH_OFF: return 115;
+        case BLOCK_REDSTONE_TORCH_ON: return 99;
+        case BLOCK_TALL_GRASS: return 39;
+        case BLOCK_DEAD_BUSH: return 55;
+        case BLOCK_VINE: return 143;
+        case BLOCK_LILY_PAD: return 76;
+        case BLOCK_NETHER_WART: return 226;
+        case BLOCK_PUMPKIN_STEM:
+        case BLOCK_MELON_STEM: return 19;
+        case BLOCK_REDSTONE_REPEATER_OFF: return 131;
+        case BLOCK_REDSTONE_REPEATER_ON: return 147;
+        case BLOCK_END_PORTAL: return 15;
+        default: return 1;
+    }
 }
 
 static void draw_block_item_model(int id, float x, float y, float z);
@@ -2699,17 +2718,22 @@ static int block_occludes_render_face(int id) {
     if (id == 0) return 0;
     if (block_is_liquid(id)) return g_opts.fancy_graphics ? 0 : 1;
     if (id == BLOCK_CHEST) return 0; /* chest model is smaller than a full cube; never cull neighboring faces behind it */
-    if (id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_FENCE ||
-        id == BLOCK_CACTUS || block_is_door_id(id) || id == BLOCK_LADDER || id == BLOCK_RAILS ||
+    if (id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS ||
+        id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
+        id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE ||
+        id == BLOCK_IRON_BARS || id == BLOCK_CACTUS || block_is_door_id(id) ||
+        id == BLOCK_LADDER || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL ||
         id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_STONE_BUTTON ||
-        id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) return 0;
+        id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON ||
+        id == BLOCK_WEB || id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME) return 0;
     if (id == BLOCK_LEAVES) return g_opts.fancy_graphics ? 0 : 1;
     if (id == BLOCK_GLASS || id == BLOCK_SAPLING ||
         id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM ||
         id == BLOCK_TORCH || id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE ||
         id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON ||
-        id == BLOCK_REEDS || id == BLOCK_SNOW_LAYER) return 0;
+        id == BLOCK_REEDS || id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH ||
+        id == BLOCK_VINE || id == BLOCK_NETHER_WART || id == BLOCK_SNOW_LAYER) return 0;
     return 1;
 }
 
@@ -2726,22 +2750,28 @@ static int neighbor_for_face(int x, int y, int z, int face) {
 static int block_uses_cross_plant_model(int id) {
     return id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
            id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM ||
-           id == BLOCK_REEDS || id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE ||
-           id == BLOCK_CROPS;
+           id == BLOCK_REEDS || id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH ||
+           id == BLOCK_NETHER_WART || id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE ||
+           id == BLOCK_CROPS || id == BLOCK_PUMPKIN_STEM || id == BLOCK_MELON_STEM;
 }
 
-static int cross_plant_tile_for_block(int id) {
+static int cross_plant_tile_for_block_meta(int id, int meta) {
     if (id == BLOCK_YELLOW_FLOWER) return 13;
     if (id == BLOCK_RED_ROSE) return 12;
-    if (id == BLOCK_SAPLING) return 15;
+    if (id == BLOCK_SAPLING) { meta &= 3; return meta == 1 ? 63 : (meta == 2 ? 79 : (meta == 3 ? 30 : 15)); }
     if (id == BLOCK_BROWN_MUSHROOM) return 29;
     if (id == BLOCK_RED_MUSHROOM) return 28;
     if (id == BLOCK_REEDS) return 73;
+    if (id == BLOCK_TALL_GRASS) return meta == 1 ? 39 : (meta == 2 ? 56 : 55);
+    if (id == BLOCK_DEAD_BUSH) return 55;
+    if (id == BLOCK_NETHER_WART) return meta >= 3 ? 228 : (meta > 0 ? 227 : 226);
+    if (id == BLOCK_PUMPKIN_STEM || id == BLOCK_MELON_STEM) return 19;
     if (id == BLOCK_FIRE) return 31;
     if (id == BLOCK_REDSTONE_WIRE) return 84;
     if (id == BLOCK_CROPS) return 88;
     return 12;
 }
+static int cross_plant_tile_for_block(int id) { return cross_plant_tile_for_block_meta(id, 0); }
 
 static void emit_cross_plant_block_float(int id, float x, float y, float z) {
     int bx = (int)floorf(x);
@@ -2753,7 +2783,7 @@ static void emit_cross_plant_block_float(int id, float x, float y, float z) {
     g_world_light_z = bz;
 
     float u0, v0, u1, v1;
-    terrain_tile_uv(cross_plant_tile_for_block(id), &u0, &v0, &u1, &v1);
+    terrain_tile_uv(cross_plant_tile_for_block_meta(id, flat_get_meta(bx, by, bz)), &u0, &v0, &u1, &v1);
     if (id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE || id == BLOCK_CROPS) {
         /* The rose texture has empty pixels at the top of the tile.  Crop that
            transparent cap for the world model so flowers do not look buried
@@ -2972,6 +3002,131 @@ static void world_tex_vertex_lit(float x, float y, float z, float u, float v,
     world_tex_vertex(x, y, z, u, v);
 }
 
+static int block_texture_125(int block_id, int meta, int face) {
+    meta &= 15;
+    switch (block_id) {
+        case BLOCK_PLANKS:
+            switch (meta & 3) {
+                case BLOCK_META_WOOD_SPRUCE: return 198;
+                case BLOCK_META_WOOD_BIRCH: return 214;
+                case BLOCK_META_WOOD_JUNGLE: return 199;
+                default: return 4;
+            }
+        case BLOCK_LOG:
+            if (face == 0 || face == 1) return 21;
+            switch (meta & 3) {
+                case BLOCK_META_WOOD_SPRUCE: return 116;
+                case BLOCK_META_WOOD_BIRCH: return 117;
+                case BLOCK_META_WOOD_JUNGLE: return 153;
+                default: return 20;
+            }
+        case BLOCK_LEAVES: {
+            int base = g_opts.fancy_graphics ? 52 : 53;
+            int type = meta & 3;
+            if (type == BLOCK_META_WOOD_SPRUCE) return base + 80;
+            if (type == BLOCK_META_WOOD_JUNGLE) return base + 144;
+            return base;
+        }
+        case BLOCK_SAPLING: return cross_plant_tile_for_block_meta(block_id, meta);
+        case BLOCK_LAPIS_ORE: return 160;
+        case BLOCK_LAPIS_BLOCK: return 144;
+        case BLOCK_DISPENSER:
+            return (face == 0 || face == 1) ? 62 : (face == 3 ? 46 : 45);
+        case BLOCK_SANDSTONE:
+            if (face == 1) return 176;
+            if (face == 0) return (meta == BLOCK_META_SANDSTONE_CHISELED || meta == BLOCK_META_SANDSTONE_SMOOTH) ? 176 : 208;
+            if (meta == BLOCK_META_SANDSTONE_CHISELED) return 229;
+            if (meta == BLOCK_META_SANDSTONE_SMOOTH) return 230;
+            return 192;
+        case BLOCK_NOTE_BLOCK: return 75;
+        case BLOCK_BED:
+            if (face == 0) return 4;
+            return (meta & 8) ? 134 : 135;
+        case BLOCK_POWERED_RAIL: return ((meta & 7) >= 6) ? 163 : 179;
+        case BLOCK_DETECTOR_RAIL: return ((meta & 7) >= 6) ? 179 : 195;
+        case BLOCK_STICKY_PISTON:
+        case BLOCK_PISTON: {
+            int dir = meta & 7;
+            int front = (block_id == BLOCK_STICKY_PISTON) ? 106 : 107;
+            if (dir <= 5 && face == dir) return front;
+            if (dir <= 5 && face == (dir ^ 1)) return 109;
+            return 108;
+        }
+        case BLOCK_PISTON_EXTENSION:
+        case BLOCK_PISTON_MOVING:
+            return (face == (meta & 7)) ? (((meta & 8) != 0) ? 106 : 107) : 108;
+        case BLOCK_WEB: return 11;
+        case BLOCK_TALL_GRASS:
+        case BLOCK_DEAD_BUSH:
+        case BLOCK_NETHER_WART:
+        case BLOCK_CROPS:
+        case BLOCK_PUMPKIN_STEM:
+        case BLOCK_MELON_STEM:
+            return cross_plant_tile_for_block_meta(block_id, meta);
+        case BLOCK_WOOL:
+            return 113 + ((meta & 8) >> 3) + ((meta & 7) * 16);
+        case BLOCK_GOLD_BLOCK: return 23;
+        case BLOCK_IRON_BLOCK: return 22;
+        case BLOCK_DIAMOND_BLOCK: return 24;
+        case BLOCK_REDSTONE_WIRE: return 164;
+        case BLOCK_FARMLAND: return (face == 1) ? ((meta > 0) ? 86 : 87) : 2;
+        case BLOCK_SLAB:
+        case BLOCK_DOUBLE_SLAB: {
+            int type = meta & 7;
+            if (type == 0) return (face <= 1) ? 6 : 5;
+            if (type == 1) return (face == 0) ? 208 : (face == 1 ? 176 : 192);
+            if (type == 2) return 4;
+            if (type == 3) return 16;
+            if (type == 4) return 7;
+            if (type == 5) return 54;
+            return 6;
+        }
+        case BLOCK_CAKE:
+            return face == 1 ? 121 : (face == 0 ? 124 : ((meta > 0 && face == 4) ? 123 : 122));
+        case BLOCK_REDSTONE_REPEATER_OFF:
+            return face == 1 ? 131 : (face == 0 ? 115 : 5);
+        case BLOCK_REDSTONE_REPEATER_ON:
+            return face == 1 ? 147 : (face == 0 ? 99 : 5);
+        case BLOCK_LOCKED_CHEST:
+            return (face == 0 || face == 1) ? chest_top_tile() : (face == 3 ? chest_front_tile() : chest_side_tile());
+        case BLOCK_TRAPDOOR: return 84;
+        case BLOCK_SILVERFISH:
+            return meta == 1 ? 16 : (meta == 2 ? 54 : 1);
+        case BLOCK_STONE_BRICK:
+            if (meta == BLOCK_META_STONE_BRICK_MOSSY) return 100;
+            if (meta == BLOCK_META_STONE_BRICK_CRACKED) return 101;
+            if (meta == BLOCK_META_STONE_BRICK_CHISELED) return 213;
+            return 54;
+        case BLOCK_BROWN_MUSHROOM_CAP:
+            return (meta == 10 && face > 1) ? 141 : (meta ? 126 : 142);
+        case BLOCK_RED_MUSHROOM_CAP:
+            return (meta == 10 && face > 1) ? 141 : (meta ? 125 : 142);
+        case BLOCK_IRON_BARS: return 85;
+        case BLOCK_GLASS_PANE: return 49;
+        case BLOCK_MELON: return (face == 1 || face == 0) ? 137 : 136;
+        case BLOCK_VINE: return 143;
+        case BLOCK_FENCE_GATE: return 4;
+        case BLOCK_BRICK_STAIRS: return 7;
+        case BLOCK_STONE_BRICK_STAIRS: return 54;
+        case BLOCK_MYCELIUM: return face == 1 ? 78 : (face == 0 ? 2 : 77);
+        case BLOCK_LILY_PAD: return 76;
+        case BLOCK_NETHER_BRICK:
+        case BLOCK_NETHER_BRICK_FENCE:
+        case BLOCK_NETHER_BRICK_STAIRS: return 224;
+        case BLOCK_ENCHANTMENT_TABLE: return face == 0 ? 183 : (face == 1 ? 166 : 182);
+        case BLOCK_BREWING_STAND: return 157;
+        case BLOCK_CAULDRON: return face == 1 ? 138 : (face == 0 ? 155 : 154);
+        case BLOCK_END_PORTAL: return 15;
+        case BLOCK_END_PORTAL_FRAME: return face == 1 ? 158 : (face == 0 ? 175 : 159);
+        case BLOCK_END_STONE: return 175;
+        case BLOCK_DRAGON_EGG: return 167;
+        case BLOCK_REDSTONE_LAMP_OFF: return 211;
+        case BLOCK_REDSTONE_LAMP_ON: return 212;
+        default: return -1;
+    }
+}
+
+
 static void world_face_style(int id, int face, int *tile) {
     float shade = world_face_base_shade(face);
 
@@ -3091,6 +3246,10 @@ static void world_face_style(int id, int face, int *tile) {
     if (id == BLOCK_NETHERRACK) { *tile = 103; world_set_shade(shade); return; }
     if (id == BLOCK_SOUL_SAND) { *tile = 104; world_set_shade(shade); return; }
     if (id == BLOCK_GLOWSTONE) { *tile = 105; world_set_shade(shade); return; }
+    if (id == BLOCK_SANDSTONE) { *tile = (face == 1 ? 176 : (face == 0 ? 208 : 192)); world_set_shade(shade); return; }
+    if (id == BLOCK_STONE_BRICK || id == BLOCK_STONE_BRICK_STAIRS) { *tile = 54; world_set_shade(shade); return; }
+    if (id == BLOCK_NETHER_BRICK || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_NETHER_BRICK_STAIRS) { *tile = 224; world_set_shade(shade); return; }
+    if (id == BLOCK_END_STONE) { *tile = 175; world_set_shade(shade); return; }
     if (id == BLOCK_SAPLING) { *tile = 15; world_set_shade(shade); return; }
     if (id == BLOCK_FARMLAND) { *tile = (face == 1) ? 87 : 2; world_set_shade(shade); return; }
     if (id == BLOCK_CROPS) { *tile = 88; world_set_shade(shade); return; }
@@ -3101,7 +3260,8 @@ static void world_face_style(int id, int face, int *tile) {
     if (id == BLOCK_FIRE) { *tile = 31; world_set_shade(shade); return; }
     if (id == BLOCK_MOB_SPAWNER) { *tile = 65; world_set_shade(shade); return; }
     if (id == BLOCK_REDSTONE_WIRE) { *tile = 84; world_set_shade(shade); return; }
-    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_WOOD_PRESSURE_PLATE) { *tile = 4; world_set_shade(shade); return; }
+    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_FENCE_GATE) { *tile = 4; world_set_shade(shade); return; }
+    if (id == BLOCK_BRICK_STAIRS) { *tile = 7; world_set_shade(shade); return; }
     if (id == BLOCK_RAILS) { *tile = 128; world_set_shade(shade); return; }
     if (id == BLOCK_COBBLE_STAIRS) { *tile = 16; world_set_shade(shade); return; }
     if (id == BLOCK_LADDER) { *tile = 83; world_set_shade(shade); return; }
@@ -3134,6 +3294,18 @@ static void world_face_style_at(int id, int x, int y, int z, int face, int *tile
             float shade = (face == 2 || face == 3) ? 0.80f : 0.60f;
             *tile = 68;
             world_set_shade(shade);
+            return;
+        }
+    }
+    {
+        int meta = flat_get_meta(x, y, z);
+        int tile125 = block_texture_125(id, meta, face);
+        if (tile125 >= 0) {
+            float shade = world_face_base_shade(face);
+            *tile = tile125;
+            if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_at(x, z), shade);
+            else if (id == BLOCK_TALL_GRASS || id == BLOCK_VINE || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(x, z), shade);
+            else world_set_shade(shade);
             return;
         }
     }
@@ -3326,7 +3498,7 @@ static void emit_world_block_face_float(int id, float x, float y, float z, int f
     int bx = (int)floorf(x), by = (int)floorf(y), bz = (int)floorf(z);
     world_style_set_pos(bx, by, bz);
     world_light_set_pos_for_face(bx, by, bz, face);
-    world_face_style(id, face, &tile);
+    world_face_style_at(id, bx, by, bz, face, &tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     if (face == 1) { /* top */
         world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
@@ -4005,23 +4177,22 @@ static void draw_stairs_block_model(int id, int x, int y, int z) {
     glEnd();
 }
 
-static void draw_fence_block_model(int x, int y, int z) {
-    int id = BLOCK_FENCE;
+static void draw_fence_block_model(int id, int x, int y, int z) {
     glBegin(GL_QUADS);
     emit_block_cuboid_faces(id, x, y, z, 0.375f, 0.0f, 0.375f, 0.625f, 1.0f, 0.625f);
-    if (flat_get_block(x-1,y,z) == BLOCK_FENCE || block_occludes_render_face(flat_get_block(x-1,y,z))) {
+    if ((flat_get_block(x-1,y,z) == id || flat_get_block(x-1,y,z) == BLOCK_FENCE || flat_get_block(x-1,y,z) == BLOCK_NETHER_BRICK_FENCE) || block_occludes_render_face(flat_get_block(x-1,y,z))) {
         emit_cuboid_block_faces(id, x, y+0.35f, z+0.4375f, x+0.5f, y+0.55f, z+0.5625f);
         emit_cuboid_block_faces(id, x, y+0.70f, z+0.4375f, x+0.5f, y+0.90f, z+0.5625f);
     }
-    if (flat_get_block(x+1,y,z) == BLOCK_FENCE || block_occludes_render_face(flat_get_block(x+1,y,z))) {
+    if ((flat_get_block(x+1,y,z) == id || flat_get_block(x+1,y,z) == BLOCK_FENCE || flat_get_block(x+1,y,z) == BLOCK_NETHER_BRICK_FENCE) || block_occludes_render_face(flat_get_block(x+1,y,z))) {
         emit_cuboid_block_faces(id, x+0.5f, y+0.35f, z+0.4375f, x+1.0f, y+0.55f, z+0.5625f);
         emit_cuboid_block_faces(id, x+0.5f, y+0.70f, z+0.4375f, x+1.0f, y+0.90f, z+0.5625f);
     }
-    if (flat_get_block(x,y,z-1) == BLOCK_FENCE || block_occludes_render_face(flat_get_block(x,y,z-1))) {
+    if ((flat_get_block(x,y,z-1) == id || flat_get_block(x,y,z-1) == BLOCK_FENCE || flat_get_block(x,y,z-1) == BLOCK_NETHER_BRICK_FENCE) || block_occludes_render_face(flat_get_block(x,y,z-1))) {
         emit_cuboid_block_faces(id, x+0.4375f, y+0.35f, z, x+0.5625f, y+0.55f, z+0.5f);
         emit_cuboid_block_faces(id, x+0.4375f, y+0.70f, z, x+0.5625f, y+0.90f, z+0.5f);
     }
-    if (flat_get_block(x,y,z+1) == BLOCK_FENCE || block_occludes_render_face(flat_get_block(x,y,z+1))) {
+    if ((flat_get_block(x,y,z+1) == id || flat_get_block(x,y,z+1) == BLOCK_FENCE || flat_get_block(x,y,z+1) == BLOCK_NETHER_BRICK_FENCE) || block_occludes_render_face(flat_get_block(x,y,z+1))) {
         emit_cuboid_block_faces(id, x+0.4375f, y+0.35f, z+0.5f, x+0.5625f, y+0.55f, z+1.0f);
         emit_cuboid_block_faces(id, x+0.4375f, y+0.70f, z+0.5f, x+0.5625f, y+0.90f, z+1.0f);
     }
@@ -4030,8 +4201,11 @@ static void draw_fence_block_model(int x, int y, int z) {
 
 static int block_uses_special_model(int id) {
     return id == BLOCK_CHEST || id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT || block_is_door_id(id) || id == BLOCK_LADDER || id == BLOCK_SNOW_LAYER ||
-           id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_FENCE ||
-           id == BLOCK_CACTUS || id == BLOCK_RAILS || id == BLOCK_REDSTONE_WIRE ||
+           id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS ||
+           id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
+           id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS ||
+           id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL_FRAME || id == BLOCK_END_PORTAL ||
+           id == BLOCK_CACTUS || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_REDSTONE_WIRE ||
            id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_STONE_BUTTON ||
            id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
            id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON;
@@ -4044,11 +4218,14 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (block_is_door_id(id)) { draw_door_block_model(id, x, y, z); return; }
     if (id == BLOCK_LADDER) { draw_ladder_block_model(x, y, z); return; }
     if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) { draw_stairs_block_model(id, x, y, z); return; }
-    if (id == BLOCK_FENCE) { draw_fence_block_model(x, y, z); return; }
+    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) { draw_stairs_block_model(id, x, y, z); return; }
+    if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); return; }
+    if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0,0.5625f,1,1); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0.4375f,1,1,0.5625f); return; }
+    if (id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_125(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
+    if (id == BLOCK_END_PORTAL_FRAME) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,13.0f/16.0f,1); return; }
     if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { float h = (flat_get_meta(x,y,z) & 1) ? (1.0f/32.0f) : (1.0f/16.0f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,h,0.9375f); return; }
-    if (id == BLOCK_RAILS || id == BLOCK_REDSTONE_WIRE) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, (id == BLOCK_RAILS) ? 128 : 84); glEnd(); return; }
+    if (id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_REDSTONE_WIRE) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, (id == BLOCK_RAILS) ? 128 : (id == BLOCK_POWERED_RAIL ? 179 : (id == BLOCK_DETECTOR_RAIL ? 195 : 84))); glEnd(); return; }
     if (id == BLOCK_SIGN_POST) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.25f,0.55f,0.4375f,0.75f,1.0f,0.5625f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.46875f,0.0f,0.46875f,0.53125f,0.55f,0.53125f); return; }
     if (id == BLOCK_WALL_SIGN) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.25f,0.35f,0.02f,0.75f,0.85f,0.10f); return; }
     if (id == BLOCK_STONE_BUTTON) {
