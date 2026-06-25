@@ -310,7 +310,8 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     Mix_Chunk *c = pex_sound_get_pitched_chunk(path, base, pitch);
     if (!c) return 0;
     int v = (int)(volume * 128.0f);
-    if (v < 0) v = 0; if (v > 128) v = 128;
+    if (v < 0) v = 0;
+    if (v > 128) v = 128;
     if (pMix_VolumeChunk) pMix_VolumeChunk(c, pMix_Volume ? 128 : v);
     if (g_pex_menu_music_request && pMix_HaltChannel && g_pex_menu_music_channel >= 0) {
         pMix_HaltChannel(g_pex_menu_music_channel);

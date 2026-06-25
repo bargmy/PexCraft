@@ -560,8 +560,10 @@ static int flat_pack_sky_block_light(int x, int y, int z, int min_block_light) {
     int sky = flat_sample_sky_light(x, y, z, 1);
     int block = flat_sample_block_light(x, y, z, 1);
     if (block < min_block_light) block = min_block_light;
-    if (sky < 0) sky = 0; if (sky > 15) sky = 15;
-    if (block < 0) block = 0; if (block > 15) block = 15;
+    if (sky < 0) sky = 0;
+    if (sky > 15) sky = 15;
+    if (block < 0) block = 0;
+    if (block > 15) block = 15;
     return (sky << 20) | (block << 4);
 }
 
@@ -572,8 +574,10 @@ static int flat_daylight_adjusted_light(int x, int y, int z, int min_block_light
     int sky = flat_sample_sky_light(x, y, z, 1) - flat_skylight_subtracted();
     int block = flat_sample_block_light(x, y, z, 1);
     if (block < min_block_light) block = min_block_light;
-    if (sky < 0) sky = 0; if (sky > 15) sky = 15;
-    if (block < 0) block = 0; if (block > 15) block = 15;
+    if (sky < 0) sky = 0;
+    if (sky > 15) sky = 15;
+    if (block < 0) block = 0;
+    if (block > 15) block = 15;
     return (sky > block) ? sky : block;
 }
 
@@ -1973,8 +1977,8 @@ static int stream_generated_border_has_blocks(int cx, int cz, int sy, int dir) {
     if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return 0;
     int x0 = cx * FLAT_RENDER_CHUNK;
     int z0 = cz * FLAT_RENDER_CHUNK;
-    int y0 = sy * FLAT_SECTION_HEIGHT;
-    int y1 = y0 + FLAT_SECTION_HEIGHT;
+    int y0 = sy * FLAT_RENDER_SECTION;
+    int y1 = y0 + FLAT_RENDER_SECTION;
     if (y1 > FLAT_WORLD_HEIGHT) y1 = FLAT_WORLD_HEIGHT;
 
     int bx0 = x0, bx1 = x0 + FLAT_RENDER_CHUNK;
