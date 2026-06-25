@@ -106,8 +106,18 @@ static float passive_mob_height_for_type(int type) {
     if (type == PASSIVE_MOB_PIG) return 0.9f;
     return 1.3f;
 }
+static int passive_mob_type_valid(int type) {
+    return type >= PASSIVE_MOB_PIG && type <= PASSIVE_MOB_CHICKEN;
+}
+
 static int passive_mob_health_for_type(int type) {
-    return type == PASSIVE_MOB_CHICKEN ? 4 : 10;
+    switch (type) {
+        case PASSIVE_MOB_PIG: return 10;
+        case PASSIVE_MOB_COW: return 10;
+        case PASSIVE_MOB_SHEEP: return 8;
+        case PASSIVE_MOB_CHICKEN: return 4;
+        default: return 1;
+    }
 }
 static float passive_mob_sound_volume(int type) {
     return type == PASSIVE_MOB_COW ? 0.4f : 1.0f;
@@ -139,12 +149,33 @@ static const char *passive_mob_death_sound(int type) {
         default: return NULL;
     }
 }
-static int passive_mob_drop_item(int type) {
-    switch (type) {
-        case PASSIVE_MOB_PIG: return ITEM_PORK_RAW;
-        case PASSIVE_MOB_COW: return ITEM_LEATHER;
-        case PASSIVE_MOB_CHICKEN: return ITEM_FEATHER;
-        default: return 0;
+static void passive_mob_drop_stack(PassiveMob *m, int item_id, int count) {
+    if (!m || item_id <= 0 || count <= 0) return;
+    for (int i = 0; i < count; ++i) {
+        spawn_item_stack(m->x, m->y + 0.5f, m->z, make_stack(item_id, 1, 0), 1);
+    }
+}
+
+static void passive_mob_drop_on_death(PassiveMob *m) {
+    if (!m || m->death_drops_done) return;
+    m->death_drops_done = 1;
+    switch (m->type) {
+        case PASSIVE_MOB_PIG:
+            passive_mob_drop_stack(m, ITEM_PORK_RAW, rand() % 3);
+            break;
+        case PASSIVE_MOB_COW:
+            passive_mob_drop_stack(m, ITEM_LEATHER, rand() % 3);
+            /* No beef item exists in this Beta-era item table. */
+            break;
+        case PASSIVE_MOB_CHICKEN:
+            passive_mob_drop_stack(m, ITEM_FEATHER, rand() % 3);
+            /* No raw/cooked chicken item exists in this Beta-era item table. */
+            break;
+        case PASSIVE_MOB_SHEEP:
+            if (!m->sheared) passive_mob_drop_stack(m, BLOCK_WOOL, 1);
+            break;
+        default:
+            break;
     }
 }
 
@@ -266,30 +297,55 @@ static void passive_mob_move_entity(PassiveMob *m, float dx, float dy, float dz)
     if (odz != dz) m->mz = 0.0f;
 }
 
-static int passive_mob_spawn_ok(int x, int y, int z) {
+static int passive_mob_can_stand_at(int x, int y, int z) {
     if (!passive_mob_ground_target_ok(x, y, z)) return 0;
-    if (flat_get_block(x, y - 1, z) != BLOCK_GRASS) return 0;
-    if (flat_combined_light(x, y, z) <= 8) return 0;
-    float dx = ((float)x + 0.5f) - g_player_x;
-    float dy = (float)y - g_player_y;
-    float dz = ((float)z + 0.5f) - g_player_z;
-    if (dx*dx + dy*dy + dz*dz < 24.0f * 24.0f) return 0;
-    float sx = (float)x;
-    float sy = (float)y;
-    float sz = (float)z;
-    if (sx*sx + sy*sy + sz*sz < 24.0f * 24.0f) return 0;
-
-    FlatAABB b = { x + 0.05f, y + 0.01f, z + 0.05f, x + 0.95f, y + 1.30f, z + 0.95f };
-    FlatAABB boxes[64];
-    if (flat_get_collision_boxes(&b, boxes, 64) > 0) return 0;
-    return 1;
+    return flat_get_block(x, y - 1, z) == BLOCK_GRASS;
 }
 
-static int passive_mob_column_spawn_y(int x, int z) {
+static int passive_mob_has_spawn_light(int x, int y, int z) {
+    return flat_combined_light(x, y, z) > 8;
+}
+
+static int passive_mob_has_spawn_clearance(int type, float x, float y, float z) {
+    if (!passive_mob_type_valid(type)) return 0;
+    float hw = passive_mob_width_for_type(type) * 0.5f;
+    float h = passive_mob_height_for_type(type);
+    FlatAABB b = { x - hw + 0.02f, y + 0.01f, z - hw + 0.02f,
+                   x + hw - 0.02f, y + h, z + hw - 0.02f };
+    if (passive_mob_aabb_has_liquid_box(b.minx, b.miny, b.minz, b.maxx, b.maxy, b.maxz, 0)) return 0;
+    FlatAABB boxes[64];
+    return flat_get_collision_boxes(&b, boxes, 64) <= 0;
+}
+
+static int passive_mob_far_enough_from_player(float x, float y, float z) {
+    float dx = x - g_player_x;
+    float dy = y - g_player_y;
+    float dz = z - g_player_z;
+    return dx * dx + dy * dy + dz * dz >= 24.0f * 24.0f;
+}
+
+static int passive_mob_far_enough_from_world_spawn(float x, float y, float z) {
+    return x * x + y * y + z * z >= 24.0f * 24.0f;
+}
+
+static int passive_mob_can_spawn_at(int type, int x, int y, int z) {
+    if (!passive_mob_type_valid(type)) return 0;
+    if (!flat_chunk_generated_at_block(x, z)) return 0;
+    if (!passive_mob_can_stand_at(x, y, z)) return 0;
+    if (!passive_mob_has_spawn_light(x, y, z)) return 0;
+    float fx = (float)x + 0.5f;
+    float fy = (float)y;
+    float fz = (float)z + 0.5f;
+    if (!passive_mob_far_enough_from_player(fx, fy, fz)) return 0;
+    if (!passive_mob_far_enough_from_world_spawn(fx, fy, fz)) return 0;
+    return passive_mob_has_spawn_clearance(type, fx, fy, fz);
+}
+
+static int passive_mob_column_spawn_y(int type, int x, int z) {
     if (x < g_flat_world_origin_x + 1 || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE - 1 ||
         z < g_flat_world_origin_z + 1 || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 1) return -9999;
     for (int y = FLAT_WORLD_Y_MAX - 2; y >= FLAT_WORLD_Y_MIN + 1; --y) {
-        if (passive_mob_spawn_ok(x, y, z)) return y;
+        if (passive_mob_can_spawn_at(type, x, y, z)) return y;
     }
     return -9999;
 }
@@ -321,7 +377,7 @@ static void passive_mobs_try_natural_spawn(void) {
         for (int tries = 0; tries < 16 && spawned < 4 && passive_mob_count() < cap; ++tries) {
             int x = base_x + (rand() % 6) - (rand() % 6);
             int z = base_z + (rand() % 6) - (rand() % 6);
-            int y = passive_mob_column_spawn_y(x, z);
+            int y = passive_mob_column_spawn_y(type, x, z);
             if (y == -9999) continue;
             PassiveMob *m = passive_mob_alloc();
             if (!m) return;
@@ -341,10 +397,10 @@ static void passive_mobs_ensure_population(int wanted, int attempts) {
     for (int attempt = 0; attempt < attempts && passive_mob_count() < wanted; ++attempt) {
         int x = (int)floorf(g_player_x) + (rand() % 129) - 64;
         int z = (int)floorf(g_player_z) + (rand() % 129) - 64;
-        int y = passive_mob_column_spawn_y(x, z);
-        if (y == -9999) continue;
         int r = rand() % 4;
         int type = r == 0 ? PASSIVE_MOB_SHEEP : r == 1 ? PASSIVE_MOB_PIG : r == 2 ? PASSIVE_MOB_CHICKEN : PASSIVE_MOB_COW;
+        int y = passive_mob_column_spawn_y(type, x, z);
+        if (y == -9999) continue;
         PassiveMob *m = passive_mob_alloc();
         if (!m) break;
         passive_mob_init(m, type, (float)x + 0.5f, (float)y, (float)z + 0.5f);
@@ -403,14 +459,6 @@ static void passive_mob_choose_target(PassiveMob *m) {
     }
 }
 
-static void passive_mob_on_death(PassiveMob *m) {
-    int drop = passive_mob_drop_item(m->type);
-    if (drop > 0) {
-        int count = rand() % 3; /* EntityLiving.onDeath: rand.nextInt(3) */
-        for (int i = 0; i < count; ++i) spawn_item_stack(m->x, m->y + 0.5f, m->z, make_stack(drop, 1, 0), 1);
-    }
-}
-
 static int held_damage_vs_mob(void) {
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (stack_empty(held)) return 1;
@@ -429,40 +477,75 @@ static int held_damage_vs_mob(void) {
     }
 }
 
+static int passive_mob_can_shear_sheep(const PassiveMob *m) {
+    if (!m || !m->active || m->death_time > 0) return 0;
+    if (m->type != PASSIVE_MOB_SHEEP || m->sheared) return 0;
+#ifdef ITEM_SHEARS
+    const ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    return held && !stack_empty(held) && held->id == ITEM_SHEARS;
+#else
+    /* TODO(passive mobs): enable sheep shearing when this Beta item table gains shears. */
+    return 0;
+#endif
+}
+
 static void passive_mob_shear_sheep(PassiveMob *m) {
-    if (!m || m->type != PASSIVE_MOB_SHEEP || m->sheared) return;
+    if (!passive_mob_can_shear_sheep(m)) return;
     m->sheared = 1;
     int count = 1 + (rand() % 3);
     for (int i = 0; i < count; ++i) {
-        FlatDroppedItem *before = NULL;
-        (void)before;
         spawn_item_stack(m->x, m->y + 1.0f, m->z, make_stack(BLOCK_WOOL, 1, 0), 1);
     }
+    restart_hand_swing();
+    g_save_dirty = 1;
 }
 
-static void passive_mob_take_damage(PassiveMob *m, int damage) {
-    if (!m || !m->active || m->death_time > 0 || damage <= 0) return;
-    passive_mob_shear_sheep(m);
-    m->health -= damage;
-    player_add_exhaustion(0.3f);
-    m->hurt_time = 10;
+static void passive_mob_apply_player_knockback(PassiveMob *m) {
     float dx = g_player_x - m->x;
     float dz = g_player_z - m->z;
-    float len = sqrtf(dx*dx + dz*dz);
+    float len = sqrtf(dx * dx + dz * dz);
     if (len < 0.001f) len = 0.001f;
     m->mx -= dx / len * 0.4f;
     m->mz -= dz / len * 0.4f;
     m->my += 0.4f;
     if (m->my > 0.4f) m->my = 0.4f;
+}
+
+static void passive_mob_start_death(PassiveMob *m) {
+    if (!m || m->death_time > 0) return;
+    const char *s = passive_mob_death_sound(m->type);
+    if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
+                             (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+    m->health = 0;
+    m->death_time = 1;
+    m->has_path_target = 0;
+    m->wander_cooldown = 0;
+    if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS &&
+        &g_passive_mobs[g_player_riding_passive_mob] == m) {
+        g_player_riding_passive_mob = -1;
+    }
+    player_add_experience(1 + (rand() % 3));
+    passive_mob_drop_on_death(m);
+}
+
+static void passive_mob_take_damage(PassiveMob *m, int damage) {
+    if (!m || !m->active || m->death_time > 0) return;
+    if (damage <= 0) return;
+    if (m->damage_cooldown > 0) return;
+    if (damage < 1) damage = 1;
+
+    m->damage_cooldown = 10;
+    m->health -= damage;
+    player_add_exhaustion(0.3f);
+    m->hurt_time = 10;
+    passive_mob_apply_player_knockback(m);
+
     if (m->health <= 0) {
-        const char *s = passive_mob_death_sound(m->type);
-        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type), (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
-        m->death_time = 1;
-        player_add_experience(1 + (rand() % 3));
-        passive_mob_on_death(m);
+        passive_mob_start_death(m);
     } else {
         const char *s = passive_mob_hurt_sound(m->type);
-        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type), (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
+                                 (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
     }
     g_save_dirty = 1;
 }
@@ -512,10 +595,10 @@ static int passive_mobs_attack_from_player(void) {
     if (!m) return 0;
     FlatRayHit block = flat_raycast();
     if (block.hit) {
-        float bx = ((float)block.bx + 0.5f) - g_player_x;
-        float by = ((float)block.by + 0.5f) - g_player_y;
-        float bz = ((float)block.bz + 0.5f) - g_player_z;
-        float block_dist = sqrtf(bx*bx + by*by + bz*bz);
+        float bx = block.hx - g_player_x;
+        float by = block.hy - g_player_y;
+        float bz = block.hz - g_player_z;
+        float block_dist = sqrtf(bx * bx + by * by + bz * bz);
         if (block_dist + 0.20f < mob_t) return 0;
     }
     restart_hand_swing();
@@ -540,6 +623,10 @@ static int passive_mobs_player_interact(void) {
     PassiveMob *m = passive_mob_raycast(5.0f, &mob_t);
     if (!m) return 0;
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    if (passive_mob_can_shear_sheep(m)) {
+        passive_mob_shear_sheep(m);
+        return 1;
+    }
     if (m->type == PASSIVE_MOB_COW && held && !stack_empty(held) && held->id == ITEM_BUCKET_EMPTY) {
         consume_held_stack_one(held, ITEM_BUCKET_MILK);
         restart_hand_swing();
@@ -573,48 +660,70 @@ static void passive_mob_request_jump(PassiveMob *m, const char *why) {
     pex_logf_trace("passive mob jump type=%s reason=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), why ? why : "", m->x, m->y, m->z);
 }
 
-static void passive_mob_update_living(PassiveMob *m) {
-    m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
+static void passive_mob_tick_timers(PassiveMob *m) {
+    m->prev_x = m->x;
+    m->prev_y = m->y;
+    m->prev_z = m->z;
     m->prev_yaw = m->yaw;
     m->prev_render_yaw = m->render_yaw;
     m->prev_pitch = m->pitch;
     m->prev_limb_swing = m->limb_swing;
     m->prev_limb_amount = m->limb_amount;
     if (m->hurt_time > 0) --m->hurt_time;
+    if (m->damage_cooldown > 0) --m->damage_cooldown;
     if (m->jump_cooldown > 0) --m->jump_cooldown;
     if (m->wander_cooldown > 0) --m->wander_cooldown;
     ++m->age;
+}
 
-    if (m->death_time > 0) {
-        ++m->death_time;
-        if (m->death_time > 20) {
-            if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS && &g_passive_mobs[g_player_riding_passive_mob] == m) g_player_riding_passive_mob = -1;
-            m->active = 0;
+static int passive_mob_tick_death(PassiveMob *m) {
+    if (m->death_time <= 0) return 0;
+    ++m->death_time;
+    m->has_path_target = 0;
+    m->mx *= 0.80f;
+    m->mz *= 0.80f;
+    if (m->death_time > 20) {
+        if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS &&
+            &g_passive_mobs[g_player_riding_passive_mob] == m) {
+            g_player_riding_passive_mob = -1;
         }
-        return;
+        m->active = 0;
     }
+    return 1;
+}
 
+static void passive_mob_tick_sounds(PassiveMob *m) {
+    if (m->death_time > 0) return;
     if (rand() % 1000 < ++m->living_sound_delay) {
         m->living_sound_delay = -120;
         const char *s = passive_mob_living_sound(m->type);
-        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type), (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
+                                 (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
     }
+}
 
+static int passive_mob_update_liquid_state(PassiveMob *m) {
     m->was_in_water = m->in_water;
     m->in_water = passive_mob_in_water(m);
     int in_liquid = m->in_water || passive_mob_in_liquid(m);
     if (m->in_water && !m->was_in_water) {
         spawn_water_entry_particles(m->x, m->y + 0.15f, m->z, m->mx, m->mz);
-        pex_sound_play_at("random.splash", m->x, m->y, m->z, 1.0f, 1.0f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
+        pex_sound_play_at("random.splash", m->x, m->y, m->z, 1.0f,
+                          1.0f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
     }
+    return in_liquid;
+}
 
-    if (!m->has_path_target || m->wander_cooldown <= 0 || (in_liquid && (rand() % 25) == 0)) passive_mob_choose_target(m);
+static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
+    if (!m->has_path_target || m->wander_cooldown <= 0 || (in_liquid && (rand() % 25) == 0)) {
+        passive_mob_choose_target(m);
+    }
 
     float forward = 0.0f;
     if (m->has_path_target) {
         float tx = m->target_x - m->x;
         float tz = m->target_z - m->z;
-        float dist2 = tx*tx + tz*tz;
+        float dist2 = tx * tx + tz * tz;
         if (dist2 < 0.55f * 0.55f) {
             m->has_path_target = 0;
         } else {
@@ -623,11 +732,14 @@ static void passive_mob_update_living(PassiveMob *m) {
             turn = pex_clamp_float(turn, -30.0f, 30.0f);
             m->yaw += turn;
             forward = in_liquid ? 0.010f : 0.026f;
-            if (m->type != PASSIVE_MOB_CHICKEN && m->target_y > m->y + 0.35f && m->on_ground && m->stuck_ticks > 8) passive_mob_request_jump(m, "higher-target");
+            if (m->type != PASSIVE_MOB_CHICKEN && m->target_y > m->y + 0.35f &&
+                m->on_ground && m->stuck_ticks > 8) {
+                passive_mob_request_jump(m, "higher-target");
+            }
         }
     }
 
-    if (in_liquid && (m->collided_horizontal || (m->stuck_ticks > 10) || (rand() % 10) < 3)) {
+    if (in_liquid && (m->collided_horizontal || m->stuck_ticks > 10 || (rand() % 10) < 3)) {
         m->my += 0.035f;
         if (m->my > 0.22f) m->my = 0.22f;
     }
@@ -639,27 +751,32 @@ static void passive_mob_update_living(PassiveMob *m) {
             m->wander_cooldown = 30 + (rand() % 60);
         }
     }
+    return forward;
+}
 
-    if (m->type == PASSIVE_MOB_CHICKEN) {
-        m->chicken_prev_wing_rot = m->chicken_wing_rot;
-        m->chicken_prev_dest_pos = m->chicken_dest_pos;
-        m->chicken_dest_pos += (float)(m->on_ground ? -1 : 4) * 0.3f;
-        m->chicken_dest_pos = pex_clamp_float(m->chicken_dest_pos, 0.0f, 1.0f);
-        if (!m->on_ground && m->chicken_wing_speed < 1.0f) m->chicken_wing_speed = 1.0f;
-        m->chicken_wing_speed *= 0.9f;
-        if (!m->on_ground && m->my < 0.0f) m->my *= 0.6f;
-        m->chicken_wing_rot += m->chicken_wing_speed * 2.0f;
-        if (--m->egg_timer <= 0) {
-            pex_sound_play_at("mob.chickenplop", m->x, m->y, m->z, 1.0f, (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
-            spawn_item_stack(m->x, m->y + 0.5f, m->z, make_stack(ITEM_EGG, 1, 0), 1);
-            m->egg_timer = rand() % 6000 + 6000;
-        }
+static void passive_mob_tick_species_behavior(PassiveMob *m) {
+    if (m->type != PASSIVE_MOB_CHICKEN) return;
+    m->chicken_prev_wing_rot = m->chicken_wing_rot;
+    m->chicken_prev_dest_pos = m->chicken_dest_pos;
+    m->chicken_dest_pos += (float)(m->on_ground ? -1 : 4) * 0.3f;
+    m->chicken_dest_pos = pex_clamp_float(m->chicken_dest_pos, 0.0f, 1.0f);
+    if (!m->on_ground && m->chicken_wing_speed < 1.0f) m->chicken_wing_speed = 1.0f;
+    m->chicken_wing_speed *= 0.9f;
+    if (!m->on_ground && m->my < 0.0f) m->my *= 0.6f;
+    m->chicken_wing_rot += m->chicken_wing_speed * 2.0f;
+    if (--m->egg_timer <= 0) {
+        pex_sound_play_at("mob.chickenplop", m->x, m->y, m->z, 1.0f,
+                          (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+        spawn_item_stack(m->x, m->y + 0.5f, m->z, make_stack(ITEM_EGG, 1, 0), 1);
+        m->egg_timer = rand() % 6000 + 6000;
     }
+}
 
+static void passive_mob_apply_physics(PassiveMob *m, float forward, int in_liquid) {
     float yaw_rad = m->yaw * (float)M_PI / 180.0f;
     if (forward > 0.0f) {
         m->mx += -sinf(yaw_rad) * forward;
-        m->mz += cosf(yaw_rad) * forward;
+        m->mz +=  cosf(yaw_rad) * forward;
     }
     if (in_liquid) {
         passive_mob_move_entity(m, m->mx, m->my, m->mz);
@@ -679,11 +796,14 @@ static void passive_mob_update_living(PassiveMob *m) {
         m->my *= 0.98f;
         if (m->on_ground && m->my < 0.0f) m->my = 0.0f;
     }
+}
 
+static void passive_mob_tick_animation(PassiveMob *m, float forward, int in_liquid) {
     float dx = m->x - m->prev_x;
     float dz = m->z - m->prev_z;
-    float speed = sqrtf(dx*dx + dz*dz);
-    if (m->has_path_target && forward > 0.0f && speed < 0.006f && (m->collided_horizontal || m->on_ground)) {
+    float speed = sqrtf(dx * dx + dz * dz);
+    if (m->has_path_target && forward > 0.0f && speed < 0.006f &&
+        (m->collided_horizontal || m->on_ground)) {
         if (m->stuck_ticks < 200) ++m->stuck_ticks;
     } else if (m->stuck_ticks > 0) {
         --m->stuck_ticks;
@@ -692,9 +812,12 @@ static void passive_mob_update_living(PassiveMob *m) {
         m->has_path_target = 0;
         m->wander_cooldown = 20 + (rand() % 40);
         m->stuck_ticks = 0;
-        pex_logf_trace("passive mob dropped stuck target type=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), m->x, m->y, m->z);
+        pex_logf_trace("passive mob dropped stuck target type=%s pos=%.2f,%.2f,%.2f",
+                       passive_mob_name(m->type), m->x, m->y, m->z);
     }
-    float target_amount = (speed > 0.01f && (m->on_ground || in_liquid)) ? pex_clamp_float(speed * 7.0f, 0.0f, 1.0f) : 0.0f;
+
+    float target_amount = (speed > 0.01f && (m->on_ground || in_liquid))
+        ? pex_clamp_float(speed * 7.0f, 0.0f, 1.0f) : 0.0f;
     m->limb_amount += (target_amount - m->limb_amount) * 0.4f;
     m->limb_swing += m->limb_amount;
     if (speed > 0.05f) {
@@ -704,12 +827,31 @@ static void passive_mob_update_living(PassiveMob *m) {
     } else {
         m->render_yaw += pex_wrap_degrees(m->yaw - m->render_yaw) * 0.15f;
     }
+}
 
-    if (m->y < -32.0f || m->x < g_flat_world_origin_x - 8 || m->x > g_flat_world_origin_x + FLAT_WORLD_SIZE + 8 ||
-        m->z < g_flat_world_origin_z - 8 || m->z > g_flat_world_origin_z + FLAT_WORLD_SIZE + 8) {
-        if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS && &g_passive_mobs[g_player_riding_passive_mob] == m) g_player_riding_passive_mob = -1;
+static void passive_mob_check_bounds(PassiveMob *m) {
+    if (m->y < -32.0f || m->x < g_flat_world_origin_x - 8 ||
+        m->x > g_flat_world_origin_x + FLAT_WORLD_SIZE + 8 ||
+        m->z < g_flat_world_origin_z - 8 ||
+        m->z > g_flat_world_origin_z + FLAT_WORLD_SIZE + 8) {
+        if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS &&
+            &g_passive_mobs[g_player_riding_passive_mob] == m) {
+            g_player_riding_passive_mob = -1;
+        }
         m->active = 0;
     }
+}
+
+static void passive_mob_tick_living(PassiveMob *m) {
+    passive_mob_tick_timers(m);
+    if (passive_mob_tick_death(m)) return;
+    passive_mob_tick_sounds(m);
+    int in_liquid = passive_mob_update_liquid_state(m);
+    float forward = passive_mob_tick_ai(m, in_liquid);
+    passive_mob_tick_species_behavior(m);
+    passive_mob_apply_physics(m, forward, in_liquid);
+    passive_mob_tick_animation(m, forward, in_liquid);
+    passive_mob_check_bounds(m);
 }
 
 static void passive_mobs_apply_riding(void) {
@@ -743,11 +885,9 @@ static int passive_mob_tick_stride(const PassiveMob *m) {
 }
 
 static void update_passive_mobs(void) {
+    /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
     if (g_mp_connected) return;
     passive_mobs_enforce_cap();
-    if ((g_ingame_ticks % 40) == 5 && passive_mob_count() < PEX_PASSIVE_INITIAL_TARGET) {
-        passive_mobs_ensure_population(PEX_PASSIVE_INITIAL_TARGET, 500);
-    }
     passive_mobs_try_natural_spawn();
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         PassiveMob *m = &g_passive_mobs[i];
@@ -761,7 +901,7 @@ static void update_passive_mobs(void) {
             m->prev_limb_swing = m->limb_swing; m->prev_limb_amount = m->limb_amount;
             continue;
         }
-        passive_mob_update_living(m);
+        passive_mob_tick_living(m);
     }
 }
 
@@ -824,7 +964,7 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
     const float max_dist2 = PEX_PASSIVE_RENDER_DIST * PEX_PASSIVE_RENDER_DIST;
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         const PassiveMob *m = &src[i];
-        if (!m->active) continue;
+        if (!m->active || !passive_mob_type_valid(m->type)) continue;
         float x = m->prev_x + (m->x - m->prev_x) * partial;
         float y = m->prev_y + (m->y - m->prev_y) * partial;
         float z = m->prev_z + (m->z - m->prev_z) * partial;
@@ -1038,6 +1178,7 @@ static void passive_render_chicken(int detail, float limb, float move, float hea
 }
 
 static void draw_passive_mobs(float partial) {
+    /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
     if (g_mp_connected) return;
     passive_mobs_submit_render_job(partial);
     PassiveMobRenderEntry entries[PEX_PASSIVE_RENDER_LIMIT];
@@ -1056,7 +1197,7 @@ static void draw_passive_mobs(float partial) {
 
     for (int i = 0; i < entry_count; ++i) {
         PassiveMobRenderEntry *e = &entries[i];
-        if (!e->active) continue;
+        if (!e->active || !passive_mob_type_valid(e->type)) continue;
         Texture *t = passive_mob_texture_for_type(e->type);
         if (!t || !t->id) continue;
 
@@ -1107,11 +1248,13 @@ static void draw_passive_mobs(float partial) {
 
 static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs) {
     int count = 0;
-    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) if (mobs[i].active) ++count;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        if (mobs[i].active && passive_mob_type_valid(mobs[i].type)) ++count;
+    }
     fwrite(&count, sizeof(count), 1, f);
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         const PassiveMob *m = &mobs[i];
-        if (!m->active) continue;
+        if (!m->active || !passive_mob_type_valid(m->type)) continue;
         fwrite(&m->type, sizeof(int), 1, f);
         fwrite(&m->x, sizeof(float), 1, f);
         fwrite(&m->y, sizeof(float), 1, f);
@@ -1172,7 +1315,19 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
             passive_mobs_reset();
             return;
         }
-        if (m->type < PASSIVE_MOB_PIG || m->type > PASSIVE_MOB_CHICKEN || m->health <= 0) { memset(m, 0, sizeof(*m)); continue; }
+        if (!passive_mob_type_valid(m->type) || m->health <= 0 ||
+            !isfinite(m->x) || !isfinite(m->y) || !isfinite(m->z) ||
+            m->x < (float)g_flat_world_origin_x - 16.0f ||
+            m->x > (float)(g_flat_world_origin_x + FLAT_WORLD_SIZE) + 16.0f ||
+            m->z < (float)g_flat_world_origin_z - 16.0f ||
+            m->z > (float)(g_flat_world_origin_z + FLAT_WORLD_SIZE) + 16.0f ||
+            m->y < (float)FLAT_WORLD_Y_MIN - 16.0f ||
+            m->y > (float)FLAT_WORLD_Y_MAX + 16.0f) {
+            memset(m, 0, sizeof(*m));
+            continue;
+        }
+        int max_health = passive_mob_health_for_type(m->type);
+        if (m->health > max_health) m->health = max_health;
         m->active = 1;
         m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
         m->prev_yaw = m->yaw;
@@ -1184,6 +1339,8 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         m->chicken_prev_wing_rot = m->chicken_wing_rot;
         m->chicken_prev_dest_pos = m->chicken_dest_pos;
         if (m->type == PASSIVE_MOB_CHICKEN && m->egg_timer <= 0) m->egg_timer = rand() % 6000 + 6000;
+        m->damage_cooldown = 0;
+        m->death_drops_done = m->death_time > 0;
         m->jump_cooldown = 0;
         m->stuck_ticks = 0;
         m->wander_cooldown = 20 + (rand() % 80);

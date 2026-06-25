@@ -3447,8 +3447,8 @@ static void emit_cuboid_block_faces(int id, float x0, float y0, float z0, float 
 
 static void emit_block_cuboid_faces(int id, float x, float y, float z,
                                               float x0, float y0, float z0, float x1, float y1, float z1) {
-    emit_cuboid_block_faces(id, x + x0, y + y0, z + z0, x + x1, y + y1, z + z1,
-                                  x0, y0, z0, x1, y1, z1);
+    emit_cuboid_block_faces_lit(id, x + x0, y + y0, z + z0, x + x1, y + y1, z + z1,
+                                x0, y0, z0, x1, y1, z1);
 }
 
 static void draw_cuboid_model_for_block(int id, float x, float y, float z, float x0, float y0, float z0, float x1, float y1, float z1) {

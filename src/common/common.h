@@ -543,7 +543,9 @@ typedef struct PassiveMob {
     float width, height;
     int health;
     int hurt_time;
+    int damage_cooldown;
     int death_time;
+    int death_drops_done;
     int on_ground;
     int collided_horizontal;
     int collided_vertical;

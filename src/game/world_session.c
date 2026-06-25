@@ -1308,13 +1308,7 @@ static void finish_prepared_world_entry(int loaded_state) {
         passive_mobs_spawn_initial();
         g_passive_mobs_need_initial_spawn = 0;
     }
-    if (loaded_state) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-        passive_mobs_ensure_population(10, 1200);
-#else
-        passive_mobs_ensure_population(16, 1800);
-#endif
-    }
+    /* Do not top up saved passive mobs on every load; natural spawning refills slowly under cap. */
 
     g_chat_input[0] = 0;
     g_chat_count = 0;
