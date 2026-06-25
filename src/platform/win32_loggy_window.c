@@ -174,8 +174,11 @@ static void loggy_append_root_hints(char **out, size_t *left, double top_account
         loggy_appendf(out, left, "  [VSYNC] V-Sync is ON and max_fps=%d. Present may block on monitor refresh.\n", g_opts.max_fps);
         hints++;
     }
-    if (g_prof_display_ms[PROF_PRESENT] > 2.0) {
-        loggy_appendf(out, left, "  [PRESENT] Present/swap is %.3fms avg. Suspect VSync/DWM/driver/back-buffer wait, not CPU logic.\n", g_prof_display_ms[PROF_PRESENT]);
+    if (g_prof_display_ms[PROF_PRESENT] > 0.75) {
+        loggy_appendf(out, left, "  [PRESENT] Present/swap is %.3fms avg. Suspect DXGI/DWM/back-buffer queue wait. flags=0x%x tearing=%d latency=%d set=%d hr=0x%08lx foreground=%d\n",
+                      g_prof_display_ms[PROF_PRESENT], g_loggy_d3d11_present_flags, g_loggy_d3d11_allow_tearing,
+                      g_loggy_d3d11_frame_latency, g_loggy_d3d11_frame_latency_set,
+                      (unsigned long)g_loggy_d3d11_present_hr, GetForegroundWindow() == g_hwnd);
         hints++;
     }
     if (g_prof_display_ms[PROF_GAMEPAD_POLL] > 0.75) {
@@ -367,6 +370,14 @@ static void loggy_build_text(void) {
                   g_prof_display_ms[PROF_WORLD_ENTITIES], g_prof_display_ms[PROF_WORLD_PARTICLES],
                   g_prof_display_ms[PROF_WORLD_TRANSLUCENT], g_prof_display_ms[PROF_WORLD_OVERLAYS],
                   g_prof_display_ms[PROF_WORLD_CLOUDS], g_prof_display_ms[PROF_HUD_GUI]);
+
+    loggy_appendf(&out, &left, "\nD3D11 PRESENT STATE:\n");
+    loggy_appendf(&out, &left, "  active=%d allow_tearing=%d swap_flags=0x%x present_flags=0x%x present_hr=0x%08lx failures=%d buffers=%d frame_latency=%d latency_set=%d stall_warn=%d\n",
+                  g_loggy_d3d11_active, g_loggy_d3d11_allow_tearing, g_loggy_d3d11_swap_flags,
+                  g_loggy_d3d11_present_flags, (unsigned long)g_loggy_d3d11_present_hr,
+                  g_loggy_d3d11_present_failures, g_loggy_d3d11_buffer_count,
+                  g_loggy_d3d11_frame_latency, g_loggy_d3d11_frame_latency_set,
+                  g_loggy_d3d11_present_stall_warning);
 
     loggy_appendf(&out, &left, "\nGUI / TEXT / BUTTONS THIS FRAME:\n");
     loggy_appendf(&out, &left, "  text_calls=%d text_chars=%d gui_quads=%d buttons=%d debug_menu=%d chunk_info=%d task_info=%d button_count=%d mouse=%d,%d grabbed=%d hidden=%d\n",
@@ -628,15 +639,19 @@ static int loggy_init(void) {
         if (y < work_rc.top) y = work_rc.top;
     }
 
-    g_loggy.hwnd = CreateWindowExA(WS_EX_APPWINDOW, wc.lpszClassName, "PexCraft Loggy",
+    /* Do not activate Loggy.  If the diagnostic window steals foreground focus,
+       DWM/DXGI may throttle PexCraft's Present() and make the profiler lie. */
+    g_loggy.hwnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, "PexCraft Loggy",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, w, h, NULL, NULL, g_inst, NULL);
     if (!g_loggy.hwnd) {
         log_windows_error("CreateWindow native loggy");
         g_loggy_enabled = 0;
         return 0;
     }
-    ShowWindow(g_loggy.hwnd, SW_SHOW);
+    ShowWindow(g_loggy.hwnd, SW_SHOWNOACTIVATE);
+    SetWindowPos(g_loggy.hwnd, HWND_TOP, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     UpdateWindow(g_loggy.hwnd);
+    if (g_hwnd) SetForegroundWindow(g_hwnd);
     return 1;
 }
 

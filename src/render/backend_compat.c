@@ -20,6 +20,9 @@
 #ifndef DXGI_PRESENT_ALLOW_TEARING
 #define DXGI_PRESENT_ALLOW_TEARING 0x00000200U
 #endif
+#ifndef DXGI_PRESENT_DO_NOT_WAIT
+#define DXGI_PRESENT_DO_NOT_WAIT 0x00000008U
+#endif
 #ifndef DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
 #define DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING 0x00000800U
 #endif
@@ -205,6 +208,9 @@ typedef struct PexD3D11Backend {
     int width, height;
     int allow_tearing;
     UINT swap_flags;
+    int buffer_count;
+    int frame_latency;
+    int frame_latency_set;
     int draw_calls;
     int triangles;
 } PexD3D11Backend;
@@ -245,6 +251,7 @@ static HRESULT compat_d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
                 desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
             } else if (attempt == 2) {
                 desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+                desc.BufferCount = 1;
             }
 
             hr = D3D11CreateDeviceAndSwapChain(NULL, drivers[d], NULL, 0,
@@ -254,12 +261,30 @@ static HRESULT compat_d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
             if (SUCCEEDED(hr)) {
                 g_d3d11.allow_tearing = (attempt == 0);
                 g_d3d11.swap_flags = desc.Flags;
+                g_d3d11.buffer_count = (int)desc.BufferCount;
                 return hr;
             }
             compat_d3d11_release_failed_device(&g_d3d11.swap, &g_d3d11.dev, &g_d3d11.ctx);
         }
     }
     return hr;
+}
+
+static void compat_d3d11_set_latency_for_unlimited_fps(void) {
+    int desired = (g_opts.max_fps <= 0) ? 8 : 1;
+    g_d3d11.frame_latency = desired;
+    g_d3d11.frame_latency_set = 0;
+#if defined(_WIN32)
+    if (g_d3d11.dev) {
+        IDXGIDevice1 *dxgi_dev = NULL;
+        if (SUCCEEDED(ID3D11Device_QueryInterface(g_d3d11.dev, &IID_IDXGIDevice1, (void**)&dxgi_dev)) && dxgi_dev) {
+            if (SUCCEEDED(IDXGIDevice1_SetMaximumFrameLatency(dxgi_dev, (UINT)desired))) {
+                g_d3d11.frame_latency_set = 1;
+            }
+            IDXGIDevice1_Release(dxgi_dev);
+        }
+    }
+#endif
 }
 
 static void pex_gpu_flush_immediate_stream(void);
@@ -995,11 +1020,12 @@ static int pex_renderer_d3d11_init(HWND hwnd) {
     int w = rc.right - rc.left; int h = rc.bottom - rc.top; if (w < 1) w = 1; if (h < 1) h = 1;
     g_d3d11.hwnd = hwnd; g_d3d11.width = w; g_d3d11.height = h;
     DXGI_SWAP_CHAIN_DESC scd; memset(&scd,0,sizeof(scd));
-    scd.BufferCount = 2; scd.BufferDesc.Width=(UINT)w; scd.BufferDesc.Height=(UINT)h; scd.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM; scd.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT; scd.OutputWindow=hwnd; scd.SampleDesc.Count=1; scd.Windowed=TRUE; scd.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    scd.BufferCount = 3; scd.BufferDesc.Width=(UINT)w; scd.BufferDesc.Height=(UINT)h; scd.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM; scd.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT; scd.OutputWindow=hwnd; scd.SampleDesc.Count=1; scd.Windowed=TRUE; scd.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
     D3D_FEATURE_LEVEL fls[3] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
     D3D_FEATURE_LEVEL got;
     HRESULT hr = compat_d3d11_create_swap_chain(&scd, fls, (UINT)ARRAY_COUNT(fls), &got);
     if (FAILED(hr) || !g_d3d11.dev || !g_d3d11.ctx || !g_d3d11.swap) return 0;
+    compat_d3d11_set_latency_for_unlimited_fps();
     if (!pex_d3d11_create_views(w,h)) return 0;
     if (!pex_d3d11_create_pipeline()) return 0;
     ID3D11DeviceContext_IASetInputLayout(g_d3d11.ctx, g_d3d11.layout);
@@ -1051,7 +1077,17 @@ static void pex_renderer_d3d11_present(void) {
     if (!pex_using_d3d11() || !g_d3d11.swap) return;
     pex_gpu_flush_immediate_stream();
     UINT flags = (g_d3d11.allow_tearing && g_opts.max_fps <= 0) ? DXGI_PRESENT_ALLOW_TEARING : 0;
-    IDXGISwapChain_Present(g_d3d11.swap, 0, flags);
+    HRESULT hr;
+    g_loggy_d3d11_active = 1;
+    g_loggy_d3d11_allow_tearing = g_d3d11.allow_tearing;
+    g_loggy_d3d11_swap_flags = g_d3d11.swap_flags;
+    g_loggy_d3d11_present_flags = flags;
+    g_loggy_d3d11_buffer_count = g_d3d11.buffer_count;
+    g_loggy_d3d11_frame_latency = g_d3d11.frame_latency;
+    g_loggy_d3d11_frame_latency_set = g_d3d11.frame_latency_set;
+    hr = IDXGISwapChain_Present(g_d3d11.swap, 0, flags);
+    g_loggy_d3d11_present_hr = (long)hr;
+    if (FAILED(hr)) g_loggy_d3d11_present_failures++;
 }
 
 static D3D11_PRIMITIVE_TOPOLOGY compat_d3d11_topology_for_mode(int mode) {

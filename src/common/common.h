@@ -1855,6 +1855,16 @@ static int g_loggy_gamepad_focus = 0;
 static int g_loggy_clipboard_copies = 0;
 static int g_loggy_edit_refreshes = 0;
 static double g_loggy_edit_refresh_last_ms = 0.0;
+static int g_loggy_d3d11_active = 0;
+static int g_loggy_d3d11_allow_tearing = 0;
+static unsigned int g_loggy_d3d11_swap_flags = 0;
+static unsigned int g_loggy_d3d11_present_flags = 0;
+static long g_loggy_d3d11_present_hr = 0;
+static int g_loggy_d3d11_present_failures = 0;
+static int g_loggy_d3d11_buffer_count = 0;
+static int g_loggy_d3d11_frame_latency = 0;
+static int g_loggy_d3d11_frame_latency_set = 0;
+static int g_loggy_d3d11_present_stall_warning = 0;
 
 static int g_third_person_view = 0; /* Java 1.2.5 GameSettings.thirdPersonView: 0=first, 1=back, 2=front. */
 static void third_person_view_cycle(void) {
