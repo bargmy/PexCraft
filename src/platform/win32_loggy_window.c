@@ -199,6 +199,11 @@ static void loggy_append_root_hints(char **out, size_t *left, double top_account
         loggy_appendf(out, left, "  [MENU DRAW] Title/menu draw costs %.3fms avg. Check title background/panorama/buttons/text loops.\n", g_prof_display_ms[PROF_DRAW_CURRENT_SCREEN]);
         hints++;
     }
+    if (g_prof_display_ms[PROF_WORLD_CLOUDS] > 1.0) {
+        loggy_appendf(out, left, "  [CLOUDS] World clouds cost %.3fms avg. Fancy clouds should be batched; many tiny immediate batches will cap FPS.\n",
+                      g_prof_display_ms[PROF_WORLD_CLOUDS]);
+        hints++;
+    }
     if (g_loggy_gui_text_calls > 1000 || g_loggy_gui_quads > 20000 || g_loggy_gui_buttons > 1000) {
         loggy_appendf(out, left, "  [GUI SPAM] This frame emits text_calls=%d quads=%d buttons=%d. If this stays high after reset, menu UI is rebuilding/drawing too much.\n",
                       g_loggy_gui_text_calls, g_loggy_gui_quads, g_loggy_gui_buttons);

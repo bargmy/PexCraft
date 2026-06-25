@@ -670,6 +670,15 @@ static void draw_source_fancy_clouds(float partial) {
     for (int pass = 0; pass < 2; ++pass) {
         glColorMask(pass != 0, pass != 0, pass != 0, pass != 0);
         float alpha = 0.8f;
+
+        /* Keep Java's two-pass fancy-cloud shape, but do not emit one immediate
+           batch per 8x8 cloud cell.  On the D3D11 compatibility backend each
+           glEnd() finalizes and submits a draw batch; the old code made roughly
+           128 tiny cloud draw batches per frame here.  That is why Loggy showed
+           World clouds at ~3 ms while the actual terrain draw was cheap.
+           One batch per depth/color pass keeps the same vertices/colors while
+           cutting the D3D11 cloud submit overhead to two batches per frame. */
+        glBegin(GL_QUADS);
         for (int cz = -radius_cells + 1; cz <= radius_cells; ++cz) {
             for (int cx = -radius_cells + 1; cx <= radius_cells; ++cx) {
                 float gx0 = (float)(cx * cell) - frac_x;
@@ -685,7 +694,6 @@ static void draw_source_fancy_clouds(float partial) {
                 float v0 = ((float)(cz * cell) + 0.0f) * uv_scale + v_base;
                 float v1 = ((float)(cz * cell + cell)) * uv_scale + v_base;
 
-                glBegin(GL_QUADS);
                 /* Java draws the bottom face when the camera is below/inside the
                    slab, and the top face when the camera is above/inside it.  The
                    earlier port had these swapped, which made fancy clouds look like
@@ -726,9 +734,9 @@ static void draw_source_fancy_clouds(float partial) {
                     float vv = ((float)(cz * cell + i) + 0.5f) * uv_scale + v_base;
                     cloud_tex_vertex(x0, y0, za, u0, vv); cloud_tex_vertex(x1, y0, za, u1, vv); cloud_tex_vertex(x1, y1, za, u1, vv); cloud_tex_vertex(x0, y1, za, u0, vv);
                 }
-                glEnd();
             }
         }
+        glEnd();
     }
 
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
