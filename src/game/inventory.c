@@ -584,6 +584,18 @@ static float flat_sun_brightness_for_light(float partial) {
     return v * 0.8f + 0.2f;
 }
 
+static float java125_world_time_dark_overlay_alpha(void) {
+    /* Debug/overlay helper shared by GUI and platform unity builds.  It follows
+       the same Java 1.2.5 sun-brightness curve used by the CPU lightmap, so the
+       value is 0.0 in full daylight and rises smoothly toward night darkness.
+       Because Java's overworld sun brightness bottoms out at 0.2F, the maximum
+       dark overlay is 0.8 rather than full black. */
+    float alpha = 1.0f - flat_sun_brightness_for_light(1.0f);
+    if (alpha < 0.0f) alpha = 0.0f;
+    if (alpha > 1.0f) alpha = 1.0f;
+    return alpha;
+}
+
 static void flat_lightmap_color_from_packed(int packed, float *r, float *g, float *b) {
     /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
        overworld, gamma=0, torchFlickerX=0, no lightning.  Java applies this as
