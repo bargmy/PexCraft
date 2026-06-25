@@ -5654,7 +5654,12 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
                     continue;
                 }
                 if (g_flat_section_mesh_building[r->sy][r->cz][r->cx]) break;
-                int submit_result = async_section_mesh_submit_priority(r->sy, r->cx, r->cz);
+                /* Loading/pre-entry prep must never use the priority path.  The
+                   priority submitter is allowed to drop queued background jobs; when
+                   the old Preparing Chunks gate used it, the prep index advanced
+                   past sections whose jobs were silently discarded, verify_complete
+                   failed, reset to zero, and the loading screen looped. */
+                int submit_result = async_section_mesh_submit(r->sy, r->cx, r->cz);
                 if (submit_result == 2) break;
                 if (submit_result == 0) rebuild_flat_world_section_list(r->sy, r->cx, r->cz);
                 g_worldgen_mesh_prep_index++;
@@ -5662,10 +5667,29 @@ static int worldgen_mesh_prep_step(int max_rebuilds) {
             }
             if (g_worldgen_mesh_prep_index >= g_worldgen_mesh_prep_count) {
                 async_section_mesh_install_ready(max_rebuilds);
-                if (async_section_mesh_pending()) return 0;
+
+                int target_still_building = 0;
+                for (int i = 0; i < g_worldgen_mesh_prep_count; ++i) {
+                    FlatRenderSectionRef *r = &g_worldgen_mesh_prep_refs[i];
+                    if (g_flat_section_mesh_building[r->sy][r->cz][r->cx]) {
+                        target_still_building = 1;
+                        break;
+                    }
+                }
+                if (target_still_building) return 0;
+
                 if (!worldgen_mesh_prep_verify_complete()) {
-                    g_worldgen_mesh_prep_index = 0;
-                    return 0;
+                    /* Do not loop a full N/N Preparing Chunks pass forever.  Mark the
+                       remaining sections dirty and let the normal Java-style renderer
+                       update queue rebuild them after entry.  Lighting has already
+                       settled by this phase, so any runtime rebuild uses final light. */
+                    for (int i = 0; i < g_worldgen_mesh_prep_count; ++i) {
+                        FlatRenderSectionRef *r = &g_worldgen_mesh_prep_refs[i];
+                        if (flat_section_needs_mesh_rebuild(r->sy, r->cz, r->cx)) {
+                            g_flat_section_dirty[r->sy][r->cz][r->cx] = 1;
+                            g_flat_section_mesh_building[r->sy][r->cz][r->cx] = 0;
+                        }
+                    }
                 }
                 return 1;
             }

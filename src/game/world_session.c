@@ -1528,10 +1528,15 @@ static void worldgen_tick(void) {
             g_player_z = g_player_prev_z = 0.5f;
             flat_world_center_origin_near(g_player_x, g_player_z);
         } else if (g_last_load_state_had_terrain) {
-            g_worldgen.phase = 2;
-            g_worldgen.progress = 92;
-            snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Preparing chunks");
-            worldgen_mesh_prep_reset();
+            /* Java 1.2.5 RenderGlobal.loadRenderers() only marks world renderers
+               dirty after a world switch; it does not block the loading screen until
+               every chunk mesh/display-list has been rebuilt.  The old C preload
+               gate could loop forever when an async mesh result was stale/dropped,
+               so enter the world after terrain/light state is ready and let the
+               normal renderer queue rebuild visible sections from final light. */
+            g_worldgen.phase = 3;
+            g_worldgen.progress = 100;
+            snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Entering world");
             return;
         }
 
@@ -1568,10 +1573,12 @@ static void worldgen_tick(void) {
 
             flat_world_finish_initial_generation();
             if (!g_worldgen.loaded_state) reset_flat_player_spawn();
-            g_worldgen.phase = 2;
-            g_worldgen.progress = 92;
-            snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Preparing chunks");
-            worldgen_mesh_prep_reset();
+            /* Match Java 1.2.5: terrain is preloaded and lighting is drained before
+               entry, but renderer rebuilds are queued/updated after the world is
+               active instead of being a blocking "Preparing chunks" phase. */
+            g_worldgen.phase = 3;
+            g_worldgen.progress = 100;
+            snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Entering world");
         }
         return;
     }
