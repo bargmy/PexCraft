@@ -1107,14 +1107,14 @@ static void biome_temp_humid_at(int x, int z, float *temp, float *humid) {
     static PEX_THREAD_LOCAL int ready = 0;
     static PEX_THREAD_LOCAL long long seed = 0;
     if (!ready || seed != g_world_seed) {
-        if (ready) { free(mgr.temp); free(mgr.humid); free(mgr.weird); memset(&mgr, 0, sizeof(mgr)); }
+        if (ready) { free(mgr.temp); memset(&mgr, 0, sizeof(mgr)); }
         biome_manager_init(&mgr, g_world_seed);
         seed = g_world_seed;
         ready = 1;
     }
-    biome_manager_get(&mgr, x, z, 1, 1);
-    *temp = (float)mgr.temp[0];
-    *humid = (float)mgr.humid[0];
+    WorldBiome b = biome_manager_get(&mgr, x, z, 1, 1)[0];
+    *temp = b.temperature;
+    *humid = b.rainfall;
 }
 
 static int java_grass_color_at(int x, int z) {
@@ -3002,7 +3002,7 @@ static void world_tex_vertex_lit(float x, float y, float z, float u, float v,
     world_tex_vertex(x, y, z, u, v);
 }
 
-static int block_texture_125(int block_id, int meta, int face) {
+static int block_texture_resolve(int block_id, int meta, int face) {
     meta &= 15;
     switch (block_id) {
         case BLOCK_PLANKS:
@@ -3299,10 +3299,10 @@ static void world_face_style_at(int id, int x, int y, int z, int face, int *tile
     }
     {
         int meta = flat_get_meta(x, y, z);
-        int tile125 = block_texture_125(id, meta, face);
-        if (tile125 >= 0) {
+        int tile_idx = block_texture_resolve(id, meta, face);
+        if (tile_idx >= 0) {
             float shade = world_face_base_shade(face);
-            *tile = tile125;
+            *tile = tile_idx;
             if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_at(x, z), shade);
             else if (id == BLOCK_TALL_GRASS || id == BLOCK_VINE || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(x, z), shade);
             else world_set_shade(shade);
@@ -4221,7 +4221,7 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) { draw_stairs_block_model(id, x, y, z); return; }
     if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); return; }
     if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0,0.5625f,1,1); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0.4375f,1,1,0.5625f); return; }
-    if (id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_125(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
+    if (id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_resolve(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
     if (id == BLOCK_END_PORTAL_FRAME) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,13.0f/16.0f,1); return; }
     if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { float h = (flat_get_meta(x,y,z) & 1) ? (1.0f/32.0f) : (1.0f/16.0f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,h,0.9375f); return; }

@@ -1333,6 +1333,7 @@ static void enter_world_from_job(void) {
     snprintf(g_loaded_world_name, sizeof(g_loaded_world_name), "%s", g_worldgen.world_name[0] ? g_worldgen.world_name : "World");
     g_selected_hotbar_slot = 0;
     g_world_type = read_world_type_for_dir(g_loaded_world_dir);
+    { int mf = 1; if (read_level_int_tag_for_dir(g_loaded_world_dir, "MapFeatures", &mf)) g_world_map_features = mf ? 1 : 0; else g_world_map_features = 1; }
     {
         long long seed = 0;
         if (read_world_seed_for_dir(g_loaded_world_dir, &seed)) g_world_seed = seed;
@@ -1383,9 +1384,11 @@ static void start_world_generation_in_dir(const char *world_dir, const char *wor
     g_worldgen.slot = slot;
     g_worldgen.radius = 4;
     g_worldgen.total_chunks = (g_worldgen.radius * 2 + 1) * (g_worldgen.radius * 2 + 1);
-    g_worldgen.seed = ((long long)time(NULL) << 32) ^ (long long)GetTickCount();
+    if (g_pending_seed_set) g_worldgen.seed = g_pending_world_seed;
+    else g_worldgen.seed = ((long long)time(NULL) << 32) ^ (long long)GetTickCount();
     g_world_seed = g_worldgen.seed;
     g_world_type = g_pending_world_type;
+    g_world_map_features = g_pending_map_features ? 1 : 0;
     snprintf(g_worldgen.world_name, sizeof(g_worldgen.world_name), "%s", (world_name && world_name[0]) ? world_name : "World");
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     snprintf(g_worldgen.world_dir, sizeof(g_worldgen.world_dir), "memory:/%s", g_worldgen.world_name);
@@ -1491,6 +1494,7 @@ static void worldgen_tick(void) {
 #endif
         {
             g_world_type = read_world_type_for_dir(g_loaded_world_dir);
+            { int mf = 1; if (read_level_int_tag_for_dir(g_loaded_world_dir, "MapFeatures", &mf)) g_world_map_features = mf ? 1 : 0; else g_world_map_features = 1; }
             {
                 long long seed = 0;
                 if (read_world_seed_for_dir(g_loaded_world_dir, &seed)) g_world_seed = seed;

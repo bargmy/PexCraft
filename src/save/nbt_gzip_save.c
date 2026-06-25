@@ -128,6 +128,9 @@ static int write_level_dat(const char *world_dir, const char *world_name, long l
     nbt_compound(&b, "Data");
     nbt_long(&b, "RandomSeed", seed);
     nbt_int(&b, "WorldType", g_world_type);
+    nbt_int(&b, "GameType", 0);
+    nbt_int(&b, "hardcore", 0);
+    nbt_int(&b, "MapFeatures", g_pending_map_features ? 1 : 0);
     nbt_string(&b, "generatorName", g_world_type ? "default" : "flat");
     nbt_int(&b, "SpawnX", spawn_x);
     nbt_int(&b, "SpawnY", spawn_y);

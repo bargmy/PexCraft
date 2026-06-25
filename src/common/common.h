@@ -313,6 +313,9 @@ typedef struct WorldSaveEntry {
     long long last_played;
     unsigned long long size_on_disk;
     int world_type;
+    int game_mode;
+    int hardcore;
+    int requires_conversion;
 } WorldSaveEntry;
 
 typedef enum ScreenId {
@@ -323,8 +326,10 @@ typedef enum ScreenId {
     SCREEN_SKINS,
     SCREEN_CONTROLS,
     SCREEN_WORLD_SELECT,
+    SCREEN_CREATE_WORLD,
     SCREEN_WORLD_TYPE,
     SCREEN_WORLD_DELETE,
+    SCREEN_RENAME_WORLD,
     SCREEN_CONFIRM_DELETE,
     SCREEN_MULTIPLAYER,
     SCREEN_CONNECTING,
@@ -647,15 +652,23 @@ static int g_ticks = 0;
 static int g_waiting_key = -1;
 static int g_confirm_world = 0;
 static int g_pending_world_slot = 0;
-static int g_pending_world_type = 0;
+static int g_pending_world_type = 1;
+static int g_pending_map_features = 1;
+static int g_pending_seed_set = 0;
+static long long g_pending_world_seed = 0;
+static char g_pending_seed_text[MAX_LABEL] = "";
+static int g_create_more_options = 0;
+static int g_create_edit_field = 0;
 static char g_pending_world_dir[MAX_PATHBUF] = "";
 static char g_pending_world_name[MAX_LABEL] = "";
+static char g_rename_world_text[MAX_LABEL] = "";
 static WorldSaveEntry g_world_saves[MAX_WORLD_SAVES];
 static int g_world_save_count = 0;
 static int g_selected_world_index = -1;
 static int g_world_save_scroll = 0;
 static int g_world_drag_scroll_pixels = 0;
-static int g_world_type = 0; /* 0 flat, 1 normal/local terrain */
+static int g_world_type = 1; /* 0 superflat, 1 default terrain */
+static int g_world_map_features = 1;
 static long long g_world_seed = 0;
 static WorldGenJob g_worldgen;
 static int g_load_state_skip_terrain_rebuild = 0;
@@ -996,7 +1009,7 @@ typedef enum PexDimension {
 } PexDimension;
 
 #define PEX_WORLDGEN_LEGACY_BETA 0
-#define PEX_WORLDGEN_JAVA_125 1
+#define PEX_WORLDGEN_MODERN 1
 
 /* Java 1.2.5 metadata values used by generated content. */
 #define BLOCK_META_WOOD_OAK 0
@@ -1223,7 +1236,7 @@ typedef enum PexDimension {
 #define ITEM_RAW_BEEF ITEM_BEEF_RAW
 #define ITEM_COOKED_CHICKEN ITEM_CHICKEN_COOKED
 #define ITEM_RAW_CHICKEN ITEM_CHICKEN_RAW
-#define ITEM_BLAZE_POWDER_125 ITEM_BLAZE_POWDER
+#define ITEM_BLAZE_POWDER_ALIAS ITEM_BLAZE_POWDER
 #define ITEM_NETHER_STALK_SEEDS ITEM_NETHER_WART
 #define ITEM_EYE_ENDER ITEM_EYE_OF_ENDER
 #define ITEM_SPAWN_EGG ITEM_MONSTER_PLACER

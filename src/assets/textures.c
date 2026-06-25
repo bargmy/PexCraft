@@ -16,7 +16,7 @@ static int file_exists(const char *path) {
 }
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-/* Generated in GitHub Actions as build/<platform>_generated/*_mcrw_assets.pak
+/* Generated in GitHub Actions as a platform-specific mcrw assets pak
    and embedded into the console executable through an .incbin assembly wrapper.
    This avoids requiring texture files on external storage. */
 #if defined(PEX_PLATFORM_PSP)

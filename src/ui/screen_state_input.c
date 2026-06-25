@@ -35,6 +35,7 @@ static void set_screen(ScreenId s) {
         g_world_save_scroll = 0;
         g_world_drag_scroll_pixels = 0;
     }
+    if (s == SCREEN_CREATE_WORLD) g_create_edit_field = g_create_more_options ? 1 : 0;
     g_waiting_key = -1;
     g_gamepad_menu_index = 0;
     g_gamepad_virtual_cursor_active = 0;
@@ -174,6 +175,9 @@ static void scan_world_saves(void) {
             if (!binary_summary) {
                 e->world_type = read_world_type_for_dir(e->path);
             }
+            { int gt = 0; if (read_level_int_tag_for_dir(e->path, "GameType", &gt)) e->game_mode = gt; else e->game_mode = 0; }
+            { int hc = 0; if (read_level_int_tag_for_dir(e->path, "hardcore", &hc)) e->hardcore = hc ? 1 : 0; else e->hardcore = 0; }
+            { int conv = 0; if (read_level_int_tag_for_dir(e->path, "RequiresConversion", &conv)) e->requires_conversion = conv ? 1 : 0; else e->requires_conversion = 0; }
             g_world_save_count++;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
@@ -259,6 +263,90 @@ static void make_unique_world_dir(const char *display_name, char *dir_name, size
     snprintf(path, path_cap, "%s\\%s", g_save_dir, dir_name);
 }
 
+static void create_world_update_folder(void) {
+    char dir_name[64];
+    make_unique_world_dir(g_pending_world_name[0] ? g_pending_world_name : "New World",
+                          dir_name, sizeof(dir_name), g_pending_world_dir, sizeof(g_pending_world_dir));
+}
+
+static long long create_world_random_seed(void) {
+    return ((long long)time(NULL) << 32) ^ (long long)GetTickCount();
+}
+
+static void create_world_prepare_defaults(void) {
+    snprintf(g_pending_world_name, sizeof(g_pending_world_name), "New World");
+    g_pending_seed_text[0] = 0;
+    g_pending_seed_set = 0;
+    g_pending_world_seed = 0;
+    g_pending_map_features = 1;
+    g_pending_world_type = 1;
+    g_create_more_options = 0;
+    g_create_edit_field = 0;
+    g_pending_world_slot = g_world_save_count + 1;
+    create_world_update_folder();
+}
+
+static int create_world_parse_seed(void) {
+    char seed_text[MAX_LABEL];
+    snprintf(seed_text, sizeof(seed_text), "%s", g_pending_seed_text);
+    trim_ascii_in_place(seed_text);
+    if (!seed_text[0]) {
+        g_pending_seed_set = 0;
+        g_pending_world_seed = create_world_random_seed();
+        return 1;
+    }
+    char *end = NULL;
+    long long parsed = strtoll(seed_text, &end, 10);
+    if (end && *end == 0 && parsed != 0) {
+        g_pending_seed_set = 1;
+        g_pending_world_seed = parsed;
+        return 1;
+    }
+    if (end && *end == 0 && parsed == 0) {
+        g_pending_seed_set = 0;
+        g_pending_world_seed = create_world_random_seed();
+        return 1;
+    }
+    g_pending_seed_set = 1;
+    g_pending_world_seed = (long long)java_string_hash_compat(seed_text);
+    return 1;
+}
+
+static void create_world_start(void) {
+    trim_ascii_in_place(g_pending_world_name);
+    if (!g_pending_world_name[0]) return;
+    create_world_update_folder();
+    if (g_pending_world_slot <= 0) g_pending_world_slot = g_world_save_count + 1;
+    create_world_parse_seed();
+    start_world_generation_in_dir(g_pending_world_dir, g_pending_world_name, g_pending_world_slot);
+}
+
+static void rename_selected_world_save(void) {
+    if (g_selected_world_index < 0 || g_selected_world_index >= g_world_save_count) return;
+    trim_ascii_in_place(g_rename_world_text);
+    if (!g_rename_world_text[0]) return;
+    WorldSaveEntry *e = &g_world_saves[g_selected_world_index];
+    long long seed = 0;
+    if (!read_world_seed_for_dir(e->path, &seed)) seed = (long long)time(NULL);
+    int old_type = read_world_type_for_dir(e->path);
+    int old_features = 1;
+    read_level_int_tag_for_dir(e->path, "MapFeatures", &old_features);
+    int old_pending_type = g_pending_world_type;
+    int old_pending_features = g_pending_map_features;
+    int old_world_type = g_world_type;
+    int old_world_features = g_world_map_features;
+    g_pending_world_type = old_type;
+    g_pending_map_features = old_features ? 1 : 0;
+    g_world_type = old_type;
+    g_world_map_features = old_features ? 1 : 0;
+    write_level_dat(e->path, g_rename_world_text, seed, 50, 5, 50, (long long)e->size_on_disk);
+    g_pending_world_type = old_pending_type;
+    g_pending_map_features = old_pending_features;
+    g_world_type = old_world_type;
+    g_world_map_features = old_world_features;
+    set_screen(SCREEN_WORLD_SELECT);
+}
+
 static void world_save_drag_scroll(int delta_y) {
     if (g_screen != SCREEN_WORLD_SELECT && g_screen != SCREEN_WORLD_DELETE) return;
     if (delta_y == 0) return;
@@ -340,10 +428,29 @@ static void rebuild_screen(void) {
             add_button_full(i, x0 + (i % 2) * 160, g_gui_h / 6 + 24 * (i >> 1), 70, 20, label, BUTTON_NORMAL);
         }
         add_button(200, g_gui_w / 2 - 100, g_gui_h / 6 + 168, tr("Done"));
+    } else if (g_screen == SCREEN_CREATE_WORLD) {
+        add_button_full(0, g_gui_w / 2 - 155, g_gui_h - 28, 150, 20, "Create New World", BUTTON_NORMAL);
+        add_button_full(1, g_gui_w / 2 + 5, g_gui_h - 28, 150, 20, "Cancel", BUTTON_NORMAL);
+        Button *create = &g_buttons[g_button_count - 2];
+        create->enabled = g_pending_world_name[0] != 0;
+        if (!g_create_more_options) {
+            Button *gm = add_button_full(2, g_gui_w / 2 - 75, 100, 150, 20, "Game Mode: Survival", BUTTON_NORMAL);
+            gm->enabled = 0;
+            add_button_full(3, g_gui_w / 2 - 75, 172, 150, 20, "More World Options...", BUTTON_NORMAL);
+        } else {
+            char mf[64];
+            snprintf(mf, sizeof(mf), "Generate Structures: %s", g_pending_map_features ? "ON" : "OFF");
+            add_button_full(4, g_gui_w / 2 - 155, 100, 150, 20, mf, BUTTON_NORMAL);
+            add_button_full(5, g_gui_w / 2 + 5, 100, 150, 20, g_pending_world_type ? "World Type: Default" : "World Type: Superflat", BUTTON_NORMAL);
+            add_button_full(3, g_gui_w / 2 - 75, 172, 150, 20, "Done", BUTTON_NORMAL);
+        }
+    } else if (g_screen == SCREEN_RENAME_WORLD) {
+        Button *rename = add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 6 + 96, 150, 20, "Rename", BUTTON_NORMAL);
+        add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 6 + 96, 150, 20, "Cancel", BUTTON_NORMAL);
+        rename->enabled = g_rename_world_text[0] != 0;
     } else if (g_screen == SCREEN_WORLD_TYPE) {
-        add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 48, "Flat");
-        add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 72, "Normal");
-        add_button(2, g_gui_w / 2 - 100, g_gui_h / 4 + 108, "Cancel");
+        /* Legacy screen id kept for old callers; new worlds use SCREEN_CREATE_WORLD. */
+        add_button_full(2, g_gui_w / 2 - 100, g_gui_h / 4 + 108, 200, 20, "Cancel", BUTTON_NORMAL);
     } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
         scan_world_saves();
         int visible_rows = world_save_visible_rows();
@@ -358,11 +465,14 @@ static void rebuild_screen(void) {
         }
         if (g_screen == SCREEN_WORLD_SELECT) {
             Button *select = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, "Play Selected World", BUTTON_NORMAL);
-            Button *delete = add_button_full(5, g_gui_w / 2 - 154, g_gui_h - 28, 150, 20, "Delete", BUTTON_NORMAL);
+            Button *rename = add_button_full(12, g_gui_w / 2 - 154, g_gui_h - 28, 70, 20, "Rename", BUTTON_NORMAL);
+            Button *delete = add_button_full(5, g_gui_w / 2 - 74, g_gui_h - 28, 70, 20, "Delete", BUTTON_NORMAL);
             add_button_full(11, g_gui_w / 2 + 4, g_gui_h - 52, 150, 20, "Create New World", BUTTON_NORMAL);
             add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 28, 150, 20, "Cancel", BUTTON_NORMAL);
-            select->enabled = g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count;
-            delete->enabled = g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count;
+            int has_world = g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count;
+            select->enabled = has_world;
+            rename->enabled = has_world;
+            delete->enabled = has_world;
         } else {
             Button *delete = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, "Delete", BUTTON_NORMAL);
             add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 52, 150, 20, "Cancel", BUTTON_NORMAL);
@@ -527,29 +637,36 @@ static void on_button(Button *b) {
             start_selected_world_save();
         } else if (b->id == 5) confirm_delete_world_save();
         else if (b->id == 11) {
-            char dir_name[64];
-            make_unique_world_dir("New World", dir_name, sizeof(dir_name), g_pending_world_dir, sizeof(g_pending_world_dir));
-            snprintf(g_pending_world_name, sizeof(g_pending_world_name), "New World");
-            g_pending_world_slot = g_world_save_count + 1;
-            g_pending_world_type = 0;
-            set_screen(SCREEN_WORLD_TYPE);
+            create_world_prepare_defaults();
+            set_screen(SCREEN_CREATE_WORLD);
+        } else if (b->id == 12 && g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
+            WorldSaveEntry *e = &g_world_saves[g_selected_world_index];
+            snprintf(g_rename_world_text, sizeof(g_rename_world_text), "%s", e->display_name[0] ? e->display_name : e->dir_name);
+            set_screen(SCREEN_RENAME_WORLD);
         }
         else if (b->id == 6) set_screen(g_parent_screen);
-    } else if (g_screen == SCREEN_WORLD_TYPE) {
-        if (b->id == 0 || b->id == 1) {
-            g_pending_world_type = b->id;
-            if (!g_pending_world_dir[0]) {
-                char dir_name[64];
-                make_unique_world_dir("New World", dir_name, sizeof(dir_name), g_pending_world_dir, sizeof(g_pending_world_dir));
-                snprintf(g_pending_world_name, sizeof(g_pending_world_name), "New World");
-            }
-            if (g_pending_world_slot <= 0) g_pending_world_slot = g_world_save_count + 1;
-            start_world_generation_in_dir(g_pending_world_dir, g_pending_world_name, g_pending_world_slot);
-        } else if (b->id == 2) {
+    } else if (g_screen == SCREEN_CREATE_WORLD) {
+        if (b->id == 0) create_world_start();
+        else if (b->id == 1) {
             g_pending_world_dir[0] = 0;
             g_pending_world_name[0] = 0;
             set_screen(SCREEN_WORLD_SELECT);
+        } else if (b->id == 3) {
+            g_create_more_options = !g_create_more_options;
+            g_create_edit_field = g_create_more_options ? 1 : 0;
+            rebuild_screen();
+        } else if (b->id == 4) {
+            g_pending_map_features = !g_pending_map_features;
+            rebuild_screen();
+        } else if (b->id == 5) {
+            g_pending_world_type = g_pending_world_type ? 0 : 1;
+            rebuild_screen();
         }
+    } else if (g_screen == SCREEN_WORLD_TYPE) {
+        if (b->id == 2) set_screen(SCREEN_WORLD_SELECT);
+    } else if (g_screen == SCREEN_RENAME_WORLD) {
+        if (b->id == 0) rename_selected_world_save();
+        else if (b->id == 1) set_screen(SCREEN_WORLD_SELECT);
     } else if (g_screen == SCREEN_WORLD_DELETE) {
         if (b->id >= WORLD_ROW_BUTTON_BASE && b->id < WORLD_ROW_BUTTON_BASE + g_world_save_count) {
             g_selected_world_index = b->id - WORLD_ROW_BUTTON_BASE;
@@ -562,7 +679,7 @@ static void on_button(Button *b) {
             if (dir_exists(g_pending_world_dir)) delete_recursive(g_pending_world_dir);
             if (!strcmp(g_pending_world_dir, g_loaded_world_dir)) {
                 g_pending_world_slot = 0;
-                g_pending_world_type = 0;
+                g_pending_world_type = 1;
             }
         }
         g_confirm_world = 0;
@@ -679,6 +796,19 @@ static void mouse_down(int mx, int my) {
         if (hit.hit) restart_hand_swing();
         else start_air_swing_once();
         return;
+    }
+    if (g_screen == SCREEN_CREATE_WORLD) {
+        int x = g_gui_w / 2 - 100;
+        int y = 60;
+        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
+            g_create_edit_field = g_create_more_options ? 1 : 0;
+            rebuild_screen();
+        }
+    }
+    if (g_screen == SCREEN_RENAME_WORLD) {
+        int x = g_gui_w / 2 - 100;
+        int y = 60;
+        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) rebuild_screen();
     }
     if (g_screen == SCREEN_MULTIPLAYER) {
         int x = g_gui_w / 2 - 100;
@@ -861,8 +991,8 @@ static int handle_traceplace_command(int argc, char **argv) {
     }
     int index = 0;
     if (argc >= 3 && !pex_chat_parse_int(argv[2], &index)) index = 0;
-    WorldgenTraceTarget125 target;
-    if (!worldgen_125_trace_target(g_world_seed, kind, (int)floorf(g_player_x), (int)floorf(g_player_z), index, &target)) {
+    WorldgenTraceTarget target;
+    if (!worldgen_trace_target(g_world_seed, kind, (int)floorf(g_player_x), (int)floorf(g_player_z), index, &target)) {
         hud_add_chat("No matching structure found nearby.");
         return 1;
     }
@@ -1015,7 +1145,9 @@ static void handle_keydown(WPARAM vk) {
         else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_WORLD_SELECT) set_screen(g_parent_screen);
+        else if (g_screen == SCREEN_CREATE_WORLD) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_WORLD_TYPE) set_screen(SCREEN_WORLD_SELECT);
+        else if (g_screen == SCREEN_RENAME_WORLD) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_WORLD_DELETE) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_CONFIRM_DELETE) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_MULTIPLAYER) set_screen(g_parent_screen);
@@ -1028,6 +1160,20 @@ static void handle_keydown(WPARAM vk) {
             set_screen(SCREEN_TITLE);
         }
         else if (g_screen == SCREEN_CLASSIC_PACK_WARNING) set_screen(SCREEN_TITLE);
+        return;
+    }
+    if (g_screen == SCREEN_CREATE_WORLD) {
+        char *field = g_create_more_options ? g_pending_seed_text : g_pending_world_name;
+        size_t len = strlen(field);
+        if (vk == VK_BACK && len > 0) { field[len - 1] = 0; if (!g_create_more_options) create_world_update_folder(); rebuild_screen(); }
+        else if (vk == VK_TAB) { g_create_more_options = !g_create_more_options; g_create_edit_field = g_create_more_options ? 1 : 0; rebuild_screen(); }
+        else if (vk == VK_RETURN && g_pending_world_name[0]) create_world_start();
+        return;
+    }
+    if (g_screen == SCREEN_RENAME_WORLD) {
+        size_t len = strlen(g_rename_world_text);
+        if (vk == VK_BACK && len > 0) { g_rename_world_text[len - 1] = 0; rebuild_screen(); }
+        else if (vk == VK_RETURN && g_rename_world_text[0]) rename_selected_world_save();
         return;
     }
     if (g_screen == SCREEN_MULTIPLAYER) {
@@ -1054,6 +1200,26 @@ static void handle_char(WPARAM ch) {
             size_t len = strlen(g_chat_input);
             g_chat_input[len] = (char)ch;
             g_chat_input[len + 1] = 0;
+        }
+        return;
+    }
+    if (g_screen == SCREEN_CREATE_WORLD) {
+        if (ch == 13 || ch == 8 || ch == 9 || ch == 27) return;
+        char *field = g_create_more_options ? g_pending_seed_text : g_pending_world_name;
+        size_t cap = g_create_more_options ? sizeof(g_pending_seed_text) : sizeof(g_pending_world_name);
+        const char *allowed = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        if (strchr(allowed, (char)ch) && strlen(field) + 1 < cap) {
+            size_t len = strlen(field); field[len] = (char)ch; field[len + 1] = 0;
+            if (!g_create_more_options) create_world_update_folder();
+            rebuild_screen();
+        }
+        return;
+    }
+    if (g_screen == SCREEN_RENAME_WORLD) {
+        if (ch == 13 || ch == 8 || ch == 9 || ch == 27) return;
+        const char *allowed = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        if (strchr(allowed, (char)ch) && strlen(g_rename_world_text) + 1 < sizeof(g_rename_world_text)) {
+            size_t len = strlen(g_rename_world_text); g_rename_world_text[len] = (char)ch; g_rename_world_text[len + 1] = 0; rebuild_screen();
         }
         return;
     }

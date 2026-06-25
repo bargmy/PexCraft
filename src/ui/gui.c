@@ -956,10 +956,48 @@ static void draw_chat_screen(void) {
 }
 
 
+static void draw_text_field_box(const char *text, int x, int y, int w, int h, int focused) {
+    draw_rect(x - 1, y - 1, x + w + 1, y + h + 1, focused ? -1 : -6250336);
+    draw_rect(x, y, x + w, y + h, -16777216);
+    char field[160];
+    snprintf(field, sizeof(field), "%s%s", text ? text : "", (focused && (g_ticks / 6 % 2 == 0)) ? "_" : "");
+    draw_text(field, x + 4, y + 6, 14737632);
+}
+
+static void draw_create_world_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Create New World", g_gui_w / 2, 20, 16777215);
+    if (!g_create_more_options) {
+        draw_text("World Name", g_gui_w / 2 - 100, 47, 10526880);
+        draw_text_field_box(g_pending_world_name, g_gui_w / 2 - 100, 60, 200, 20, g_create_edit_field == 0);
+        char folder[160];
+        const char *slash = strrchr(g_pending_world_dir, '\\');
+        const char *name = slash ? slash + 1 : g_pending_world_dir;
+        snprintf(folder, sizeof(folder), "Will be saved in: %s", name && name[0] ? name : "New World");
+        draw_text(folder, g_gui_w / 2 - 100, 85, 10526880);
+        draw_text("Search for resources, crafting, gain", g_gui_w / 2 - 100, 122, 10526880);
+        draw_text("levels, health and hunger", g_gui_w / 2 - 100, 134, 10526880);
+    } else {
+        draw_text("Seed for the World Generator", g_gui_w / 2 - 100, 47, 10526880);
+        draw_text_field_box(g_pending_seed_text, g_gui_w / 2 - 100, 60, 200, 20, g_create_edit_field == 1);
+        draw_text("Leave blank for a random seed", g_gui_w / 2 - 100, 85, 10526880);
+        draw_text("Villages, dungeons etc", g_gui_w / 2 - 150, 122, 10526880);
+    }
+    draw_all_buttons();
+}
+
+static void draw_rename_world_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Rename World", g_gui_w / 2, 20, 16777215);
+    draw_text("World Name", g_gui_w / 2 - 100, 47, 10526880);
+    draw_text_field_box(g_rename_world_text, g_gui_w / 2 - 100, 60, 200, 20, 1);
+    draw_all_buttons();
+}
+
 static void draw_world_type_screen(void) {
     draw_default_bg();
-    draw_centered_text("Create new world", g_gui_w / 2, 40, 16777215);
-    draw_centered_text("Choose terrain type", g_gui_w / 2, 64, 10526880);
+    draw_centered_text("Create New World", g_gui_w / 2, 40, 16777215);
+    draw_centered_text("This legacy screen is unused", g_gui_w / 2, 64, 10526880);
     draw_all_buttons();
 }
 

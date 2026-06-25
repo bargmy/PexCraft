@@ -1,4 +1,7 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
+#if defined(PEXCRAFT_WORLDGEN_ARRAYS_ONLY)
+static int g_world_map_features = 1;
+#endif
 
 #define BLK_AIR       0
 #define BLK_STONE     1
@@ -318,7 +321,7 @@ static double *simplex_octaves_fill(SimplexOctaves *o, double *out, int *cap, do
    the 1.2.5 GenLayer + WorldChunkManager + ChunkProviderGenerate path.
    ------------------------------------------------------------------------- */
 
-typedef enum MC125BiomeId {
+typedef enum WorldBiomeId {
     BIOME_OCEAN = 0,
     BIOME_PLAINS = 1,
     BIOME_DESERT = 2,
@@ -327,8 +330,8 @@ typedef enum MC125BiomeId {
     BIOME_TAIGA = 5,
     BIOME_SWAMPLAND = 6,
     BIOME_RIVER = 7,
-    BIOME_HELL_125 = 8,
-    BIOME_SKY_125 = 9,
+    BIOME_HELL = 8,
+    BIOME_SKY = 9,
     BIOME_FROZEN_OCEAN = 10,
     BIOME_FROZEN_RIVER = 11,
     BIOME_ICE_PLAINS = 12,
@@ -342,9 +345,9 @@ typedef enum MC125BiomeId {
     BIOME_EXTREME_HILLS_EDGE = 20,
     BIOME_JUNGLE = 21,
     BIOME_JUNGLE_HILLS = 22
-} MC125BiomeId;
+} WorldBiomeId;
 
-typedef struct MC125Biome {
+typedef struct WorldBiome {
     int id;
     unsigned char top;
     unsigned char filler;
@@ -365,15 +368,15 @@ typedef struct MC125Biome {
     int waterlilyPerChunk;
     int mushroomsPerChunk;
     int bigMushroomsPerChunk;
-} MC125Biome;
+} WorldBiome;
 
-static MC125Biome mc125_biome_list[256];
-static int mc125_biomes_ready = 0;
+static WorldBiome world_biome_list[256];
+static int world_biomes_ready = 0;
 
-static void mc125_biome_set(int id, unsigned char top, unsigned char filler,
+static void world_biome_set(int id, unsigned char top, unsigned char filler,
                             float minH, float maxH, float temp, float rain,
                             int snow) {
-    MC125Biome *b = &mc125_biome_list[id];
+    WorldBiome *b = &world_biome_list[id];
     memset(b, 0, sizeof(*b));
     b->id = id;
     b->top = top;
@@ -391,163 +394,163 @@ static void mc125_biome_set(int id, unsigned char top, unsigned char filler,
     b->clayPerChunk = 1;
 }
 
-static void mc125_init_biomes(void) {
-    if(mc125_biomes_ready) return;
-    for(int i=0;i<256;i++) mc125_biome_set(i, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.5f, 0.5f, 0);
+static void world_biomes_init(void) {
+    if(world_biomes_ready) return;
+    for(int i=0;i<256;i++) world_biome_set(i, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.5f, 0.5f, 0);
 
-    mc125_biome_set(BIOME_OCEAN, BLK_GRASS, BLK_DIRT, -1.0f, 0.4f, 0.5f, 0.5f, 0);
-    mc125_biome_set(BIOME_PLAINS, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.8f, 0.4f, 0);
-    mc125_biome_set(BIOME_DESERT, BLK_SAND, BLK_SAND, 0.1f, 0.2f, 2.0f, 0.0f, 0);
-    mc125_biome_set(BIOME_EXTREME_HILLS, BLK_GRASS, BLK_DIRT, 0.2f, 1.3f, 0.2f, 0.3f, 0);
-    mc125_biome_set(BIOME_FOREST, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.7f, 0.8f, 0);
-    mc125_biome_set(BIOME_TAIGA, BLK_GRASS, BLK_DIRT, 0.1f, 0.4f, 0.05f, 0.8f, 1);
-    mc125_biome_set(BIOME_SWAMPLAND, BLK_GRASS, BLK_DIRT, -0.2f, 0.1f, 0.8f, 0.9f, 0);
-    mc125_biome_set(BIOME_RIVER, BLK_GRASS, BLK_DIRT, -0.5f, 0.0f, 0.5f, 0.5f, 0);
-    mc125_biome_set(BIOME_HELL_125, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 2.0f, 0.0f, 0);
-    mc125_biome_set(BIOME_SKY_125, BLK_DIRT, BLK_DIRT, 0.1f, 0.3f, 0.5f, 0.5f, 0);
-    mc125_biome_set(BIOME_FROZEN_OCEAN, BLK_GRASS, BLK_DIRT, -1.0f, 0.5f, 0.0f, 0.5f, 1);
-    mc125_biome_set(BIOME_FROZEN_RIVER, BLK_GRASS, BLK_DIRT, -0.5f, 0.0f, 0.0f, 0.5f, 1);
-    mc125_biome_set(BIOME_ICE_PLAINS, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.0f, 0.5f, 1);
-    mc125_biome_set(BIOME_ICE_MOUNTAINS, BLK_GRASS, BLK_DIRT, 0.2f, 1.2f, 0.0f, 0.5f, 1);
-    mc125_biome_set(BIOME_MUSHROOM_ISLAND, BLK_MYCELIUM, BLK_DIRT, 0.2f, 1.0f, 0.9f, 1.0f, 0);
-    mc125_biome_set(BIOME_MUSHROOM_ISLAND_SHORE, BLK_MYCELIUM, BLK_DIRT, -1.0f, 0.1f, 0.9f, 1.0f, 0);
-    mc125_biome_set(BIOME_BEACH, BLK_SAND, BLK_SAND, 0.0f, 0.1f, 0.8f, 0.4f, 0);
-    mc125_biome_set(BIOME_DESERT_HILLS, BLK_SAND, BLK_SAND, 0.2f, 0.7f, 2.0f, 0.0f, 0);
-    mc125_biome_set(BIOME_FOREST_HILLS, BLK_GRASS, BLK_DIRT, 0.2f, 0.6f, 0.7f, 0.8f, 0);
-    mc125_biome_set(BIOME_TAIGA_HILLS, BLK_GRASS, BLK_DIRT, 0.2f, 0.7f, 0.05f, 0.8f, 1);
-    mc125_biome_set(BIOME_EXTREME_HILLS_EDGE, BLK_GRASS, BLK_DIRT, 0.2f, 0.8f, 0.2f, 0.3f, 0);
-    mc125_biome_set(BIOME_JUNGLE, BLK_GRASS, BLK_DIRT, 0.2f, 0.4f, 1.2f, 0.9f, 0);
-    mc125_biome_set(BIOME_JUNGLE_HILLS, BLK_GRASS, BLK_DIRT, 1.8f, 0.2f, 1.2f, 0.9f, 0);
+    world_biome_set(BIOME_OCEAN, BLK_GRASS, BLK_DIRT, -1.0f, 0.4f, 0.5f, 0.5f, 0);
+    world_biome_set(BIOME_PLAINS, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.8f, 0.4f, 0);
+    world_biome_set(BIOME_DESERT, BLK_SAND, BLK_SAND, 0.1f, 0.2f, 2.0f, 0.0f, 0);
+    world_biome_set(BIOME_EXTREME_HILLS, BLK_GRASS, BLK_DIRT, 0.2f, 1.3f, 0.2f, 0.3f, 0);
+    world_biome_set(BIOME_FOREST, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.7f, 0.8f, 0);
+    world_biome_set(BIOME_TAIGA, BLK_GRASS, BLK_DIRT, 0.1f, 0.4f, 0.05f, 0.8f, 1);
+    world_biome_set(BIOME_SWAMPLAND, BLK_GRASS, BLK_DIRT, -0.2f, 0.1f, 0.8f, 0.9f, 0);
+    world_biome_set(BIOME_RIVER, BLK_GRASS, BLK_DIRT, -0.5f, 0.0f, 0.5f, 0.5f, 0);
+    world_biome_set(BIOME_HELL, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 2.0f, 0.0f, 0);
+    world_biome_set(BIOME_SKY, BLK_DIRT, BLK_DIRT, 0.1f, 0.3f, 0.5f, 0.5f, 0);
+    world_biome_set(BIOME_FROZEN_OCEAN, BLK_GRASS, BLK_DIRT, -1.0f, 0.5f, 0.0f, 0.5f, 1);
+    world_biome_set(BIOME_FROZEN_RIVER, BLK_GRASS, BLK_DIRT, -0.5f, 0.0f, 0.0f, 0.5f, 1);
+    world_biome_set(BIOME_ICE_PLAINS, BLK_GRASS, BLK_DIRT, 0.1f, 0.3f, 0.0f, 0.5f, 1);
+    world_biome_set(BIOME_ICE_MOUNTAINS, BLK_GRASS, BLK_DIRT, 0.2f, 1.2f, 0.0f, 0.5f, 1);
+    world_biome_set(BIOME_MUSHROOM_ISLAND, BLK_MYCELIUM, BLK_DIRT, 0.2f, 1.0f, 0.9f, 1.0f, 0);
+    world_biome_set(BIOME_MUSHROOM_ISLAND_SHORE, BLK_MYCELIUM, BLK_DIRT, -1.0f, 0.1f, 0.9f, 1.0f, 0);
+    world_biome_set(BIOME_BEACH, BLK_SAND, BLK_SAND, 0.0f, 0.1f, 0.8f, 0.4f, 0);
+    world_biome_set(BIOME_DESERT_HILLS, BLK_SAND, BLK_SAND, 0.2f, 0.7f, 2.0f, 0.0f, 0);
+    world_biome_set(BIOME_FOREST_HILLS, BLK_GRASS, BLK_DIRT, 0.2f, 0.6f, 0.7f, 0.8f, 0);
+    world_biome_set(BIOME_TAIGA_HILLS, BLK_GRASS, BLK_DIRT, 0.2f, 0.7f, 0.05f, 0.8f, 1);
+    world_biome_set(BIOME_EXTREME_HILLS_EDGE, BLK_GRASS, BLK_DIRT, 0.2f, 0.8f, 0.2f, 0.3f, 0);
+    world_biome_set(BIOME_JUNGLE, BLK_GRASS, BLK_DIRT, 0.2f, 0.4f, 1.2f, 0.9f, 0);
+    world_biome_set(BIOME_JUNGLE_HILLS, BLK_GRASS, BLK_DIRT, 1.8f, 0.2f, 1.2f, 0.9f, 0);
 
-    mc125_biome_list[BIOME_DESERT].treesPerChunk = -999;
-    mc125_biome_list[BIOME_DESERT].deadBushPerChunk = 2;
-    mc125_biome_list[BIOME_DESERT].reedsPerChunk = 50;
-    mc125_biome_list[BIOME_DESERT].cactiPerChunk = 10;
-    mc125_biome_list[BIOME_DESERT_HILLS] = mc125_biome_list[BIOME_DESERT];
-    mc125_biome_list[BIOME_DESERT_HILLS].id = BIOME_DESERT_HILLS;
-    mc125_biome_list[BIOME_DESERT_HILLS].minHeight = 0.2f;
-    mc125_biome_list[BIOME_DESERT_HILLS].maxHeight = 0.7f;
+    world_biome_list[BIOME_DESERT].treesPerChunk = -999;
+    world_biome_list[BIOME_DESERT].deadBushPerChunk = 2;
+    world_biome_list[BIOME_DESERT].reedsPerChunk = 50;
+    world_biome_list[BIOME_DESERT].cactiPerChunk = 10;
+    world_biome_list[BIOME_DESERT_HILLS] = world_biome_list[BIOME_DESERT];
+    world_biome_list[BIOME_DESERT_HILLS].id = BIOME_DESERT_HILLS;
+    world_biome_list[BIOME_DESERT_HILLS].minHeight = 0.2f;
+    world_biome_list[BIOME_DESERT_HILLS].maxHeight = 0.7f;
 
-    mc125_biome_list[BIOME_PLAINS].treesPerChunk = -999;
-    mc125_biome_list[BIOME_PLAINS].flowersPerChunk = 4;
-    mc125_biome_list[BIOME_PLAINS].grassPerChunk = 10;
-    mc125_biome_list[BIOME_FOREST].treesPerChunk = 10;
-    mc125_biome_list[BIOME_FOREST].grassPerChunk = 2;
-    mc125_biome_list[BIOME_FOREST_HILLS].treesPerChunk = 10;
-    mc125_biome_list[BIOME_FOREST_HILLS].grassPerChunk = 2;
-    mc125_biome_list[BIOME_TAIGA].treesPerChunk = 10;
-    mc125_biome_list[BIOME_TAIGA].grassPerChunk = 1;
-    mc125_biome_list[BIOME_TAIGA_HILLS].treesPerChunk = 10;
-    mc125_biome_list[BIOME_TAIGA_HILLS].grassPerChunk = 1;
-    mc125_biome_list[BIOME_SWAMPLAND].treesPerChunk = 2;
-    mc125_biome_list[BIOME_SWAMPLAND].flowersPerChunk = -999;
-    mc125_biome_list[BIOME_SWAMPLAND].deadBushPerChunk = 1;
-    mc125_biome_list[BIOME_SWAMPLAND].mushroomsPerChunk = 8;
-    mc125_biome_list[BIOME_SWAMPLAND].reedsPerChunk = 10;
-    mc125_biome_list[BIOME_SWAMPLAND].clayPerChunk = 1;
-    mc125_biome_list[BIOME_SWAMPLAND].waterlilyPerChunk = 4;
-    mc125_biome_list[BIOME_JUNGLE].treesPerChunk = 50;
-    mc125_biome_list[BIOME_JUNGLE].grassPerChunk = 25;
-    mc125_biome_list[BIOME_JUNGLE].flowersPerChunk = 4;
-    mc125_biome_list[BIOME_JUNGLE_HILLS].treesPerChunk = 50;
-    mc125_biome_list[BIOME_JUNGLE_HILLS].grassPerChunk = 25;
-    mc125_biome_list[BIOME_JUNGLE_HILLS].flowersPerChunk = 4;
-    mc125_biome_list[BIOME_MUSHROOM_ISLAND].treesPerChunk = -100;
-    mc125_biome_list[BIOME_MUSHROOM_ISLAND].flowersPerChunk = -100;
-    mc125_biome_list[BIOME_MUSHROOM_ISLAND].grassPerChunk = -100;
-    mc125_biome_list[BIOME_MUSHROOM_ISLAND].mushroomsPerChunk = 1;
-    mc125_biome_list[BIOME_MUSHROOM_ISLAND].bigMushroomsPerChunk = 1;
-    mc125_biome_list[BIOME_BEACH].treesPerChunk = -999;
-    mc125_biome_list[BIOME_BEACH].deadBushPerChunk = 0;
-    mc125_biomes_ready = 1;
+    world_biome_list[BIOME_PLAINS].treesPerChunk = -999;
+    world_biome_list[BIOME_PLAINS].flowersPerChunk = 4;
+    world_biome_list[BIOME_PLAINS].grassPerChunk = 10;
+    world_biome_list[BIOME_FOREST].treesPerChunk = 10;
+    world_biome_list[BIOME_FOREST].grassPerChunk = 2;
+    world_biome_list[BIOME_FOREST_HILLS].treesPerChunk = 10;
+    world_biome_list[BIOME_FOREST_HILLS].grassPerChunk = 2;
+    world_biome_list[BIOME_TAIGA].treesPerChunk = 10;
+    world_biome_list[BIOME_TAIGA].grassPerChunk = 1;
+    world_biome_list[BIOME_TAIGA_HILLS].treesPerChunk = 10;
+    world_biome_list[BIOME_TAIGA_HILLS].grassPerChunk = 1;
+    world_biome_list[BIOME_SWAMPLAND].treesPerChunk = 2;
+    world_biome_list[BIOME_SWAMPLAND].flowersPerChunk = -999;
+    world_biome_list[BIOME_SWAMPLAND].deadBushPerChunk = 1;
+    world_biome_list[BIOME_SWAMPLAND].mushroomsPerChunk = 8;
+    world_biome_list[BIOME_SWAMPLAND].reedsPerChunk = 10;
+    world_biome_list[BIOME_SWAMPLAND].clayPerChunk = 1;
+    world_biome_list[BIOME_SWAMPLAND].waterlilyPerChunk = 4;
+    world_biome_list[BIOME_JUNGLE].treesPerChunk = 50;
+    world_biome_list[BIOME_JUNGLE].grassPerChunk = 25;
+    world_biome_list[BIOME_JUNGLE].flowersPerChunk = 4;
+    world_biome_list[BIOME_JUNGLE_HILLS].treesPerChunk = 50;
+    world_biome_list[BIOME_JUNGLE_HILLS].grassPerChunk = 25;
+    world_biome_list[BIOME_JUNGLE_HILLS].flowersPerChunk = 4;
+    world_biome_list[BIOME_MUSHROOM_ISLAND].treesPerChunk = -100;
+    world_biome_list[BIOME_MUSHROOM_ISLAND].flowersPerChunk = -100;
+    world_biome_list[BIOME_MUSHROOM_ISLAND].grassPerChunk = -100;
+    world_biome_list[BIOME_MUSHROOM_ISLAND].mushroomsPerChunk = 1;
+    world_biome_list[BIOME_MUSHROOM_ISLAND].bigMushroomsPerChunk = 1;
+    world_biome_list[BIOME_BEACH].treesPerChunk = -999;
+    world_biome_list[BIOME_BEACH].deadBushPerChunk = 0;
+    world_biomes_ready = 1;
 }
 
-typedef enum GenLayerType125 {
-    GL125_ISLAND,
-    GL125_FUZZY_ZOOM,
-    GL125_ZOOM,
-    GL125_ADD_ISLAND,
-    GL125_ADD_SNOW,
-    GL125_BIOME,
-    GL125_HILLS,
-    GL125_RIVER_INIT,
-    GL125_RIVER,
-    GL125_RIVER_MIX,
-    GL125_SHORE,
-    GL125_SMOOTH,
-    GL125_SWAMP_RIVERS,
-    GL125_VORONOI_ZOOM,
-    GL125_ADD_MUSHROOM_ISLAND
-} GenLayerType125;
+typedef enum GenLayerType {
+    GL_ISLAND,
+    GL_FUZZY_ZOOM,
+    GL_ZOOM,
+    GL_ADD_ISLAND,
+    GL_ADD_SNOW,
+    GL_BIOME,
+    GL_HILLS,
+    GL_RIVER_INIT,
+    GL_RIVER,
+    GL_RIVER_MIX,
+    GL_SHORE,
+    GL_SMOOTH,
+    GL_SWAMP_RIVERS,
+    GL_VORONOI_ZOOM,
+    GL_ADD_MUSHROOM_ISLAND
+} GenLayerType;
 
-typedef struct GenLayer125 GenLayer125;
-struct GenLayer125 {
-    GenLayerType125 type;
-    GenLayer125 *parent;
-    GenLayer125 *parent2;
+typedef struct GenLayer GenLayer;
+struct GenLayer {
+    GenLayerType type;
+    GenLayer *parent;
+    GenLayer *parent2;
     int64_t worldGenSeed;
     int64_t chunkSeed;
     int64_t baseSeed;
 };
 
-static int64_t gl125_step_seed(int64_t seed, int64_t add) {
+static int64_t genlayer_step_seed(int64_t seed, int64_t add) {
     uint64_t s = (uint64_t)seed;
     uint64_t v = s * (s * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407));
     v += (uint64_t)add;
     return (int64_t)v;
 }
-static int64_t gl125_base_seed(int64_t seed) {
+static int64_t genlayer_base_seed(int64_t seed) {
     int64_t s = seed;
-    s = gl125_step_seed(s, seed);
-    s = gl125_step_seed(s, seed);
-    s = gl125_step_seed(s, seed);
+    s = genlayer_step_seed(s, seed);
+    s = genlayer_step_seed(s, seed);
+    s = genlayer_step_seed(s, seed);
     return s;
 }
-static void gl125_ctor(GenLayer125 *g, GenLayerType125 type, int64_t seed, GenLayer125 *p1, GenLayer125 *p2) {
+static void genlayer_ctor(GenLayer *g, GenLayerType type, int64_t seed, GenLayer *p1, GenLayer *p2) {
     memset(g, 0, sizeof(*g));
     g->type = type;
     g->parent = p1;
     g->parent2 = p2;
-    g->baseSeed = gl125_base_seed(seed);
+    g->baseSeed = genlayer_base_seed(seed);
 }
-static void gl125_init_world_seed(GenLayer125 *g, int64_t seed) {
+static void genlayer_init_world_seed(GenLayer *g, int64_t seed) {
     if(!g) return;
-    if(g->type == GL125_RIVER_MIX) {
-        gl125_init_world_seed(g->parent, seed);
-        gl125_init_world_seed(g->parent2, seed);
+    if(g->type == GL_RIVER_MIX) {
+        genlayer_init_world_seed(g->parent, seed);
+        genlayer_init_world_seed(g->parent2, seed);
     } else if(g->parent) {
-        gl125_init_world_seed(g->parent, seed);
+        genlayer_init_world_seed(g->parent, seed);
     }
     g->worldGenSeed = seed;
-    g->worldGenSeed = gl125_step_seed(g->worldGenSeed, g->baseSeed);
-    g->worldGenSeed = gl125_step_seed(g->worldGenSeed, g->baseSeed);
-    g->worldGenSeed = gl125_step_seed(g->worldGenSeed, g->baseSeed);
+    g->worldGenSeed = genlayer_step_seed(g->worldGenSeed, g->baseSeed);
+    g->worldGenSeed = genlayer_step_seed(g->worldGenSeed, g->baseSeed);
+    g->worldGenSeed = genlayer_step_seed(g->worldGenSeed, g->baseSeed);
 }
-static void gl125_init_chunk_seed(GenLayer125 *g, int64_t x, int64_t z) {
+static void genlayer_init_chunk_seed(GenLayer *g, int64_t x, int64_t z) {
     g->chunkSeed = g->worldGenSeed;
-    g->chunkSeed = gl125_step_seed(g->chunkSeed, x);
-    g->chunkSeed = gl125_step_seed(g->chunkSeed, z);
-    g->chunkSeed = gl125_step_seed(g->chunkSeed, x);
-    g->chunkSeed = gl125_step_seed(g->chunkSeed, z);
+    g->chunkSeed = genlayer_step_seed(g->chunkSeed, x);
+    g->chunkSeed = genlayer_step_seed(g->chunkSeed, z);
+    g->chunkSeed = genlayer_step_seed(g->chunkSeed, x);
+    g->chunkSeed = genlayer_step_seed(g->chunkSeed, z);
 }
-static int gl125_next_int(GenLayer125 *g, int bound) {
+static int genlayer_next_int(GenLayer *g, int bound) {
     int64_t shifted = g->chunkSeed >> 24;
     int v = (int)(shifted % (int64_t)bound);
     if(v < 0) v += bound;
-    g->chunkSeed = gl125_step_seed(g->chunkSeed, g->worldGenSeed);
+    g->chunkSeed = genlayer_step_seed(g->chunkSeed, g->worldGenSeed);
     return v;
 }
-static int *gl125_alloc(int n) {
+static int *genlayer_alloc(int n) {
     int *p = (int*)malloc(sizeof(int) * (size_t)n);
     if(!p) ExitProcess(2);
     return p;
 }
-static int gl125_choose2(GenLayer125 *g, int a, int b) { return gl125_next_int(g,2) == 0 ? a : b; }
-static int gl125_choose4_fuzzy(GenLayer125 *g, int a, int b, int c, int d) {
-    int v = gl125_next_int(g,4);
+static int genlayer_choose2(GenLayer *g, int a, int b) { return genlayer_next_int(g,2) == 0 ? a : b; }
+static int genlayer_choose4_fuzzy(GenLayer *g, int a, int b, int c, int d) {
+    int v = genlayer_next_int(g,4);
     return v == 0 ? a : (v == 1 ? b : (v == 2 ? c : d));
 }
-static int gl125_choose4_zoom(GenLayer125 *g, int a, int b, int c, int d) {
+static int genlayer_choose4_zoom(GenLayer *g, int a, int b, int c, int d) {
     if(b == c && c == d) return b;
     if(a == b && a == c) return a;
     if(a == b && a == d) return a;
@@ -564,106 +567,106 @@ static int gl125_choose4_zoom(GenLayer125 *g, int a, int b, int c, int d) {
     if(d == a && b != c) return c;
     if(d == b && a != c) return c;
     if(d == c && a != b) return c;
-    return gl125_choose4_fuzzy(g,a,b,c,d);
+    return genlayer_choose4_fuzzy(g,a,b,c,d);
 }
 
-static int *gl125_get_ints(GenLayer125 *g, int x, int z, int w, int h);
+static int *genlayer_get_ints(GenLayer *g, int x, int z, int w, int h);
 
-static int *gl125_island(GenLayer125 *g, int x, int z, int w, int h) {
-    int *out = gl125_alloc(w*h);
+static int *genlayer_island(GenLayer *g, int x, int z, int w, int h) {
+    int *out = genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
-        gl125_init_chunk_seed(g, (int64_t)(x + dx), (int64_t)(z + dz));
-        out[dx + dz*w] = gl125_next_int(g,10) == 0 ? 1 : 0;
+        genlayer_init_chunk_seed(g, (int64_t)(x + dx), (int64_t)(z + dz));
+        out[dx + dz*w] = genlayer_next_int(g,10) == 0 ? 1 : 0;
     }
     if(x > -w && x <= 0 && z > -h && z <= 0) out[-x + -z * w] = 1;
     return out;
 }
-static int *gl125_zoom_common(GenLayer125 *g, int x, int z, int w, int h, int fuzzy) {
+static int *genlayer_zoom_common(GenLayer *g, int x, int z, int w, int h, int fuzzy) {
     int px = x >> 1, pz = z >> 1;
     int pw = (w >> 1) + 3, ph = (h >> 1) + 3;
-    int *par = gl125_get_ints(g->parent, px, pz, pw, ph);
+    int *par = genlayer_get_ints(g->parent, px, pz, pw, ph);
     int tw = pw << 1, th = ph << 1;
-    int *tmp = gl125_alloc(tw * th);
+    int *tmp = genlayer_alloc(tw * th);
     for(int row=0; row<ph-1; row++) {
         int ty = row << 1;
         int ti = ty * tw;
         int v00 = par[(row + 0) * pw];
         int v01 = par[(row + 1) * pw];
         for(int col=0; col<pw-1; col++) {
-            gl125_init_chunk_seed(g, (int64_t)((col + px) << 1), (int64_t)((row + pz) << 1));
+            genlayer_init_chunk_seed(g, (int64_t)((col + px) << 1), (int64_t)((row + pz) << 1));
             int v10 = par[col + 1 + row * pw];
             int v11 = par[col + 1 + (row + 1) * pw];
             tmp[ti] = v00;
-            tmp[ti++ + tw] = gl125_choose2(g, v00, v01);
-            tmp[ti] = gl125_choose2(g, v00, v10);
-            tmp[ti++ + tw] = fuzzy ? gl125_choose4_fuzzy(g, v00, v10, v01, v11) : gl125_choose4_zoom(g, v00, v10, v01, v11);
+            tmp[ti++ + tw] = genlayer_choose2(g, v00, v01);
+            tmp[ti] = genlayer_choose2(g, v00, v10);
+            tmp[ti++ + tw] = fuzzy ? genlayer_choose4_fuzzy(g, v00, v10, v01, v11) : genlayer_choose4_zoom(g, v00, v10, v01, v11);
             v00 = v10;
             v01 = v11;
         }
     }
-    int *out = gl125_alloc(w*h);
+    int *out = genlayer_alloc(w*h);
     for(int row=0; row<h; row++) memcpy(out + row*w, tmp + (row + (z & 1)) * tw + (x & 1), sizeof(int)*(size_t)w);
     free(tmp); free(par);
     return out;
 }
-static int *gl125_add_island(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_add_island(GenLayer *g, int x, int z, int w, int h) {
     int px=x-1, pz=z-1, pw=w+2, ph=h+2;
-    int *par=gl125_get_ints(g->parent,px,pz,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,px,pz,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
         int nw=par[dx + (dz+0)*pw], ne=par[dx+2 + (dz+0)*pw], sw=par[dx + (dz+2)*pw], se=par[dx+2 + (dz+2)*pw], c=par[dx+1 + (dz+1)*pw];
-        gl125_init_chunk_seed(g, (int64_t)(dx+x), (int64_t)(dz+z));
+        genlayer_init_chunk_seed(g, (int64_t)(dx+x), (int64_t)(dz+z));
         if(c != 0 || (nw == 0 && ne == 0 && sw == 0 && se == 0)) {
             if(c > 0 && (nw == 0 || ne == 0 || sw == 0 || se == 0)) {
-                if(gl125_next_int(g,5) == 0) out[dx+dz*w] = (c == BIOME_ICE_PLAINS) ? BIOME_FROZEN_OCEAN : 0;
+                if(genlayer_next_int(g,5) == 0) out[dx+dz*w] = (c == BIOME_ICE_PLAINS) ? BIOME_FROZEN_OCEAN : 0;
                 else out[dx+dz*w] = c;
             } else out[dx+dz*w] = c;
         } else {
             int choices=1, chosen=1;
-            if(nw != 0 && gl125_next_int(g, choices++) == 0) chosen = nw;
-            if(ne != 0 && gl125_next_int(g, choices++) == 0) chosen = ne;
-            if(sw != 0 && gl125_next_int(g, choices++) == 0) chosen = sw;
-            if(se != 0 && gl125_next_int(g, choices++) == 0) chosen = se;
-            if(gl125_next_int(g,3) == 0) out[dx+dz*w] = chosen;
+            if(nw != 0 && genlayer_next_int(g, choices++) == 0) chosen = nw;
+            if(ne != 0 && genlayer_next_int(g, choices++) == 0) chosen = ne;
+            if(sw != 0 && genlayer_next_int(g, choices++) == 0) chosen = sw;
+            if(se != 0 && genlayer_next_int(g, choices++) == 0) chosen = se;
+            if(genlayer_next_int(g,3) == 0) out[dx+dz*w] = chosen;
             else out[dx+dz*w] = (chosen == BIOME_ICE_PLAINS) ? BIOME_FROZEN_OCEAN : 0;
         }
     }
     free(par); return out;
 }
-static int *gl125_add_snow(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_add_snow(GenLayer *g, int x, int z, int w, int h) {
     int px=x-1, pz=z-1, pw=w+2, ph=h+2;
-    int *par=gl125_get_ints(g->parent,px,pz,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,px,pz,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
         int c=par[dx+1 + (dz+1)*pw];
-        gl125_init_chunk_seed(g, (int64_t)(dx+x), (int64_t)(dz+z));
+        genlayer_init_chunk_seed(g, (int64_t)(dx+x), (int64_t)(dz+z));
         if(c == 0) out[dx+dz*w] = 0;
-        else { int v=gl125_next_int(g,5); out[dx+dz*w] = (v == 0) ? BIOME_ICE_PLAINS : 1; }
+        else { int v=genlayer_next_int(g,5); out[dx+dz*w] = (v == 0) ? BIOME_ICE_PLAINS : 1; }
     }
     free(par); return out;
 }
-static int *gl125_biome_layer(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_biome_layer(GenLayer *g, int x, int z, int w, int h) {
     static const int allowed[] = {BIOME_DESERT, BIOME_FOREST, BIOME_EXTREME_HILLS, BIOME_SWAMPLAND, BIOME_PLAINS, BIOME_TAIGA, BIOME_JUNGLE};
-    int *par=gl125_get_ints(g->parent,x,z,w,h);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,x,z,w,h);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
-        gl125_init_chunk_seed(g, (int64_t)(dx+x), (int64_t)(dz+z));
+        genlayer_init_chunk_seed(g, (int64_t)(dx+x), (int64_t)(dz+z));
         int v=par[dx+dz*w];
         if(v == 0) out[dx+dz*w]=0;
         else if(v == BIOME_MUSHROOM_ISLAND) out[dx+dz*w]=v;
-        else if(v == 1) out[dx+dz*w]=allowed[gl125_next_int(g, (int)(sizeof(allowed)/sizeof(allowed[0])))];
+        else if(v == 1) out[dx+dz*w]=allowed[genlayer_next_int(g, (int)(sizeof(allowed)/sizeof(allowed[0])))];
         else out[dx+dz*w]=BIOME_ICE_PLAINS;
     }
     free(par); return out;
 }
-static int *gl125_hills(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_hills(GenLayer *g, int x, int z, int w, int h) {
     int pw=w+2, ph=h+2;
-    int *par=gl125_get_ints(g->parent,x-1,z-1,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,x-1,z-1,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
-        gl125_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
+        genlayer_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
         int c=par[dx+1 + (dz+1)*pw];
-        if(gl125_next_int(g,3)==0) {
+        if(genlayer_next_int(g,3)==0) {
             int hill=c;
             if(c==BIOME_DESERT) hill=BIOME_DESERT_HILLS;
             else if(c==BIOME_FOREST) hill=BIOME_FOREST_HILLS;
@@ -679,16 +682,16 @@ static int *gl125_hills(GenLayer125 *g, int x, int z, int w, int h) {
     }
     free(par); return out;
 }
-static int *gl125_river_init(GenLayer125 *g, int x, int z, int w, int h) {
-    int *par=gl125_get_ints(g->parent,x,z,w,h);
-    int *out=gl125_alloc(w*h);
-    for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) { gl125_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z)); out[dx+dz*w] = par[dx+dz*w] > 0 ? gl125_next_int(g,2)+2 : 0; }
+static int *genlayer_river_init(GenLayer *g, int x, int z, int w, int h) {
+    int *par=genlayer_get_ints(g->parent,x,z,w,h);
+    int *out=genlayer_alloc(w*h);
+    for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) { genlayer_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z)); out[dx+dz*w] = par[dx+dz*w] > 0 ? genlayer_next_int(g,2)+2 : 0; }
     free(par); return out;
 }
-static int *gl125_river(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_river(GenLayer *g, int x, int z, int w, int h) {
     int px=x-1,pz=z-1,pw=w+2,ph=h+2;
-    int *par=gl125_get_ints(g->parent,px,pz,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,px,pz,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
         int west=par[dx + (dz+1)*pw], east=par[dx+2 + (dz+1)*pw], north=par[dx+1 + dz*pw], south=par[dx+1 + (dz+2)*pw], c=par[dx+1 + (dz+1)*pw];
         if(c != 0 && west != 0 && east != 0 && north != 0 && south != 0) out[dx+dz*w] = (c==west && c==north && c==east && c==south) ? -1 : BIOME_RIVER;
@@ -696,10 +699,10 @@ static int *gl125_river(GenLayer125 *g, int x, int z, int w, int h) {
     }
     free(par); return out;
 }
-static int *gl125_river_mix(GenLayer125 *g, int x, int z, int w, int h) {
-    int *biome=gl125_get_ints(g->parent,x,z,w,h);
-    int *river=gl125_get_ints(g->parent2,x,z,w,h);
-    int *out=gl125_alloc(w*h);
+static int *genlayer_river_mix(GenLayer *g, int x, int z, int w, int h) {
+    int *biome=genlayer_get_ints(g->parent,x,z,w,h);
+    int *river=genlayer_get_ints(g->parent2,x,z,w,h);
+    int *out=genlayer_alloc(w*h);
     for(int i=0;i<w*h;i++) {
         if(biome[i] == BIOME_OCEAN) out[i] = biome[i];
         else if(river[i] >= 0) {
@@ -710,12 +713,12 @@ static int *gl125_river_mix(GenLayer125 *g, int x, int z, int w, int h) {
     }
     free(biome); free(river); return out;
 }
-static int *gl125_shore(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_shore(GenLayer *g, int x, int z, int w, int h) {
     int pw=w+2, ph=h+2;
-    int *par=gl125_get_ints(g->parent,x-1,z-1,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,x-1,z-1,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
-        gl125_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
+        genlayer_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
         int c=par[dx+1 + (dz+1)*pw];
         if(c == BIOME_MUSHROOM_ISLAND) {
             int n=par[dx+1 + dz*pw], e=par[dx+2 + (dz+1)*pw], ww=par[dx + (dz+1)*pw], s=par[dx+1 + (dz+2)*pw];
@@ -730,56 +733,56 @@ static int *gl125_shore(GenLayer125 *g, int x, int z, int w, int h) {
     }
     free(par); return out;
 }
-static int *gl125_smooth(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_smooth(GenLayer *g, int x, int z, int w, int h) {
     int px=x-1,pz=z-1,pw=w+2,ph=h+2;
-    int *par=gl125_get_ints(g->parent,px,pz,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,px,pz,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
         int west=par[dx + (dz+1)*pw], east=par[dx+2 + (dz+1)*pw], north=par[dx+1 + dz*pw], south=par[dx+1 + (dz+2)*pw], c=par[dx+1 + (dz+1)*pw];
-        if(west == east && north == south) { gl125_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z)); c = gl125_next_int(g,2)==0 ? west : north; }
+        if(west == east && north == south) { genlayer_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z)); c = genlayer_next_int(g,2)==0 ? west : north; }
         else { if(west == east) c = west; if(north == south) c = north; }
         out[dx+dz*w] = c;
     }
     free(par); return out;
 }
-static int *gl125_swamp_rivers(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_swamp_rivers(GenLayer *g, int x, int z, int w, int h) {
     int pw=w+2, ph=h+2;
-    int *par=gl125_get_ints(g->parent,x-1,z-1,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,x-1,z-1,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
-        gl125_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
+        genlayer_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
         int c=par[dx+1 + (dz+1)*pw];
-        if(c == BIOME_SWAMPLAND && gl125_next_int(g,6)==0) out[dx+dz*w] = BIOME_RIVER;
-        else if((c == BIOME_JUNGLE || c == BIOME_JUNGLE_HILLS) && gl125_next_int(g,8)==0) out[dx+dz*w] = BIOME_RIVER;
+        if(c == BIOME_SWAMPLAND && genlayer_next_int(g,6)==0) out[dx+dz*w] = BIOME_RIVER;
+        else if((c == BIOME_JUNGLE || c == BIOME_JUNGLE_HILLS) && genlayer_next_int(g,8)==0) out[dx+dz*w] = BIOME_RIVER;
         else out[dx+dz*w] = c;
     }
     free(par); return out;
 }
-static int *gl125_voronoi(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_voronoi(GenLayer *g, int x, int z, int w, int h) {
     x -= 2; z -= 2;
     const int shift = 2, scale = 1 << shift;
     int px = x >> shift, pz = z >> shift;
     int pw = (w >> shift) + 3, ph = (h >> shift) + 3;
-    int *par = gl125_get_ints(g->parent, px, pz, pw, ph);
+    int *par = genlayer_get_ints(g->parent, px, pz, pw, ph);
     int tw = pw << shift, th = ph << shift;
-    int *tmp = gl125_alloc(tw * th);
+    int *tmp = genlayer_alloc(tw * th);
     for(int row=0; row<ph-1; row++) {
         int v00 = par[(row+0)*pw];
         int v01 = par[(row+1)*pw];
         for(int col=0; col<pw-1; col++) {
             double jitter = (double)scale * 0.9;
-            gl125_init_chunk_seed(g,(int64_t)((col + px) << shift),(int64_t)((row + pz) << shift));
-            double x00=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter;
-            double z00=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter;
-            gl125_init_chunk_seed(g,(int64_t)((col + px + 1) << shift),(int64_t)((row + pz) << shift));
-            double x10=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
-            double z10=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter;
-            gl125_init_chunk_seed(g,(int64_t)((col + px) << shift),(int64_t)((row + pz + 1) << shift));
-            double x01=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter;
-            double z01=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
-            gl125_init_chunk_seed(g,(int64_t)((col + px + 1) << shift),(int64_t)((row + pz + 1) << shift));
-            double x11=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
-            double z11=((double)gl125_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
+            genlayer_init_chunk_seed(g,(int64_t)((col + px) << shift),(int64_t)((row + pz) << shift));
+            double x00=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter;
+            double z00=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter;
+            genlayer_init_chunk_seed(g,(int64_t)((col + px + 1) << shift),(int64_t)((row + pz) << shift));
+            double x10=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
+            double z10=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter;
+            genlayer_init_chunk_seed(g,(int64_t)((col + px) << shift),(int64_t)((row + pz + 1) << shift));
+            double x01=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter;
+            double z01=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
+            genlayer_init_chunk_seed(g,(int64_t)((col + px + 1) << shift),(int64_t)((row + pz + 1) << shift));
+            double x11=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
+            double z11=((double)genlayer_next_int(g,1024)/1024.0 - 0.5) * jitter + (double)scale;
             int v10 = par[col+1 + row*pw];
             int v11 = par[col+1 + (row+1)*pw];
             for(int dz=0; dz<scale; dz++) {
@@ -798,138 +801,138 @@ static int *gl125_voronoi(GenLayer125 *g, int x, int z, int w, int h) {
             v00 = v10; v01 = v11;
         }
     }
-    int *out=gl125_alloc(w*h);
+    int *out=genlayer_alloc(w*h);
     for(int row=0; row<h; row++) memcpy(out + row*w, tmp + (row + (z & (scale-1))) * tw + (x & (scale-1)), sizeof(int)*(size_t)w);
     free(tmp); free(par); return out;
 }
-static int *gl125_add_mushroom(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_add_mushroom(GenLayer *g, int x, int z, int w, int h) {
     int px=x-1,pz=z-1,pw=w+2,ph=h+2;
-    int *par=gl125_get_ints(g->parent,px,pz,pw,ph);
-    int *out=gl125_alloc(w*h);
+    int *par=genlayer_get_ints(g->parent,px,pz,pw,ph);
+    int *out=genlayer_alloc(w*h);
     for(int dz=0; dz<h; dz++) for(int dx=0; dx<w; dx++) {
         int nw=par[dx + dz*pw], ne=par[dx+2 + dz*pw], sw=par[dx + (dz+2)*pw], se=par[dx+2 + (dz+2)*pw], c=par[dx+1 + (dz+1)*pw];
-        gl125_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
-        out[dx+dz*w] = (c == 0 && nw == 0 && ne == 0 && sw == 0 && se == 0 && gl125_next_int(g,100)==0) ? BIOME_MUSHROOM_ISLAND : c;
+        genlayer_init_chunk_seed(g,(int64_t)(dx+x),(int64_t)(dz+z));
+        out[dx+dz*w] = (c == 0 && nw == 0 && ne == 0 && sw == 0 && se == 0 && genlayer_next_int(g,100)==0) ? BIOME_MUSHROOM_ISLAND : c;
     }
     free(par); return out;
 }
-static int *gl125_get_ints(GenLayer125 *g, int x, int z, int w, int h) {
+static int *genlayer_get_ints(GenLayer *g, int x, int z, int w, int h) {
     switch(g->type) {
-        case GL125_ISLAND: return gl125_island(g,x,z,w,h);
-        case GL125_FUZZY_ZOOM: return gl125_zoom_common(g,x,z,w,h,1);
-        case GL125_ZOOM: return gl125_zoom_common(g,x,z,w,h,0);
-        case GL125_ADD_ISLAND: return gl125_add_island(g,x,z,w,h);
-        case GL125_ADD_SNOW: return gl125_add_snow(g,x,z,w,h);
-        case GL125_BIOME: return gl125_biome_layer(g,x,z,w,h);
-        case GL125_HILLS: return gl125_hills(g,x,z,w,h);
-        case GL125_RIVER_INIT: return gl125_river_init(g,x,z,w,h);
-        case GL125_RIVER: return gl125_river(g,x,z,w,h);
-        case GL125_RIVER_MIX: return gl125_river_mix(g,x,z,w,h);
-        case GL125_SHORE: return gl125_shore(g,x,z,w,h);
-        case GL125_SMOOTH: return gl125_smooth(g,x,z,w,h);
-        case GL125_SWAMP_RIVERS: return gl125_swamp_rivers(g,x,z,w,h);
-        case GL125_VORONOI_ZOOM: return gl125_voronoi(g,x,z,w,h);
-        case GL125_ADD_MUSHROOM_ISLAND: return gl125_add_mushroom(g,x,z,w,h);
+        case GL_ISLAND: return genlayer_island(g,x,z,w,h);
+        case GL_FUZZY_ZOOM: return genlayer_zoom_common(g,x,z,w,h,1);
+        case GL_ZOOM: return genlayer_zoom_common(g,x,z,w,h,0);
+        case GL_ADD_ISLAND: return genlayer_add_island(g,x,z,w,h);
+        case GL_ADD_SNOW: return genlayer_add_snow(g,x,z,w,h);
+        case GL_BIOME: return genlayer_biome_layer(g,x,z,w,h);
+        case GL_HILLS: return genlayer_hills(g,x,z,w,h);
+        case GL_RIVER_INIT: return genlayer_river_init(g,x,z,w,h);
+        case GL_RIVER: return genlayer_river(g,x,z,w,h);
+        case GL_RIVER_MIX: return genlayer_river_mix(g,x,z,w,h);
+        case GL_SHORE: return genlayer_shore(g,x,z,w,h);
+        case GL_SMOOTH: return genlayer_smooth(g,x,z,w,h);
+        case GL_SWAMP_RIVERS: return genlayer_swamp_rivers(g,x,z,w,h);
+        case GL_VORONOI_ZOOM: return genlayer_voronoi(g,x,z,w,h);
+        case GL_ADD_MUSHROOM_ISLAND: return genlayer_add_mushroom(g,x,z,w,h);
     }
-    return gl125_alloc(w*h);
+    return genlayer_alloc(w*h);
 }
 
 typedef struct BiomeManager {
-    GenLayer125 layers[64];
+    GenLayer layers[64];
     int layer_count;
-    GenLayer125 *gen_biomes;
-    GenLayer125 *gen_voronoi;
-    MC125Biome biomes[256];
-    MC125Biome genBiomes[128];
+    GenLayer *gen_biomes;
+    GenLayer *gen_voronoi;
+    WorldBiome biomes[256];
+    WorldBiome genBiomes[128];
     double *temp;
     int tempCap;
 } BiomeManager;
 
-static GenLayer125 *biome_manager_new_layer(BiomeManager *bm, GenLayerType125 type, int64_t seed, GenLayer125 *p1, GenLayer125 *p2) {
+static GenLayer *biome_manager_new_layer(BiomeManager *bm, GenLayerType type, int64_t seed, GenLayer *p1, GenLayer *p2) {
     if(bm->layer_count >= (int)(sizeof(bm->layers)/sizeof(bm->layers[0]))) ExitProcess(2);
-    GenLayer125 *g = &bm->layers[bm->layer_count++];
-    gl125_ctor(g, type, seed, p1, p2);
+    GenLayer *g = &bm->layers[bm->layer_count++];
+    genlayer_ctor(g, type, seed, p1, p2);
     return g;
 }
-static GenLayer125 *biome_manager_zoom_many(BiomeManager *bm, int64_t seed, GenLayer125 *parent, int count) {
-    GenLayer125 *g = parent;
-    for(int i=0; i<count; i++) g = biome_manager_new_layer(bm, GL125_ZOOM, seed + (int64_t)i, g, NULL);
+static GenLayer *biome_manager_zoom_many(BiomeManager *bm, int64_t seed, GenLayer *parent, int count) {
+    GenLayer *g = parent;
+    for(int i=0; i<count; i++) g = biome_manager_new_layer(bm, GL_ZOOM, seed + (int64_t)i, g, NULL);
     return g;
 }
 static void biome_manager_init(BiomeManager *bm, int64_t worldSeed) {
-    mc125_init_biomes();
+    world_biomes_init();
     memset(bm, 0, sizeof(*bm));
-    GenLayer125 *var3 = biome_manager_new_layer(bm, GL125_ISLAND, 1, NULL, NULL);
-    GenLayer125 *var9 = biome_manager_new_layer(bm, GL125_FUZZY_ZOOM, 2000, var3, NULL);
-    GenLayer125 *var10 = biome_manager_new_layer(bm, GL125_ADD_ISLAND, 1, var9, NULL);
-    GenLayer125 *var11 = biome_manager_new_layer(bm, GL125_ZOOM, 2001, var10, NULL);
-    var10 = biome_manager_new_layer(bm, GL125_ADD_ISLAND, 2, var11, NULL);
-    GenLayer125 *var12 = biome_manager_new_layer(bm, GL125_ADD_SNOW, 2, var10, NULL);
-    var11 = biome_manager_new_layer(bm, GL125_ZOOM, 2002, var12, NULL);
-    var10 = biome_manager_new_layer(bm, GL125_ADD_ISLAND, 3, var11, NULL);
-    var11 = biome_manager_new_layer(bm, GL125_ZOOM, 2003, var10, NULL);
-    var10 = biome_manager_new_layer(bm, GL125_ADD_ISLAND, 4, var11, NULL);
-    GenLayer125 *var15 = biome_manager_new_layer(bm, GL125_ADD_MUSHROOM_ISLAND, 5, var10, NULL);
+    GenLayer *var3 = biome_manager_new_layer(bm, GL_ISLAND, 1, NULL, NULL);
+    GenLayer *var9 = biome_manager_new_layer(bm, GL_FUZZY_ZOOM, 2000, var3, NULL);
+    GenLayer *var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 1, var9, NULL);
+    GenLayer *var11 = biome_manager_new_layer(bm, GL_ZOOM, 2001, var10, NULL);
+    var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 2, var11, NULL);
+    GenLayer *var12 = biome_manager_new_layer(bm, GL_ADD_SNOW, 2, var10, NULL);
+    var11 = biome_manager_new_layer(bm, GL_ZOOM, 2002, var12, NULL);
+    var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 3, var11, NULL);
+    var11 = biome_manager_new_layer(bm, GL_ZOOM, 2003, var10, NULL);
+    var10 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 4, var11, NULL);
+    GenLayer *var15 = biome_manager_new_layer(bm, GL_ADD_MUSHROOM_ISLAND, 5, var10, NULL);
     int var4 = 4;
-    GenLayer125 *var5 = biome_manager_zoom_many(bm, 1000, var15, 0);
-    GenLayer125 *var13 = biome_manager_new_layer(bm, GL125_RIVER_INIT, 100, var5, NULL);
+    GenLayer *var5 = biome_manager_zoom_many(bm, 1000, var15, 0);
+    GenLayer *var13 = biome_manager_new_layer(bm, GL_RIVER_INIT, 100, var5, NULL);
     var5 = biome_manager_zoom_many(bm, 1000, var13, var4 + 2);
-    GenLayer125 *var14 = biome_manager_new_layer(bm, GL125_RIVER, 1, var5, NULL);
-    GenLayer125 *var16 = biome_manager_new_layer(bm, GL125_SMOOTH, 1000, var14, NULL);
-    GenLayer125 *var6 = biome_manager_zoom_many(bm, 1000, var15, 0);
-    GenLayer125 *var17 = biome_manager_new_layer(bm, GL125_BIOME, 200, var6, NULL);
+    GenLayer *var14 = biome_manager_new_layer(bm, GL_RIVER, 1, var5, NULL);
+    GenLayer *var16 = biome_manager_new_layer(bm, GL_SMOOTH, 1000, var14, NULL);
+    GenLayer *var6 = biome_manager_zoom_many(bm, 1000, var15, 0);
+    GenLayer *var17 = biome_manager_new_layer(bm, GL_BIOME, 200, var6, NULL);
     var6 = biome_manager_zoom_many(bm, 1000, var17, 2);
-    GenLayer125 *var18 = biome_manager_new_layer(bm, GL125_HILLS, 1000, var6, NULL);
+    GenLayer *var18 = biome_manager_new_layer(bm, GL_HILLS, 1000, var6, NULL);
     for(int var7=0; var7<var4; var7++) {
-        var18 = biome_manager_new_layer(bm, GL125_ZOOM, 1000 + var7, var18, NULL);
-        if(var7 == 0) var18 = biome_manager_new_layer(bm, GL125_ADD_ISLAND, 3, var18, NULL);
-        if(var7 == 1) var18 = biome_manager_new_layer(bm, GL125_SHORE, 1000, var18, NULL);
-        if(var7 == 1) var18 = biome_manager_new_layer(bm, GL125_SWAMP_RIVERS, 1000, var18, NULL);
+        var18 = biome_manager_new_layer(bm, GL_ZOOM, 1000 + var7, var18, NULL);
+        if(var7 == 0) var18 = biome_manager_new_layer(bm, GL_ADD_ISLAND, 3, var18, NULL);
+        if(var7 == 1) var18 = biome_manager_new_layer(bm, GL_SHORE, 1000, var18, NULL);
+        if(var7 == 1) var18 = biome_manager_new_layer(bm, GL_SWAMP_RIVERS, 1000, var18, NULL);
     }
-    GenLayer125 *var19 = biome_manager_new_layer(bm, GL125_SMOOTH, 1000, var18, NULL);
-    GenLayer125 *var20 = biome_manager_new_layer(bm, GL125_RIVER_MIX, 100, var19, var16);
-    GenLayer125 *var8 = biome_manager_new_layer(bm, GL125_VORONOI_ZOOM, 10, var20, NULL);
-    gl125_init_world_seed(var20, worldSeed);
-    gl125_init_world_seed(var8, worldSeed);
+    GenLayer *var19 = biome_manager_new_layer(bm, GL_SMOOTH, 1000, var18, NULL);
+    GenLayer *var20 = biome_manager_new_layer(bm, GL_RIVER_MIX, 100, var19, var16);
+    GenLayer *var8 = biome_manager_new_layer(bm, GL_VORONOI_ZOOM, 10, var20, NULL);
+    genlayer_init_world_seed(var20, worldSeed);
+    genlayer_init_world_seed(var8, worldSeed);
     bm->gen_biomes = var20;
     bm->gen_voronoi = var8;
 }
-static MC125Biome *biome_manager_get_generation(BiomeManager *bm, int x, int z, int xs, int zs) {
+static WorldBiome *biome_manager_get_generation(BiomeManager *bm, int x, int z, int xs, int zs) {
     int n=xs*zs;
-    int *ids = gl125_get_ints(bm->gen_biomes, x, z, xs, zs);
-    MC125Biome *dst = n <= (int)(sizeof(bm->genBiomes)/sizeof(bm->genBiomes[0])) ? bm->genBiomes : bm->biomes;
-    for(int i=0;i<n;i++) dst[i] = mc125_biome_list[(ids[i] >= 0 && ids[i] < 256) ? ids[i] : 0];
+    int *ids = genlayer_get_ints(bm->gen_biomes, x, z, xs, zs);
+    WorldBiome *dst = n <= (int)(sizeof(bm->genBiomes)/sizeof(bm->genBiomes[0])) ? bm->genBiomes : bm->biomes;
+    for(int i=0;i<n;i++) dst[i] = world_biome_list[(ids[i] >= 0 && ids[i] < 256) ? ids[i] : 0];
     free(ids);
     return dst;
 }
-static MC125Biome *biome_manager_get(BiomeManager *bm, int x, int z, int xs, int zs) {
+static WorldBiome *biome_manager_get(BiomeManager *bm, int x, int z, int xs, int zs) {
     int n=xs*zs;
-    int *ids = gl125_get_ints(bm->gen_voronoi, x, z, xs, zs);
-    for(int i=0;i<n && i<256;i++) bm->biomes[i] = mc125_biome_list[(ids[i] >= 0 && ids[i] < 256) ? ids[i] : 0];
+    int *ids = genlayer_get_ints(bm->gen_voronoi, x, z, xs, zs);
+    for(int i=0;i<n && i<256;i++) bm->biomes[i] = world_biome_list[(ids[i] >= 0 && ids[i] < 256) ? ids[i] : 0];
     free(ids);
     return bm->biomes;
 }
 static double *biome_manager_temperatures(BiomeManager *bm, double *out, int *cap, int x, int z, int xs, int zs) {
     int n=xs*zs;
     if(!out || *cap < n) { free(out); out=(double*)malloc(sizeof(double)*(size_t)n); if(!out) ExitProcess(2); *cap=n; }
-    int *ids = gl125_get_ints(bm->gen_voronoi, x, z, xs, zs);
-    for(int i=0;i<n;i++) out[i] = mc125_biome_list[(ids[i] >= 0 && ids[i] < 256) ? ids[i] : 0].temperature;
+    int *ids = genlayer_get_ints(bm->gen_voronoi, x, z, xs, zs);
+    for(int i=0;i<n;i++) out[i] = world_biome_list[(ids[i] >= 0 && ids[i] < 256) ? ids[i] : 0].temperature;
     free(ids);
     return out;
 }
 static void biome_manager_write_biome_array(BiomeManager *bm, int cx, int cz, unsigned char *out256) {
-    int *ids = gl125_get_ints(bm->gen_voronoi, cx*16, cz*16, 16, 16);
+    int *ids = genlayer_get_ints(bm->gen_voronoi, cx*16, cz*16, 16, 16);
     for(int i=0;i<256;i++) out256[i] = (unsigned char)(ids[i] & 255);
     free(ids);
 }
 
-static int mc125_is_stronghold_biome(int id) {
+static int worldgen_is_stronghold_biome(int id) {
     return id == BIOME_DESERT || id == BIOME_FOREST || id == BIOME_EXTREME_HILLS || id == BIOME_SWAMPLAND ||
            id == BIOME_TAIGA || id == BIOME_ICE_PLAINS || id == BIOME_ICE_MOUNTAINS ||
            id == BIOME_DESERT_HILLS || id == BIOME_FOREST_HILLS || id == BIOME_EXTREME_HILLS_EDGE ||
            id == BIOME_JUNGLE || id == BIOME_JUNGLE_HILLS;
 }
-static int mc125_is_village_biome(int id) { return id == BIOME_PLAINS || id == BIOME_DESERT; }
+static int worldgen_is_village_biome(int id) { return id == BIOME_PLAINS || id == BIOME_DESERT; }
 
 static int biome_manager_find_biome_position(BiomeManager *bm, int x, int z, int radius, int (*allowed)(int), JavaRandom *rand, int *outX, int *outZ) {
     int minX = (x - radius) >> 2;
@@ -938,7 +941,7 @@ static int biome_manager_find_biome_position(BiomeManager *bm, int x, int z, int
     int maxZ = (z + radius) >> 2;
     int w = maxX - minX + 1;
     int h = maxZ - minZ + 1;
-    int *ids = gl125_get_ints(bm->gen_biomes, minX, minZ, w, h);
+    int *ids = genlayer_get_ints(bm->gen_biomes, minX, minZ, w, h);
     int found = 0, count = 0, rx = 0, rz = 0;
     for (int i = 0; i < w * h; ++i) {
         int wx = (minX + i % w) << 2;
@@ -956,10 +959,10 @@ static int biome_manager_find_biome_position(BiomeManager *bm, int x, int z, int
     return found;
 }
 
-int worldgen_125_get_stronghold_coords(long long seed, int out_chunk_x[3], int out_chunk_z[3]) {
+int worldgen_get_stronghold_coords(long long seed, int out_chunk_x[3], int out_chunk_z[3]) {
     BiomeManager bm;
     memset(&bm, 0, sizeof(bm));
-    mc125_init_biomes();
+    world_biomes_init();
     biome_manager_init(&bm, (int64_t)seed);
     JavaRandom rand;
     jr_set_seed(&rand, (int64_t)seed);
@@ -969,7 +972,7 @@ int worldgen_125_get_stronghold_coords(long long seed, int out_chunk_x[3], int o
         int cx = beta_floor_double(cos(angle) * dist + 0.5);
         int cz = beta_floor_double(sin(angle) * dist + 0.5);
         int bx, bz;
-        if (biome_manager_find_biome_position(&bm, (cx << 4) + 8, (cz << 4) + 8, 112, mc125_is_stronghold_biome, &rand, &bx, &bz)) {
+        if (biome_manager_find_biome_position(&bm, (cx << 4) + 8, (cz << 4) + 8, 112, worldgen_is_stronghold_biome, &rand, &bx, &bz)) {
             cx = bx >> 4;
             cz = bz >> 4;
         }
@@ -981,38 +984,38 @@ int worldgen_125_get_stronghold_coords(long long seed, int out_chunk_x[3], int o
     return 3;
 }
 
-static JavaRandom worldgen_125_set_random_seed(long long seed, int x, int z, int salt) {
+static JavaRandom worldgen_set_random_seed(long long seed, int x, int z, int salt) {
     JavaRandom r;
     int64_t s = (int64_t)x * INT64_C(341873128712) + (int64_t)z * INT64_C(132897987541) + (int64_t)seed + (int64_t)salt;
     jr_set_seed(&r, s);
     return r;
 }
 
-int worldgen_125_village_can_spawn(long long seed, int chunkX, int chunkZ) {
+int worldgen_village_can_spawn(long long seed, int chunkX, int chunkZ) {
     int spacing = 32, separation = 8;
     int ox = chunkX, oz = chunkZ;
     if (chunkX < 0) chunkX -= spacing - 1;
     if (chunkZ < 0) chunkZ -= spacing - 1;
     int gridX = chunkX / spacing;
     int gridZ = chunkZ / spacing;
-    JavaRandom r = worldgen_125_set_random_seed(seed, gridX, gridZ, 10387312);
+    JavaRandom r = worldgen_set_random_seed(seed, gridX, gridZ, 10387312);
     int candX = gridX * spacing + jr_next_int_bound(&r, spacing - separation);
     int candZ = gridZ * spacing + jr_next_int_bound(&r, spacing - separation);
     if (ox != candX || oz != candZ) return 0;
     BiomeManager bm;
     memset(&bm, 0, sizeof(bm));
-    mc125_init_biomes();
+    world_biomes_init();
     biome_manager_init(&bm, (int64_t)seed);
     int qx = (ox * 16 + 8) >> 2;
     int qz = (oz * 16 + 8) >> 2;
-    int *ids = gl125_get_ints(bm.gen_biomes, qx, qz, 1, 1);
-    int ok = ids && mc125_is_village_biome(ids[0]);
+    int *ids = genlayer_get_ints(bm.gen_biomes, qx, qz, 1, 1);
+    int ok = ids && worldgen_is_village_biome(ids[0]);
     free(ids);
     free(bm.temp);
     return ok;
 }
 
-int worldgen_125_mineshaft_can_spawn(long long seed, int chunkX, int chunkZ) {
+int worldgen_mineshaft_can_spawn(long long seed, int chunkX, int chunkZ) {
     JavaRandom r;
     jr_set_seed(&r, (int64_t)seed);
     int64_t mulX = jr_next_long(&r);
@@ -1029,7 +1032,7 @@ typedef struct TerrainProvider {
     JavaRandom rand;
     OctaveNoise k,l,m,n,o,a,b,c;
     BiomeManager biomeManager;
-    MC125Biome *densityBiomes;
+    WorldBiome *densityBiomes;
     double *q,*r,*s,*t,*d,*e,*f,*g,*h,*snow;
     float biomeWeights[25];
     int qCap,rCap,sCap,tCap,dCap,eCap,fCap,gCap,hCap,snowCap;
@@ -1067,10 +1070,10 @@ static double *qm_density(TerrainProvider *tp, int x, int y, int z, int xs, int 
     for(int xi=0; xi<xs; xi++) {
         for(int zi=0; zi<zs; zi++) {
             float maxHeight = 0.0f, minHeight = 0.0f, weightSum = 0.0f;
-            const MC125Biome *center = &tp->densityBiomes[xi + 2 + (zi + 2) * (xs + 5)];
+            const WorldBiome *center = &tp->densityBiomes[xi + 2 + (zi + 2) * (xs + 5)];
             for(int bx=-2; bx<=2; bx++) {
                 for(int bz=-2; bz<=2; bz++) {
-                    const MC125Biome *b = &tp->densityBiomes[xi + bx + 2 + (zi + bz + 2) * (xs + 5)];
+                    const WorldBiome *b = &tp->densityBiomes[xi + bx + 2 + (zi + bz + 2) * (xs + 5)];
                     float weight = tp->biomeWeights[bx + 2 + (bz + 2) * 5] / (b->minHeight + 2.0f);
                     if(b->minHeight > center->minHeight) weight /= 2.0f;
                     maxHeight += b->maxHeight * weight;
@@ -1157,11 +1160,11 @@ static void qm_generate_base(TerrainProvider *tp, int cx, int cz, unsigned char 
     }
 }
 
-static void qm_replace_surface(TerrainProvider *tp, int cx, int cz, unsigned char *blocks, MC125Biome *biomes) {
+static void qm_replace_surface(TerrainProvider *tp, int cx, int cz, unsigned char *blocks, WorldBiome *biomes) {
     int sea=63;
     tp->t = octave_fill3(&tp->o, tp->t, &tp->tCap, cx*16, cz*16, 0.0, 16,16,1,0.0625,0.0625,0.0625);
     for(int x=0;x<16;x++) for(int z=0;z<16;z++) {
-        MC125Biome *bio = &biomes[z + x*16];
+        WorldBiome *bio = &biomes[z + x*16];
         float temp = bio->temperature;
         int depth = (int)(tp->t[x+z*16] / 3.0 + 3.0 + jr_next_double(&tp->rand) * 0.25);
         int run = -1;
@@ -1318,7 +1321,7 @@ static void ravine_carve_node(TerrainProvider *tp, JavaRandom *seedRand, int chu
         if(i == 0 || jr_next_int_bound(&rand, 3) == 0) widthScale = 1.0f + jr_next_float(&rand) * jr_next_float(&rand);
         widths[i] = widthScale * widthScale;
     }
-    MC125Biome *chunkBiomes = biome_manager_get(&tp->biomeManager, chunkX*16, chunkZ*16, 16, 16);
+    WorldBiome *chunkBiomes = biome_manager_get(&tp->biomeManager, chunkX*16, chunkZ*16, 16, 16);
     for(; step < maxStep; step++) {
         double hRadius = 1.5 + (double)(beta_sin((float)step * (float)M_PI / (float)maxStep) * radius);
         double vRadius = hRadius * heightScale;
@@ -1347,9 +1350,12 @@ static void ravine_carve_node(TerrainProvider *tp, JavaRandom *seedRand, int chu
                 int maxY = beta_floor_double(y + vRadius) + 1;
                 int minZ = beta_floor_double(z - hRadius) - chunkZ*16 - 1;
                 int maxZ = beta_floor_double(z + hRadius) - chunkZ*16 + 1;
-                if(minX < 0) minX = 0; if(maxX > 16) maxX = 16;
-                if(minY < 1) minY = 1; if(maxY > 120) maxY = 120;
-                if(minZ < 0) minZ = 0; if(maxZ > 16) maxZ = 16;
+                if(minX < 0) minX = 0;
+                if(maxX > 16) maxX = 16;
+                if(minY < 1) minY = 1;
+                if(maxY > 120) maxY = 120;
+                if(minZ < 0) minZ = 0;
+                if(maxZ > 16) maxZ = 16;
                 int foundWater = 0;
                 for(int xx=minX; !foundWater && xx<maxX; xx++) for(int zz=minZ; !foundWater && zz<maxZ; zz++) for(int yy=maxY+1; !foundWater && yy>=minY-1; yy--) {
                     if(yy >= 0 && yy < 128) {
@@ -1940,7 +1946,7 @@ static void canvas_place_huge_tree_leaf_blob(GenCanvas *cv, JavaRandom *r, int x
             for (int zz = z - radius; zz <= z + radius + 1; ++zz) {
                 int dz = zz - z;
                 if ((dx >= 0 || dz >= 0 || dx * dx + dz * dz <= radius * radius) &&
-                    (dx <= 0 && dz <= 0 || dx * dx + dz * dz <= (radius + 1) * (radius + 1)) &&
+                    ((dx <= 0 && dz <= 0) || dx * dx + dz * dz <= (radius + 1) * (radius + 1)) &&
                     (jr_next_int_bound(r, 4) != 0 || dx * dx + dz * dz <= (radius - 1) * (radius - 1)) &&
                     !cv_opaque_id(canvas_get(cv, xx, yy, zz))) {
                     canvas_set_with_meta(cv, xx, yy, zz, BLK_LEAVES, (unsigned char)(leavesMeta & 3));
@@ -2475,7 +2481,7 @@ static int canvas_place_big_tree(GenCanvas *cv, JavaRandom *mainRand, BigTreeGen
     return 1;
 }
 
-static void canvas_place_biome_tree_125(GenCanvas *cv, JavaRandom *r, MC125Biome biome, int x, int y, int z) {
+static void canvas_place_biome_tree(GenCanvas *cv, JavaRandom *r, WorldBiome biome, int x, int y, int z) {
     BigTreeGen bigTree;
     if(biome.id == BIOME_SWAMPLAND) {
         canvas_place_swamp_tree(cv, r, x, y, z);
@@ -2516,7 +2522,7 @@ static void canvas_place_biome_tree_125(GenCanvas *cv, JavaRandom *r, MC125Biome
    the generated chunks now contain the important blocks, metadata and tile
    entities needed for in-game testing.
    ------------------------------------------------------------------------- */
-static JavaRandom worldgen_125_structure_random(long long seed, int sourceChunkX, int sourceChunkZ) {
+static JavaRandom worldgen_structure_random(long long seed, int sourceChunkX, int sourceChunkZ) {
     JavaRandom r;
     jr_set_seed(&r, (int64_t)seed);
     int64_t mulX = jr_next_long(&r);
@@ -2663,7 +2669,7 @@ static void struct_place_stronghold_stairs(GenCanvas *cv, JavaRandom *r, int x0,
 }
 
 static void struct_place_simplified_stronghold(GenCanvas *cv, long long seed, int scx, int scz) {
-    JavaRandom r = worldgen_125_structure_random(seed, scx, scz);
+    JavaRandom r = worldgen_structure_random(seed, scx, scz);
     int baseX = (scx << 4) + 2;
     int baseZ = (scz << 4) + 2;
     int y = 26 + jr_next_int_bound(&r, 16);
@@ -2804,12 +2810,12 @@ static void struct_place_village_lamp(GenCanvas *cv, int x, int y, int z) {
 }
 
 static void struct_place_simplified_village(GenCanvas *cv, long long seed, int vcx, int vcz) {
-    JavaRandom r = worldgen_125_structure_random(seed, vcx, vcz);
+    JavaRandom r = worldgen_structure_random(seed, vcx, vcz);
     int cx = (vcx << 4) + 8;
     int cz = (vcz << 4) + 8;
     int y = struct_surface_y(cv,cx,cz);
     if(y < 2 || y > 110) return;
-    MC125Biome b = mc125_biome_list[BIOME_PLAINS];
+    WorldBiome b = world_biome_list[BIOME_PLAINS];
     (void)b;
     int desert = 0;
     /* Querying exact biome here avoids desert villages being made from wood. */
@@ -2885,7 +2891,7 @@ static void struct_place_mineshaft_side_room(GenCanvas *cv, JavaRandom *r, int x
 }
 
 static void struct_place_simplified_mineshaft(GenCanvas *cv, long long seed, int mcx, int mcz) {
-    JavaRandom r = worldgen_125_structure_random(seed, mcx, mcz);
+    JavaRandom r = worldgen_structure_random(seed, mcx, mcz);
     int cx = (mcx << 4) + 8;
     int cz = (mcz << 4) + 8;
     int y = 18 + jr_next_int_bound(&r, 28);
@@ -2907,21 +2913,22 @@ static int structure_chunk_in_canvas_reach(GenCanvas *cv, int chunkX, int chunkZ
     return chunkX >= min && chunkX <= max && chunkZ >= minz && chunkZ <= maxz;
 }
 
-static void worldgen_125_place_structure_blocks(TerrainProvider *tp, GenCanvas *cv, int centerCx, int centerCz) {
+static void worldgen_place_structure_blocks(TerrainProvider *tp, GenCanvas *cv, int centerCx, int centerCz) {
+    if (!g_world_map_features) return;
     int sx[3], sz[3];
-    worldgen_125_get_stronghold_coords((long long)tp->worldSeed, sx, sz);
+    worldgen_get_stronghold_coords((long long)tp->worldSeed, sx, sz);
     for(int i=0;i<3;i++) if(structure_chunk_in_canvas_reach(cv,sx[i],sz[i],4)) struct_place_simplified_stronghold(cv,(long long)tp->worldSeed,sx[i],sz[i]);
     /* MapGenStructure.generate scans source chunks within range 8 for starts. */
     for(int x=centerCx-8; x<=centerCx+8; ++x) for(int z=centerCz-8; z<=centerCz+8; ++z) {
-        if(worldgen_125_mineshaft_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,4)) struct_place_simplified_mineshaft(cv,(long long)tp->worldSeed,x,z);
-        if(worldgen_125_village_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,4)) struct_place_simplified_village(cv,(long long)tp->worldSeed,x,z);
+        if(worldgen_mineshaft_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,4)) struct_place_simplified_mineshaft(cv,(long long)tp->worldSeed,x,z);
+        if(worldgen_village_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,4)) struct_place_simplified_village(cv,(long long)tp->worldSeed,x,z);
     }
 }
 
 static void generate_canvas_chunk(TerrainProvider *tp, GenCanvas *cv, int cx, int cz) {
     unsigned char *tmp=(unsigned char*)calloc(32768,1); if(!tmp) return;
     jr_set_seed(&tp->rand, (int64_t)((uint64_t)(int64_t)cx * UINT64_C(341873128712) + (uint64_t)(int64_t)cz * UINT64_C(132897987541)));
-    MC125Biome *biomes=biome_manager_get(&tp->biomeManager,cx*16,cz*16,16,16);
+    WorldBiome *biomes=biome_manager_get(&tp->biomeManager,cx*16,cz*16,16,16);
     qm_generate_base(tp,cx,cz,tmp);
     qm_replace_surface(tp,cx,cz,tmp,biomes);
     qm_generate_caves(tp,cx,cz,tmp);
@@ -2935,7 +2942,7 @@ static void generate_canvas_chunk(TerrainProvider *tp, GenCanvas *cv, int cx, in
 }
 static void qm_populate_canvas(TerrainProvider *tp, GenCanvas *cv, int cx, int cz) {
     int baseX=cx*16, baseZ=cz*16;
-    MC125Biome centerBiome = biome_manager_get(&tp->biomeManager, baseX+16, baseZ+16, 1, 1)[0];
+    WorldBiome centerBiome = biome_manager_get(&tp->biomeManager, baseX+16, baseZ+16, 1, 1)[0];
     JavaRandom *r=&tp->rand;
     jr_set_seed(r, tp->worldSeed);
     int64_t s1=jr_next_long(r)/2LL*2LL+1LL, s2=jr_next_long(r)/2LL*2LL+1LL;
@@ -2943,7 +2950,7 @@ static void qm_populate_canvas(TerrainProvider *tp, GenCanvas *cv, int cx, int c
 
     int villageGenerated = 0;
     for(int vx=cx-8; vx<=cx+8 && !villageGenerated; ++vx) for(int vz=cz-8; vz<=cz+8 && !villageGenerated; ++vz) {
-        if(worldgen_125_village_can_spawn((long long)tp->worldSeed, vx, vz)) {
+        if(worldgen_village_can_spawn((long long)tp->worldSeed, vx, vz)) {
             int vwx=(vx<<4)+8, vwz=(vz<<4)+8;
             if(vwx >= baseX-48 && vwx <= baseX+64 && vwz >= baseZ-48 && vwz <= baseZ+64) villageGenerated = 1;
         }
@@ -2971,7 +2978,7 @@ static void qm_populate_canvas(TerrainProvider *tp, GenCanvas *cv, int cx, int c
     for(int i=0;i<treeCount;i++) {
         int x=baseX+jr_next_int_bound(r,16)+8, z=baseZ+jr_next_int_bound(r,16)+8;
         int y=canvas_top_solid(cv,x,z);
-        canvas_place_biome_tree_125(cv,r,centerBiome,x,y,z);
+        canvas_place_biome_tree(cv,r,centerBiome,x,y,z);
     }
 
     for(int i=0;i<centerBiome.bigMushroomsPerChunk;i++) { int x=baseX+jr_next_int_bound(r,16)+8, z=baseZ+jr_next_int_bound(r,16)+8; canvas_place_big_mushroom(cv,r,x,canvas_top_solid(cv,x,z),z); }
@@ -3057,7 +3064,7 @@ static void recalc_light_and_height(unsigned char *blocks, unsigned char *sky, u
     }
 }
 
-int worldgen_125_generate_chunk_arrays(long long seed, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
+int worldgen_generate_chunk_arrays(long long seed, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
     if (!blocks || !data || !heightmap || !biome_array) return 0;
     memset(blocks, 0, 32768);
     memset(data, 0, 16384);
@@ -3088,7 +3095,7 @@ int worldgen_125_generate_chunk_arrays(long long seed, int cx, int cz, unsigned 
         }
     }
 
-    worldgen_125_place_structure_blocks(tp, &cv, cx, cz);
+    worldgen_place_structure_blocks(tp, &cv, cx, cz);
 
     for (int pz = cz - 1; pz <= cz; pz++) {
         for (int px = cx - 1; px <= cx; px++) {
@@ -3128,14 +3135,14 @@ int worldgen_125_generate_chunk_arrays(long long seed, int cx, int cz, unsigned 
    generated by tools and trace commands, but no portal or gameplay dimension
    travel is connected here.
    ------------------------------------------------------------------------- */
-typedef struct NetherProvider125 {
+typedef struct NetherProvider {
     JavaRandom rand;
     OctaveNoise n1,n2,n3,slowsandGravel,exclusive,n6,n7;
     double *density,*slow,*gravel,*exclusiveNoise,*d1,*d2,*d3,*d4,*d5;
     int densityCap,slowCap,gravelCap,exclusiveCap,d1Cap,d2Cap,d3Cap,d4Cap,d5Cap;
-} NetherProvider125;
+} NetherProvider;
 
-static void nether_provider_init(NetherProvider125 *np, int64_t seed) {
+static void nether_provider_init(NetherProvider *np, int64_t seed) {
     memset(np,0,sizeof(*np));
     jr_set_seed(&np->rand, seed);
     octave_init(&np->n1,&np->rand,16);
@@ -3146,12 +3153,12 @@ static void nether_provider_init(NetherProvider125 *np, int64_t seed) {
     octave_init(&np->n6,&np->rand,10);
     octave_init(&np->n7,&np->rand,16);
 }
-static void nether_provider_free(NetherProvider125 *np) {
+static void nether_provider_free(NetherProvider *np) {
     free(np->density); free(np->slow); free(np->gravel); free(np->exclusiveNoise);
     free(np->d1); free(np->d2); free(np->d3); free(np->d4); free(np->d5);
 }
 
-static double *nether_density_125(NetherProvider125 *np, int x, int y, int z, int xs, int ys, int zs) {
+static double *nether_density(NetherProvider *np, int x, int y, int z, int xs, int ys, int zs) {
     int n=xs*ys*zs;
     if(!np->density || np->densityCap<n) { free(np->density); np->density=(double*)malloc(sizeof(double)*(size_t)n); np->densityCap=n; }
     if(!np->density) ExitProcess(2);
@@ -3195,9 +3202,9 @@ static double *nether_density_125(NetherProvider125 *np, int x, int y, int z, in
     return np->density;
 }
 
-static void nether_generate_terrain_125(NetherProvider125 *np, int cx, int cz, unsigned char *blocks) {
+static void nether_generate_terrain(NetherProvider *np, int cx, int cz, unsigned char *blocks) {
     int cell=4, sea=32, xs=5, ys=17, zs=5;
-    double *den=nether_density_125(np,cx*cell,0,cz*cell,xs,ys,zs);
+    double *den=nether_density(np,cx*cell,0,cz*cell,xs,ys,zs);
     for(int ix=0; ix<cell; ++ix) for(int iz=0; iz<cell; ++iz) for(int iy=0; iy<16; ++iy) {
         double yStep=0.125;
         double d00=den[((ix+0)*zs + iz+0)*ys + iy+0];
@@ -3230,7 +3237,7 @@ static void nether_generate_terrain_125(NetherProvider125 *np, int cx, int cz, u
     }
 }
 
-static void nether_replace_surface_125(NetherProvider125 *np, int cx, int cz, unsigned char *blocks) {
+static void nether_replace_surface(NetherProvider *np, int cx, int cz, unsigned char *blocks) {
     double sc=1.0/32.0;
     np->slow = octave_fill3(&np->slowsandGravel,np->slow,&np->slowCap,cx*16,0,cz*16,16,1,16,sc,1.0,sc);
     np->gravel = octave_fill3(&np->slowsandGravel,np->gravel,&np->gravelCap,cx*16,109,cz*16,16,1,16,sc,1.0,sc);
@@ -3272,7 +3279,7 @@ static void chunk_set_world_local(unsigned char *blocks, int cx, int cz, int wx,
     int lx=wx-(cx<<4), lz=wz-(cz<<4);
     set_block_local(blocks,lx,y,lz,(unsigned char)id);
 }
-static void nether_place_fire_125(unsigned char *blocks, int cx, int cz, JavaRandom *r, int x, int y, int z) {
+static void nether_place_fire(unsigned char *blocks, int cx, int cz, JavaRandom *r, int x, int y, int z) {
     for(int i=0;i<64;i++) {
         int wx=x+jr_next_int_bound(r,8)-jr_next_int_bound(r,8);
         int wy=y+jr_next_int_bound(r,4)-jr_next_int_bound(r,4);
@@ -3280,7 +3287,7 @@ static void nether_place_fire_125(unsigned char *blocks, int cx, int cz, JavaRan
         if(chunk_get_world_local(blocks,cx,cz,wx,wy,wz,BLK_AIR)==BLK_AIR && chunk_get_world_local(blocks,cx,cz,wx,wy-1,wz,BLK_NETHERRACK)==BLK_NETHERRACK) chunk_set_world_local(blocks,cx,cz,wx,wy,wz,BLK_FIRE);
     }
 }
-static void nether_place_glowstone_125(unsigned char *blocks, int cx, int cz, JavaRandom *r, int x, int y, int z) {
+static void nether_place_glowstone(unsigned char *blocks, int cx, int cz, JavaRandom *r, int x, int y, int z) {
     if(chunk_get_world_local(blocks,cx,cz,x,y,z,BLK_AIR)!=BLK_AIR) return;
     if(chunk_get_world_local(blocks,cx,cz,x,y+1,z,BLK_NETHERRACK)!=BLK_NETHERRACK) return;
     chunk_set_world_local(blocks,cx,cz,x,y,z,BLK_GLOWSTONE);
@@ -3299,7 +3306,7 @@ static void nether_place_glowstone_125(unsigned char *blocks, int cx, int cz, Ja
         if(adj == 1) chunk_set_world_local(blocks,cx,cz,wx,wy,wz,BLK_GLOWSTONE);
     }
 }
-static void nether_place_lava_125(unsigned char *blocks, int cx, int cz, JavaRandom *r, int x, int y, int z) {
+static void nether_place_lava(unsigned char *blocks, int cx, int cz, JavaRandom *r, int x, int y, int z) {
     (void)r;
     if(chunk_get_world_local(blocks,cx,cz,x,y+1,z,BLK_NETHERRACK)!=BLK_NETHERRACK) return;
     int here=chunk_get_world_local(blocks,cx,cz,x,y,z,BLK_AIR);
@@ -3313,17 +3320,17 @@ static void nether_place_lava_125(unsigned char *blocks, int cx, int cz, JavaRan
     }
     if(rock==4 && air==1) chunk_set_world_local(blocks,cx,cz,x,y,z,BLK_LAVA);
 }
-static void nether_place_flower_125(unsigned char *blocks, int cx, int cz, JavaRandom *r, int id, int x, int y, int z) {
+static void nether_place_flower(unsigned char *blocks, int cx, int cz, JavaRandom *r, int id, int x, int y, int z) {
     for(int i=0;i<64;i++) {
         int wx=x+jr_next_int_bound(r,8)-jr_next_int_bound(r,8), wy=y+jr_next_int_bound(r,4)-jr_next_int_bound(r,4), wz=z+jr_next_int_bound(r,8)-jr_next_int_bound(r,8);
         if(chunk_get_world_local(blocks,cx,cz,wx,wy,wz,BLK_AIR)==BLK_AIR && chunk_get_world_local(blocks,cx,cz,wx,wy-1,wz,BLK_NETHERRACK)==BLK_NETHERRACK) chunk_set_world_local(blocks,cx,cz,wx,wy,wz,id);
     }
 }
 
-static void nether_place_bridge_debug_125(unsigned char *blocks, long long seed, int cx, int cz) {
+static void nether_place_bridge_debug(unsigned char *blocks, long long seed, int cx, int cz) {
     int gridX = cx >= 0 ? cx / 16 : (cx - 15) / 16;
     int gridZ = cz >= 0 ? cz / 16 : (cz - 15) / 16;
-    JavaRandom fr = worldgen_125_set_random_seed(seed, gridX, gridZ, 30084232);
+    JavaRandom fr = worldgen_set_random_seed(seed, gridX, gridZ, 30084232);
     int fcX = gridX * 16 + jr_next_int_bound(&fr, 8) + 4;
     int fcZ = gridZ * 16 + jr_next_int_bound(&fr, 8) + 4;
     if (abs(cx - fcX) > 1 || abs(cz - fcZ) > 1) return;
@@ -3344,25 +3351,25 @@ static void nether_place_bridge_debug_125(unsigned char *blocks, long long seed,
     chunk_set_world_local(blocks,cx,cz,ox-3,y+1,oz-5,BLK_NETHER_WART);
 }
 
-static void worldgen_125_generate_nether_chunk(long long seed, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
+static void worldgen_generate_nether_chunk(long long seed, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
     memset(blocks, 0, 32768); memset(data, 0, 16384); memset(heightmap, 0, 256);
-    if (biome_array) memset(biome_array, BIOME_HELL_125, 256);
-    NetherProvider125 np; nether_provider_init(&np,(int64_t)seed);
+    if (biome_array) memset(biome_array, BIOME_HELL, 256);
+    NetherProvider np; nether_provider_init(&np,(int64_t)seed);
     jr_set_seed(&np.rand, (int64_t)((uint64_t)(int64_t)cx * UINT64_C(341873128712) + (uint64_t)(int64_t)cz * UINT64_C(132897987541)));
-    nether_generate_terrain_125(&np,cx,cz,blocks);
-    nether_replace_surface_125(&np,cx,cz,blocks);
-    nether_place_bridge_debug_125(blocks,seed,cx,cz);
+    nether_generate_terrain(&np,cx,cz,blocks);
+    nether_replace_surface(&np,cx,cz,blocks);
+    nether_place_bridge_debug(blocks,seed,cx,cz);
 
     /* Chunk-local version of ChunkProviderHell.populate feature order. */
     int baseX=cx*16, baseZ=cz*16;
-    for(int i=0;i<8;i++) nether_place_lava_125(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,120)+4,baseZ+jr_next_int_bound(&np.rand,16)+8);
+    for(int i=0;i<8;i++) nether_place_lava(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,120)+4,baseZ+jr_next_int_bound(&np.rand,16)+8);
     int fireCount=jr_next_int_bound(&np.rand,jr_next_int_bound(&np.rand,10)+1)+1;
-    for(int i=0;i<fireCount;i++) nether_place_fire_125(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,120)+4,baseZ+jr_next_int_bound(&np.rand,16)+8);
+    for(int i=0;i<fireCount;i++) nether_place_fire(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,120)+4,baseZ+jr_next_int_bound(&np.rand,16)+8);
     int glow1=jr_next_int_bound(&np.rand,jr_next_int_bound(&np.rand,10)+1);
-    for(int i=0;i<glow1;i++) nether_place_glowstone_125(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,120)+4,baseZ+jr_next_int_bound(&np.rand,16)+8);
-    for(int i=0;i<10;i++) nether_place_glowstone_125(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,128),baseZ+jr_next_int_bound(&np.rand,16)+8);
-    if(jr_next_int_bound(&np.rand,1)==0) nether_place_flower_125(blocks,cx,cz,&np.rand,BLK_BROWN_MUSHROOM,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,128),baseZ+jr_next_int_bound(&np.rand,16)+8);
-    if(jr_next_int_bound(&np.rand,1)==0) nether_place_flower_125(blocks,cx,cz,&np.rand,BLK_RED_MUSHROOM,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,128),baseZ+jr_next_int_bound(&np.rand,16)+8);
+    for(int i=0;i<glow1;i++) nether_place_glowstone(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,120)+4,baseZ+jr_next_int_bound(&np.rand,16)+8);
+    for(int i=0;i<10;i++) nether_place_glowstone(blocks,cx,cz,&np.rand,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,128),baseZ+jr_next_int_bound(&np.rand,16)+8);
+    if(jr_next_int_bound(&np.rand,1)==0) nether_place_flower(blocks,cx,cz,&np.rand,BLK_BROWN_MUSHROOM,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,128),baseZ+jr_next_int_bound(&np.rand,16)+8);
+    if(jr_next_int_bound(&np.rand,1)==0) nether_place_flower(blocks,cx,cz,&np.rand,BLK_RED_MUSHROOM,baseX+jr_next_int_bound(&np.rand,16)+8,jr_next_int_bound(&np.rand,128),baseZ+jr_next_int_bound(&np.rand,16)+8);
 
     unsigned char *sky=(unsigned char*)calloc(16384,1);
     if(sky) { recalc_light_and_height(blocks, sky, heightmap); free(sky); }
@@ -3370,13 +3377,13 @@ static void worldgen_125_generate_nether_chunk(long long seed, int cx, int cz, u
 }
 
 
-typedef struct EndProvider125 {
+typedef struct EndProvider {
     JavaRandom rand;
     OctaveNoise n1,n2,n3,n4,n5;
     double *density,*d1,*d2,*d3,*d4,*d5;
     int densityCap,d1Cap,d2Cap,d3Cap,d4Cap,d5Cap;
-} EndProvider125;
-static void end_provider_init(EndProvider125 *ep, int64_t seed) {
+} EndProvider;
+static void end_provider_init(EndProvider *ep, int64_t seed) {
     memset(ep,0,sizeof(*ep));
     jr_set_seed(&ep->rand, seed);
     octave_init(&ep->n1,&ep->rand,16);
@@ -3385,8 +3392,8 @@ static void end_provider_init(EndProvider125 *ep, int64_t seed) {
     octave_init(&ep->n4,&ep->rand,10);
     octave_init(&ep->n5,&ep->rand,16);
 }
-static void end_provider_free(EndProvider125 *ep) { free(ep->density); free(ep->d1); free(ep->d2); free(ep->d3); free(ep->d4); free(ep->d5); }
-static double *end_density_125(EndProvider125 *ep, int x, int y, int z, int xs, int ys, int zs) {
+static void end_provider_free(EndProvider *ep) { free(ep->density); free(ep->d1); free(ep->d2); free(ep->d3); free(ep->d4); free(ep->d5); }
+static double *end_density(EndProvider *ep, int x, int y, int z, int xs, int ys, int zs) {
     int n=xs*ys*zs;
     if(!ep->density || ep->densityCap<n) { free(ep->density); ep->density=(double*)malloc(sizeof(double)*(size_t)n); ep->densityCap=n; }
     if(!ep->density) ExitProcess(2);
@@ -3433,9 +3440,9 @@ static double *end_density_125(EndProvider125 *ep, int x, int y, int z, int xs, 
     }
     return ep->density;
 }
-static void end_generate_terrain_125(EndProvider125 *ep, int cx, int cz, unsigned char *blocks) {
+static void end_generate_terrain(EndProvider *ep, int cx, int cz, unsigned char *blocks) {
     int cell=2, xs=3, ys=33, zs=3;
-    double *den=end_density_125(ep,cx*cell,0,cz*cell,xs,ys,zs);
+    double *den=end_density(ep,cx*cell,0,cz*cell,xs,ys,zs);
     for(int ix=0; ix<cell; ++ix) for(int iz=0; iz<cell; ++iz) for(int iy=0; iy<32; ++iy) {
         double yStep=0.25;
         double d00=den[((ix+0)*zs + iz+0)*ys + iy+0];
@@ -3468,7 +3475,7 @@ static int end_top_solid(const unsigned char *blocks, int lx, int lz) {
     for(int y=127; y>=0; --y) if(get_block_local(blocks,lx,y,lz)!=BLK_AIR) return y+1;
     return 0;
 }
-static void end_place_spike_125(unsigned char *blocks, int cx, int cz, JavaRandom *r, int wx, int y, int wz) {
+static void end_place_spike(unsigned char *blocks, int cx, int cz, JavaRandom *r, int wx, int y, int wz) {
     int lx=wx-(cx<<4), lz=wz-(cz<<4);
     if(lx<0||lx>=16||lz<0||lz>=16||y<=0||y>=128) return;
     if(get_block_local(blocks,lx,y,lz)!=BLK_AIR || get_block_local(blocks,lx,y-1,lz)!=BLK_END_STONE) return;
@@ -3487,12 +3494,12 @@ static void end_place_spike_125(unsigned char *blocks, int cx, int cz, JavaRando
     chunk_set_world_local(blocks,cx,cz,wx,y+h,wz,BLK_BEDROCK);
 }
 
-static void worldgen_125_generate_end_chunk(long long seed, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
+static void worldgen_generate_end_chunk(long long seed, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
     memset(blocks, 0, 32768); memset(data, 0, 16384); memset(heightmap, 0, 256);
-    if (biome_array) memset(biome_array, BIOME_SKY_125, 256);
-    EndProvider125 ep; end_provider_init(&ep,(int64_t)seed);
+    if (biome_array) memset(biome_array, BIOME_SKY, 256);
+    EndProvider ep; end_provider_init(&ep,(int64_t)seed);
     jr_set_seed(&ep.rand, (int64_t)((uint64_t)(int64_t)cx * UINT64_C(341873128712) + (uint64_t)(int64_t)cz * UINT64_C(132897987541)));
-    end_generate_terrain_125(&ep,cx,cz,blocks);
+    end_generate_terrain(&ep,cx,cz,blocks);
 
     /* BiomeEndDecorator-style spike chance; dragon/crystal entities are not
        spawned in PexCraft, but the obsidian/bedrock block side effects are. */
@@ -3502,7 +3509,7 @@ static void worldgen_125_generate_end_chunk(long long seed, int cx, int cz, unsi
         int wz=baseZ+jr_next_int_bound(&ep.rand,16)+8;
         int lx=wx-(cx<<4), lz=wz-(cz<<4);
         int y=(lx>=0&&lx<16&&lz>=0&&lz<16) ? end_top_solid(blocks,lx,lz) : 0;
-        if(y>0) end_place_spike_125(blocks,cx,cz,&ep.rand,wx,y,wz);
+        if(y>0) end_place_spike(blocks,cx,cz,&ep.rand,wx,y,wz);
     }
     if (cx == 0 && cz == 0) {
         for (int lx=6; lx<=10; ++lx) for (int lz=6; lz<=10; ++lz) set_block_local(blocks,lx,64,lz,BLK_OBSIDIAN);
@@ -3513,39 +3520,39 @@ static void worldgen_125_generate_end_chunk(long long seed, int cx, int cz, unsi
 }
 
 
-int worldgen_125_generate_dimension_chunk_arrays(long long seed, int dimension, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
+int worldgen_generate_dimension_chunk_arrays(long long seed, int dimension, int cx, int cz, unsigned char *blocks, unsigned char *data, unsigned char *heightmap, unsigned char *biome_array) {
     if (!blocks || !data || !heightmap || !biome_array) return 0;
-    if (dimension == 0) return worldgen_125_generate_chunk_arrays(seed, cx, cz, blocks, data, heightmap, biome_array);
-    if (dimension == -1) { worldgen_125_generate_nether_chunk(seed, cx, cz, blocks, data, heightmap, biome_array); return 1; }
-    if (dimension == 1) { worldgen_125_generate_end_chunk(seed, cx, cz, blocks, data, heightmap, biome_array); return 1; }
+    if (dimension == 0) return worldgen_generate_chunk_arrays(seed, cx, cz, blocks, data, heightmap, biome_array);
+    if (dimension == -1) { worldgen_generate_nether_chunk(seed, cx, cz, blocks, data, heightmap, biome_array); return 1; }
+    if (dimension == 1) { worldgen_generate_end_chunk(seed, cx, cz, blocks, data, heightmap, biome_array); return 1; }
     return 0;
 }
 
-typedef struct WorldgenTraceTarget125 {
+typedef struct WorldgenTraceTarget {
     int found;
     int kind;
     int chunkX, chunkZ;
     int blockX, footY, blockZ;
     int surface; /* 1 = choose a safe surface after generation; 0 = underground target */
     char label[64];
-} WorldgenTraceTarget125;
+} WorldgenTraceTarget;
 
-static int wg125_dist2_chunks(int ax, int az, int bx, int bz) {
+static int worldgen_dist2_chunks(int ax, int az, int bx, int bz) {
     int dx=ax-bx, dz=az-bz;
     return dx*dx + dz*dz;
 }
 
-int worldgen_125_trace_target(long long seed, const char *kind, int fromBlockX, int fromBlockZ, int index, WorldgenTraceTarget125 *out) {
+int worldgen_trace_target(long long seed, const char *kind, int fromBlockX, int fromBlockZ, int index, WorldgenTraceTarget *out) {
     if (!kind || !out) return 0;
     memset(out, 0, sizeof(*out));
     int fromCx = wg_floor_div16(fromBlockX), fromCz = wg_floor_div16(fromBlockZ);
     if (index < 0) index = 0;
     if (strcmp(kind, "stronghold") == 0 || strcmp(kind, "portalroom") == 0) {
-        int sx[3], sz[3]; worldgen_125_get_stronghold_coords(seed, sx, sz);
+        int sx[3], sz[3]; worldgen_get_stronghold_coords(seed, sx, sz);
         int pick = 0, best = 0x7fffffff;
         if (index >= 1 && index <= 3) pick = index - 1;
-        else for (int i=0;i<3;i++) { int d=wg125_dist2_chunks(fromCx,fromCz,sx[i],sz[i]); if (d < best) { best=d; pick=i; } }
-        JavaRandom r = worldgen_125_structure_random(seed, sx[pick], sz[pick]);
+        else for (int i=0;i<3;i++) { int d=worldgen_dist2_chunks(fromCx,fromCz,sx[i],sz[i]); if (d < best) { best=d; pick=i; } }
+        JavaRandom r = worldgen_structure_random(seed, sx[pick], sz[pick]);
         int baseX = (sx[pick] << 4) + 2, baseZ = (sz[pick] << 4) + 2;
         int y = 26 + jr_next_int_bound(&r, 16);
         out->found=1; out->kind=1; out->chunkX=sx[pick]; out->chunkZ=sz[pick]; out->blockX=baseX+2; out->blockZ=baseZ+29; out->footY=y+2; out->surface=0;
@@ -3558,7 +3565,7 @@ int worldgen_125_trace_target(long long seed, const char *kind, int fromBlockX, 
             for (int dz=-r; dz<=r; ++dz) for (int dx=-r; dx<=r; ++dx) {
                 if (abs(dx) != r && abs(dz) != r) continue;
                 int cx=fromCx+dx, cz=fromCz+dz;
-                if (worldgen_125_village_can_spawn(seed,cx,cz)) { int d=dx*dx+dz*dz; if (d < best) { best=d; bestCx=cx; bestCz=cz; found=1; } }
+                if (worldgen_village_can_spawn(seed,cx,cz)) { int d=dx*dx+dz*dz; if (d < best) { best=d; bestCx=cx; bestCz=cz; found=1; } }
             }
         }
         if (!found) return 0;
@@ -3572,11 +3579,11 @@ int worldgen_125_trace_target(long long seed, const char *kind, int fromBlockX, 
             for (int dz=-r; dz<=r; ++dz) for (int dx=-r; dx<=r; ++dx) {
                 if (abs(dx) != r && abs(dz) != r) continue;
                 int cx=fromCx+dx, cz=fromCz+dz;
-                if (worldgen_125_mineshaft_can_spawn(seed,cx,cz)) { int d=dx*dx+dz*dz; if (d < best) { best=d; bestCx=cx; bestCz=cz; found=1; } }
+                if (worldgen_mineshaft_can_spawn(seed,cx,cz)) { int d=dx*dx+dz*dz; if (d < best) { best=d; bestCx=cx; bestCz=cz; found=1; } }
             }
         }
         if (!found) return 0;
-        JavaRandom r = worldgen_125_structure_random(seed, bestCx, bestCz);
+        JavaRandom r = worldgen_structure_random(seed, bestCx, bestCz);
         int y = 18 + jr_next_int_bound(&r, 28);
         out->found=1; out->kind=3; out->chunkX=bestCx; out->chunkZ=bestCz; out->blockX=(bestCx<<4)+8; out->blockZ=(bestCz<<4)+8; out->footY=y+2; out->surface=0;
         snprintf(out->label,sizeof(out->label),"mineshaft");
@@ -3587,18 +3594,18 @@ int worldgen_125_trace_target(long long seed, const char *kind, int fromBlockX, 
 
 
 #ifndef PEXCRAFT_WORLDGEN_ARRAYS_ONLY
-static void nbt_byte_125(BinBuf *b, const char *name, int v) { nbt_tag(b, 1, name); bb_u8(b, (unsigned int)(v & 0xff)); }
-static void nbt_short_125(BinBuf *b, const char *name, int v) { nbt_tag(b, 2, name); bb_u16be(b, (unsigned int)(v & 0xffff)); }
+static void nbt_byte_value(BinBuf *b, const char *name, int v) { nbt_tag(b, 1, name); bb_u8(b, (unsigned int)(v & 0xff)); }
+static void nbt_short_value(BinBuf *b, const char *name, int v) { nbt_tag(b, 2, name); bb_u16be(b, (unsigned int)(v & 0xffff)); }
 
-typedef struct WG125LootItem { int slot, id, count, damage; } WG125LootItem;
+typedef struct WorldgenLootItem { int slot, id, count, damage; } WorldgenLootItem;
 
-static unsigned int wg125_pos_hash(int wx, int y, int wz, unsigned int salt) {
+static unsigned int worldgen_pos_hash(int wx, int y, int wz, unsigned int salt) {
     unsigned int h = (unsigned int)wx * 73428767u ^ (unsigned int)wz * 91227153u ^ (unsigned int)y * 42317861u ^ salt;
     h ^= h >> 16; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;
     return h;
 }
 
-static int wg125_neighbor_id_local(const unsigned char *blocks, int x, int y, int z, int id, int radius) {
+static int worldgen_neighbor_id_local(const unsigned char *blocks, int x, int y, int z, int id, int radius) {
     for(int dy=-radius; dy<=radius; ++dy) for(int dz=-radius; dz<=radius; ++dz) for(int dx=-radius; dx<=radius; ++dx) {
         int xx=x+dx, yy=y+dy, zz=z+dz;
         if(xx<0||xx>=16||yy<0||yy>=128||zz<0||zz>=16) continue;
@@ -3607,22 +3614,22 @@ static int wg125_neighbor_id_local(const unsigned char *blocks, int x, int y, in
     return 0;
 }
 
-static const char *worldgen_125_spawner_entity(const unsigned char *blocks, int x, int y, int z) {
-    if(wg125_neighbor_id_local(blocks,x,y,z,BLK_END_PORTAL_FRAME,6) || wg125_neighbor_id_local(blocks,x,y,z,BLK_STONE_BRICK,6)) return "Silverfish";
-    if(wg125_neighbor_id_local(blocks,x,y,z,BLK_NETHER_BRICK,8)) return "Blaze";
-    if(wg125_neighbor_id_local(blocks,x,y,z,BLK_WEB,8) || wg125_neighbor_id_local(blocks,x,y,z,BLK_RAILS,8)) return "CaveSpider";
+static const char *worldgen_spawner_entity(const unsigned char *blocks, int x, int y, int z) {
+    if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_END_PORTAL_FRAME,6) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_STONE_BRICK,6)) return "Silverfish";
+    if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_NETHER_BRICK,8)) return "Blaze";
+    if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_WEB,8) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_RAILS,8)) return "CaveSpider";
     return "Silverfish";
 }
 
-static int worldgen_125_chest_kind(const unsigned char *blocks, int x, int y, int z) {
-    if(wg125_neighbor_id_local(blocks,x,y,z,BLK_BOOKSHELF,8) || wg125_neighbor_id_local(blocks,x,y,z,BLK_STONE_BRICK,8)) return 1; /* stronghold */
-    if(wg125_neighbor_id_local(blocks,x,y,z,BLK_RAILS,8) || wg125_neighbor_id_local(blocks,x,y,z,BLK_WEB,8)) return 2; /* mineshaft */
-    if(wg125_neighbor_id_local(blocks,x,y,z,BLK_NETHER_BRICK,8)) return 3; /* fortress */
+static int worldgen_chest_kind(const unsigned char *blocks, int x, int y, int z) {
+    if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_BOOKSHELF,8) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_STONE_BRICK,8)) return 1; /* stronghold */
+    if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_RAILS,8) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_WEB,8)) return 2; /* mineshaft */
+    if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_NETHER_BRICK,8)) return 3; /* fortress */
     return 0; /* village/dungeon fallback */
 }
 
-static int worldgen_125_make_loot(int kind, int wx, int y, int wz, WG125LootItem out[16]) {
-    unsigned int h = wg125_pos_hash(wx,y,wz,0x125125u);
+static int worldgen_make_loot(int kind, int wx, int y, int wz, WorldgenLootItem out[16]) {
+    unsigned int h = worldgen_pos_hash(wx,y,wz,0x125125u);
     int n = 0;
 #define ADD_LOOT(slot_, id_, count_, damage_) do { if(n < 16) { out[n].slot=(slot_); out[n].id=(id_); out[n].count=(count_); out[n].damage=(damage_); ++n; } } while(0)
     if(kind == 1) { /* stronghold library/corridor style */
@@ -3657,25 +3664,25 @@ static int worldgen_125_make_loot(int kind, int wx, int y, int wz, WG125LootItem
     return n;
 }
 
-static void nbt_item_stack_125(BinBuf *b, const WG125LootItem *it) {
-    nbt_byte_125(b, "Slot", it->slot);
-    nbt_short_125(b, "id", it->id);
-    nbt_byte_125(b, "Count", it->count);
-    nbt_short_125(b, "Damage", it->damage);
+static void nbt_item_stack(BinBuf *b, const WorldgenLootItem *it) {
+    nbt_byte_value(b, "Slot", it->slot);
+    nbt_short_value(b, "id", it->id);
+    nbt_byte_value(b, "Count", it->count);
+    nbt_short_value(b, "Damage", it->damage);
     nbt_end(b);
 }
 
-static void nbt_chest_items_125(BinBuf *b, const unsigned char *blocks, int cx, int cz, int x, int y, int z) {
-    WG125LootItem items[16];
+static void nbt_chest_items(BinBuf *b, const unsigned char *blocks, int cx, int cz, int x, int y, int z) {
+    WorldgenLootItem items[16];
     int wx = (cx << 4) + x, wz = (cz << 4) + z;
-    int count = worldgen_125_make_loot(worldgen_125_chest_kind(blocks,x,y,z), wx, y, wz, items);
+    int count = worldgen_make_loot(worldgen_chest_kind(blocks,x,y,z), wx, y, wz, items);
     nbt_tag(b, 9, "Items");
     bb_u8(b, 10);
     bb_u32be(b, (unsigned int)count);
-    for(int i=0;i<count;i++) nbt_item_stack_125(b, &items[i]);
+    for(int i=0;i<count;i++) nbt_item_stack(b, &items[i]);
 }
 
-static int worldgen_125_tile_entity_count(const unsigned char *blocks) {
+static int worldgen_tile_entity_count(const unsigned char *blocks) {
     int count = 0;
     for (int x=0;x<16;x++) for (int z=0;z<16;z++) for (int y=0;y<128;y++) {
         int id = blocks[chunk_index(x,y,z)];
@@ -3683,8 +3690,8 @@ static int worldgen_125_tile_entity_count(const unsigned char *blocks) {
     }
     return count;
 }
-static void worldgen_125_write_tile_entities(BinBuf *b, const unsigned char *blocks, int cx, int cz) {
-    int count = worldgen_125_tile_entity_count(blocks);
+static void worldgen_write_tile_entities(BinBuf *b, const unsigned char *blocks, int cx, int cz) {
+    int count = worldgen_tile_entity_count(blocks);
     nbt_tag(b, 9, "TileEntities");
     bb_u8(b, 10);
     bb_u32be(b, (unsigned int)count);
@@ -3694,13 +3701,13 @@ static void worldgen_125_write_tile_entities(BinBuf *b, const unsigned char *blo
         if (id == BLK_CHEST) {
             nbt_string(b, "id", "Chest");
             nbt_int(b, "x", (cx << 4) + x); nbt_int(b, "y", y); nbt_int(b, "z", (cz << 4) + z);
-            nbt_chest_items_125(b, blocks, cx, cz, x, y, z);
+            nbt_chest_items(b, blocks, cx, cz, x, y, z);
             nbt_end(b);
         } else {
             nbt_string(b, "id", "MobSpawner");
             nbt_int(b, "x", (cx << 4) + x); nbt_int(b, "y", y); nbt_int(b, "z", (cz << 4) + z);
-            nbt_string(b, "EntityId", worldgen_125_spawner_entity(blocks,x,y,z));
-            nbt_short_125(b, "Delay", 20);
+            nbt_string(b, "EntityId", worldgen_spawner_entity(blocks,x,y,z));
+            nbt_short_value(b, "Delay", 20);
             nbt_end(b);
         }
     }
@@ -3716,7 +3723,7 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
     unsigned char *biome_array = (unsigned char*)calloc(256, 1);
     if (!blocks || !data || !sky || !blocklight || !heightmap || !biome_array) { free(blocks); free(data); free(sky); free(blocklight); free(heightmap); free(biome_array); return 0; }
 
-    if (!worldgen_125_generate_chunk_arrays(seed, cx, cz, blocks, data, heightmap, biome_array)) {
+    if (!worldgen_generate_chunk_arrays(seed, cx, cz, blocks, data, heightmap, biome_array)) {
         free(blocks); free(data); free(sky); free(blocklight); free(heightmap); free(biome_array);
         return 0;
     }
@@ -3736,7 +3743,7 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
     nbt_byte_array(&b, "Biomes", biome_array, 256);
     nbt_byte(&b, "TerrainPopulated", 1);
     nbt_empty_compound_list(&b, "Entities");
-    worldgen_125_write_tile_entities(&b, blocks, cx, cz);
+    worldgen_write_tile_entities(&b, blocks, cx, cz);
     nbt_end(&b);
     nbt_end(&b);
     char bx[32], bz[32], fx[32], fz[32];

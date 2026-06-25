@@ -82,7 +82,9 @@ static void draw_current_screen(float partial) {
         case SCREEN_CONTROLS: draw_controls_screen(); break;
         case SCREEN_WORLD_SELECT:
         case SCREEN_WORLD_DELETE: draw_world_screen(); break;
+        case SCREEN_CREATE_WORLD: draw_create_world_screen(); break;
         case SCREEN_WORLD_TYPE: draw_world_type_screen(); break;
+        case SCREEN_RENAME_WORLD: draw_rename_world_screen(); break;
         case SCREEN_CONFIRM_DELETE: draw_confirm_delete(); break;
         case SCREEN_MULTIPLAYER: draw_multiplayer(); break;
         case SCREEN_CONNECTING: draw_connecting_screen(); break;

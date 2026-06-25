@@ -403,7 +403,7 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
 static int pex_gamepad_menu_screen(void) {
     return g_screen == SCREEN_TITLE || g_screen == SCREEN_OPTIONS || g_screen == SCREEN_OPTIONS_MORE ||
            g_screen == SCREEN_SYSTEM_INFO || g_screen == SCREEN_SKINS || g_screen == SCREEN_CONTROLS ||
-           g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_TYPE || g_screen == SCREEN_WORLD_DELETE ||
+           g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_CREATE_WORLD || g_screen == SCREEN_WORLD_TYPE || g_screen == SCREEN_WORLD_DELETE || g_screen == SCREEN_RENAME_WORLD ||
            g_screen == SCREEN_CONFIRM_DELETE || g_screen == SCREEN_MULTIPLAYER || g_screen == SCREEN_CONNECTING ||
            g_screen == SCREEN_TEXPACK || g_screen == SCREEN_PAUSE || g_screen == SCREEN_DEATH ||
            g_screen == SCREEN_NOTICE || g_screen == SCREEN_RENDERER_RESTART_PROMPT ||
