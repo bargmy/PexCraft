@@ -440,8 +440,9 @@ static void rebuild_screen(void) {
         }
         add_button_full(300, g_gui_w / 2 - 100, g_gui_h / 6 + 96 - 6, 200, 20, tr("Video Settings..."), BUTTON_NORMAL);
         add_button_full(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, tr("Controls..."), BUTTON_NORMAL);
-        add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
-        add_button_full(200, g_gui_w / 2 - 100, g_gui_h / 6 + 168, 200, 20, tr("Done"), BUTTON_NORMAL);
+        add_button_full(302, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Language"), BUTTON_NORMAL);
+        add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 168 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
+        add_button_full(200, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         const OptionId video_options[] = {
             OPT_GRAPHICS, OPT_RENDER_DISTANCE, OPT_VIEW_BOBBING, OPT_LIMIT_FRAMERATE,
@@ -464,6 +465,16 @@ static void rebuild_screen(void) {
         add_button_full(199, g_gui_w / 2 - 100, g_gui_h / 6 + 168, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 24, 200, 20, tr("Back"), BUTTON_NORMAL);
+    } else if (g_screen == SCREEN_LANGUAGE) {
+        int count = pex_language_count();
+        int top = 38;
+        int row_h = 18;
+        for (int i = 0; i < count; ++i) {
+            int y = top + i * row_h - 4;
+            if (y > g_gui_h - 72) break;
+            add_button_full(4000 + i, g_gui_w / 2 - 105, y, 210, 16, "", BUTTON_HITBOX);
+        }
+        add_button_full(200, g_gui_w / 2 - 75, g_gui_h - 38, 150, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SKINS) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h - 76, tr("Import Skin..."));
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Use Default"), BUTTON_NORMAL);
@@ -622,7 +633,7 @@ static void on_button(Button *b) {
         else if (b->id == 1) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_WORLD_SELECT); }
         else if (b->id == 2) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_MULTIPLAYER); }
         else if (b->id == 3) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_TEXPACK); }
-        else if (b->id == 5) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_OPTIONS); }
+        else if (b->id == 5) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_LANGUAGE); }
         else if (b->id == 4) {
 #ifdef PEX_PLATFORM_PSP
             g_running = 0;
@@ -640,6 +651,7 @@ static void on_button(Button *b) {
         else if (b->id == 200) finish_options_to(g_parent_screen);
         else if (b->id == 300) set_screen(SCREEN_OPTIONS_MORE);
         else if (b->id == 301) set_screen(SCREEN_SKINS);
+        else if (b->id == 302) { g_parent_screen = SCREEN_OPTIONS; set_screen(SCREEN_LANGUAGE); }
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         if (b->id < 100) {
             if (b->kind == BUTTON_NORMAL) {
@@ -648,6 +660,14 @@ static void on_button(Button *b) {
             }
         } else if (b->id == 122) set_screen(SCREEN_SYSTEM_INFO);
         else if (b->id == 199) { save_options(); set_screen(SCREEN_OPTIONS); }
+    } else if (g_screen == SCREEN_LANGUAGE) {
+        if (b->id >= 4000 && b->id < 4000 + pex_language_count()) {
+            const char *code = pex_language_code_at(b->id - 4000);
+            snprintf(g_opts.language, sizeof(g_opts.language), "%s", code);
+            pex_set_language_code(g_opts.language);
+            save_options();
+            rebuild_screen();
+        } else if (b->id == 200) set_screen(g_parent_screen == SCREEN_TITLE ? SCREEN_TITLE : SCREEN_OPTIONS);
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_SKINS) {

@@ -393,15 +393,18 @@ static void draw_inventory_block_model(int id, int meta) {
 }
 
 static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, float pz, float u, float v) {
-    /* Java GUI block transform collapsed to 2-D screen coordinates:
-       T(slot-2,+3) * S(10) * T(1,0.5,8) * Rx(210) * Ry(45).
-       This keeps inventory block icons visually 1:1 with the deobfuscated Java
-       path without letting old depth/cull state leak wrong cube faces into GUI. */
+    /* Exact Java 1.2.5 GUI block facing:
+       glTranslate(slotX - 2, slotY + 3, -3), glScale(10), glTranslate(1,.5,1),
+       glScale(1,1,-1), glRotate(210,x), glRotate(45,y), glRotate(-90,y),
+       then RenderBlocks.renderBlockAsItem() translates the block by -0.5.
+       The old PexCraft projection forgot the final -90 yaw, so every inventory
+       block faced the wrong direction versus Java. */
     const float c45 = 0.70710678118f;
     const float cx = -0.86602540378f;
     const float sx = -0.5f;
-    float rx = c45 * px + c45 * pz;
-    float rz = -c45 * px + c45 * pz;
+    /* Net yaw is -45 degrees, not +45. */
+    float rx = c45 * px - c45 * pz;
+    float rz = c45 * px + c45 * pz;
     float ry = cx * py - sx * rz;
     float gx = (float)(slot_x - 2) + 10.0f * (1.0f + rx);
     float gy = (float)(slot_y + 3) + 10.0f * (0.5f + ry);
@@ -434,6 +437,11 @@ static void emit_inventory_iso_face(int id, int meta, int slot_x, int slot_y,
         inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az0, u1, v0);
         inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az0, u0, v0);
         inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u0, v1);
+    } else if (face == 2) {
+        inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az0, u1, v0);
+        inventory_iso_vertex(slot_x, slot_y, ax1, ay0, az0, u1, v1);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az0, u0, v1);
+        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az0, u0, v0);
     } else if (face == 3) {
         inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u0, v0);
         inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az1, u0, v1);
@@ -451,11 +459,9 @@ static void draw_inventory_iso_cuboid(int id, int meta, int slot_x, int slot_y,
                                                 float x0, float y0, float z0,
                                                 float x1, float y1, float z1) {
     glBegin(GL_QUADS);
-    /* At Java's inventory rotation the visible faces are x-min, z-max, and top.
-       Emit only those faces, in painter order, so no back/inside face can bleed
-       through on PSP/D3D compatibility paths. */
+    /* Painter-order the same three faces visible after Java's net -45 yaw. */
+    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 2);
     emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
-    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
     emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
     glEnd();
 }
@@ -954,71 +960,71 @@ static const char *item_display_name(int id) {
 
 static const char *dye_damage_name(int damage) {
     switch (damage & 15) {
-        case 0: return "Ink Sac";
-        case 1: return "Rose Red";
-        case 2: return "Cactus Green";
-        case 3: return "Cocoa Beans";
-        case 4: return "Lapis Lazuli";
-        case 5: return "Purple Dye";
-        case 6: return "Cyan Dye";
-        case 7: return "Light Gray Dye";
-        case 8: return "Gray Dye";
-        case 9: return "Pink Dye";
-        case 10: return "Lime Dye";
-        case 11: return "Dandelion Yellow";
-        case 12: return "Light Blue Dye";
-        case 13: return "Magenta Dye";
-        case 14: return "Orange Dye";
-        case 15: return "Bone Meal";
-        default: return "Dye";
+        case 0: return tr_key_default("item.dyePowder.black.name", "Ink Sac");
+        case 1: return tr_key_default("item.dyePowder.red.name", "Rose Red");
+        case 2: return tr_key_default("item.dyePowder.green.name", "Cactus Green");
+        case 3: return tr_key_default("item.dyePowder.brown.name", "Cocoa Beans");
+        case 4: return tr_key_default("item.dyePowder.blue.name", "Lapis Lazuli");
+        case 5: return tr_key_default("item.dyePowder.purple.name", "Purple Dye");
+        case 6: return tr_key_default("item.dyePowder.cyan.name", "Cyan Dye");
+        case 7: return tr_key_default("item.dyePowder.silver.name", "Light Gray Dye");
+        case 8: return tr_key_default("item.dyePowder.gray.name", "Gray Dye");
+        case 9: return tr_key_default("item.dyePowder.pink.name", "Pink Dye");
+        case 10: return tr_key_default("item.dyePowder.lime.name", "Lime Dye");
+        case 11: return tr_key_default("item.dyePowder.yellow.name", "Dandelion Yellow");
+        case 12: return tr_key_default("item.dyePowder.lightBlue.name", "Light Blue Dye");
+        case 13: return tr_key_default("item.dyePowder.magenta.name", "Magenta Dye");
+        case 14: return tr_key_default("item.dyePowder.orange.name", "Orange Dye");
+        case 15: return tr_key_default("item.dyePowder.white.name", "Bone Meal");
+        default: return tr_key_default("item.dyePowder.name", "Dye");
     }
 }
 
 static const char *wool_damage_name(int damage) {
     switch (damage & 15) {
-        case 0: return "White Wool";
-        case 1: return "Orange Wool";
-        case 2: return "Magenta Wool";
-        case 3: return "Light Blue Wool";
-        case 4: return "Yellow Wool";
-        case 5: return "Lime Wool";
-        case 6: return "Pink Wool";
-        case 7: return "Gray Wool";
-        case 8: return "Light Gray Wool";
-        case 9: return "Cyan Wool";
-        case 10: return "Purple Wool";
-        case 11: return "Blue Wool";
-        case 12: return "Brown Wool";
-        case 13: return "Green Wool";
-        case 14: return "Red Wool";
-        case 15: return "Black Wool";
-        default: return "Wool";
+        case 0: return tr_key_default("tile.cloth.white.name", "White Wool");
+        case 1: return tr_key_default("tile.cloth.orange.name", "Orange Wool");
+        case 2: return tr_key_default("tile.cloth.magenta.name", "Magenta Wool");
+        case 3: return tr_key_default("tile.cloth.lightBlue.name", "Light Blue Wool");
+        case 4: return tr_key_default("tile.cloth.yellow.name", "Yellow Wool");
+        case 5: return tr_key_default("tile.cloth.lime.name", "Lime Wool");
+        case 6: return tr_key_default("tile.cloth.pink.name", "Pink Wool");
+        case 7: return tr_key_default("tile.cloth.gray.name", "Gray Wool");
+        case 8: return tr_key_default("tile.cloth.silver.name", "Light Gray Wool");
+        case 9: return tr_key_default("tile.cloth.cyan.name", "Cyan Wool");
+        case 10: return tr_key_default("tile.cloth.purple.name", "Purple Wool");
+        case 11: return tr_key_default("tile.cloth.blue.name", "Blue Wool");
+        case 12: return tr_key_default("tile.cloth.brown.name", "Brown Wool");
+        case 13: return tr_key_default("tile.cloth.green.name", "Green Wool");
+        case 14: return tr_key_default("tile.cloth.red.name", "Red Wool");
+        case 15: return tr_key_default("tile.cloth.black.name", "Black Wool");
+        default: return tr_key_default("tile.cloth.name", "Wool");
     }
 }
 
 static const char *spawn_egg_entity_name(int damage) {
     switch (damage) {
-        case 50: return "Creeper";
-        case 51: return "Skeleton";
-        case 52: return "Spider";
-        case 54: return "Zombie";
-        case 55: return "Slime";
-        case 56: return "Ghast";
-        case 57: return "Zombie Pigman";
-        case 58: return "Enderman";
-        case 59: return "Cave Spider";
-        case 60: return "Silverfish";
-        case 61: return "Blaze";
-        case 62: return "Magma Cube";
-        case 90: return "Pig";
-        case 91: return "Sheep";
-        case 92: return "Cow";
-        case 93: return "Chicken";
-        case 94: return "Squid";
-        case 95: return "Wolf";
-        case 96: return "Mooshroom";
-        case 98: return "Ocelot";
-        case 120: return "Villager";
+        case 50: return tr_key_default("entity.Creeper.name", "Creeper");
+        case 51: return tr_key_default("entity.Skeleton.name", "Skeleton");
+        case 52: return tr_key_default("entity.Spider.name", "Spider");
+        case 54: return tr_key_default("entity.Zombie.name", "Zombie");
+        case 55: return tr_key_default("entity.Slime.name", "Slime");
+        case 56: return tr_key_default("entity.Ghast.name", "Ghast");
+        case 57: return tr_key_default("entity.PigZombie.name", "Zombie Pigman");
+        case 58: return tr_key_default("entity.Enderman.name", "Enderman");
+        case 59: return tr_key_default("entity.CaveSpider.name", "Cave Spider");
+        case 60: return tr_key_default("entity.Silverfish.name", "Silverfish");
+        case 61: return tr_key_default("entity.Blaze.name", "Blaze");
+        case 62: return tr_key_default("entity.LavaSlime.name", "Magma Cube");
+        case 90: return tr_key_default("entity.Pig.name", "Pig");
+        case 91: return tr_key_default("entity.Sheep.name", "Sheep");
+        case 92: return tr_key_default("entity.Cow.name", "Cow");
+        case 93: return tr_key_default("entity.Chicken.name", "Chicken");
+        case 94: return tr_key_default("entity.Squid.name", "Squid");
+        case 95: return tr_key_default("entity.Wolf.name", "Wolf");
+        case 96: return tr_key_default("entity.MushroomCow.name", "Mooshroom");
+        case 98: return tr_key_default("entity.Ozelot.name", "Ocelot");
+        case 120: return tr_key_default("entity.Villager.name", "Villager");
         default: return NULL;
     }
 }
@@ -1030,7 +1036,7 @@ static const char *item_stack_display_name(const ItemStack *st) {
     if (st->id == ITEM_MONSTER_PLACER) {
         const char *entity = spawn_egg_entity_name(st->damage);
         if (entity && entity[0]) {
-            snprintf(name, sizeof(name), "Spawn %s", entity);
+            snprintf(name, sizeof(name), "%s %s", tr_key_default("item.monsterPlacer.name", "Spawn"), entity);
             return name;
         }
         return "Spawn";
@@ -1094,7 +1100,7 @@ static const char *item_stack_display_name(const ItemStack *st) {
         }
     }
     if (st->id == BLOCK_TALL_GRASS) return (st->damage == 2) ? "Fern" : "Grass";
-    return item_display_name(st->id);
+    return tr(item_display_name(st->id));
 }
 
 static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int animate_pop) {

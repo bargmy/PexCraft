@@ -339,10 +339,6 @@ static void draw_centered_text(const char *s, int cx, int y, int color) {
     draw_text(s, cx - text_width(s) / 2, y, color);
 }
 
-static const char *tr(const char *en) {
-    return en ? en : "";
-}
-
 static void button_label(Button *b, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -359,7 +355,7 @@ static Button *add_button_full(int id, int x, int y, int w, int h, const char *l
     b->enabled = 1; b->visible = 1;
     b->kind = kind;
     b->opt = OPT_COUNT;
-    snprintf(b->label, sizeof(b->label), "%s", label ? label : "");
+    snprintf(b->label, sizeof(b->label), "%s", (label && label[0]) ? tr(label) : "");
     return b;
 }
 

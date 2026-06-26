@@ -62,6 +62,7 @@ static void apply_texture_pack_index(int index);
 #include "assets/classic_pack_installer.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"
+#include "i18n/language.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
 #include "audio/sound.c"

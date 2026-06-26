@@ -81,6 +81,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "assets/classic_pack_installer_psp.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"
+#include "i18n/language.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
 #include "audio/sound.c"

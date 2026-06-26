@@ -329,6 +329,7 @@ typedef enum ScreenId {
     SCREEN_TITLE,
     SCREEN_OPTIONS,
     SCREEN_OPTIONS_MORE,
+    SCREEN_LANGUAGE,
     SCREEN_SYSTEM_INFO,
     SCREEN_SKINS,
     SCREEN_CONTROLS,
@@ -433,6 +434,7 @@ typedef struct Options {
     char skin_path[MAX_PATHBUF];
     char last_server[64];
     char username[32];
+    char language[16];
     int keys[10];
 } Options;
 
@@ -1986,6 +1988,15 @@ static void set_screen(ScreenId s);
 static int load_custom_skin_path(const char *path, int persist);
 static int choose_and_import_skin(void);
 static const char *tr(const char *en);
+static const char *tr_key(const char *key);
+static const char *tr_key_default(const char *key, const char *fallback);
+static void pex_set_language_code(const char *code);
+static int pex_language_count(void);
+static const char *pex_language_code_at(int idx);
+static const char *pex_language_name_at(int idx);
+static int pex_current_language_index(void);
+static const char *pex_current_language_code(void);
+static int pex_current_language_is_unicode(void);
 static void open_notice(const char *title, const char *line1, const char *line2);
 static int renderer_backend_supported(int backend);
 static const char *renderer_backend_label(int backend);

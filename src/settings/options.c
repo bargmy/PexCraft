@@ -37,6 +37,8 @@ static void set_default_options(void) {
     g_opts.skin_path[0] = 0;
     g_opts.last_server[0] = 0;
     snprintf(g_opts.username, sizeof(g_opts.username), "Player");
+    snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
+    pex_set_language_code(g_opts.language);
     for (int i = 0; i < 10; i++) g_opts.keys[i] = default_keys[i];
 }
 
@@ -124,6 +126,7 @@ static void load_options(void) {
         else if (!strcmp(k, "skinPath")) snprintf(g_opts.skin_path, sizeof(g_opts.skin_path), "%s", v);
         else if (!strcmp(k, "lastServer")) snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", v);
         else if (!strcmp(k, "username")) snprintf(g_opts.username, sizeof(g_opts.username), "%s", v);
+        else if (!strcmp(k, "lang") || !strcmp(k, "language")) snprintf(g_opts.language, sizeof(g_opts.language), "%s", v);
         else if (!strncmp(k, "key_", 4)) {
             const char *name = k + 4;
             for (int i = 0; i < 10; i++) {
@@ -150,7 +153,10 @@ static void load_options(void) {
     g_selected_renderer_backend = g_opts.renderer_backend;
     if (g_opts.max_fps <= 0) g_opts.anaglyph = 0;
     if (!g_opts.username[0]) snprintf(g_opts.username, sizeof(g_opts.username), "Player");
+    if (!g_opts.language[0]) snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
+    pex_set_language_code(g_opts.language);
 }
+
 
 static void save_options(void) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
@@ -188,6 +194,7 @@ static void save_options(void) {
     fprintf(f, "skinPath:%s\n", g_opts.skin_path);
     fprintf(f, "lastServer:%s\n", g_opts.last_server);
     fprintf(f, "username:%s\n", g_opts.username);
+    fprintf(f, "lang:%s\n", g_opts.language[0] ? g_opts.language : pex_current_language_code());
     const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};
     for (int i = 0; i < 10; i++) fprintf(f, "key_%s:%d\n", orig[i], vk_to_lwjgl(g_opts.keys[i]));
     fclose(f);

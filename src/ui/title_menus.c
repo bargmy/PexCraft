@@ -517,6 +517,31 @@ static void draw_title_screen(float partial) {
 }
 
 
+
+static void draw_language_screen(void) {
+    draw_default_bg();
+    draw_centered_text(tr_key_default("options.language", "Language"), g_gui_w / 2, 16, 16777215);
+    int count = pex_language_count();
+    int top = 38;
+    int row_h = 18;
+    int cur = pex_current_language_index();
+    for (int i = 0; i < count; ++i) {
+        int y = top + i * row_h;
+        if (y > g_gui_h - 68) break;
+        const char *name = pex_language_name_at(i);
+        int color = (i == cur) ? 0xFFFFA0 : 0xFFFFFF;
+        if (i == cur) draw_rect(g_gui_w / 2 - 105, y - 2, g_gui_w / 2 + 105, y + 12, (int)0x80404040u);
+        draw_centered_text(name, g_gui_w / 2, y, color);
+    }
+    char warn[256];
+    snprintf(warn, sizeof(warn), "(%s)", tr_key_default("options.languageWarning", "Language translations may not be 100% accurate"));
+    draw_centered_text(warn, g_gui_w / 2, g_gui_h - 56, 8421504);
+    if (pex_current_language_is_unicode()) {
+        draw_centered_text("Unicode glyph pages are not loaded yet", g_gui_w / 2, g_gui_h - 68, 0xFF8080);
+    }
+    draw_all_buttons();
+}
+
 static void draw_options_screen(void) {
     draw_default_bg();
     draw_centered_text(tr("Options"), g_gui_w / 2, 20, 16777215);

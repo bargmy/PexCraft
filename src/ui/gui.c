@@ -822,7 +822,7 @@ static void draw_inventory_screen(void) {
 
     /* Container labels are drawn without the HUD-style shadow, matching the
        original GUI text color and avoiding the dark/white muddy look. */
-    draw_text_no_shadow("Crafting", x + 86, y + 6, 0x404040);
+    draw_text_no_shadow(tr_key_default("container.crafting", "Crafting"), x + 86, y + 6, 0x404040);
     for (int row = 0; row < 2; row++) for (int col = 0; col < 2; col++) {
         int slot = col + row * 2;
         draw_item_stack_gui(&g_craft_grid[slot], x + 88 + col * 18, y + 26 + row * 18);
@@ -885,7 +885,7 @@ static void draw_creative_screen(void) {
         draw_rect(x + 1, y + CREATIVE_YSIZE - 1, x + CREATIVE_XSIZE, y + CREATIVE_YSIZE, 0xFF555555);
     }
 
-    draw_text_no_shadow("Creative Inventory", x + 8, y + 6, 0x404040);
+    draw_text_no_shadow(tr_key_default("container.creative", "Item Selection"), x + 8, y + 6, 0x404040);
 
     int start = g_creative_scroll_row * CREATIVE_COLS;
     for (int row = 0; row < CREATIVE_ROWS; row++) {
@@ -949,7 +949,7 @@ static void draw_workbench_screen(void) {
     if (tex_workbench.id) draw_textured_rect_tex(&tex_workbench, x, y, 0, 0, 176, 166, 0xFFFFFF);
     else draw_rect(x, y, x + 176, y + 166, 0xFFc6c6c6);
 
-    draw_text_no_shadow("Crafting", x + 28, y + 6, 4210752);
+    draw_text_no_shadow(tr_key_default("container.crafting", "Crafting"), x + 28, y + 6, 4210752);
     for (int row = 0; row < 3; row++) for (int col = 0; col < 3; col++) {
         int slot = col + row * 3;
         draw_item_stack_gui(&g_workbench_grid[slot], x + 30 + col * 18, y + 17 + row * 18);
@@ -958,7 +958,7 @@ static void draw_workbench_screen(void) {
     ItemStack out = workbench_crafting_output();
     draw_item_stack_gui(&out, x + 124, y + 35);
 
-    draw_text_no_shadow("Inventory", x + 8, y + 72, 4210752);
+    draw_text_no_shadow(tr_key_default("container.inventory", "Inventory"), x + 8, y + 72, 4210752);
     draw_player_inventory_stacks(x, y);
     draw_hovered_item_tooltip();
     draw_carried_stack();
@@ -989,8 +989,8 @@ static void draw_chest_screen(void) {
             draw_textured_rect_tex(&tex_chest_gui, x, y, 0, 0, 176, h, 0xFFFFFF);
         }
     } else draw_rect(x, y, x + 176, y + h, 0xFFc6c6c6);
-    draw_text_no_shadow(g_open_chest_title[0] ? g_open_chest_title : "Chest", x + 8, y + 6, 4210752);
-    draw_text_no_shadow("Inventory", x + 8, y + inv_label_y, 4210752);
+    draw_text_no_shadow(g_open_chest_title[0] ? g_open_chest_title : tr_key_default("container.chest", "Chest"), x + 8, y + 6, 4210752);
+    draw_text_no_shadow(tr_key_default("container.inventory", "Inventory"), x + 8, y + inv_label_y, 4210752);
 
     for (int row = 0; row < rows; row++) for (int col = 0; col < 9; col++) {
         ItemStack *st = chest_get_open_slot_ptr(col + row * 9);
@@ -1021,8 +1021,8 @@ static void draw_furnace_screen(void) {
         }
     }
 
-    draw_text_no_shadow("Furnace", x + 60, y + 6, 4210752);
-    draw_text_no_shadow("Inventory", x + 8, y + 72, 4210752);
+    draw_text_no_shadow(tr_key_default("container.furnace", "Furnace"), x + 60, y + 6, 4210752);
+    draw_text_no_shadow(tr_key_default("container.inventory", "Inventory"), x + 8, y + 72, 4210752);
 
     ItemStack *in = furnace_get_slot_ptr(0);
     ItemStack *fuel = furnace_get_slot_ptr(1);
