@@ -1467,8 +1467,13 @@ static void draw_passive_mobs(float partial) {
         glPushMatrix();
         glBindTexture(GL_TEXTURE_2D, t->id);
         passive_fast_set_texture_dims(t);
-        if (e->hurt) passive_fast_set_tint(1.0f, 0.35f, 0.35f);
-        else passive_fast_set_tint(1.0f, 1.0f, 1.0f);
+        {
+            float entity_br = flat_light_brightness((int)floorf(e->x), (int)floorf(e->y + 1.0f), (int)floorf(e->z));
+            if (entity_br < 0.18f) entity_br = 0.18f;
+            if (entity_br > 1.0f) entity_br = 1.0f;
+            if (e->hurt) passive_fast_set_tint(entity_br, entity_br * 0.35f, entity_br * 0.35f);
+            else passive_fast_set_tint(entity_br, entity_br, entity_br);
+        }
         glTranslatef(e->x, e->y, e->z);
         glRotatef(180.0f - e->yaw, 0.0f, 1.0f, 0.0f);
         if (e->death_time > 0.0f) {

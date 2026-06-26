@@ -487,3 +487,54 @@ int pex_mcpe_encode_respawn_packet(uint8_t *out_data, size_t out_capacity, size_
     if (out_size) *out_size = b.offset;
     return 1;
 }
+
+int pex_mcpe_decode_set_entity_data_packet(const uint8_t *data, size_t size, PexMcpeEntityDataInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t eid = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->eid = (uint64_t)eid;
+    for (;;) {
+        uint8_t header = 0;
+        const uint8_t *ignored = NULL;
+        if (!pex_mcpe_read_u8(&b, &header)) return 1;
+        if (header == 0x7f) return 1;
+        int type = header >> 5;
+        int key = header & 0x1f;
+        if (type == 0) { /* byte */
+            uint8_t v = 0;
+            if (!pex_mcpe_read_u8(&b, &v)) return 0;
+            if (key == 0) { out_info->flags = (int)v; out_info->has_flags = 1; }
+        } else if (type == 1) {
+            if (!pex_mcpe_read_bytes(&b, &ignored, 2)) return 0;
+        } else if (type == 2 || type == 3) {
+            if (!pex_mcpe_read_bytes(&b, &ignored, 4)) return 0;
+        } else if (type == 4) {
+            uint16_t len = 0;
+            if (!pex_mcpe_read_u16_le(&b, &len)) return 0;
+            if (!pex_mcpe_read_bytes(&b, &ignored, len)) return 0;
+        } else if (type == 5) {
+            if (!pex_mcpe_read_bytes(&b, &ignored, 5)) return 0;
+        } else if (type == 6) {
+            if (!pex_mcpe_read_bytes(&b, &ignored, 12)) return 0;
+        } else if (type == 7) {
+            if (!pex_mcpe_read_bytes(&b, &ignored, 8)) return 0;
+        } else {
+            return 0;
+        }
+    }
+}
+
+int pex_mcpe_encode_interact_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size, int action, uint64_t target_eid) {
+    if (out_size) *out_size = 0;
+    PexMcpeBuffer b;
+    pex_mcpe_buffer_init(&b, out_data, out_capacity);
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
+        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_INTERACT) ||
+        !pex_mcpe_write_u8(&b, (uint8_t)action) ||
+        !pex_mcpe_write_i64_be(&b, (int64_t)target_eid)) return 0;
+    if (out_size) *out_size = b.offset;
+    return 1;
+}

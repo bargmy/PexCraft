@@ -1292,13 +1292,12 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_ESCAPE) { g_chat_input[0] = 0; set_screen(SCREEN_INGAME); return; }
         if (vk == VK_RETURN) {
             if (strlen(g_chat_input) > 0) {
-                if (!handle_local_chat_command(g_chat_input)) {
-                    if (g_mp_connected) pex_net_send_chat(g_chat_input);
-                    else {
-                        char line[180];
-                        snprintf(line, sizeof(line), "<Player> %s", g_chat_input);
-                        hud_add_chat(line);
-                    }
+                if (g_mp_connected) {
+                    pex_net_send_chat(g_chat_input);
+                } else if (!handle_local_chat_command(g_chat_input)) {
+                    char line[180];
+                    snprintf(line, sizeof(line), "<Player> %s", g_chat_input);
+                    hud_add_chat(line);
                 }
             }
             g_chat_input[0] = 0;

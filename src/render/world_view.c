@@ -2839,6 +2839,13 @@ static void draw_xp_orbs(float partial) {
     glEnable(GL_TEXTURE_2D);
 }
 
+static float entity_light_factor_at(float x, float y, float z) {
+    float br = flat_light_brightness((int)floorf(x), (int)floorf(y), (int)floorf(z));
+    if (br < 0.18f) br = 0.18f;
+    if (br > 1.0f) br = 1.0f;
+    return br;
+}
+
 static void draw_dropped_items(void) {
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float yaw = lerp_angle(pr->prev_yaw, pr->yaw, g_frame_partial);
@@ -2863,7 +2870,8 @@ static void draw_dropped_items(void) {
         draw_java_entity_shadow(x, y, z, 0.15f, 1.0f);
 
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        glColor4f(1,1,1,1);
+        float entity_br = entity_light_factor_at(x, y + 0.5f, z);
+        glColor4f(entity_br, entity_br, entity_br, 1);
         glPushMatrix();
         glTranslatef(x, y + bob, z);
         glRotatef((((float)e->age + g_frame_partial) / 20.0f + e->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
@@ -6597,8 +6605,11 @@ static void draw_third_person_player(void) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_steve.id);
     steve_set_texture_dims(&tex_steve);
-    if (pr->hurt_time > 0 || pr->dead) steve_set_tint(1.0f, 0.35f, 0.35f);
-    else steve_set_tint(1.0f, 1.0f, 1.0f);
+    {
+        float entity_br = entity_light_factor_at(x, eye_y, z);
+        if (pr->hurt_time > 0 || pr->dead) steve_set_tint(entity_br, entity_br * 0.35f, entity_br * 0.35f);
+        else steve_set_tint(entity_br, entity_br, entity_br);
+    }
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_CULL_FACE);
@@ -6751,8 +6762,11 @@ static void draw_multiplayer_remote_players(void) {
         Texture *skin_tex = (r->has_skin && r->skin.id) ? &r->skin : &tex_steve;
         glBindTexture(GL_TEXTURE_2D, skin_tex->id);
         steve_set_texture_dims(skin_tex);
-        if (r->hurt_time > 0.0f || r->health <= 0) steve_set_tint(1.0f, 0.35f, 0.35f);
-        else steve_set_tint(1.0f, 1.0f, 1.0f);
+        {
+            float entity_br = entity_light_factor_at(rx, ry, rz);
+            if (r->hurt_time > 0.0f || r->health <= 0) steve_set_tint(entity_br, entity_br * 0.35f, entity_br * 0.35f);
+            else steve_set_tint(entity_br, entity_br, entity_br);
+        }
         glTranslatef(rx, feet_y, rz);
         glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
         if (death_time > 0.0f) {
@@ -6815,16 +6829,16 @@ static void draw_multiplayer_name_tags(void) {
         int y = (int)(((double)g_win_h - sy) / (double)g_gui_scale);
         int tw = text_width(name);
         if (tw <= 0) continue;
-        float scale = 1.55f / (1.0f + dist * 0.055f);
-        if (scale < 0.32f) scale = 0.32f;
-        if (scale > 1.30f) scale = 1.30f;
-        int pad = 3;
+        /* Java RenderLiving label: fixed GUI-size text over a translucent black
+           strip. Distance only gates visibility; it should not keep shrinking. */
+        float scale = sneaking ? 0.85f : 1.0f;
+        int pad = 2;
         glPushMatrix();
         glTranslatef((float)x, (float)y, 0.0f);
         glScalef(scale, scale, 1.0f);
-        draw_rect(-tw / 2 - pad, -4, tw / 2 + pad, 8, (int)0x80000000u);
+        draw_rect(-tw / 2 - pad, -4, tw / 2 + pad, 5, (int)0x40000000u);
         glEnable(GL_TEXTURE_2D);
-        draw_text(name, -tw / 2, -2, 0xFFFFFF);
+        draw_text(name, -tw / 2, -3, 0xFFFFFF);
         glDisable(GL_TEXTURE_2D);
         glPopMatrix();
     }

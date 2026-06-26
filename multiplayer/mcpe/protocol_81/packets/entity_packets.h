@@ -75,6 +75,12 @@ typedef struct PexMcpeEntityEventInfo {
     int event;
 } PexMcpeEntityEventInfo;
 
+typedef struct PexMcpeEntityDataInfo {
+    uint64_t eid;
+    int has_flags;
+    int flags;
+} PexMcpeEntityDataInfo;
+
 typedef struct PexMcpeLevelEventInfo {
     int event_id;
     float x, y, z;
@@ -123,12 +129,14 @@ int pex_mcpe_decode_add_item_entity_packet(const uint8_t *data, size_t size, Pex
 int pex_mcpe_decode_take_item_entity_packet(const uint8_t *data, size_t size, PexMcpeTakeItemInfo *out_info);
 int pex_mcpe_decode_set_entity_motion_packet(const uint8_t *data, size_t size, PexMcpeEntityMotionInfo *out_entries, size_t max_entries, size_t *out_count);
 int pex_mcpe_decode_entity_event_packet(const uint8_t *data, size_t size, PexMcpeEntityEventInfo *out_info);
+int pex_mcpe_decode_set_entity_data_packet(const uint8_t *data, size_t size, PexMcpeEntityDataInfo *out_info);
 int pex_mcpe_decode_level_event_packet(const uint8_t *data, size_t size, PexMcpeLevelEventInfo *out_info);
 int pex_mcpe_decode_update_attributes_packet(const uint8_t *data, size_t size, PexMcpeAttributesInfo *out_info);
 int pex_mcpe_decode_mob_armor_equipment_packet(const uint8_t *data, size_t size, PexMcpeArmorInfo *out_info);
 int pex_mcpe_decode_container_set_content_packet(const uint8_t *data, size_t size, PexMcpeContainerContentInfo *out_info);
 int pex_mcpe_decode_container_set_slot_packet(const uint8_t *data, size_t size, PexMcpeContainerSlotInfo *out_info);
 int pex_mcpe_encode_animate_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size, uint64_t eid, int action);
+int pex_mcpe_encode_interact_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size, int action, uint64_t target_eid);
 int pex_mcpe_encode_container_set_slot_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size,
                                              int window_id, int slot, int hotbar_slot,
                                              int item_id, int count, int damage);

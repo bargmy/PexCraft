@@ -5095,6 +5095,9 @@ static void start_air_swing_once(void) {
 }
 
 static void reset_breaking_state(void) {
+    if (g_mp_connected && g_breaking_block) {
+        net_send_action_progress(PEX_ACTION_MINE_HIT, g_break_x, g_break_y, g_break_z, g_break_face, 0, -1);
+    }
     g_breaking_block = 0;
     g_break_damage = 0.0f;
     g_prev_break_damage = 0.0f;
@@ -5775,6 +5778,10 @@ static void update_breaking(void) {
         g_prev_break_damage = 0.0f;
         g_break_sound_counter = 0.0f;
         g_last_sent_mine_stage = -1;
+        if (g_mp_connected) {
+            net_send_action_progress(PEX_ACTION_MINE_HIT, g_break_x, g_break_y, g_break_z, g_break_face, id, 0);
+            g_last_sent_mine_stage = 0;
+        }
         return;
     }
 

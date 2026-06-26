@@ -321,6 +321,13 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
             }
             break;
         }
+        case PEX_MCPE_PACKET_SET_ENTITY_DATA: {
+            PexMcpeEntityDataInfo data_info;
+            if (pex_mcpe_decode_set_entity_data_packet(body, body_size, &data_info) && s->callbacks.on_entity_data) {
+                s->callbacks.on_entity_data(s->callback_userdata, &data_info);
+            }
+            break;
+        }
         case PEX_MCPE_PACKET_SET_ENTITY_MOTION: {
             PexMcpeEntityMotionInfo motions[32];
             size_t count = 0;
@@ -499,6 +506,14 @@ int pex_mcpe_join_session_send_animate(PexMcpeJoinSession *session, int action) 
     uint8_t buf[64];
     size_t n = 0;
     if (!pex_mcpe_encode_animate_packet(buf, sizeof(buf), &n, session->entity_id, action)) return 0;
+    return pex_raknet_client_send(session->raknet, buf, n, 0);
+}
+
+int pex_mcpe_join_session_send_interact(PexMcpeJoinSession *session, int action, uint64_t target_eid) {
+    if (!session || !session->raknet || target_eid == 0) return 0;
+    uint8_t buf[64];
+    size_t n = 0;
+    if (!pex_mcpe_encode_interact_packet(buf, sizeof(buf), &n, action, target_eid)) return 0;
     return pex_raknet_client_send(session->raknet, buf, n, 0);
 }
 
