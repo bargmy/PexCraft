@@ -122,10 +122,20 @@ static void ensure_dir(const char *path) {
     if (!dir_exists(path)) CreateDirectoryA(path, NULL);
 }
 
+#if defined(PEX_PLATFORM_XBOX_UWP)
+extern const char *pex_xbox_uwp_get_local_folder(void);
+#endif
+
 static void init_dirs(void) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    const char *local = pex_xbox_uwp_get_local_folder();
+    if (local && local[0]) snprintf(g_mc_dir, sizeof(g_mc_dir), "%s\\PexCraft", local);
+    else snprintf(g_mc_dir, sizeof(g_mc_dir), ".\\PexCraft");
+#else
     const char *appdata = getenv("APPDATA");
     if (appdata && appdata[0]) snprintf(g_mc_dir, sizeof(g_mc_dir), "%s\\.pexcraft", appdata);
     else snprintf(g_mc_dir, sizeof(g_mc_dir), ".\\.pexcraft");
+#endif
     ensure_dir(g_mc_dir);
     path_join(g_save_dir, sizeof(g_save_dir), g_mc_dir, "saves");
     path_join(g_texpack_dir, sizeof(g_texpack_dir), g_mc_dir, "texturepacks");

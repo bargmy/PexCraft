@@ -103,6 +103,7 @@ static void draw_current_screen(float partial) {
         case SCREEN_CHEST: draw_chest_screen(); break;
         case SCREEN_DEATH: draw_death_screen(); break;
         case SCREEN_CHAT: draw_chat_screen(); break;
+        case SCREEN_VIRTUAL_KEYBOARD: draw_virtual_keyboard_screen(); break;
         case SCREEN_NOTICE: draw_notice(); break;
         case SCREEN_RENDERER_RESTART_PROMPT: draw_renderer_restart_prompt(); break;
         case SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT: draw_pack_download_prompt(); break;

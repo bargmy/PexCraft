@@ -6,6 +6,10 @@ static ScreenId pex_startup_screen(void);
 static void pex_ui_text_input_end(void);
 static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h);
 static void pex_ui_text_input_begin_for_current_field(void);
+static void create_world_update_folder(void);
+static int handle_local_chat_command(const char *text);
+static void pex_virtual_keyboard_prepare(ScreenId return_screen);
+static int pex_virtual_keyboard_enabled(void);
 
 /* GuiMainMenu owns panoramaTimer/viewportTexture per screen instance in Java.
    g_screen starts as SCREEN_TITLE before platform init calls set_screen(), so
@@ -51,8 +55,17 @@ static void set_screen(ScreenId s) {
     pex_ui_text_input_end();
     clear_buttons();
     rebuild_screen();
-    if (s == SCREEN_CHAT) pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
+    if (s == SCREEN_CHAT) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+        pex_virtual_keyboard_prepare(SCREEN_CHAT);
+        g_screen = SCREEN_VIRTUAL_KEYBOARD;
+        rebuild_screen();
+#else
+        pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
+#endif
+    }
 }
+
 
 
 static int java_string_hash_compat(const char *s) {
@@ -132,7 +145,122 @@ static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h) {
     g_ui_text_input_active = 1;
 }
 
+static int pex_virtual_keyboard_enabled(void) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static void pex_virtual_keyboard_prepare(ScreenId return_screen) {
+    g_virtual_keyboard_return_screen = return_screen;
+    g_virtual_keyboard_row = 0;
+    g_virtual_keyboard_col = 0;
+    g_virtual_keyboard_caps = 0;
+    g_ui_text_input_active = 1;
+}
+
+static char *pex_virtual_keyboard_target(size_t *cap) {
+    if (cap) *cap = 0;
+    switch (g_virtual_keyboard_return_screen) {
+        case SCREEN_CHAT: if (cap) *cap = sizeof(g_chat_input); return g_chat_input;
+        case SCREEN_SET_NAME: if (cap) *cap = sizeof(g_name_edit_text); return g_name_edit_text;
+        case SCREEN_CREATE_WORLD: if (g_create_more_options) { if (cap) *cap = sizeof(g_pending_seed_text); return g_pending_seed_text; } if (cap) *cap = sizeof(g_pending_world_name); return g_pending_world_name;
+        case SCREEN_RENAME_WORLD: if (cap) *cap = sizeof(g_rename_world_text); return g_rename_world_text;
+        case SCREEN_MULTIPLAYER: if (pex_mp_server_edit_field_get() == 1) { if (cap) *cap = sizeof(g_mp_server_edit_name); return g_mp_server_edit_name; } if (cap) *cap = sizeof(g_mp_server_edit_address); return g_mp_server_edit_address;
+        default: return NULL;
+    }
+}
+
+static int pex_virtual_keyboard_char_allowed(char ch) {
+    if (g_virtual_keyboard_return_screen == SCREEN_SET_NAME) return pex_valid_nickname_char(ch);
+    if (g_virtual_keyboard_return_screen == SCREEN_CREATE_WORLD && g_create_more_options) return (ch == '-' || ch == '+' || (ch >= '0' && ch <= '9'));
+    return ch >= 32 && ch <= 126;
+}
+
+static void pex_virtual_keyboard_append(char ch) {
+    if (!pex_virtual_keyboard_char_allowed(ch)) return;
+    size_t cap = 0;
+    char *dst = pex_virtual_keyboard_target(&cap);
+    if (!dst || cap < 2) return;
+    size_t len = strlen(dst);
+    if (g_virtual_keyboard_return_screen == SCREEN_SET_NAME && len >= 16) return;
+    if (len + 1 >= cap) return;
+    dst[len] = ch;
+    dst[len + 1] = 0;
+    if (g_virtual_keyboard_return_screen == SCREEN_CREATE_WORLD && !g_create_more_options) create_world_update_folder();
+    rebuild_screen();
+}
+
+static void pex_virtual_keyboard_backspace(void) {
+    size_t cap = 0; (void)cap;
+    char *dst = pex_virtual_keyboard_target(&cap);
+    if (!dst) return;
+    size_t len = strlen(dst);
+    if (len > 0) dst[len - 1] = 0;
+    if (g_virtual_keyboard_return_screen == SCREEN_CREATE_WORLD && !g_create_more_options) create_world_update_folder();
+    rebuild_screen();
+}
+
+static void pex_virtual_keyboard_done(void) {
+    ScreenId ret = g_virtual_keyboard_return_screen;
+    g_ui_text_input_active = 0;
+    set_screen(ret);
+    if (ret == SCREEN_CHAT) {
+        if (strlen(g_chat_input) > 0) {
+            if (g_mp_connected) pex_net_send_chat(g_chat_input);
+            else if (!handle_local_chat_command(g_chat_input)) { char line[180]; snprintf(line, sizeof(line), "<Player> %s", g_chat_input); hud_add_chat(line); }
+        }
+        g_chat_input[0] = 0;
+        set_screen(SCREEN_INGAME);
+    }
+}
+
+static void pex_virtual_keyboard_cancel(void) {
+    ScreenId ret = g_virtual_keyboard_return_screen;
+    g_ui_text_input_active = 0;
+    set_screen(ret == SCREEN_CHAT ? SCREEN_INGAME : ret);
+}
+
+static void pex_virtual_keyboard_select(void) {
+    static const char *rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm_-."};
+    if (g_virtual_keyboard_row >= 0 && g_virtual_keyboard_row < 4) {
+        const char *row = rows[g_virtual_keyboard_row];
+        int n = (int)strlen(row);
+        if (g_virtual_keyboard_col < 0) g_virtual_keyboard_col = 0;
+        if (g_virtual_keyboard_col >= n) g_virtual_keyboard_col = n - 1;
+        char ch = row[g_virtual_keyboard_col];
+        if (g_virtual_keyboard_caps && ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+        pex_virtual_keyboard_append(ch);
+    } else {
+        switch (g_virtual_keyboard_col) {
+            case 0: pex_virtual_keyboard_append(' '); break;
+            case 1: pex_virtual_keyboard_backspace(); break;
+            case 2: g_virtual_keyboard_caps = !g_virtual_keyboard_caps; break;
+            case 3: pex_virtual_keyboard_done(); break;
+            case 4: pex_virtual_keyboard_cancel(); break;
+        }
+    }
+}
+
+static void pex_virtual_keyboard_move(int dx, int dy) {
+    static const int row_lens[] = {10,10,9,10,5};
+    g_virtual_keyboard_row += dy;
+    if (g_virtual_keyboard_row < 0) g_virtual_keyboard_row = 0;
+    if (g_virtual_keyboard_row > 4) g_virtual_keyboard_row = 4;
+    g_virtual_keyboard_col += dx;
+    int maxc = row_lens[g_virtual_keyboard_row] - 1;
+    if (g_virtual_keyboard_col < 0) g_virtual_keyboard_col = maxc;
+    if (g_virtual_keyboard_col > maxc) g_virtual_keyboard_col = 0;
+}
+
 static void pex_ui_text_input_begin_for_current_field(void) {
+    if (pex_virtual_keyboard_enabled()) {
+        pex_virtual_keyboard_prepare(g_screen);
+        set_screen(SCREEN_VIRTUAL_KEYBOARD);
+        return;
+    }
     if (g_screen == SCREEN_CHAT) {
         pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
     } else if (g_screen == SCREEN_SET_NAME) {
@@ -147,7 +275,7 @@ static void pex_ui_text_input_begin_for_current_field(void) {
 }
 
 static int pex_tv_remote_platform_enabled(void) {
-#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
     return 1;
 #else
     return 0;
@@ -651,7 +779,7 @@ static void rebuild_screen(void) {
         add_button_full(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, tr("Controls..."), BUTTON_NORMAL);
         add_button_full(302, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Language"), BUTTON_NORMAL);
         add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 168 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
-#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
         add_button_full(303, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 98, 20, "Nickname...", BUTTON_NORMAL);
         add_button_full(304, g_gui_w / 2 + 2, g_gui_h / 6 + 192 - 6, 98, 20, "Remote...", BUTTON_NORMAL);
 #else
@@ -1525,6 +1653,16 @@ static int handle_local_chat_command(const char *text) {
 }
 
 static void handle_keydown(WPARAM vk) {
+    if (g_screen == SCREEN_VIRTUAL_KEYBOARD) {
+        if (vk == VK_LEFT) { pex_virtual_keyboard_move(-1, 0); return; }
+        if (vk == VK_RIGHT) { pex_virtual_keyboard_move(1, 0); return; }
+        if (vk == VK_UP) { pex_virtual_keyboard_move(0, -1); return; }
+        if (vk == VK_DOWN) { pex_virtual_keyboard_move(0, 1); return; }
+        if (vk == VK_BACK) { pex_virtual_keyboard_backspace(); return; }
+        if (vk == VK_ESCAPE) { pex_virtual_keyboard_cancel(); return; }
+        if (vk == VK_RETURN || vk == ' ') { pex_virtual_keyboard_select(); return; }
+        return;
+    }
     if (vk == VK_F11) { toggle_fullscreen(); return; }
     if (g_screen == SCREEN_CONTROLS && g_waiting_key >= 0) { key_to_control((int)vk); return; }
 
@@ -1602,6 +1740,7 @@ static void handle_keydown(WPARAM vk) {
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_SET_NAME) { if (!g_name_screen_first_run) set_screen(g_name_return_screen); }
         else if (g_screen == SCREEN_TV_REMOTE_MAP) { if (!g_opts.tv_remote_mapped) pex_tv_remote_apply_defaults(); if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen); else set_screen(pex_startup_screen()); }
+        else if (g_screen == SCREEN_VIRTUAL_KEYBOARD) pex_virtual_keyboard_cancel();
         else if (g_screen == SCREEN_SYSTEM_INFO) set_screen(SCREEN_OPTIONS_MORE);
         else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
@@ -1624,14 +1763,14 @@ static void handle_keydown(WPARAM vk) {
         return;
     }
     if (g_screen == SCREEN_SET_NAME) {
-        if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
+        if (vk == VK_RETURN && (pex_tv_remote_platform_enabled() || pex_virtual_keyboard_enabled()) && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
         size_t len = strlen(g_name_edit_text);
         if (vk == VK_BACK && len > 0) { g_name_edit_text[len - 1] = 0; rebuild_screen(); }
         else if (vk == VK_RETURN && pex_nickname_valid(g_name_edit_text)) pex_commit_nickname();
         return;
     }
     if (g_screen == SCREEN_CREATE_WORLD) {
-        if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
+        if (vk == VK_RETURN && (pex_tv_remote_platform_enabled() || pex_virtual_keyboard_enabled()) && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
         char *field = g_create_more_options ? g_pending_seed_text : g_pending_world_name;
         size_t len = strlen(field);
         if (vk == VK_BACK && len > 0) { field[len - 1] = 0; if (!g_create_more_options) create_world_update_folder(); rebuild_screen(); }
@@ -1640,7 +1779,7 @@ static void handle_keydown(WPARAM vk) {
         return;
     }
     if (g_screen == SCREEN_RENAME_WORLD) {
-        if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
+        if (vk == VK_RETURN && (pex_tv_remote_platform_enabled() || pex_virtual_keyboard_enabled()) && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
         size_t len = strlen(g_rename_world_text);
         if (vk == VK_BACK && len > 0) { g_rename_world_text[len - 1] = 0; rebuild_screen(); }
         else if (vk == VK_RETURN && g_rename_world_text[0]) rename_selected_world_save();
@@ -1657,7 +1796,7 @@ static void handle_keydown(WPARAM vk) {
                 for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { on_button(&g_buttons[i]); break; }
             }
         } else {
-            if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
+            if (vk == VK_RETURN && (pex_tv_remote_platform_enabled() || pex_virtual_keyboard_enabled()) && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
             char *field = pex_mp_server_edit_field_get() == 1 ? g_mp_server_edit_name : g_mp_server_edit_address;
             size_t len = strlen(field);
             if (vk == VK_TAB) {

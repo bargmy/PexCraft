@@ -9,6 +9,8 @@
 #include "../../platforms/wii/wii_compat.h"
 #elif defined(PEX_PLATFORM_ANDROID_TV)
 #include "../platform/android_tv/android_tv_compat.h"
+#elif defined(PEX_PLATFORM_XBOX_UWP)
+#include "../platform/xbox_uwp/xbox_uwp_compat.h"
 #elif defined(PEX_PLATFORM_SDL2)
 #include "../platform/sdl2_compat.h"
 #else
@@ -355,6 +357,7 @@ typedef enum ScreenId {
     SCREEN_CHEST,
     SCREEN_DEATH,
     SCREEN_CHAT,
+    SCREEN_VIRTUAL_KEYBOARD,
     SCREEN_NOTICE,
     SCREEN_RENDERER_RESTART_PROMPT,
     SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT,
@@ -718,6 +721,10 @@ static ScreenId g_tv_remote_return_screen = SCREEN_TITLE;
 static int g_tv_remote_map_step = 0;
 static int g_tv_remote_state[PEX_TV_REMOTE_ACTION_COUNT];
 static int g_tv_remote_seen = 0;
+static ScreenId g_virtual_keyboard_return_screen = SCREEN_TITLE;
+static int g_virtual_keyboard_row = 0;
+static int g_virtual_keyboard_col = 0;
+static int g_virtual_keyboard_caps = 0;
 static char g_multiplayer_status[MAX_LABEL] = "";
 static SOCKET g_mp_socket = INVALID_SOCKET;
 static int g_mp_winsock_started = 0;

@@ -25,7 +25,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
       }}
     runs-on: windows-latest
@@ -185,7 +186,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
       }}
     runs-on: ubuntu-latest
@@ -502,7 +504,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
       }}
     runs-on: ubuntu-latest
@@ -666,7 +669,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
       }}
     runs-on: ubuntu-latest
@@ -832,7 +836,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
       }}
     runs-on: ubuntu-latest
@@ -978,6 +983,78 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+
+  xbox_uwp:
+    name: Xbox One UWP Dev Mode - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Build Xbox One UWP Dev Mode package layout
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build,logs,dist | Out-Null
+          try {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File platforms/xbox_uwp/build_xbox_uwp.ps1 -Configuration Release -Platform x64 2>&1 | Tee-Object -FilePath logs/build-xbox-uwp.log
+            if ($LASTEXITCODE -ne 0) { throw "build_xbox_uwp.ps1 failed with $LASTEXITCODE" }
+            "XBOX_UWP_BUILD_OK=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } catch {
+            $_ | Out-File -FilePath logs/build-xbox-uwp.log -Append
+            "XBOX_UWP_BUILD_OK=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Attach commit/build info
+        if: env.XBOX_UWP_BUILD_OK == '1'
+        shell: pwsh
+        run: |
+          $pkg = 'dist/pexcraft-xbox-one-uwp-devmode.zip'
+          if (!(Test-Path $pkg)) { throw "missing $pkg" }
+          "XBOX_UWP_PATH=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload Xbox One UWP artifact
+        if: env.XBOX_UWP_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-xbox-one-uwp-devmode
+          path: ${{ env.XBOX_UWP_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: env.XBOX_UWP_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Xbox One UWP Dev Mode failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
   telegram:
     name: Upload successful builds to Telegram
     runs-on: ubuntu-latest
@@ -988,6 +1065,7 @@ jobs:
       - android
       - android_tv
       - wii
+      - xbox_uwp
     if: always() && github.event_name != 'pull_request'
 
     steps:
@@ -1030,7 +1108,7 @@ jobs:
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           sha = os.environ.get("GITHUB_SHA", "")
 
-          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True) + glob.glob("telegram_upload/**/*.apk", recursive=True))
+          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True) + glob.glob("telegram_upload/**/*.apk", recursive=True) + glob.glob("telegram_upload/**/*.appx", recursive=True) + glob.glob("telegram_upload/**/*.appxbundle", recursive=True) + glob.glob("telegram_upload/**/*.msixbundle", recursive=True))
 
           caption = (
               "PEXCraft successful builds\n"
@@ -1079,7 +1157,7 @@ jobs:
 
               def filefield(name, path):
                   filename = os.path.basename(path)
-                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.android.package-archive" if filename.endswith(".apk") else ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else "application/zip"))
+                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.android.package-archive" if filename.endswith(".apk") else ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else ("application/vnd.ms-appx" if filename.endswith((".appx", ".appxbundle", ".msixbundle")) else "application/zip")))
                   parts.append(
                       (
                           f"--{boundary}\r\n"

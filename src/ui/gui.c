@@ -1239,6 +1239,54 @@ static void draw_tv_remote_map_screen(void) {
     draw_all_buttons();
 }
 
+
+static void draw_virtual_keyboard_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Text Input", g_gui_w / 2, 18, 16777215);
+    const char *label = "";
+    if (g_virtual_keyboard_return_screen == SCREEN_CHAT) label = "Chat";
+    else if (g_virtual_keyboard_return_screen == SCREEN_SET_NAME) label = "Nickname";
+    else if (g_virtual_keyboard_return_screen == SCREEN_CREATE_WORLD) label = g_create_more_options ? "Seed" : "World Name";
+    else if (g_virtual_keyboard_return_screen == SCREEN_RENAME_WORLD) label = "Rename World";
+    else if (g_virtual_keyboard_return_screen == SCREEN_MULTIPLAYER) label = pex_mp_server_edit_field_get() == 1 ? "Server Name" : "Server Address";
+    draw_centered_text(label, g_gui_w / 2, 34, 10526880);
+    size_t cap = 0;
+    char *dst = pex_virtual_keyboard_target(&cap);
+    (void)cap;
+    draw_text_field_box(dst ? dst : "", g_gui_w / 2 - 130, 48, 260, 20, 1);
+
+    static const char *rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm_-."};
+    int y = 84;
+    for (int r = 0; r < 4; ++r) {
+        const char *row = rows[r];
+        int n = (int)strlen(row);
+        int total = n * 20;
+        int x = g_gui_w / 2 - total / 2;
+        for (int c = 0; c < n; ++c) {
+            char ch[2] = { row[c], 0 };
+            if (g_virtual_keyboard_caps && ch[0] >= 'a' && ch[0] <= 'z') ch[0] = (char)(ch[0] - 'a' + 'A');
+            int selected = (g_virtual_keyboard_row == r && g_virtual_keyboard_col == c);
+            draw_rect(x + c * 20, y, x + c * 20 + 18, y + 18, selected ? 0xFFFFFFFF : 0xFF555555);
+            draw_rect(x + c * 20 + 1, y + 1, x + c * 20 + 17, y + 17, selected ? 0xFFAAAAAA : 0xFF000000);
+            draw_centered_text(ch, x + c * 20 + 9, y + 5, selected ? 0xFFFF55 : 0xFFFFFF);
+        }
+        y += 22;
+    }
+    const char *actions[] = {"Space", "Back", g_virtual_keyboard_caps ? "Caps:ON" : "Caps", "Done", "Cancel"};
+    int widths[] = {52, 44, 58, 44, 52};
+    int total = 0;
+    for (int i = 0; i < 5; ++i) total += widths[i] + 4;
+    int x = g_gui_w / 2 - total / 2;
+    for (int i = 0; i < 5; ++i) {
+        int selected = (g_virtual_keyboard_row == 4 && g_virtual_keyboard_col == i);
+        draw_rect(x, y, x + widths[i], y + 18, selected ? 0xFFFFFFFF : 0xFF555555);
+        draw_rect(x + 1, y + 1, x + widths[i] - 1, y + 17, selected ? 0xFFAAAAAA : 0xFF000000);
+        draw_centered_text(actions[i], x + widths[i] / 2, y + 5, selected ? 0xFFFF55 : 0xFFFFFF);
+        x += widths[i] + 4;
+    }
+    draw_centered_text("D-pad: move  A/OK: select  B/Back: erase  Menu: cancel", g_gui_w / 2, g_gui_h - 24, 10526880);
+}
+
 static void draw_world_type_screen(void) {
     draw_default_bg();
     draw_centered_text(tr_key_default("selectWorld.create", "Create New World"), g_gui_w / 2, 40, 16777215);
