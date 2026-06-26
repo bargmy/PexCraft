@@ -547,7 +547,7 @@ static int pex_mcpe_begin_bedrock_protocol_81_join(const char *host, int port, i
     pex_mcpe_join_session_set_callbacks(&g_mp_bedrock_session, &cb, NULL);
 
     snprintf(g_multiplayer_status, sizeof(g_multiplayer_status),
-             "Detected MCPE %s/protocol %d. Loading RakNetDLL...",
+             "Detected MCPE %s/protocol %d. Opening RakLib v6 UDP...",
              g_mp_bedrock_detected_version[0] ? g_mp_bedrock_detected_version : "0.15.4",
              g_mp_bedrock_detected_protocol ? g_mp_bedrock_detected_protocol : 82);
     return 1;

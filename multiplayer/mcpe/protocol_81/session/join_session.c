@@ -207,7 +207,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
                 return 0;
             }
             session->state = PEX_MCPE_JOIN_RAKNET_CONNECTING;
-            pex_mcpe_join_set_status(session, "Connecting RakNet UDP...");
+            pex_mcpe_join_set_status(session, "Connecting RakLib v6 UDP...");
         }
     }
 
@@ -223,7 +223,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
         if (type == PEX_RAKNET_POLL_NONE) break;
         if (type == PEX_RAKNET_POLL_CONNECTED) {
             session->state = PEX_MCPE_JOIN_RAKNET_CONNECTED;
-            pex_mcpe_join_set_status(session, "RakNet connected; sending login.");
+            pex_mcpe_join_set_status(session, "RakLib connected; sending LoginPacket.");
             pex_mcpe_send_login(session);
         } else if (type == PEX_RAKNET_POLL_DATA && n > 0) {
             pex_mcpe_process_one_packet(session, buf, n, 0);
