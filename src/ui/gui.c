@@ -781,7 +781,7 @@ static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
         st = inventory_slot_ptr(slot);
     }
     if (!st || stack_empty(st)) return;
-    const char *name = item_display_name(st->id);
+    const char *name = item_stack_display_name(st);
     if (!name || !name[0]) return;
 
     const char *lines[3];
@@ -840,7 +840,7 @@ static void draw_creative_tooltip(int mx, int my) {
     if (idx < 0) {
         int hb = creative_hotbar_slot_at(mx, my);
         if (hb >= 0 && hb < 9 && !stack_empty(&g_inventory[hb])) {
-            const char *name = item_display_name(g_inventory[hb].id);
+            const char *name = item_stack_display_name(&g_inventory[hb]);
             if (name && name[0]) {
                 const char *lines[1] = { name };
                 draw_hovering_text(lines, 1, mx, my);
@@ -849,7 +849,7 @@ static void draw_creative_tooltip(int mx, int my) {
         return;
     }
     ItemStack st = creative_stack_for_index(idx);
-    const char *name = item_display_name(st.id);
+    const char *name = item_stack_display_name(&st);
     if (name && name[0]) {
         const char *lines[1] = { name };
         draw_hovering_text(lines, 1, mx, my);
@@ -896,7 +896,7 @@ static void draw_creative_screen(void) {
             int idx = start + row * CREATIVE_COLS + col;
             if (idx < creative_catalog_count()) {
                 ItemStack st = creative_stack_for_index(idx);
-                draw_item_stack_gui(&st, sx + 1, sy + 1);
+                draw_item_stack_gui(&st, sx, sy);
             }
         }
     }
@@ -920,7 +920,7 @@ static void draw_creative_screen(void) {
 
     for (int col = 0; col < 9; col++) {
         if (!textured_bg) draw_creative_slot_bg(x + 8 + col * 18, y + 184);
-        draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18 + 1, y + 185);
+        draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 184);
     }
 
     draw_creative_tooltip(g_mouse_x, g_mouse_y);

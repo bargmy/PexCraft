@@ -146,6 +146,68 @@ static int item_icon_tile(int id) {
         case ITEM_RECORD_11: return 250;
         default: return 0;
     }
+
+}
+
+static int item_icon_tile_for_stack(const ItemStack *st) {
+    if (stack_empty(st)) return 0;
+    if (st->id == ITEM_DYE_POWDER) {
+        int d = st->damage;
+        if (d < 0) d = 0;
+        if (d > 15) d = 15;
+        return item_icon_tile(st->id) + (d % 8) * 16 + (d / 8);
+    }
+    if (st->id == ITEM_MONSTER_PLACER) return item_icon_tile(st->id);
+    return item_icon_tile(st->id);
+}
+
+static int spawn_egg_color(int damage, int layer) {
+    switch (damage) {
+        case 50: return layer == 0 ? 894731 : 0;
+        case 51: return layer == 0 ? 12698049 : 4802889;
+        case 52: return layer == 0 ? 3419431 : 11013646;
+        case 54: return layer == 0 ? 0x00AFAF : 7969893;
+        case 55: return layer == 0 ? 5349438 : 8306542;
+        case 56: return layer == 0 ? 16382457 : 12369084;
+        case 57: return layer == 0 ? 15373203 : 5009705;
+        case 58: return layer == 0 ? 1447446 : 0;
+        case 59: return layer == 0 ? 803406 : 11013646;
+        case 60: return layer == 0 ? 7237230 : 3158064;
+        case 61: return layer == 0 ? 16167425 : 16775294;
+        case 62: return layer == 0 ? 3407872 : 16579584;
+        case 90: return layer == 0 ? 15771042 : 14377823;
+        case 91: return layer == 0 ? 15198183 : 16758197;
+        case 92: return layer == 0 ? 4470310 : 10592673;
+        case 93: return layer == 0 ? 10592673 : 16711680;
+        case 94: return layer == 0 ? 2243405 : 7375001;
+        case 95: return layer == 0 ? 14144467 : 13545366;
+        case 96: return layer == 0 ? 10489616 : 12040119;
+        case 98: return layer == 0 ? 15720061 : 5653556;
+        case 120: return layer == 0 ? 5651507 : 12422002;
+        default: return 0xFFFFFF;
+    }
+}
+
+static void item_world_face_style(int id, int meta, int face, int *tile) {
+    float shade = world_face_base_shade(face);
+    int tile_idx = block_texture_resolve(id, meta, face);
+    if (tile_idx >= 0) {
+        *tile = tile_idx;
+        if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_at(0, 0), shade);
+        else if (id == BLOCK_TALL_GRASS || id == BLOCK_VINE || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(0, 0), shade);
+        else world_set_shade(shade);
+        return;
+    }
+    world_face_style(id, face, tile);
+}
+
+static int block_item_tile_for_id(int id);
+
+static int item_block_tile_for_stack(const ItemStack *st) {
+    if (stack_empty(st)) return 1;
+    int tile_idx = block_texture_resolve(st->id, st->damage, 1);
+    if (tile_idx >= 0) return tile_idx;
+    return block_item_tile_for_id(st->id);
 }
 
 static int item_is_block_id(int id) {
@@ -198,23 +260,36 @@ static int block_item_is_3d(int id) {
     return 1;
 }
 
-static void draw_item_icon_gui_2d(const ItemStack *st, int x, int y) {
-    if (stack_empty(st) || !tex_items.id) return;
-    int tile = item_icon_tile(st->id);
+static void draw_item_icon_tile_gui(int tile, int x, int y, int rgb) {
+    if (!tex_items.id) return;
     int sx = (tile & 15) * 16;
     int sy = (tile >> 4) * 16;
+    float r = ((rgb >> 16) & 255) / 255.0f;
+    float g = ((rgb >> 8) & 255) / 255.0f;
+    float b = (rgb & 255) / 255.0f;
     glColorMask(1,1,1,1);
-    glColor4f(1,1,1,1);
+    glColor4f(r,g,b,1.0f);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     draw_textured_rect_tex(&tex_items, x, y, sx, sy, 16, 16, 0xFFFFFF);
+    glColor4f(1,1,1,1);
+}
+
+static void draw_item_icon_gui_2d(const ItemStack *st, int x, int y) {
+    if (stack_empty(st) || !tex_items.id) return;
+    if (st->id == ITEM_MONSTER_PLACER) {
+        draw_item_icon_tile_gui(item_icon_tile(st->id), x, y, spawn_egg_color(st->damage, 0));
+        draw_item_icon_tile_gui(item_icon_tile(st->id) + 16, x, y, spawn_egg_color(st->damage, 1));
+        return;
+    }
+    draw_item_icon_tile_gui(item_icon_tile_for_stack(st), x, y, 0xFFFFFF);
 }
 
 
-static void emit_inventory_cuboid_face(int id,
+static void emit_inventory_cuboid_face(int id, int meta,
                                                  float bx, float by, float bz,
                                                  float x0, float y0, float z0,
                                                  float x1, float y1, float z1,
@@ -225,7 +300,7 @@ static void emit_inventory_cuboid_face(int id,
     float ax1 = bx + x1, ay1 = by + y1, az1 = bz + z1;
 
     world_style_set_pos(0, 0, 0);
-    world_face_style(id, face, &tile);
+    item_world_face_style(id, meta, face, &tile);
 
     if (face == 0 || face == 1) {
         terrain_tile_uv_subrect(tile, x0, z0, x1, z1, &u0, &v0, &u1, &v1);
@@ -268,53 +343,53 @@ static void emit_inventory_cuboid_face(int id,
     }
 }
 
-static void emit_inventory_cuboid_faces(int id,
+static void emit_inventory_cuboid_faces(int id, int meta,
                                                   float bx, float by, float bz,
                                                   float x0, float y0, float z0,
                                                   float x1, float y1, float z1) {
     for (int face = 0; face < 6; face++) {
-        emit_inventory_cuboid_face(id, bx, by, bz, x0, y0, z0, x1, y1, z1, face);
+        emit_inventory_cuboid_face(id, meta, bx, by, bz, x0, y0, z0, x1, y1, z1, face);
     }
 }
 
-static void draw_inventory_cuboid_model(int id,
+static void draw_inventory_cuboid_model(int id, int meta,
                                                    float bx, float by, float bz,
                                                    float x0, float y0, float z0,
                                                    float x1, float y1, float z1) {
     glBegin(GL_QUADS);
-    emit_inventory_cuboid_faces(id, bx, by, bz, x0, y0, z0, x1, y1, z1);
+    emit_inventory_cuboid_faces(id, meta, bx, by, bz, x0, y0, z0, x1, y1, z1);
     glEnd();
 }
 
-static void draw_inventory_block_model(int id) {
+static void draw_inventory_block_model(int id, int meta) {
     /* Match Java RenderBlocks.func_1227_a exactly: after RenderItem applies
        its slot transform, RenderBlocks shifts the 0..1 block model by -0.5 on
        every axis before emitting faces.  Inventory cuboids use the same face
        winding/order as the deobfuscated Java source so only the correct faces
        are visible. */
     const float bx = -0.5f, by = -0.5f, bz = -0.5f;
-    if (id == BLOCK_SLAB) { draw_inventory_cuboid_model(id, bx,by,bz, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_SNOW_LAYER) { draw_inventory_cuboid_model(id, bx,by,bz, 0,0,0,1,0.125f,1); return; }
-    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_inventory_cuboid_model(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
-    if (id == BLOCK_STONE_BUTTON) { draw_inventory_cuboid_model(id, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
-    if (id == BLOCK_CACTUS) { draw_inventory_cuboid_model(id, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_SLAB) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
+    if (id == BLOCK_STONE_BUTTON) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
+    if (id == BLOCK_CACTUS) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_FENCE) {
         glBegin(GL_QUADS);
-        emit_inventory_cuboid_faces(id, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
-        emit_inventory_cuboid_faces(id, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
-        emit_inventory_cuboid_faces(id, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
         glEnd();
         return;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
         glBegin(GL_QUADS);
-        emit_inventory_cuboid_faces(id, bx,by,bz, 0,0,0,1,0.5f,1);
-        emit_inventory_cuboid_faces(id, bx,by,bz, 0.5f,0.5f,0,1,1,1);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0,0,0,1,0.5f,1);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.5f,0.5f,0,1,1,1);
         glEnd();
         return;
     }
     if (id == BLOCK_CHEST) { draw_chest_block(bx,by,bz); return; }
-    draw_inventory_cuboid_model(id, bx, by, bz, 0,0,0,1,1,1);
+    draw_inventory_cuboid_model(id, meta, bx, by, bz, 0,0,0,1,1,1);
 }
 
 static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, float pz, float u, float v) {
@@ -334,14 +409,14 @@ static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, flo
     glVertex3f(gx, gy, 0.0f);
 }
 
-static void emit_inventory_iso_face(int id, int slot_x, int slot_y,
+static void emit_inventory_iso_face(int id, int meta, int slot_x, int slot_y,
                                               float x0, float y0, float z0,
                                               float x1, float y1, float z1,
                                               int face) {
     int tile = 2;
     float u0, v0, u1, v1;
     world_style_set_pos(0, 0, 0);
-    world_face_style(id, face, &tile);
+    item_world_face_style(id, meta, face, &tile);
 
     if (face == 0 || face == 1) {
         terrain_tile_uv_subrect(tile, x0, z0, x1, z1, &u0, &v0, &u1, &v1);
@@ -372,36 +447,36 @@ static void emit_inventory_iso_face(int id, int slot_x, int slot_y,
     }
 }
 
-static void draw_inventory_iso_cuboid(int id, int slot_x, int slot_y,
+static void draw_inventory_iso_cuboid(int id, int meta, int slot_x, int slot_y,
                                                 float x0, float y0, float z0,
                                                 float x1, float y1, float z1) {
     glBegin(GL_QUADS);
     /* At Java's inventory rotation the visible faces are x-min, z-max, and top.
        Emit only those faces, in painter order, so no back/inside face can bleed
        through on PSP/D3D compatibility paths. */
-    emit_inventory_iso_face(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
-    emit_inventory_iso_face(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
-    emit_inventory_iso_face(id, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
+    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
+    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
+    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
     glEnd();
 }
 
-static void draw_inventory_iso_block_model(int id, int slot_x, int slot_y) {
-    if (id == BLOCK_SLAB) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,0.5f,1); return; }
-    if (id == BLOCK_SNOW_LAYER) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,0.125f,1); return; }
-    if (id == BLOCK_CACTUS) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
-    if (id == BLOCK_CHEST) { draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,14.0f/16.0f,0.9375f); return; }
+static void draw_inventory_iso_block_model(int id, int meta, int slot_x, int slot_y) {
+    if (id == BLOCK_SLAB) { draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_SNOW_LAYER) { draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0,0,0,1,0.125f,1); return; }
+    if (id == BLOCK_CACTUS) { draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (id == BLOCK_CHEST) { draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0.0625f,0,0.0625f,0.9375f,14.0f/16.0f,0.9375f); return; }
     if (id == BLOCK_FENCE) {
-        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
-        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
-        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
+        draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
+        draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
+        draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0.0f,0.70f,0.4375f,1.0f,0.90f,0.5625f);
         return;
     }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
-        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,0.5f,1);
-        draw_inventory_iso_cuboid(id, slot_x, slot_y, 0.5f,0.5f,0,1,1,1);
+        draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0,0,0,1,0.5f,1);
+        draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0.5f,0.5f,0,1,1,1);
         return;
     }
-    draw_inventory_iso_cuboid(id, slot_x, slot_y, 0,0,0,1,1,1);
+    draw_inventory_iso_cuboid(id, meta, slot_x, slot_y, 0,0,0,1,1,1);
 }
 
 static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
@@ -429,7 +504,7 @@ static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
     /* Use the explicit 2-D Java-projected inventory path for all GUI block
        models, including chests.  The matrix-rendered chest path clipped/overdrew
        its top and front faces in the GUI, leaving only the side faces visible. */
-    draw_inventory_iso_block_model(st->id, x, y);
+    draw_inventory_iso_block_model(st->id, st->damage, x, y);
     g_force_fullbright_item_model--;
 
     glDisable(GL_ALPHA_TEST);
@@ -597,9 +672,9 @@ static int block_item_tile_for_id(int id) {
 }
 
 
-static void draw_block_item_icon_gui(int id, int x, int y) {
-    if (!tex_terrain.id) return;
-    int tile = block_item_tile_for_id(id);
+static void draw_block_item_icon_gui(const ItemStack *st, int x, int y) {
+    if (stack_empty(st) || !tex_terrain.id) return;
+    int tile = item_block_tile_for_stack(st);
     float u0, v0, u1, v1;
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     glEnable(GL_TEXTURE_2D);
@@ -877,6 +952,151 @@ static const char *item_display_name(int id) {
     return "";
 }
 
+static const char *dye_damage_name(int damage) {
+    switch (damage & 15) {
+        case 0: return "Ink Sac";
+        case 1: return "Rose Red";
+        case 2: return "Cactus Green";
+        case 3: return "Cocoa Beans";
+        case 4: return "Lapis Lazuli";
+        case 5: return "Purple Dye";
+        case 6: return "Cyan Dye";
+        case 7: return "Light Gray Dye";
+        case 8: return "Gray Dye";
+        case 9: return "Pink Dye";
+        case 10: return "Lime Dye";
+        case 11: return "Dandelion Yellow";
+        case 12: return "Light Blue Dye";
+        case 13: return "Magenta Dye";
+        case 14: return "Orange Dye";
+        case 15: return "Bone Meal";
+        default: return "Dye";
+    }
+}
+
+static const char *wool_damage_name(int damage) {
+    switch (damage & 15) {
+        case 0: return "White Wool";
+        case 1: return "Orange Wool";
+        case 2: return "Magenta Wool";
+        case 3: return "Light Blue Wool";
+        case 4: return "Yellow Wool";
+        case 5: return "Lime Wool";
+        case 6: return "Pink Wool";
+        case 7: return "Gray Wool";
+        case 8: return "Light Gray Wool";
+        case 9: return "Cyan Wool";
+        case 10: return "Purple Wool";
+        case 11: return "Blue Wool";
+        case 12: return "Brown Wool";
+        case 13: return "Green Wool";
+        case 14: return "Red Wool";
+        case 15: return "Black Wool";
+        default: return "Wool";
+    }
+}
+
+static const char *spawn_egg_entity_name(int damage) {
+    switch (damage) {
+        case 50: return "Creeper";
+        case 51: return "Skeleton";
+        case 52: return "Spider";
+        case 54: return "Zombie";
+        case 55: return "Slime";
+        case 56: return "Ghast";
+        case 57: return "Zombie Pigman";
+        case 58: return "Enderman";
+        case 59: return "Cave Spider";
+        case 60: return "Silverfish";
+        case 61: return "Blaze";
+        case 62: return "Magma Cube";
+        case 90: return "Pig";
+        case 91: return "Sheep";
+        case 92: return "Cow";
+        case 93: return "Chicken";
+        case 94: return "Squid";
+        case 95: return "Wolf";
+        case 96: return "Mooshroom";
+        case 98: return "Ocelot";
+        case 120: return "Villager";
+        default: return NULL;
+    }
+}
+
+static const char *item_stack_display_name(const ItemStack *st) {
+    static char name[64];
+    if (stack_empty(st)) return "";
+    if (st->id == ITEM_DYE_POWDER) return dye_damage_name(st->damage);
+    if (st->id == ITEM_MONSTER_PLACER) {
+        const char *entity = spawn_egg_entity_name(st->damage);
+        if (entity && entity[0]) {
+            snprintf(name, sizeof(name), "Spawn %s", entity);
+            return name;
+        }
+        return "Spawn";
+    }
+    if (st->id == BLOCK_WOOL) return wool_damage_name(st->damage);
+    if (st->id == BLOCK_PLANKS) {
+        switch (st->damage & 3) {
+            case 1: return "Spruce Wood Planks";
+            case 2: return "Birch Wood Planks";
+            case 3: return "Jungle Wood Planks";
+            default: return "Wooden Planks";
+        }
+    }
+    if (st->id == BLOCK_LOG) {
+        switch (st->damage & 3) {
+            case 1: return "Pine Wood";
+            case 2: return "Birch Wood";
+            case 3: return "Jungle Wood";
+            default: return "Wood";
+        }
+    }
+    if (st->id == BLOCK_LEAVES) {
+        switch (st->damage & 3) {
+            case 1: return "Pine Leaves";
+            case 2: return "Birch Leaves";
+            case 3: return "Jungle Leaves";
+            default: return "Leaves";
+        }
+    }
+    if (st->id == BLOCK_SAPLING) {
+        switch (st->damage & 3) {
+            case 1: return "Pine Sapling";
+            case 2: return "Birch Sapling";
+            case 3: return "Jungle Sapling";
+            default: return "Sapling";
+        }
+    }
+    if (st->id == BLOCK_SLAB || st->id == BLOCK_DOUBLE_SLAB) {
+        switch (st->damage & 7) {
+            case 1: return "Sandstone Slab";
+            case 2: return "Wooden Slab";
+            case 3: return "Cobblestone Slab";
+            case 4: return "Brick Slab";
+            case 5: return "Stone Brick Slab";
+            default: return "Stone Slab";
+        }
+    }
+    if (st->id == BLOCK_STONE_BRICK) {
+        switch (st->damage & 3) {
+            case 1: return "Mossy Stone Bricks";
+            case 2: return "Cracked Stone Bricks";
+            case 3: return "Chiseled Stone Bricks";
+            default: return "Stone Bricks";
+        }
+    }
+    if (st->id == BLOCK_SANDSTONE) {
+        switch (st->damage & 3) {
+            case 1: return "Chiseled Sandstone";
+            case 2: return "Smooth Sandstone";
+            default: return "Sandstone";
+        }
+    }
+    if (st->id == BLOCK_TALL_GRASS) return (st->damage == 2) ? "Fern" : "Grass";
+    return item_display_name(st->id);
+}
+
 static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int animate_pop) {
     if (stack_empty(st)) return;
     int pushed = 0;
@@ -894,7 +1114,7 @@ static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int anim
     glColor4f(1,1,1,1);
     if (item_is_block_id(st->id)) {
         if (block_item_is_3d(st->id)) draw_block_item_gui_3d(st, x, y);
-        else draw_block_item_icon_gui(st->id, x, y);
+        else draw_block_item_icon_gui(st, x, y);
     } else draw_item_icon_gui_2d(st, x, y);
 
     if (pushed) glPopMatrix();

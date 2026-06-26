@@ -2078,6 +2078,7 @@ static void spawn_water_entry_particles(float x, float y, float z, float mx, flo
 static void update_dig_particles(void);
 static void draw_item_stack_gui(const ItemStack *st, int x, int y);
 static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y);
+static const char *item_stack_display_name(const ItemStack *st);
 static void draw_carried_stack(void);
 static void draw_creative_screen(void);
 static void update_breaking(void);
