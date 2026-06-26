@@ -20,8 +20,7 @@ int pex_mcpe_encode_mob_equipment_packet(uint8_t *out_data, size_t out_capacity,
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
     int wire_slot = item_id <= 0 ? 0x28 : selected_slot + 9;
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_MOB_EQUIPMENT) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_MOB_EQUIPMENT) ||
         !pex_mcpe_write_i64_be(&b, (int64_t)entity_id) ||
         !pex_mcpe_write_slot(&b, item_id, count, damage) ||
         !pex_mcpe_write_u8(&b, (uint8_t)wire_slot) ||

@@ -9,8 +9,7 @@ int pex_mcpe_encode_use_item_packet(uint8_t *out_data, size_t out_capacity, size
     if (slot < 0) slot = 0;
     if (count <= 0) count = 1;
     PexMcpeBuffer b; pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_USE_ITEM) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_USE_ITEM) ||
         !pex_mcpe_write_i32_be(&b, x) ||
         !pex_mcpe_write_i32_be(&b, y) ||
         !pex_mcpe_write_i32_be(&b, z) ||

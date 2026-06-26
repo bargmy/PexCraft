@@ -242,8 +242,7 @@ int pex_mcpe_encode_login_packet_with_skin(uint8_t *out_data,
 
     PexMcpeBuffer out;
     pex_mcpe_buffer_init(&out, out_data, out_capacity);
-    int ok = pex_mcpe_write_u8(&out, PEX_MCPE_RAKLIB_GAME_PACKET) &&
-             pex_mcpe_write_u8(&out, PEX_MCPE_PACKET_LOGIN) &&
+    int ok = pex_mcpe_write_u8(&out, PEX_MCPE_PACKET_LOGIN) &&
              pex_mcpe_write_i32_be(&out, protocol_version) &&
              pex_mcpe_write_i32_be(&out, (int32_t)compressed_cap) &&
              pex_mcpe_write_bytes(&out, compressed, (size_t)compressed_cap);

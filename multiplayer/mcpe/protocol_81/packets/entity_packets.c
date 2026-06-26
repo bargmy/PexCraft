@@ -328,8 +328,7 @@ int pex_mcpe_encode_animate_packet(uint8_t *out_data, size_t out_capacity, size_
     if (out_size) *out_size = 0;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_ANIMATE) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_ANIMATE) ||
         !pex_mcpe_write_u8(&b, (uint8_t)action) ||
         !pex_mcpe_write_i64_be(&b, (int64_t)eid)) return 0;
     if (out_size) *out_size = b.offset;
@@ -342,8 +341,7 @@ int pex_mcpe_encode_container_set_slot_packet(uint8_t *out_data, size_t out_capa
     if (out_size) *out_size = 0;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_CONTAINER_SET_SLOT) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_CONTAINER_SET_SLOT) ||
         !pex_mcpe_write_u8(&b, (uint8_t)window_id) ||
         !pex_mcpe_write_i16_be(&b, (int16_t)slot) ||
         !pex_mcpe_write_i16_be(&b, (int16_t)hotbar_slot) ||
@@ -466,8 +464,7 @@ int pex_mcpe_encode_drop_item_packet(uint8_t *out_data, size_t out_capacity, siz
     if (out_size) *out_size = 0;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_DROP_ITEM) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_DROP_ITEM) ||
         !pex_mcpe_write_u8(&b, 0) ||
         !pex_mcpe_write_slot_info(&b, item_id, count, damage)) return 0;
     if (out_size) *out_size = b.offset;
@@ -479,8 +476,7 @@ int pex_mcpe_encode_respawn_packet(uint8_t *out_data, size_t out_capacity, size_
     if (out_size) *out_size = 0;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_RESPAWN) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_RESPAWN) ||
         !pex_mcpe_write_f32_be(&b, x) ||
         !pex_mcpe_write_f32_be(&b, y) ||
         !pex_mcpe_write_f32_be(&b, z)) return 0;
@@ -531,8 +527,7 @@ int pex_mcpe_encode_interact_packet(uint8_t *out_data, size_t out_capacity, size
     if (out_size) *out_size = 0;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_INTERACT) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_INTERACT) ||
         !pex_mcpe_write_u8(&b, (uint8_t)action) ||
         !pex_mcpe_write_i64_be(&b, (int64_t)target_eid)) return 0;
     if (out_size) *out_size = b.offset;

@@ -127,8 +127,7 @@ int pex_mcpe_encode_chat_packet(uint8_t *out_data, size_t out_capacity, size_t *
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
     if (!source) source = "";
     if (!message) message = "";
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_TEXT) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_TEXT) ||
         !pex_mcpe_write_u8(&b, 1) ||
         !pex_mcpe_write_string(&b, source) ||
         !pex_mcpe_write_string(&b, message)) return 0;

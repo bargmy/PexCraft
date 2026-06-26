@@ -16,10 +16,63 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <zlib.h>
 
 static void pex_mcpe_join_set_status(PexMcpeJoinSession *s, const char *msg) {
     if (!s) return;
     snprintf(s->status_text, sizeof(s->status_text), "%s", msg ? msg : "");
+}
+
+
+static int pex_mcpe_send_packet_batched(PexMcpeJoinSession *session, const uint8_t *data, size_t size) {
+    if (!session || !session->raknet || !data || size == 0) return 0;
+    if (size > 0x7fffffffUL) return 0;
+
+    /* Batch payload format used by MCPE 0.15.x / protocol 81-82:
+       [inner_packet_length:4 bytes BE] [inner_packet_bytes...]
+       Then zlib-compress that payload and wrap it as:
+       [0xfe RakLib game marker] [0x06 BatchPacket ID] [compressed_length:4 bytes BE] [zlib bytes]
+    */
+    size_t plain_size = 4 + size;
+    uint8_t *plain = (uint8_t *)malloc(plain_size);
+    if (!plain) return 0;
+    plain[0] = (uint8_t)((size >> 24) & 0xff);
+    plain[1] = (uint8_t)((size >> 16) & 0xff);
+    plain[2] = (uint8_t)((size >> 8) & 0xff);
+    plain[3] = (uint8_t)(size & 0xff);
+    memcpy(plain + 4, data, size);
+
+    uLongf compressed_size = compressBound((uLong)plain_size);
+    uint8_t *compressed = (uint8_t *)malloc((size_t)compressed_size);
+    if (!compressed) {
+        free(plain);
+        return 0;
+    }
+    int zr = compress2(compressed, &compressed_size, plain, (uLong)plain_size, Z_BEST_SPEED);
+    free(plain);
+    if (zr != Z_OK || compressed_size > 0x7fffffffUL) {
+        free(compressed);
+        return 0;
+    }
+
+    size_t final_size = 1 + 1 + 4 + (size_t)compressed_size;
+    uint8_t *final_buf = (uint8_t *)malloc(final_size);
+    if (!final_buf) {
+        free(compressed);
+        return 0;
+    }
+    final_buf[0] = PEX_MCPE_RAKLIB_GAME_PACKET;
+    final_buf[1] = PEX_MCPE_PACKET_BATCH;
+    final_buf[2] = (uint8_t)(((size_t)compressed_size >> 24) & 0xff);
+    final_buf[3] = (uint8_t)(((size_t)compressed_size >> 16) & 0xff);
+    final_buf[4] = (uint8_t)(((size_t)compressed_size >> 8) & 0xff);
+    final_buf[5] = (uint8_t)((size_t)compressed_size & 0xff);
+    memcpy(final_buf + 6, compressed, (size_t)compressed_size);
+    free(compressed);
+
+    int ok = pex_raknet_client_send(session->raknet, final_buf, final_size, 0);
+    free(final_buf);
+    return ok;
 }
 
 void pex_mcpe_join_session_init(PexMcpeJoinSession *session,
@@ -73,7 +126,7 @@ static int pex_mcpe_send_login(PexMcpeJoinSession *s) {
         s->state = PEX_MCPE_JOIN_FAILED;
         return 0;
     }
-    if (!pex_raknet_client_send(s->raknet, buf, n, 0)) {
+    if (!pex_mcpe_send_packet_batched(s, buf, n)) {
         pex_mcpe_join_set_status(s, pex_raknet_client_last_error(s->raknet));
         s->state = PEX_MCPE_JOIN_FAILED;
         return 0;
@@ -87,7 +140,7 @@ static int pex_mcpe_send_request_radius(PexMcpeJoinSession *s) {
     uint8_t buf[64];
     size_t n = 0;
     if (!pex_mcpe_encode_request_chunk_radius_packet(buf, sizeof(buf), &n, s->chunk_radius)) return 0;
-    if (!pex_raknet_client_send(s->raknet, buf, n, 0)) return 0;
+    if (!pex_mcpe_send_packet_batched(s, buf, n)) return 0;
     s->state = PEX_MCPE_JOIN_REQUEST_RADIUS_SENT;
     pex_mcpe_join_set_status(s, "Building terrain");
     return 1;
@@ -450,7 +503,7 @@ int pex_mcpe_join_session_send_move(PexMcpeJoinSession *session,
     size_t n;
     if (!pex_mcpe_encode_move_player_packet(buf, sizeof(buf), &n, session->entity_id, x, y, z, yaw, pitch)) return 0;
     session->x = x; session->y = y; session->z = z; session->yaw = yaw; session->pitch = pitch;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *message) {
@@ -458,7 +511,7 @@ int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *mes
     uint8_t buf[1024];
     size_t n;
     if (!pex_mcpe_encode_chat_packet(buf, sizeof(buf), &n, session->username, message)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 
@@ -469,7 +522,7 @@ int pex_mcpe_join_session_send_equipment(PexMcpeJoinSession *session,
     size_t n = 0;
     if (!pex_mcpe_encode_mob_equipment_packet(buf, sizeof(buf), &n, session->entity_id,
                                              slot, item_id, count, damage)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, int z, int face,
@@ -479,13 +532,13 @@ int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, 
     size_t n = 0;
     pex_mcpe_join_session_send_equipment(session, slot, held_item_id, held_count, held_damage);
     if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 0, x, y, z, face)) {
-        pex_raknet_client_send(session->raknet, buf, n, 0);
+        pex_mcpe_send_packet_batched(session, buf, n);
     }
     if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 2, x, y, z, face)) {
-        pex_raknet_client_send(session->raknet, buf, n, 0);
+        pex_mcpe_send_packet_batched(session, buf, n);
     }
     if (pex_mcpe_encode_remove_block_packet(buf, sizeof(buf), &n, session->entity_id, x, y, z)) {
-        return pex_raknet_client_send(session->raknet, buf, n, 0);
+        return pex_mcpe_send_packet_batched(session, buf, n);
     }
     return 0;
 }
@@ -498,7 +551,7 @@ int pex_mcpe_join_session_send_use_item(PexMcpeJoinSession *session, int x, int 
     size_t n;
     pex_mcpe_join_session_send_equipment(session, slot, item_id, count, damage);
     if (!pex_mcpe_encode_use_item_packet(buf, sizeof(buf), &n, x, y, z, face, pos_x, pos_y, pos_z, slot, item_id, count, damage)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_animate(PexMcpeJoinSession *session, int action) {
@@ -506,7 +559,7 @@ int pex_mcpe_join_session_send_animate(PexMcpeJoinSession *session, int action) 
     uint8_t buf[64];
     size_t n = 0;
     if (!pex_mcpe_encode_animate_packet(buf, sizeof(buf), &n, session->entity_id, action)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_interact(PexMcpeJoinSession *session, int action, uint64_t target_eid) {
@@ -514,7 +567,7 @@ int pex_mcpe_join_session_send_interact(PexMcpeJoinSession *session, int action,
     uint8_t buf[64];
     size_t n = 0;
     if (!pex_mcpe_encode_interact_packet(buf, sizeof(buf), &n, action, target_eid)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_inventory_slot(PexMcpeJoinSession *session,
@@ -524,7 +577,7 @@ int pex_mcpe_join_session_send_inventory_slot(PexMcpeJoinSession *session,
     uint8_t buf[128];
     size_t n = 0;
     if (!pex_mcpe_encode_container_set_slot_packet(buf, sizeof(buf), &n, window_id, slot, hotbar_slot, item_id, count, damage)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_player_action(PexMcpeJoinSession *session, int action, int x, int y, int z, int face) {
@@ -532,7 +585,7 @@ int pex_mcpe_join_session_send_player_action(PexMcpeJoinSession *session, int ac
     uint8_t buf[128];
     size_t n = 0;
     if (!pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, action, x, y, z, face)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_drop_item(PexMcpeJoinSession *session, int item_id, int count, int damage) {
@@ -540,7 +593,7 @@ int pex_mcpe_join_session_send_drop_item(PexMcpeJoinSession *session, int item_i
     uint8_t buf[128];
     size_t n = 0;
     if (!pex_mcpe_encode_drop_item_packet(buf, sizeof(buf), &n, item_id, count, damage)) return 0;
-    return pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_send_packet_batched(session, buf, n);
 }
 
 int pex_mcpe_join_session_send_respawn(PexMcpeJoinSession *session, float x, float y, float z) {
@@ -548,7 +601,7 @@ int pex_mcpe_join_session_send_respawn(PexMcpeJoinSession *session, float x, flo
     uint8_t buf[128];
     size_t n = 0;
     /* Genisys handles respawn from PlayerActionPacket ACTION_SPAWN_*; send the old RespawnPacket too for clients/servers that expect it. */
-    if (pex_mcpe_encode_respawn_packet(buf, sizeof(buf), &n, x, y, z)) pex_raknet_client_send(session->raknet, buf, n, 0);
+    if (pex_mcpe_encode_respawn_packet(buf, sizeof(buf), &n, x, y, z)) pex_mcpe_send_packet_batched(session, buf, n);
     return pex_mcpe_join_session_send_player_action(session, 13, 0, 0, 0, -1);
 }
 
@@ -559,11 +612,10 @@ void pex_mcpe_join_session_disconnect(PexMcpeJoinSession *session) {
         size_t n = 0;
         PexMcpeBuffer b;
         pex_mcpe_buffer_init(&b, buf, sizeof(buf));
-        if (pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) &&
-            pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_DISCONNECT) &&
+        if (pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_DISCONNECT) &&
             pex_mcpe_write_string(&b, "disconnect")) {
             n = b.offset;
-            pex_raknet_client_send(session->raknet, buf, n, 0);
+            pex_mcpe_send_packet_batched(session, buf, n);
         }
         pex_raknet_client_destroy(session->raknet);
         session->raknet = NULL;

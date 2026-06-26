@@ -14,8 +14,7 @@ int pex_mcpe_encode_move_player_packet(uint8_t *out_data,
     if (out_size) *out_size = 0;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_MOVE_PLAYER) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_MOVE_PLAYER) ||
         !pex_mcpe_write_i64_be(&b, (int64_t)entity_id) ||
         !pex_mcpe_write_f32_be(&b, x) ||
         !pex_mcpe_write_f32_be(&b, y) ||

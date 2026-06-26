@@ -8,8 +8,7 @@ int pex_mcpe_encode_request_chunk_radius_packet(uint8_t *out_data, size_t out_ca
     if (radius > 16) radius = 16;
     PexMcpeBuffer b;
     pex_mcpe_buffer_init(&b, out_data, out_capacity);
-    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
-        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_REQUEST_CHUNK_RADIUS) ||
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_REQUEST_CHUNK_RADIUS) ||
         !pex_mcpe_write_i32_be(&b, radius)) return 0;
     if (out_size) *out_size = b.offset;
     return 1;

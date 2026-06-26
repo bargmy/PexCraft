@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-/* Encodes a complete RakLib game packet: 0xfe, LoginPacket ID, then body. */
+/* Encodes a raw MCPE LoginPacket: LoginPacket ID, then body. Join session wraps it in a BatchPacket before sending. */
 int pex_mcpe_encode_login_packet(uint8_t *out_data,
                                  size_t out_capacity,
                                  size_t *out_size,
