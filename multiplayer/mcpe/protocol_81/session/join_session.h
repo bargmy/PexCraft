@@ -6,6 +6,7 @@
 #include "../packets/play_status_packet.h"
 #include "../packets/start_game_packet.h"
 #include "../packets/full_chunk_data_packet.h"
+#include "../packets/entity_packets.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,6 +32,9 @@ typedef struct PexMcpeJoinCallbacks {
     void (*on_chunk)(void *userdata, const PexMcpeFullChunkData *chunk);
     void (*on_text)(void *userdata, const char *text);
     void (*on_block_update)(void *userdata, int x, int y, int z, int id, int meta);
+    void (*on_add_player)(void *userdata, const PexMcpeRemotePlayerInfo *player);
+    void (*on_move_entity)(void *userdata, const PexMcpeEntityMoveInfo *move);
+    void (*on_remove_entity)(void *userdata, uint64_t eid);
     void (*on_disconnect)(void *userdata, const char *message);
 } PexMcpeJoinCallbacks;
 
@@ -44,6 +48,7 @@ typedef struct PexMcpeJoinSession {
     int chunks_received;
     int spawn_status_received;
     uint64_t entity_id;
+    int entity_id_valid;
     float x, y, z, yaw, pitch;
     PexMcpeJoinState state;
     char status_text[256];

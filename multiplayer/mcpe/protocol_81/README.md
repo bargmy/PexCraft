@@ -22,3 +22,13 @@ Limits of this pass:
 
 - The code is implemented against the uploaded Genisys packet formats, but the live RakNetDLL/Genisys handshake still needs real-server testing.
 - Inventory/entity support is minimal. Joining, terrain, movement, chat, block break, block place/use, and block updates are the first target.
+
+## Runtime sync notes
+
+The Genisys StartGame packet uses entity id `0` for the local client.  The
+client must still send `MovePlayerPacket` with eid `0`; treating zero as
+"missing id" prevents movement from reaching the server.
+
+Remote players are populated from `AddPlayerPacket` and updated from
+`MoveEntityPacket` / `MovePlayerPacket`.  `RemoveEntityPacket` removes them from
+PexCraft's remote player table.

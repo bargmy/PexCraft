@@ -10,6 +10,7 @@
 #include "../packets/player_action_packet.h"
 #include "../packets/use_item_packet.h"
 #include "../packets/update_block_packet.h"
+#include "../packets/entity_packets.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -114,8 +115,12 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
                     pex_mcpe_join_set_status(s, "Login accepted; waiting for StartGame.");
                 } else if (st == PEX_MCPE_PLAY_STATUS_PLAYER_SPAWN) {
                     s->spawn_status_received = 1;
-                    s->state = PEX_MCPE_JOIN_WORLD_READY;
-                    pex_mcpe_join_set_status(s, "Spawned on Genisys server.");
+                    if (s->chunks_received > 0) {
+                        s->state = PEX_MCPE_JOIN_WORLD_READY;
+                        pex_mcpe_join_set_status(s, "Spawned on Genisys server.");
+                    } else {
+                        pex_mcpe_join_set_status(s, "Server spawned player; waiting for terrain.");
+                    }
                 } else if (st == PEX_MCPE_PLAY_STATUS_LOGIN_FAILED_CLIENT) {
                     s->state = PEX_MCPE_JOIN_FAILED;
                     pex_mcpe_join_set_status(s, "Login failed: client protocol rejected.");
@@ -130,6 +135,7 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
             PexMcpeStartGameInfo info;
             if (pex_mcpe_decode_start_game_packet(body, body_size, &info)) {
                 s->entity_id = (uint64_t)info.entity_id;
+                s->entity_id_valid = 1;
                 s->x = info.x;
                 s->y = info.y;
                 s->z = info.z;
@@ -152,8 +158,12 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
                 s->chunks_received++;
                 if (s->callbacks.on_chunk) s->callbacks.on_chunk(s->callback_userdata, &chunk);
                 if (s->state == PEX_MCPE_JOIN_REQUEST_RADIUS_SENT && s->chunks_received > 0) {
-                    s->state = PEX_MCPE_JOIN_WORLD_READY;
-                    pex_mcpe_join_set_status(s, "Terrain received; entering world.");
+                    if (s->spawn_status_received) {
+                        s->state = PEX_MCPE_JOIN_WORLD_READY;
+                        pex_mcpe_join_set_status(s, "Terrain received; spawned.");
+                    } else {
+                        pex_mcpe_join_set_status(s, "Terrain received; waiting for server spawn.");
+                    }
                 }
             }
             break;
@@ -172,6 +182,42 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
                 for (size_t i = 0; i < count; ++i) {
                     s->callbacks.on_block_update(s->callback_userdata, records[i].x, records[i].y, records[i].z, records[i].id, records[i].meta);
                 }
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_ADD_PLAYER: {
+            PexMcpeRemotePlayerInfo player;
+            if (pex_mcpe_decode_add_player_packet(body, body_size, &player) && s->callbacks.on_add_player) {
+                s->callbacks.on_add_player(s->callback_userdata, &player);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_MOVE_PLAYER: {
+            PexMcpeEntityMoveInfo move;
+            if (pex_mcpe_decode_move_player_packet(body, body_size, &move)) {
+                if (move.is_self) {
+                    /* Server correction/teleport for this client. */
+                    s->x = move.x;
+                    s->y = move.y;
+                    s->z = move.z;
+                    s->yaw = move.yaw;
+                    s->pitch = move.pitch;
+                }
+                if (s->callbacks.on_move_entity) s->callbacks.on_move_entity(s->callback_userdata, &move);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_MOVE_ENTITY: {
+            PexMcpeEntityMoveInfo move;
+            if (pex_mcpe_decode_move_entity_packet(body, body_size, &move) && s->callbacks.on_move_entity) {
+                s->callbacks.on_move_entity(s->callback_userdata, &move);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_REMOVE_ENTITY: {
+            uint64_t eid = 0;
+            if (pex_mcpe_decode_remove_entity_packet(body, body_size, &eid) && s->callbacks.on_remove_entity) {
+                s->callbacks.on_remove_entity(s->callback_userdata, eid);
             }
             break;
         }
@@ -240,7 +286,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
 int pex_mcpe_join_session_send_move(PexMcpeJoinSession *session,
                                     float x, float y, float z,
                                     float yaw, float pitch) {
-    if (!session || !session->raknet || session->state == PEX_MCPE_JOIN_FAILED || !session->entity_id) return 0;
+    if (!session || !session->raknet || session->state == PEX_MCPE_JOIN_FAILED || !session->entity_id_valid) return 0;
     uint8_t buf[128];
     size_t n;
     if (!pex_mcpe_encode_move_player_packet(buf, sizeof(buf), &n, session->entity_id, x, y, z, yaw, pitch)) return 0;
@@ -249,7 +295,7 @@ int pex_mcpe_join_session_send_move(PexMcpeJoinSession *session,
 }
 
 int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *message) {
-    if (!session || !session->raknet || !message || !message[0]) return 0;
+    if (!session || !session->raknet || !message || !message[0] || !session->spawn_status_received) return 0;
     uint8_t buf[1024];
     size_t n;
     if (!pex_mcpe_encode_chat_packet(buf, sizeof(buf), &n, session->username, message)) return 0;
@@ -258,7 +304,7 @@ int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *mes
 
 
 int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, int z, int face) {
-    if (!session || !session->raknet || !session->entity_id) return 0;
+    if (!session || !session->raknet || !session->entity_id_valid) return 0;
     uint8_t buf[128];
     size_t n;
     if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 0, x, y, z, face)) {

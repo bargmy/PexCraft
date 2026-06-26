@@ -34,11 +34,21 @@ static PexMcpeJoinSession g_mp_bedrock_session;
 static int g_mp_bedrock_session_active = 0;
 static double g_mp_bedrock_last_move_time = 0.0;
 
+typedef struct PexMpBedrockEntityMap {
+    uint64_t eid;
+    int player_id;
+} PexMpBedrockEntityMap;
+static PexMpBedrockEntityMap g_mp_bedrock_entities[PEX_NET_MAX_PLAYERS];
+static int g_mp_bedrock_next_player_id = 2;
+
 static void pex_mp_bedrock_on_status(void *userdata, PexMcpePlayStatus status);
 static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameInfo *info);
 static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *chunk);
 static void pex_mp_bedrock_on_text(void *userdata, const char *text);
 static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, int id, int meta);
+static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlayerInfo *player);
+static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move);
+static void pex_mp_bedrock_on_remove_entity(void *userdata, uint64_t eid);
 static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message);
 
 #define PEX_MP_PACKET_QUEUE_MAX 384
@@ -543,6 +553,9 @@ static int pex_mcpe_begin_bedrock_protocol_81_join(const char *host, int port, i
     cb.on_chunk = pex_mp_bedrock_on_chunk;
     cb.on_text = pex_mp_bedrock_on_text;
     cb.on_block_update = pex_mp_bedrock_on_block_update;
+    cb.on_add_player = pex_mp_bedrock_on_add_player;
+    cb.on_move_entity = pex_mp_bedrock_on_move_entity;
+    cb.on_remove_entity = pex_mp_bedrock_on_remove_entity;
     cb.on_disconnect = pex_mp_bedrock_on_disconnect;
     pex_mcpe_join_session_set_callbacks(&g_mp_bedrock_session, &cb, NULL);
 
@@ -1045,6 +1058,8 @@ static void pex_net_clear_remote_state(void) {
     g_mp_interp_duration = 0.10;
     g_mp_render_last_time = g_mp_interp_start_time;
     memset(g_mp_pending_pickups, 0, sizeof(g_mp_pending_pickups));
+    memset(g_mp_bedrock_entities, 0, sizeof(g_mp_bedrock_entities));
+    g_mp_bedrock_next_player_id = 2;
     g_mp_last_chunk_request_time = 0.0;
     g_mp_last_request_cx = 999999;
     g_mp_last_request_cz = 999999;
@@ -1111,10 +1126,21 @@ static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameI
     g_mp_connected = 1;
     g_mp_player_id = 1;
     g_mp_player_count = 1;
+    memset(g_mp_bedrock_entities, 0, sizeof(g_mp_bedrock_entities));
+    g_mp_bedrock_next_player_id = 2;
     g_mp_world_ready = 0;
     g_player_x = g_player_prev_x = info->x;
     g_player_y = g_player_prev_y = info->y;
     g_player_z = g_player_prev_z = info->z;
+    memset(&g_mp_players[0], 0, sizeof(g_mp_players[0]));
+    g_mp_players[0].player_id = g_mp_player_id;
+    snprintf(g_mp_players[0].name, sizeof(g_mp_players[0].name), "%s", g_multiplayer_username[0] ? g_multiplayer_username : "PexPlayer");
+    g_mp_players[0].x = g_player_x;
+    g_mp_players[0].y = g_player_y;
+    g_mp_players[0].z = g_player_z;
+    g_mp_players[0].health = g_player_health > 0 ? g_player_health : 20;
+    g_mp_players[0].armor = g_player_armor;
+    g_mp_prev_players[0] = g_mp_players[0];
     g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
     g_mp_expected_chunks = (g_mp_bedrock_session.chunk_radius * 2 + 1) * (g_mp_bedrock_session.chunk_radius * 2 + 1);
     if (g_mp_expected_chunks <= 0) g_mp_expected_chunks = 1;
@@ -1153,6 +1179,109 @@ static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, 
     flat_mark_sections_dirty_near_block(x, y, z);
     flat_mark_chunks_dirty_near(x, z);
     if (old != (unsigned char)id) flat_mark_light_dirty_for_change(x, y, z, old, id);
+}
+
+
+static int pex_mp_bedrock_find_player_slot_by_eid(uint64_t eid) {
+    if (eid == 0) return -1;
+    for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
+        if (g_mp_bedrock_entities[i].eid == eid) return i;
+    }
+    return -1;
+}
+
+static int pex_mp_bedrock_find_player_index_by_id(int player_id) {
+    for (int i = 0; i < g_mp_player_count; i++) {
+        if (g_mp_players[i].player_id == player_id) return i;
+    }
+    return -1;
+}
+
+static int pex_mp_bedrock_get_or_add_player_id(uint64_t eid) {
+    int slot = pex_mp_bedrock_find_player_slot_by_eid(eid);
+    if (slot >= 0) return g_mp_bedrock_entities[slot].player_id;
+    for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
+        if (g_mp_bedrock_entities[i].eid == 0) {
+            g_mp_bedrock_entities[i].eid = eid;
+            g_mp_bedrock_entities[i].player_id = g_mp_bedrock_next_player_id++;
+            if (g_mp_bedrock_next_player_id < 2) g_mp_bedrock_next_player_id = 2;
+            return g_mp_bedrock_entities[i].player_id;
+        }
+    }
+    return 0;
+}
+
+static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlayerInfo *player) {
+    (void)userdata;
+    if (!player || player->eid == 0) return;
+    int player_id = pex_mp_bedrock_get_or_add_player_id(player->eid);
+    if (player_id <= 0) return;
+    int idx = pex_mp_bedrock_find_player_index_by_id(player_id);
+    if (idx < 0) {
+        if (g_mp_player_count >= PEX_NET_MAX_PLAYERS) return;
+        idx = g_mp_player_count++;
+        memset(&g_mp_players[idx], 0, sizeof(g_mp_players[idx]));
+        memset(&g_mp_prev_players[idx], 0, sizeof(g_mp_prev_players[idx]));
+    }
+    g_mp_prev_players[idx] = g_mp_players[idx];
+    g_mp_players[idx].player_id = player_id;
+    snprintf(g_mp_players[idx].name, sizeof(g_mp_players[idx].name), "%s", player->username[0] ? player->username : "BedrockPlayer");
+    g_mp_players[idx].x = player->x;
+    g_mp_players[idx].y = player->y;
+    g_mp_players[idx].z = player->z;
+    g_mp_players[idx].yaw = player->yaw;
+    g_mp_players[idx].pitch = player->pitch;
+    g_mp_players[idx].health = 20;
+    g_mp_players[idx].armor = 0;
+    g_mp_players[idx].selected_slot = 0;
+    if (g_mp_prev_players[idx].player_id == 0) g_mp_prev_players[idx] = g_mp_players[idx];
+    hud_add_chat("A Bedrock player joined your view.");
+}
+
+static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move) {
+    (void)userdata;
+    if (!move) return;
+    if (move->is_self) {
+        /* Genisys uses eid=0 for self corrections/teleports. */
+        g_player_x = g_player_prev_x = move->x;
+        g_player_y = g_player_prev_y = move->y - 1.62f;
+        g_player_z = g_player_prev_z = move->z;
+        g_player_yaw = move->yaw;
+        g_player_pitch = move->pitch;
+        g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+        return;
+    }
+    int slot = pex_mp_bedrock_find_player_slot_by_eid(move->eid);
+    if (slot < 0) return;
+    int player_id = g_mp_bedrock_entities[slot].player_id;
+    int idx = pex_mp_bedrock_find_player_index_by_id(player_id);
+    if (idx < 0) return;
+    g_mp_prev_players[idx] = g_mp_players[idx];
+    g_mp_players[idx].x = move->x;
+    g_mp_players[idx].y = move->y;
+    g_mp_players[idx].z = move->z;
+    g_mp_players[idx].yaw = move->yaw;
+    g_mp_players[idx].pitch = move->pitch;
+    g_mp_interp_start_time = now_seconds();
+    g_mp_interp_duration = 0.10;
+}
+
+static void pex_mp_bedrock_on_remove_entity(void *userdata, uint64_t eid) {
+    (void)userdata;
+    int slot = pex_mp_bedrock_find_player_slot_by_eid(eid);
+    if (slot < 0) return;
+    int player_id = g_mp_bedrock_entities[slot].player_id;
+    memset(&g_mp_bedrock_entities[slot], 0, sizeof(g_mp_bedrock_entities[slot]));
+    int idx = pex_mp_bedrock_find_player_index_by_id(player_id);
+    if (idx >= 0) {
+        for (int i = idx; i + 1 < g_mp_player_count; i++) {
+            g_mp_players[i] = g_mp_players[i + 1];
+            g_mp_prev_players[i] = g_mp_prev_players[i + 1];
+        }
+        if (g_mp_player_count > 0) g_mp_player_count--;
+        memset(&g_mp_players[g_mp_player_count], 0, sizeof(g_mp_players[g_mp_player_count]));
+        memset(&g_mp_prev_players[g_mp_player_count], 0, sizeof(g_mp_prev_players[g_mp_player_count]));
+    }
 }
 
 static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message) {
@@ -2222,9 +2351,21 @@ static void pex_net_send_player_state(void) {
         double now = now_seconds();
         if (now - g_mp_bedrock_last_move_time < 0.05) return;
         g_mp_bedrock_last_move_time = now;
-        pex_mcpe_join_session_send_move(&g_mp_bedrock_session,
-                                        g_player_x, g_player_y + 1.62f, g_player_z,
-                                        g_player_yaw, g_player_pitch);
+        if (pex_mcpe_join_session_send_move(&g_mp_bedrock_session,
+                                            g_player_x, g_player_y + 1.62f, g_player_z,
+                                            g_player_yaw, g_player_pitch)) {
+            if (g_mp_player_count > 0 && g_mp_players[0].player_id == g_mp_player_id) {
+                g_mp_prev_players[0] = g_mp_players[0];
+                g_mp_players[0].x = g_player_x;
+                g_mp_players[0].y = g_player_y;
+                g_mp_players[0].z = g_player_z;
+                g_mp_players[0].yaw = g_player_yaw;
+                g_mp_players[0].pitch = g_player_pitch;
+                g_mp_players[0].health = g_player_health;
+                g_mp_players[0].armor = g_player_armor;
+                g_mp_players[0].selected_slot = g_selected_hotbar_slot;
+            }
+        }
         return;
     }
     if (!g_mp_connected || g_mp_player_id <= 0 || !g_mp_world_ready) return;
@@ -2522,7 +2663,9 @@ static void pex_net_send_chest_update(void) {
 static void pex_net_send_chat(const char *text) {
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !text || !text[0] || !g_mp_bedrock_session_active) return;
-        pex_mcpe_join_session_send_chat(&g_mp_bedrock_session, text);
+        if (!pex_mcpe_join_session_send_chat(&g_mp_bedrock_session, text)) {
+            hud_add_chat("Chat was not sent; Genisys has not finished spawning this client yet.");
+        }
         return;
     }
     if (!g_mp_connected || !g_mp_world_ready || !text || !text[0]) return;

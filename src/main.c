@@ -87,6 +87,7 @@ static void steve_set_tint(float r, float g, float b);
 #include "../multiplayer/mcpe/protocol_81/packets/player_action_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/use_item_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/update_block_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/entity_packets.c"
 #include "../multiplayer/mcpe/protocol_81/transport/raknet_loader.c"
 #include "../multiplayer/mcpe/protocol_81/transport/raknet_wrapper.c"
 #include "../multiplayer/mcpe/protocol_81/session/motd_detect.c"
