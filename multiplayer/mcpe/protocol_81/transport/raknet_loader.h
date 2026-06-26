@@ -24,7 +24,7 @@ typedef int (*PexFnRaknetPeerGetAveragePing)(RakPeerHandle*, const char*, unsign
 typedef struct PexRakNetLibrary {
     void *handle;
     char path[512];
-    char error[256];
+    char error[2048];
     PexFnRaknetPeerCreate peer_create;
     PexFnRaknetPeerDestroy peer_destroy;
     PexFnRaknetPeerStartup peer_startup;

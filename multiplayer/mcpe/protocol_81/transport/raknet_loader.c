@@ -34,10 +34,71 @@ const char* pex_raknet_library_expected_platform_folder(void) {
 #endif
 }
 
+static void pex_append_error(char *dst, size_t dst_cap, const char *msg) {
+    if (!dst || dst_cap == 0 || !msg || !msg[0]) return;
+    size_t len = strlen(dst);
+    if (len + 3 >= dst_cap) return;
+    if (len) {
+        dst[len++] = '\n';
+        dst[len] = 0;
+    }
+    snprintf(dst + len, dst_cap - len, "%s", msg);
+}
+
+#if defined(_WIN32)
+static void pex_win_format_error(DWORD code, char *buf, size_t cap) {
+    if (!buf || cap == 0) return;
+    buf[0] = 0;
+    if (!code) {
+        snprintf(buf, cap, "GetLastError=0");
+        return;
+    }
+    char msg[512] = "";
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   NULL, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                   msg, (DWORD)sizeof(msg), NULL);
+    for (char *p = msg; *p; ++p) {
+        if (*p == '\r' || *p == '\n') *p = ' ';
+    }
+    snprintf(buf, cap, "GetLastError=%lu (%s)", (unsigned long)code, msg[0] ? msg : "unknown Windows loader error");
+}
+
+static int pex_win_get_exe_dir(char *buf, size_t cap) {
+    if (!buf || cap == 0) return 0;
+    DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)cap);
+    if (!n || n >= cap) {
+        buf[0] = 0;
+        return 0;
+    }
+    for (char *p = buf + strlen(buf); p > buf; --p) {
+        if (p[-1] == '\\' || p[-1] == '/') {
+            p[-1] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
+
 static void* pex_dyn_open(const char *path, char *err, size_t err_cap) {
 #if defined(_WIN32)
-    HMODULE h = LoadLibraryA(path);
-    if (!h && err && err_cap) snprintf(err, err_cap, "LoadLibraryA failed for %s", path);
+    HMODULE h = NULL;
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+
+    /* LOAD_WITH_ALTERED_SEARCH_PATH makes Windows search the DLL's own folder
+       for secondary dependencies like libstdc++-6.dll / libgcc / pthread DLLs. */
+    if (strchr(path, '\\') || strchr(path, '/')) {
+        h = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    } else {
+        h = LoadLibraryA(path);
+    }
+
+    if (!h && err && err_cap) {
+        DWORD code = GetLastError();
+        char winerr[640];
+        pex_win_format_error(code, winerr, sizeof(winerr));
+        snprintf(err, err_cap, "LoadLibrary failed for %s: %s", path, winerr);
+    }
     return (void*)h;
 #else
     void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
@@ -93,31 +154,75 @@ fail:
 PexRakNetLibrary* pex_raknet_library_open_for_current_platform(void) {
     const char *platform = pex_raknet_library_expected_platform_folder();
     const char *name = pex_raknet_library_expected_name();
-    const char *candidates[8];
-    char p0[512], p1[512], p2[512], p3[512];
-    snprintf(p0, sizeof(p0), "multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
-    snprintf(p1, sizeof(p1), "./multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
-    snprintf(p2, sizeof(p2), "../multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
-    snprintf(p3, sizeof(p3), "%s", name);
-    candidates[0] = p0; candidates[1] = p1; candidates[2] = p2; candidates[3] = p3; candidates[4] = NULL;
+    const char *candidates[16];
+    char p0[512], p1[512], p2[512], p3[512], p4[512], p5[512], p6[512], p7[512];
+    int ci = 0;
+
+#if defined(_WIN32)
+    char exe_dir[512] = "";
+    if (pex_win_get_exe_dir(exe_dir, sizeof(exe_dir))) {
+        snprintf(p0, sizeof(p0), "%s\\%s", exe_dir, name);
+        snprintf(p1, sizeof(p1), "%s\\multiplayer\\mcpe\\protocol_81\\transport\\bin\\%s\\%s", exe_dir, platform, name);
+        snprintf(p2, sizeof(p2), "%s\\src\\multiplayer\\mcpe\\protocol_81\\transport\\bin\\%s\\%s", exe_dir, platform, name);
+        candidates[ci++] = p0;
+        candidates[ci++] = p1;
+        candidates[ci++] = p2;
+    }
+    snprintf(p3, sizeof(p3), ".\\%s", name);
+    snprintf(p4, sizeof(p4), ".\\multiplayer\\mcpe\\protocol_81\\transport\\bin\\%s\\%s", platform, name);
+    snprintf(p5, sizeof(p5), ".\\src\\multiplayer\\mcpe\\protocol_81\\transport\\bin\\%s\\%s", platform, name);
+    snprintf(p6, sizeof(p6), "multiplayer\\mcpe\\protocol_81\\transport\\bin\\%s\\%s", platform, name);
+    snprintf(p7, sizeof(p7), "%s", name);
+#else
+    snprintf(p0, sizeof(p0), "./%s", name);
+    snprintf(p1, sizeof(p1), "multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
+    snprintf(p2, sizeof(p2), "./multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
+    candidates[ci++] = p0;
+    candidates[ci++] = p1;
+    candidates[ci++] = p2;
+    snprintf(p3, sizeof(p3), "../multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
+    snprintf(p4, sizeof(p4), "src/multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
+    snprintf(p5, sizeof(p5), "./src/multiplayer/mcpe/protocol_81/transport/bin/%s/%s", platform, name);
+    snprintf(p6, sizeof(p6), "%s", name);
+    p7[0] = 0;
+#endif
+    candidates[ci++] = p3;
+    candidates[ci++] = p4;
+    candidates[ci++] = p5;
+    candidates[ci++] = p6;
+    candidates[ci++] = p7[0] ? p7 : name;
+    candidates[ci] = NULL;
 
     PexRakNetLibrary *lib = (PexRakNetLibrary*)calloc(1, sizeof(*lib));
     if (!lib) return NULL;
 
+    char attempts[2048] = "";
     for (int i = 0; candidates[i]; ++i) {
-        char err[256] = "";
+        if (!candidates[i][0]) continue;
+        char err[768] = "";
         void *h = pex_dyn_open(candidates[i], err, sizeof(err));
         if (!h) {
-            snprintf(lib->error, sizeof(lib->error), "%s", err[0] ? err : "Could not load RakNetDLL");
+            char line[900];
+            snprintf(line, sizeof(line), "%s", err[0] ? err : "Could not load RakNetDLL");
+            pex_append_error(attempts, sizeof(attempts), line);
             continue;
         }
         lib->handle = h;
         snprintf(lib->path, sizeof(lib->path), "%s", candidates[i]);
         if (pex_raknet_library_load_symbols(lib)) return lib;
+
+        char line[768];
+        snprintf(line, sizeof(line), "%s loaded but symbol check failed: %s", candidates[i], lib->error[0] ? lib->error : "unknown symbol error");
+        pex_append_error(attempts, sizeof(attempts), line);
         pex_dyn_close(lib->handle);
         lib->handle = NULL;
     }
-    if (!lib->error[0]) snprintf(lib->error, sizeof(lib->error), "Could not find %s for %s", name, platform);
+
+    if (attempts[0]) {
+        snprintf(lib->error, sizeof(lib->error), "%s", attempts);
+    } else {
+        snprintf(lib->error, sizeof(lib->error), "Could not find %s for %s", name, platform);
+    }
     return lib;
 }
 

@@ -10,7 +10,7 @@ struct PexRakNetClient {
     char host[256];
     uint16_t port;
     int connected;
-    char error[256];
+    char error[2048];
 };
 
 PexRakNetClient *pex_raknet_client_create(void) {
