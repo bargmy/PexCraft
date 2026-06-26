@@ -393,18 +393,15 @@ static void draw_inventory_block_model(int id, int meta) {
 }
 
 static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, float pz, float u, float v) {
-    /* Exact Java 1.2.5 GUI block facing:
-       glTranslate(slotX - 2, slotY + 3, -3), glScale(10), glTranslate(1,.5,1),
-       glScale(1,1,-1), glRotate(210,x), glRotate(45,y), glRotate(-90,y),
-       then RenderBlocks.renderBlockAsItem() translates the block by -0.5.
-       The old PexCraft projection forgot the final -90 yaw, so every inventory
-       block faced the wrong direction versus Java. */
+    /* Java GUI block transform collapsed to 2-D screen coordinates:
+       T(slot-2,+3) * S(10) * T(1,0.5,8) * Rx(210) * Ry(45).
+       This keeps inventory block icons visually 1:1 with the deobfuscated Java
+       path without letting old depth/cull state leak wrong cube faces into GUI. */
     const float c45 = 0.70710678118f;
     const float cx = -0.86602540378f;
     const float sx = -0.5f;
-    /* Net yaw is -45 degrees, not +45. */
-    float rx = c45 * px - c45 * pz;
-    float rz = c45 * px + c45 * pz;
+    float rx = c45 * px + c45 * pz;
+    float rz = -c45 * px + c45 * pz;
     float ry = cx * py - sx * rz;
     float gx = (float)(slot_x - 2) + 10.0f * (1.0f + rx);
     float gy = (float)(slot_y + 3) + 10.0f * (0.5f + ry);
@@ -437,11 +434,6 @@ static void emit_inventory_iso_face(int id, int meta, int slot_x, int slot_y,
         inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az0, u1, v0);
         inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az0, u0, v0);
         inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u0, v1);
-    } else if (face == 2) {
-        inventory_iso_vertex(slot_x, slot_y, ax1, ay1, az0, u1, v0);
-        inventory_iso_vertex(slot_x, slot_y, ax1, ay0, az0, u1, v1);
-        inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az0, u0, v1);
-        inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az0, u0, v0);
     } else if (face == 3) {
         inventory_iso_vertex(slot_x, slot_y, ax0, ay1, az1, u0, v0);
         inventory_iso_vertex(slot_x, slot_y, ax0, ay0, az1, u0, v1);
@@ -459,9 +451,11 @@ static void draw_inventory_iso_cuboid(int id, int meta, int slot_x, int slot_y,
                                                 float x0, float y0, float z0,
                                                 float x1, float y1, float z1) {
     glBegin(GL_QUADS);
-    /* Painter-order the same three faces visible after Java's net -45 yaw. */
-    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 2);
+    /* At Java's inventory rotation the visible faces are x-min, z-max, and top.
+       Emit only those faces, in painter order, so no back/inside face can bleed
+       through on PSP/D3D compatibility paths. */
     emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 4);
+    emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 3);
     emit_inventory_iso_face(id, meta, slot_x, slot_y, x0, y0, z0, x1, y1, z1, 1);
     glEnd();
 }
