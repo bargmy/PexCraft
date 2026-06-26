@@ -6,11 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
 
 static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+static size_t pex_b64_encoded_size(size_t size) {
+    return ((size + 2) / 3) * 4;
+}
+
 static int pex_b64_encode(const uint8_t *data, size_t size, char *out, size_t out_cap) {
-    size_t need = ((size + 2) / 3) * 4 + 1;
+    size_t need = pex_b64_encoded_size(size) + 1;
     if (!out || out_cap < need) return 0;
     size_t oi = 0;
     for (size_t i = 0; i < size; i += 3) {
@@ -28,6 +33,17 @@ static int pex_b64_encode(const uint8_t *data, size_t size, char *out, size_t ou
     return 1;
 }
 
+static char *pex_b64_encode_alloc(const uint8_t *data, size_t size) {
+    size_t cap = pex_b64_encoded_size(size) + 1;
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+    if (!pex_b64_encode(data, size, out, cap)) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
 static void pex_uuid_v4_text(char *out, size_t out_cap) {
     unsigned char b[16];
     unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)(uintptr_t)out;
@@ -39,6 +55,26 @@ static void pex_uuid_v4_text(char *out, size_t out_cap) {
              "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
              b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
              b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+}
+
+static void pex_normalize_username(const char *src, char *dst, size_t dst_cap) {
+    size_t j = 0;
+    if (!dst || dst_cap == 0) return;
+    if (!src || !src[0]) src = "PexPlayer";
+    for (size_t i = 0; src[i] && j + 1 < dst_cap && j < 16; ++i) {
+        unsigned char c = (unsigned char)src[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+            dst[j++] = (char)c;
+        }
+    }
+    while (j < 3 && j + 1 < dst_cap) {
+        char fill = (j == 0) ? 'P' : 'x';
+        dst[j++] = fill;
+    }
+    dst[j] = 0;
+    if (strcmp(dst, "rcon") == 0 || strcmp(dst, "console") == 0 || strcmp(dst, "RCON") == 0 || strcmp(dst, "CONSOLE") == 0) {
+        snprintf(dst, dst_cap, "PexPlayer");
+    }
 }
 
 static void pex_json_escape(const char *src, char *dst, size_t dst_cap) {
@@ -58,13 +94,26 @@ static void pex_json_escape(const char *src, char *dst, size_t dst_cap) {
     dst[j] = 0;
 }
 
-static int pex_make_jwt(const char *payload_json, char *out, size_t out_cap) {
+static char *pex_make_jwt_alloc(const char *payload_json) {
     const char *header_json = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-    char h[128];
-    char p[4096];
-    if (!pex_b64_encode((const uint8_t *)header_json, strlen(header_json), h, sizeof(h))) return 0;
-    if (!pex_b64_encode((const uint8_t *)payload_json, strlen(payload_json), p, sizeof(p))) return 0;
-    return snprintf(out, out_cap, "%s.%s.", h, p) > 0 && strlen(out) < out_cap;
+    char *h = pex_b64_encode_alloc((const uint8_t *)header_json, strlen(header_json));
+    char *p = pex_b64_encode_alloc((const uint8_t *)payload_json, strlen(payload_json));
+    if (!h || !p) {
+        free(h);
+        free(p);
+        return NULL;
+    }
+    size_t need = strlen(h) + 1 + strlen(p) + 1 + 1;
+    char *out = (char *)malloc(need);
+    if (!out) {
+        free(h);
+        free(p);
+        return NULL;
+    }
+    snprintf(out, need, "%s.%s.", h, p);
+    free(h);
+    free(p);
+    return out;
 }
 
 int pex_mcpe_encode_login_packet(uint8_t *out_data,
@@ -75,13 +124,15 @@ int pex_mcpe_encode_login_packet(uint8_t *out_data,
                                  const char *server_address) {
     if (out_size) *out_size = 0;
     if (!out_data || out_capacity < 64) return 0;
-    if (!username || !username[0]) username = "PexPlayer";
     if (!server_address) server_address = "";
     if (protocol_version != 81 && protocol_version != 82) protocol_version = 82;
 
+    char normalized_name[32];
+    pex_normalize_username(username, normalized_name, sizeof(normalized_name));
+
     char safe_name[64];
     char safe_server[256];
-    pex_json_escape(username, safe_name, sizeof(safe_name));
+    pex_json_escape(normalized_name, safe_name, sizeof(safe_name));
     pex_json_escape(server_address, safe_server, sizeof(safe_server));
 
     char uuid[48];
@@ -92,36 +143,66 @@ int pex_mcpe_encode_login_packet(uint8_t *out_data,
              "{\"extraData\":{\"displayName\":\"%s\",\"identity\":\"%s\"},\"identityPublicKey\":\"PEXDUMMYKEY\"}",
              safe_name, uuid);
 
-    char chain_jwt[2048];
-    if (!pex_make_jwt(chain_payload, chain_jwt, sizeof(chain_jwt))) return 0;
+    char *chain_jwt = pex_make_jwt_alloc(chain_payload);
+    if (!chain_jwt) return 0;
 
-    char chain_json[2400];
-    snprintf(chain_json, sizeof(chain_json), "{\"chain\":[\"%s\"]}", chain_jwt);
+    size_t chain_json_cap = strlen(chain_jwt) + 32;
+    char *chain_json = (char *)malloc(chain_json_cap);
+    if (!chain_json) {
+        free(chain_jwt);
+        return 0;
+    }
+    snprintf(chain_json, chain_json_cap, "{\"chain\":[\"%s\"]}", chain_jwt);
+    free(chain_jwt);
 
-    uint8_t skin[64 * 64 * 4];
+    /* Genisys accepts 64x32x4 or 64x64x4. 64x32 is smaller and avoids needless login-packet size. */
+    uint8_t skin[64 * 32 * 4];
     for (size_t i = 0; i < sizeof(skin); i += 4) {
         skin[i + 0] = 0xb8;
         skin[i + 1] = 0x7a;
         skin[i + 2] = 0x4a;
         skin[i + 3] = 0xff;
     }
-    char skin_b64[22000];
-    if (!pex_b64_encode(skin, sizeof(skin), skin_b64, sizeof(skin_b64))) return 0;
+    char *skin_b64 = pex_b64_encode_alloc(skin, sizeof(skin));
+    if (!skin_b64) {
+        free(chain_json);
+        return 0;
+    }
 
     long long client_id = ((long long)time(NULL) << 20) ^ (long long)(rand() & 0xfffff);
-    char skin_payload[24000];
-    snprintf(skin_payload, sizeof(skin_payload),
+    size_t skin_payload_cap = strlen(skin_b64) + strlen(safe_server) + 256;
+    char *skin_payload = (char *)malloc(skin_payload_cap);
+    if (!skin_payload) {
+        free(chain_json);
+        free(skin_b64);
+        return 0;
+    }
+    snprintf(skin_payload, skin_payload_cap,
              "{\"ClientRandomId\":%lld,\"ServerAddress\":\"%s\",\"SkinId\":\"Standard_Custom\",\"SkinData\":\"%s\"}",
              client_id, safe_server, skin_b64);
+    free(skin_b64);
 
-    char skin_jwt[33000];
-    if (!pex_make_jwt(skin_payload, skin_jwt, sizeof(skin_jwt))) return 0;
+    char *skin_jwt = pex_make_jwt_alloc(skin_payload);
+    free(skin_payload);
+    if (!skin_jwt) {
+        free(chain_json);
+        return 0;
+    }
 
     size_t chain_len = strlen(chain_json);
     size_t skin_len = strlen(skin_jwt);
+    if (chain_len > 0x7fffffffU || skin_len > 0x7fffffffU) {
+        free(chain_json);
+        free(skin_jwt);
+        return 0;
+    }
     size_t plain_cap = 4 + chain_len + 4 + skin_len;
     uint8_t *plain = (uint8_t *)malloc(plain_cap);
-    if (!plain) return 0;
+    if (!plain) {
+        free(chain_json);
+        free(skin_jwt);
+        return 0;
+    }
 
     PexMcpeBuffer plain_buf;
     pex_mcpe_buffer_init(&plain_buf, plain, plain_cap);
@@ -129,16 +210,26 @@ int pex_mcpe_encode_login_packet(uint8_t *out_data,
         !pex_mcpe_write_bytes(&plain_buf, chain_json, chain_len) ||
         !pex_mcpe_write_i32_le(&plain_buf, (int32_t)skin_len) ||
         !pex_mcpe_write_bytes(&plain_buf, skin_jwt, skin_len)) {
+        free(chain_json);
+        free(skin_jwt);
         free(plain);
         return 0;
     }
+    free(chain_json);
+    free(skin_jwt);
 
     uLongf compressed_cap = compressBound((uLong)plain_buf.offset);
     uint8_t *compressed = (uint8_t *)malloc((size_t)compressed_cap);
-    if (!compressed) { free(plain); return 0; }
+    if (!compressed) {
+        free(plain);
+        return 0;
+    }
     int zr = compress2(compressed, &compressed_cap, plain, (uLong)plain_buf.offset, Z_BEST_SPEED);
     free(plain);
-    if (zr != Z_OK) { free(compressed); return 0; }
+    if (zr != Z_OK || compressed_cap > 0x7fffffffUL) {
+        free(compressed);
+        return 0;
+    }
 
     PexMcpeBuffer out;
     pex_mcpe_buffer_init(&out, out_data, out_capacity);
