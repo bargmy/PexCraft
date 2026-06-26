@@ -1646,9 +1646,17 @@ static void pex_mp_bedrock_on_level_event(void *userdata, const PexMcpeLevelEven
     } else if (event->event_id == 4000) {
         int id = event->data & 0xff;
         int meta = (event->data >> 8) & 0xff;
-        if (id > 0) {
-            flat_set_block(x, y, z, id);
-            flat_set_meta(x, y, z, meta);
+        if (id > 0 && flat_in_bounds(x, y, z)) {
+            int yi = flat_y_index(y);
+            int zi = flat_z_index(z);
+            int xi = flat_index(x);
+            unsigned char old = g_flat_blocks[yi][zi][xi];
+            g_flat_blocks[yi][zi][xi] = (unsigned char)id;
+            g_flat_meta[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)(meta & 15) : (unsigned char)meta;
+            g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)(meta & 15) : 0;
+            flat_mark_sections_dirty_near_block(x, y, z);
+            flat_mark_chunks_dirty_near(x, z);
+            if (old != (unsigned char)id) flat_mark_light_dirty_for_change(x, y, z, old, id);
         }
     }
 }
