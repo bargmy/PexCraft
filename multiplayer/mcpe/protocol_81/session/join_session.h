@@ -36,6 +36,7 @@ typedef struct PexMcpeJoinCallbacks {
     void (*on_move_entity)(void *userdata, const PexMcpeEntityMoveInfo *move);
     void (*on_remove_entity)(void *userdata, uint64_t eid);
     void (*on_player_skin)(void *userdata, const PexMcpePlayerListSkin *skin);
+    void (*on_set_time)(void *userdata, int time);
     void (*on_disconnect)(void *userdata, const char *message);
 } PexMcpeJoinCallbacks;
 
@@ -77,7 +78,8 @@ int pex_mcpe_join_session_send_move(PexMcpeJoinSession *session,
                                     float x, float y, float z,
                                     float yaw, float pitch);
 int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *message);
-int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, int z, int face);
+int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, int z, int face,
+                                       int slot, int held_item_id, int held_count, int held_damage);
 int pex_mcpe_join_session_send_use_item(PexMcpeJoinSession *session, int x, int y, int z, int face,
                                         float pos_x, float pos_y, float pos_z,
                                         int slot, int item_id, int count, int damage);

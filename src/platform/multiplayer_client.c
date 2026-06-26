@@ -89,6 +89,7 @@ static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlay
 static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move);
 static void pex_mp_bedrock_on_remove_entity(void *userdata, uint64_t eid);
 static void pex_mp_bedrock_on_player_skin(void *userdata, const PexMcpePlayerListSkin *skin);
+static void pex_mp_bedrock_on_set_time(void *userdata, int time);
 static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message);
 
 #define PEX_MP_PACKET_QUEUE_MAX 384
@@ -597,16 +598,14 @@ static int pex_mcpe_begin_bedrock_protocol_81_join(const char *host, int port, i
     cb.on_move_entity = pex_mp_bedrock_on_move_entity;
     cb.on_remove_entity = pex_mp_bedrock_on_remove_entity;
     cb.on_player_skin = pex_mp_bedrock_on_player_skin;
+    cb.on_set_time = pex_mp_bedrock_on_set_time;
     cb.on_disconnect = pex_mp_bedrock_on_disconnect;
     pex_mcpe_join_session_set_callbacks(&g_mp_bedrock_session, &cb, NULL);
     if (tex_steve.rgba && tex_steve.w == 64 && (tex_steve.h == 32 || tex_steve.h == 64)) {
         pex_mcpe_join_session_set_skin(&g_mp_bedrock_session, tex_steve.rgba, tex_steve.w, tex_steve.h);
     }
 
-    snprintf(g_multiplayer_status, sizeof(g_multiplayer_status),
-             "Detected MCPE %s/protocol %d. Opening RakLib v6 UDP...",
-             g_mp_bedrock_detected_version[0] ? g_mp_bedrock_detected_version : "0.15.4",
-             g_mp_bedrock_detected_protocol ? g_mp_bedrock_detected_protocol : 82);
+    snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Connecting");
     return 1;
 }
 
@@ -1396,9 +1395,7 @@ static void pex_net_note_sections_received(int section_count) {
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
         g_mp_connect_progress = pct;
-        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status),
-                 "Downloading terrain: %d/%d (%d%%)",
-                 g_mp_chunks_received, g_mp_expected_chunks, pct);
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Building terrain");
     }
     if (g_mp_expected_chunks > 0 && g_mp_chunks_received >= g_mp_expected_chunks) {
         g_mp_world_ready = 1;
@@ -1408,15 +1405,13 @@ static void pex_net_note_sections_received(int section_count) {
 
 static void pex_net_finish_world_download(void) {
     if (!g_mp_world_ready && g_mp_expected_chunks > 0 && g_mp_chunks_received < g_mp_expected_chunks) {
-        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status),
-                 "Downloaded %d/%d sections; starting anyway.",
-                 g_mp_chunks_received, g_mp_expected_chunks);
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Done!");
     }
     g_mp_world_ready = 1;
     g_mp_connect_progress = 100;
     if (g_screen != SCREEN_INGAME) {
         g_chat_count = 0;
-        hud_add_chat(g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 ? "Connected to Genisys server." : "Connected to PEXCraft server.");
+        if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) hud_add_chat("Connected to PEXCraft server.");
         set_screen(SCREEN_INGAME);
     }
 }
@@ -1432,9 +1427,9 @@ static void pex_net_mark_chunk_ready(int chunk_x, int chunk_z) {
 static void pex_mp_bedrock_on_status(void *userdata, PexMcpePlayStatus status) {
     (void)userdata;
     if (status == PEX_MCPE_PLAY_STATUS_LOGIN_SUCCESS) {
-        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Genisys accepted login; waiting for StartGame.");
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Connecting");
     } else if (status == PEX_MCPE_PLAY_STATUS_PLAYER_SPAWN) {
-        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Genisys spawned player.");
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Done!");
         if (g_mp_chunks_received > 0) pex_net_finish_world_download();
     }
 }
@@ -1452,6 +1447,7 @@ static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameI
     /* Genisys StartGame uses feet/body Y. PexCraft stores camera/eye Y. */
     g_player_y = g_player_prev_y = info->y + 1.62f;
     g_player_z = g_player_prev_z = info->z;
+    g_game_mode = (info->game_mode == 1) ? 1 : 0;
     memset(&g_mp_players[0], 0, sizeof(g_mp_players[0]));
     g_mp_players[0].player_id = g_mp_player_id;
     snprintf(g_mp_players[0].name, sizeof(g_mp_players[0].name), "%s", g_multiplayer_username[0] ? g_multiplayer_username : "PexPlayer");
@@ -1466,7 +1462,7 @@ static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameI
     if (g_mp_expected_chunks <= 0) g_mp_expected_chunks = 1;
     g_mp_chunks_received = 0;
     g_mp_connect_progress = 60;
-    snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "StartGame received; requesting chunks around spawn.");
+    snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Building terrain");
 }
 
 static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *chunk) {
@@ -1475,8 +1471,7 @@ static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *
     if (pex_mcpe_convert_chunk_to_pexcraft(chunk->payload, chunk->payload_size, chunk->chunk_x, chunk->chunk_z, chunk->order)) {
         pex_net_mark_chunk_ready(chunk->chunk_x, chunk->chunk_z);
         pex_net_note_sections_received(1);
-        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Genisys terrain: %d chunk%s received.",
-                 g_mp_chunks_received, g_mp_chunks_received == 1 ? "" : "s");
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Building terrain");
         if (!g_mp_world_ready && g_mp_chunks_received >= 1) {
             pex_net_finish_world_download();
         }
@@ -1486,6 +1481,11 @@ static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *
 static void pex_mp_bedrock_on_text(void *userdata, const char *text) {
     (void)userdata;
     if (text && text[0]) hud_add_chat(text);
+}
+
+static void pex_mp_bedrock_on_set_time(void *userdata, int time) {
+    (void)userdata;
+    g_world_time = (long long)time;
 }
 
 static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, int id, int meta) {
@@ -1556,7 +1556,6 @@ static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlay
     g_mp_players[idx].armor = 0;
     g_mp_players[idx].selected_slot = 0;
     if (g_mp_prev_players[idx].player_id == 0) g_mp_prev_players[idx] = g_mp_players[idx];
-    hud_add_chat("A Bedrock player joined your view.");
 }
 
 static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move) {
@@ -2487,7 +2486,7 @@ static void pex_net_connect_tick(void) {
 
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_bedrock_session_active) {
-            pex_net_connect_fail("Bedrock session was not initialized.");
+            pex_net_connect_fail("Could not connect.");
             return;
         }
         if (!pex_mcpe_join_session_tick(&g_mp_bedrock_session)) {
@@ -2561,7 +2560,7 @@ static void pex_net_poll(void) {
                 char msg[256];
                 snprintf(msg, sizeof(msg), "%s", pex_mcpe_join_session_status(&g_mp_bedrock_session));
                 pex_net_disconnect();
-                open_notice("Disconnected", msg[0] ? msg : "Bedrock connection failed.", "");
+                open_notice("Disconnected", msg[0] ? msg : "Connection lost.", "");
             }
         }
         return;
@@ -2653,7 +2652,7 @@ static int pex_net_connect_to_server(const char *server) {
         char version[24];
         motd[0] = 0;
         version[0] = 0;
-        pex_net_set_status("Checking for Bedrock/Genisys MOTD...");
+        pex_net_set_status("Connecting");
         if (pex_mcpe_probe_unconnected_motd(host, mcpe_port, motd, sizeof(motd)) &&
             pex_mcpe_motd_is_genisys_0154(motd, &protocol, version, sizeof(version))) {
             return pex_mcpe_begin_bedrock_protocol_81_join(host, mcpe_port, protocol, version, motd);
@@ -2736,13 +2735,28 @@ static void pex_net_send_player_state(void) {
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id) {
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
+        ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+        int held_id = held ? held->id : 0;
+        int held_count = held ? held->count : 0;
+        int held_damage = held ? held->damage : 0;
         if (action == PEX_BLOCK_BREAK) {
-            pex_mcpe_join_session_send_break(&g_mp_bedrock_session, x, y, z, face);
+            pex_mcpe_join_session_send_break(&g_mp_bedrock_session, x, y, z, face,
+                                             g_selected_hotbar_slot, held_id, held_count, held_damage);
         } else {
-            pex_mcpe_join_session_send_use_item(&g_mp_bedrock_session, x, y, z, face,
+            int tx = x, ty = y, tz = z;
+            /* PexCraft passes the local placement cell. Genisys UseItemPacket
+               expects the block that was clicked plus the clicked face. */
+            if (face == 0) ty += 1;
+            else if (face == 1) ty -= 1;
+            else if (face == 2) tz += 1;
+            else if (face == 3) tz -= 1;
+            else if (face == 4) tx += 1;
+            else if (face == 5) tx -= 1;
+            pex_mcpe_join_session_send_use_item(&g_mp_bedrock_session, tx, ty, tz, face,
                                                 g_player_x, g_player_y, g_player_z,
-                                                g_selected_hotbar_slot, block_id, 1, 0);
+                                                g_selected_hotbar_slot, held_id, held_count, held_damage);
         }
+        (void)block_id;
         return;
     }
     if (!g_mp_connected || !g_mp_world_ready) return;
@@ -2764,6 +2778,7 @@ static void pex_net_send_block_action(int action, int x, int y, int z, int face,
 }
 
 static void net_send_action_progress(int action, int x, int y, int z, int face, int block_id, int progress) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) return;
     if (!g_mp_connected || !g_mp_world_ready || g_mp_player_id <= 0) return;
     PexNetPlayerAction a;
     memset(&a, 0, sizeof(a));
@@ -3009,7 +3024,7 @@ static void pex_net_send_chat(const char *text) {
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !text || !text[0] || !g_mp_bedrock_session_active) return;
         if (!pex_mcpe_join_session_send_chat(&g_mp_bedrock_session, text)) {
-            hud_add_chat("Chat was not sent; Genisys has not finished spawning this client yet.");
+            hud_add_chat("Chat was not sent yet.");
         }
         return;
     }

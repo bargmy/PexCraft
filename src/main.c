@@ -85,6 +85,8 @@ static void steve_set_tint(float r, float g, float b);
 #include "../multiplayer/mcpe/protocol_81/packets/text_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/batch_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/player_action_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/remove_block_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/mob_equipment_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/use_item_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/update_block_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/entity_packets.c"

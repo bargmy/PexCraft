@@ -769,7 +769,6 @@ static void draw_multiplayer(void) {
         char address_line[128];
         snprintf(address_line, sizeof(address_line), "%s%s", pex_mp_server_edit_address_get(), (pex_mp_server_edit_field_get() == 0 && g_ticks / 6 % 2 == 0) ? "_" : "");
         draw_text(address_line, x + 4, y + 6, 14737632);
-        draw_text("Bedrock 0.15.4 / protocol 82 uses default port 19132.", x, y + 28, 8421504);
         draw_all_buttons();
         return;
     }
@@ -842,14 +841,13 @@ static void draw_connecting_screen(void) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
 
-    const char *top = g_mp_connected ? "Logging in..." : "Connecting to server...";
-    const char *bottom = g_multiplayer_status[0] ? g_multiplayer_status : "";
-    if (g_mp_expected_chunks > 0 && !g_mp_world_ready) top = "Downloading terrain";
+    const char *top = "Connecting";
+    if (g_mp_expected_chunks > 0 || g_mp_chunks_received > 0 || pct >= 65) top = "Building terrain";
+    if (g_mp_world_ready || pct >= 100) top = "Done!";
 
     int cx = g_gui_w / 2;
     int cy = g_gui_h / 2;
-    draw_centered_text(top, cx, cy - 20, 16777215);
-    draw_centered_text(bottom, cx, cy + 4, 16777215);
+    draw_centered_text(top, cx, cy - 8, 16777215);
 
     if (pct >= 0) {
         int bw = 100;

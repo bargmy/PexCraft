@@ -616,6 +616,7 @@ static int g_mouse_down = 0;
 static int g_running = 1;
 static ScreenId g_screen = SCREEN_TITLE;
 static ScreenId g_parent_screen = SCREEN_TITLE;
+static ScreenId g_language_return_screen = SCREEN_TITLE;
 static Button g_buttons[MAX_BUTTONS];
 static int g_button_count = 0;
 static Button *g_drag_slider = NULL;

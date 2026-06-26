@@ -672,7 +672,7 @@ static void on_button(Button *b) {
         else if (b->id == 1) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_WORLD_SELECT); }
         else if (b->id == 2) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_MULTIPLAYER); }
         else if (b->id == 3) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_TEXPACK); }
-        else if (b->id == 5) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_LANGUAGE); }
+        else if (b->id == 5) { g_language_return_screen = SCREEN_TITLE; set_screen(SCREEN_LANGUAGE); }
         else if (b->id == 4) {
 #ifdef PEX_PLATFORM_PSP
             g_running = 0;
@@ -690,7 +690,7 @@ static void on_button(Button *b) {
         else if (b->id == 200) finish_options_to(g_parent_screen);
         else if (b->id == 300) set_screen(SCREEN_OPTIONS_MORE);
         else if (b->id == 301) set_screen(SCREEN_SKINS);
-        else if (b->id == 302) { g_parent_screen = SCREEN_OPTIONS; set_screen(SCREEN_LANGUAGE); }
+        else if (b->id == 302) { g_language_return_screen = SCREEN_OPTIONS; set_screen(SCREEN_LANGUAGE); }
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         if (b->id < 100) {
             if (b->kind == BUTTON_NORMAL) {
@@ -713,7 +713,7 @@ static void on_button(Button *b) {
             } else {
                 open_notice("Language", "Could not download languages from client.jar.", g_classic_install_error);
             }
-        } else if (b->id == 200) set_screen(g_parent_screen == SCREEN_TITLE ? SCREEN_TITLE : SCREEN_OPTIONS);
+        } else if (b->id == 200) { save_options(); set_screen(g_language_return_screen); }
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_SKINS) {
@@ -1335,7 +1335,7 @@ static void handle_keydown(WPARAM vk) {
     }
 
     if (g_screen == SCREEN_LANGUAGE) {
-        if (vk == VK_ESCAPE) { set_screen(g_parent_screen == SCREEN_TITLE ? SCREEN_TITLE : SCREEN_OPTIONS); return; }
+        if (vk == VK_ESCAPE) { save_options(); set_screen(g_language_return_screen); return; }
         if (vk == VK_PRIOR) { language_scroll_by(-5); return; }
         if (vk == VK_NEXT) { language_scroll_by(5); return; }
         return;

@@ -8,6 +8,8 @@
 #include "../packets/batch_packet.h"
 #include "../packets/text_packet.h"
 #include "../packets/player_action_packet.h"
+#include "../packets/remove_block_packet.h"
+#include "../packets/mob_equipment_packet.h"
 #include "../packets/use_item_packet.h"
 #include "../packets/update_block_packet.h"
 #include "../packets/entity_packets.h"
@@ -32,7 +34,7 @@ void pex_mcpe_join_session_init(PexMcpeJoinSession *session,
     session->protocol_version = 82;
     session->chunk_radius = 4;
     session->state = PEX_MCPE_JOIN_IDLE;
-    pex_mcpe_join_set_status(session, "Bedrock join initialized.");
+    pex_mcpe_join_set_status(session, "Connecting");
 }
 
 void pex_mcpe_join_session_set_callbacks(PexMcpeJoinSession *session,
@@ -77,7 +79,7 @@ static int pex_mcpe_send_login(PexMcpeJoinSession *s) {
         return 0;
     }
     s->state = PEX_MCPE_JOIN_WAIT_PLAY_STATUS;
-    pex_mcpe_join_set_status(s, "LoginPacket sent; waiting for PlayStatus.");
+    pex_mcpe_join_set_status(s, "Connecting");
     return 1;
 }
 
@@ -87,7 +89,7 @@ static int pex_mcpe_send_request_radius(PexMcpeJoinSession *s) {
     if (!pex_mcpe_encode_request_chunk_radius_packet(buf, sizeof(buf), &n, s->chunk_radius)) return 0;
     if (!pex_raknet_client_send(s->raknet, buf, n, 0)) return 0;
     s->state = PEX_MCPE_JOIN_REQUEST_RADIUS_SENT;
-    pex_mcpe_join_set_status(s, "Requested chunk radius.");
+    pex_mcpe_join_set_status(s, "Building terrain");
     return 1;
 }
 
@@ -129,14 +131,14 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
                 if (s->callbacks.on_status) s->callbacks.on_status(s->callback_userdata, st);
                 if (st == PEX_MCPE_PLAY_STATUS_LOGIN_SUCCESS) {
                     s->state = PEX_MCPE_JOIN_WAIT_START_GAME;
-                    pex_mcpe_join_set_status(s, "Login accepted; waiting for StartGame.");
+                    pex_mcpe_join_set_status(s, "Connecting");
                 } else if (st == PEX_MCPE_PLAY_STATUS_PLAYER_SPAWN) {
                     s->spawn_status_received = 1;
                     if (s->chunks_received > 0) {
                         s->state = PEX_MCPE_JOIN_WORLD_READY;
-                        pex_mcpe_join_set_status(s, "Spawned on Genisys server.");
+                        pex_mcpe_join_set_status(s, "Done!");
                     } else {
-                        pex_mcpe_join_set_status(s, "Server spawned player; waiting for terrain.");
+                        pex_mcpe_join_set_status(s, "Building terrain");
                     }
                 } else if (st == PEX_MCPE_PLAY_STATUS_LOGIN_FAILED_CLIENT) {
                     s->state = PEX_MCPE_JOIN_FAILED;
@@ -165,7 +167,7 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
             int r = 0;
             if (pex_mcpe_decode_chunk_radius_updated_packet(body, body_size, &r)) {
                 s->server_chunk_radius = r;
-                pex_mcpe_join_set_status(s, "Receiving terrain chunks...");
+                pex_mcpe_join_set_status(s, "Building terrain");
             }
             break;
         }
@@ -177,11 +179,22 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
                 if (s->state == PEX_MCPE_JOIN_REQUEST_RADIUS_SENT && s->chunks_received > 0) {
                     if (s->spawn_status_received) {
                         s->state = PEX_MCPE_JOIN_WORLD_READY;
-                        pex_mcpe_join_set_status(s, "Terrain received; spawned.");
+                        pex_mcpe_join_set_status(s, "Done!");
                     } else {
-                        pex_mcpe_join_set_status(s, "Terrain received; waiting for server spawn.");
+                        pex_mcpe_join_set_status(s, "Building terrain");
                     }
                 }
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_SET_TIME: {
+            PexMcpeReadBuffer tb;
+            int32_t t = 0;
+            uint8_t started = 0;
+            pex_mcpe_read_buffer_init(&tb, body, body_size);
+            if (pex_mcpe_read_i32_be(&tb, &t)) {
+                (void)pex_mcpe_read_u8(&tb, &started);
+                if (s->callbacks.on_set_time) s->callbacks.on_set_time(s->callback_userdata, (int)t);
             }
             break;
         }
@@ -282,7 +295,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
                 return 0;
             }
             session->state = PEX_MCPE_JOIN_RAKNET_CONNECTING;
-            pex_mcpe_join_set_status(session, "Connecting RakLib v6 UDP...");
+            pex_mcpe_join_set_status(session, "Connecting");
         }
     }
 
@@ -298,7 +311,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
         if (type == PEX_RAKNET_POLL_NONE) break;
         if (type == PEX_RAKNET_POLL_CONNECTED) {
             session->state = PEX_MCPE_JOIN_RAKNET_CONNECTED;
-            pex_mcpe_join_set_status(session, "RakLib connected; sending LoginPacket.");
+            pex_mcpe_join_set_status(session, "Connecting");
             pex_mcpe_send_login(session);
         } else if (type == PEX_RAKNET_POLL_DATA && n > 0) {
             pex_mcpe_process_one_packet(session, buf, n, 0);
@@ -332,14 +345,26 @@ int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *mes
 }
 
 
-int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, int z, int face) {
+static int pex_mcpe_join_session_send_equipment(PexMcpeJoinSession *session,
+                                                    int slot, int item_id, int count, int damage) {
     if (!session || !session->raknet || !session->entity_id_valid) return 0;
     uint8_t buf[128];
-    size_t n;
+    size_t n = 0;
+    if (!pex_mcpe_encode_mob_equipment_packet(buf, sizeof(buf), &n, session->entity_id,
+                                             slot, item_id, count, damage)) return 0;
+    return pex_raknet_client_send(session->raknet, buf, n, 0);
+}
+
+int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, int z, int face,
+                                     int slot, int held_item_id, int held_count, int held_damage) {
+    if (!session || !session->raknet || !session->entity_id_valid) return 0;
+    uint8_t buf[128];
+    size_t n = 0;
+    pex_mcpe_join_session_send_equipment(session, slot, held_item_id, held_count, held_damage);
     if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 0, x, y, z, face)) {
         pex_raknet_client_send(session->raknet, buf, n, 0);
     }
-    if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 2, x, y, z, face)) {
+    if (pex_mcpe_encode_remove_block_packet(buf, sizeof(buf), &n, session->entity_id, x, y, z)) {
         return pex_raknet_client_send(session->raknet, buf, n, 0);
     }
     return 0;
@@ -351,6 +376,7 @@ int pex_mcpe_join_session_send_use_item(PexMcpeJoinSession *session, int x, int 
     if (!session || !session->raknet) return 0;
     uint8_t buf[256];
     size_t n;
+    pex_mcpe_join_session_send_equipment(session, slot, item_id, count, damage);
     if (!pex_mcpe_encode_use_item_packet(buf, sizeof(buf), &n, x, y, z, face, pos_x, pos_y, pos_z, slot, item_id, count, damage)) return 0;
     return pex_raknet_client_send(session->raknet, buf, n, 0);
 }
@@ -365,7 +391,7 @@ void pex_mcpe_join_session_disconnect(PexMcpeJoinSession *session) {
 }
 
 const char *pex_mcpe_join_session_status(const PexMcpeJoinSession *session) {
-    return session && session->status_text[0] ? session->status_text : "Bedrock join idle.";
+    return session && session->status_text[0] ? session->status_text : "Connecting";
 }
 
 int pex_mcpe_join_session_progress(const PexMcpeJoinSession *session) {
