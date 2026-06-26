@@ -3168,8 +3168,11 @@ static int block_texture_resolve(int block_id, int meta, int face) {
         case BLOCK_PUMPKIN_STEM:
         case BLOCK_MELON_STEM:
             return cross_plant_tile_for_block_meta(block_id, meta);
-        case BLOCK_WOOL:
-            return 113 + ((meta & 8) >> 3) + ((meta & 7) * 16);
+        case BLOCK_WOOL: {
+            int wm = (meta & 15);
+            if (wm != 0) wm = (~wm) & 15;
+            return 113 + ((wm & 8) >> 3) + ((wm & 7) * 16);
+        }
         case BLOCK_GOLD_BLOCK: return 23;
         case BLOCK_IRON_BLOCK: return 22;
         case BLOCK_DIAMOND_BLOCK: return 24;

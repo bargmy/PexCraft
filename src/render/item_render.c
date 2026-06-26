@@ -202,10 +202,25 @@ static void item_world_face_style(int id, int meta, int face, int *tile) {
 }
 
 static int block_item_tile_for_id(int id);
+static int java125_wool_texture_meta(int meta);
+static int java125_block_render_type(int id);
+static int java125_render_item_in_3d(int render_type);
+static int java125_inventory_model_meta(int id, int damage);
 
 static int item_block_tile_for_stack(const ItemStack *st) {
     if (stack_empty(st)) return 1;
-    int tile_idx = block_texture_resolve(st->id, st->damage, 1);
+    /* Java flat ItemBlock icon path uses Item.getIconFromDamage(), not the GUI
+       block-model top face.  Plain ItemBlock uses side 2; metadata item
+       subclasses override this through getBlockTextureFromSideAndMetadata. */
+    if (st->id == BLOCK_WOOL) return block_texture_resolve(st->id, java125_wool_texture_meta(st->damage), 2);
+    if (st->id == BLOCK_LEAVES || st->id == BLOCK_VINE || st->id == BLOCK_TALL_GRASS) return block_texture_resolve(st->id, st->damage, 0);
+    if (st->id == BLOCK_LILY_PAD) return block_texture_resolve(st->id, st->damage, 0);
+    if (st->id == BLOCK_SLAB || st->id == BLOCK_DOUBLE_SLAB || st->id == BLOCK_PLANKS || st->id == BLOCK_LOG ||
+        st->id == BLOCK_SAPLING || st->id == BLOCK_STONE_BRICK || st->id == BLOCK_SANDSTONE) {
+        int tile_idx = block_texture_resolve(st->id, st->damage, 2);
+        if (tile_idx >= 0) return tile_idx;
+    }
+    int tile_idx = block_texture_resolve(st->id, st->damage, 2);
     if (tile_idx >= 0) return tile_idx;
     return block_item_tile_for_id(st->id);
 }
@@ -239,25 +254,95 @@ static int item_max_damage(int id) {
     return armor_max > 0 ? armor_max : 0;
 }
 
+static int java125_block_render_type(int id) {
+    /* Source of truth for Java 1.2.5 Block.getRenderType().  Inventory 3-D
+       selection must use RenderBlocks.renderItemIn3d(renderType), not a
+       PexCraft-specific blacklist. */
+    switch (id) {
+        case BLOCK_WATER:
+        case BLOCK_STILL_WATER:
+        case BLOCK_LAVA:
+        case BLOCK_STILL_LAVA: return 4;
+        case BLOCK_SAPLING:
+        case BLOCK_YELLOW_FLOWER:
+        case BLOCK_RED_ROSE:
+        case BLOCK_BROWN_MUSHROOM:
+        case BLOCK_RED_MUSHROOM:
+        case BLOCK_REEDS: return 1;
+        case BLOCK_WEB: return 1;
+        case BLOCK_TALL_GRASS:
+        case BLOCK_DEAD_BUSH: return 1;
+        case BLOCK_TORCH:
+        case BLOCK_REDSTONE_TORCH_OFF:
+        case BLOCK_REDSTONE_TORCH_ON: return 2;
+        case BLOCK_FIRE: return 3;
+        case BLOCK_REDSTONE_WIRE: return 5;
+        case BLOCK_CROPS:
+        case BLOCK_NETHER_WART: return 6;
+        case BLOCK_WOOD_DOOR:
+        case BLOCK_IRON_DOOR: return 7;
+        case BLOCK_LADDER: return 8;
+        case BLOCK_RAILS:
+        case BLOCK_POWERED_RAIL:
+        case BLOCK_DETECTOR_RAIL: return 9;
+        case BLOCK_WOOD_STAIRS:
+        case BLOCK_COBBLE_STAIRS:
+        case BLOCK_BRICK_STAIRS:
+        case BLOCK_STONE_BRICK_STAIRS:
+        case BLOCK_NETHER_BRICK_STAIRS: return 10;
+        case BLOCK_FENCE:
+        case BLOCK_NETHER_BRICK_FENCE: return 11;
+        case BLOCK_LEVER: return 12;
+        case BLOCK_CACTUS: return 13;
+        case BLOCK_BED: return 14;
+        case BLOCK_REDSTONE_REPEATER_OFF:
+        case BLOCK_REDSTONE_REPEATER_ON: return 15;
+        case BLOCK_PISTON:
+        case BLOCK_STICKY_PISTON: return 16;
+        case BLOCK_PISTON_EXTENSION: return 17;
+        case BLOCK_IRON_BARS:
+        case BLOCK_GLASS_PANE: return 18;
+        case BLOCK_PUMPKIN_STEM:
+        case BLOCK_MELON_STEM: return 19;
+        case BLOCK_VINE: return 20;
+        case BLOCK_FENCE_GATE: return 21;
+        case BLOCK_CHEST:
+        case BLOCK_LOCKED_CHEST: return 22;
+        case BLOCK_LILY_PAD: return 23;
+        case BLOCK_CAULDRON: return 24;
+        case BLOCK_BREWING_STAND: return 25;
+        case BLOCK_END_PORTAL_FRAME: return 26;
+        case BLOCK_DRAGON_EGG: return 27;
+        case BLOCK_END_PORTAL:
+        case BLOCK_SIGN_POST:
+        case BLOCK_WALL_SIGN:
+        case BLOCK_PISTON_MOVING: return -1;
+        default: return 0;
+    }
+}
+
+static int java125_render_item_in_3d(int render_type) {
+    return render_type == 0 || render_type == 13 || render_type == 10 ||
+           render_type == 11 || render_type == 27 || render_type == 22 ||
+           render_type == 21 || render_type == 16;
+}
+
 static int block_item_is_3d(int id) {
     if (!item_is_block_id(id)) return 0;
-    /* Keep the Java 3-D inventory path for normal cube-like blocks, but also
-       force chests down the model renderer so the inventory icon matches the
-       in-world chest silhouette instead of falling back to a flat sprite. */
-    if (block_is_liquid(id) ||
-        id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
-        id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM || id == BLOCK_TORCH ||
-        id == BLOCK_FIRE || id == BLOCK_REDSTONE_WIRE || id == BLOCK_CROPS ||
-        id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN || id == BLOCK_WOOD_DOOR ||
-        id == BLOCK_IRON_DOOR || id == BLOCK_LADDER || id == BLOCK_RAILS ||
-        id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL ||
-        id == BLOCK_LEVER || id == BLOCK_REEDS || id == BLOCK_STONE_BUTTON ||
-        id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE ||
-        id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH || id == BLOCK_VINE ||
-        id == BLOCK_LILY_PAD || id == BLOCK_NETHER_WART || id == BLOCK_PUMPKIN_STEM ||
-        id == BLOCK_MELON_STEM || id == BLOCK_REDSTONE_REPEATER_OFF ||
-        id == BLOCK_REDSTONE_REPEATER_ON || id == BLOCK_END_PORTAL) return 0;
-    return 1;
+    return java125_render_item_in_3d(java125_block_render_type(id));
+}
+
+static int java125_inventory_model_meta(int id, int damage) {
+    /* Java RenderBlocks.renderBlockAsItem forces piston base item metadata to 1
+       so the inventory face is the upright Java piston face, independent of
+       placed-world facing metadata. */
+    if (java125_block_render_type(id) == 16) return 1;
+    return damage & 15;
+}
+
+static int java125_wool_texture_meta(int meta) {
+    if ((meta & 15) == 0) return 0;
+    return (~meta) & 15;
 }
 
 static void draw_item_icon_tile_gui(int tile, int x, int y, int rgb) {
@@ -288,6 +373,18 @@ static void draw_item_icon_gui_2d(const ItemStack *st, int x, int y) {
     draw_item_icon_tile_gui(item_icon_tile_for_stack(st), x, y, 0xFFFFFF);
 }
 
+static int java125_item_block_tint(const ItemStack *st) {
+    if (!st || stack_empty(st)) return 0xFFFFFF;
+    if (st->id == BLOCK_LILY_PAD) return 2129968;
+    if (st->id == BLOCK_VINE) return java_foliage_color_at(0, 0);
+    if (st->id == BLOCK_TALL_GRASS) return ((st->damage & 15) == 0) ? 0xFFFFFF : java_grass_color_at(0, 0);
+    if (st->id == BLOCK_LEAVES) return java_foliage_color_at(0, 0);
+    return 0xFFFFFF;
+}
+
+static void gl_color_from_rgb_int(int rgb) {
+    glColor4f(((rgb >> 16) & 255) / 255.0f, ((rgb >> 8) & 255) / 255.0f, (rgb & 255) / 255.0f, 1.0f);
+}
 
 static void emit_inventory_cuboid_face(int id, int meta,
                                                  float bx, float by, float bz,
@@ -362,18 +459,22 @@ static void draw_inventory_cuboid_model(int id, int meta,
 }
 
 static void draw_inventory_block_model(int id, int meta) {
-    /* Match Java RenderBlocks.func_1227_a exactly: after RenderItem applies
-       its slot transform, RenderBlocks shifts the 0..1 block model by -0.5 on
-       every axis before emitting faces.  Inventory cuboids use the same face
-       winding/order as the deobfuscated Java source so only the correct faces
-       are visible. */
+    /* Java RenderBlocks.renderBlockAsItem emits real cuboids after
+       Block.setBlockBoundsForItemRender().  Keep inventory metadata and placed
+       metadata separate: this function only receives the ItemStack damage used
+       by Java item rendering. */
     const float bx = -0.5f, by = -0.5f, bz = -0.5f;
+    int rt = java125_block_render_type(id);
+
+    if (rt == 16) meta = 1; /* Java renderBlockAsItem special case for pistons. */
+
     if (id == BLOCK_SLAB) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0,0,0,1,0.5f,1); return; }
+    if (id == BLOCK_DOUBLE_SLAB) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0,0,0,1,1,1); return; }
     if (id == BLOCK_SNOW_LAYER) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0,0,0,1,0.125f,1); return; }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,0.0625f,0.9375f); return; }
     if (id == BLOCK_STONE_BUTTON) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.3125f,0.375f,0.375f,0.6875f,0.625f,0.5000f); return; }
-    if (id == BLOCK_CACTUS) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
-    if (id == BLOCK_FENCE) {
+    if (rt == 13) { draw_inventory_cuboid_model(id, meta, bx,by,bz, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
+    if (rt == 11) {
         glBegin(GL_QUADS);
         emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.375f,0.0f,0.375f,0.625f,1.0f,0.625f);
         emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.0f,0.35f,0.4375f,1.0f,0.55f,0.5625f);
@@ -381,17 +482,41 @@ static void draw_inventory_block_model(int id, int meta) {
         glEnd();
         return;
     }
-    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
+    if (rt == 10) {
         glBegin(GL_QUADS);
-        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0,0,0,1,0.5f,1);
-        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.5f,0.5f,0,1,1,1);
+        /* Java renderBlockAsItem uses the canonical stair item bounds, not the
+           placed block's north/south/east/west metadata. */
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0,0,0,1,1,0.5f);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0,0,0.5f,1,0.5f,1);
         glEnd();
         return;
     }
-    if (id == BLOCK_CHEST) { draw_chest_block(bx,by,bz); return; }
+    if (rt == 21) {
+        glBegin(GL_QUADS);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.4375f,0.30f,0.0f,0.5625f,1.0f,0.125f);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.4375f,0.30f,0.875f,0.5625f,1.0f,1.0f);
+        emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.4375f,0.50f,0.0f,0.5625f,0.9375f,1.0f);
+        glEnd();
+        return;
+    }
+    if (rt == 27) {
+        int used = 0;
+        static const unsigned char widths[8] = {2,3,4,5,6,7,6,3};
+        static const unsigned char heights[8] = {1,1,1,2,3,5,2,1};
+        glBegin(GL_QUADS);
+        for (int i = 0; i < 8; ++i) {
+            float w = (float)widths[i] / 16.0f;
+            float y1 = 1.0f - (float)used / 16.0f;
+            float y0 = 1.0f - (float)(used + heights[i]) / 16.0f;
+            used += heights[i];
+            emit_inventory_cuboid_faces(id, meta, bx,by,bz, 0.5f-w,y0,0.5f-w,0.5f+w,y1,0.5f+w);
+        }
+        glEnd();
+        return;
+    }
+    if (rt == 22) { draw_chest_block(bx,by,bz); return; }
     draw_inventory_cuboid_model(id, meta, bx, by, bz, 0,0,0,1,1,1);
 }
-
 static void inventory_iso_vertex(int slot_x, int slot_y, float px, float py, float pz, float u, float v) {
     /* Java GUI block transform collapsed to 2-D screen coordinates:
        T(slot-2,+3) * S(10) * T(1,0.5,8) * Rx(210) * Ry(45).
@@ -481,39 +606,51 @@ static void draw_inventory_iso_block_model(int id, int meta, int slot_x, int slo
 
 static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
     if (stack_empty(st) || !tex_terrain.id) return;
+    int meta = java125_inventory_model_meta(st->id, st->damage);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-    glDepthMask(GL_TRUE);
     glColorMask(1,1,1,1);
-    glColor4f(1,1,1,1);
+    glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_CULL_FACE);
 
-    int cutout_item = (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE);
-    if (cutout_item) {
+    if (st->id == BLOCK_GLASS || st->id == BLOCK_LEAVES || st->id == BLOCK_ICE) {
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.5f);
         glDisable(GL_BLEND);
     } else {
-        glDisable(GL_ALPHA_TEST);
+        glEnable(GL_ALPHA_TEST);
+        glAlphaFunc(GL_GREATER, 0.1f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
 
-    g_force_fullbright_item_model++;
-    /* Use the explicit 2-D Java-projected inventory path for all GUI block
-       models, including chests.  The matrix-rendered chest path clipped/overdrew
-       its top and front faces in the GUI, leaving only the side faces visible. */
-    draw_inventory_iso_block_model(st->id, st->damage, x, y);
-    g_force_fullbright_item_model--;
+    glPushMatrix();
+    /* Exact Java 1.2.5 RenderItem.drawItemIntoGui block path. */
+    glTranslatef((float)(x - 2), (float)(y + 3), -3.0f);
+    glScalef(10.0f, 10.0f, 10.0f);
+    glTranslatef(1.0f, 0.5f, 1.0f);
+    glScalef(1.0f, 1.0f, -1.0f);
+    glRotatef(210.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+    gl_color_from_rgb_int(java125_item_block_tint(st));
+    glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
 
-    glDisable(GL_ALPHA_TEST);
+    g_force_fullbright_item_model++;
+    draw_inventory_block_model(st->id, meta);
+    g_force_fullbright_item_model--;
+    glPopMatrix();
+
     glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(1,1,1,1);
 }
-
 
 
 static int item_terrain_tile_has_pixels(int tile) {
@@ -675,6 +812,7 @@ static int block_item_tile_for_id(int id) {
 static void draw_block_item_icon_gui(const ItemStack *st, int x, int y) {
     if (stack_empty(st) || !tex_terrain.id) return;
     int tile = item_block_tile_for_stack(st);
+    int tint = java125_item_block_tint(st);
     float u0, v0, u1, v1;
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     glEnable(GL_TEXTURE_2D);
@@ -682,7 +820,7 @@ static void draw_block_item_icon_gui(const ItemStack *st, int x, int y) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
-    glColor4f(1, 1, 1, 1);
+    gl_color_from_rgb_int(tint);
     glBegin(GL_QUADS);
     glTexCoord2f(u0, v0); glVertex2f((float)x, (float)y);
     glTexCoord2f(u1, v0); glVertex2f((float)(x + 16), (float)y);
@@ -690,6 +828,7 @@ static void draw_block_item_icon_gui(const ItemStack *st, int x, int y) {
     glTexCoord2f(u0, v1); glVertex2f((float)x, (float)(y + 16));
     glEnd();
     glDisable(GL_ALPHA_TEST);
+    glColor4f(1,1,1,1);
 }
 
 

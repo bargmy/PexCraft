@@ -1,7 +1,9 @@
 /* Minecraft 1.2.5-style runtime language support.
    No official language data is linked into the executable.  The client loads
-   /lang/languages.txt and /lang/*.lang extracted from Minecraft 1.2.5 client.jar
+   lang/languages.txt and lang/*.lang extracted from Minecraft 1.2.5 client.jar
    into the installed Release texture pack directory at runtime. */
+
+static void rebuild_screen(void);
 
 #define PEX_LANG_MAX_LANGUAGES 256
 #define PEX_LANG_CODE_MAX 24
