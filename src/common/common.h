@@ -38,6 +38,13 @@
 #include "net_protocol.h"
 #include <signal.h>
 
+#ifndef VK_PRIOR
+#define VK_PRIOR 0x21
+#endif
+#ifndef VK_NEXT
+#define VK_NEXT 0x22
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -339,6 +346,7 @@ typedef enum ScreenId {
     SCREEN_INGAME,
     SCREEN_PAUSE,
     SCREEN_INVENTORY,
+    SCREEN_CREATIVE,
     SCREEN_WORKBENCH,
     SCREEN_FURNACE,
     SCREEN_CHEST,
@@ -653,6 +661,7 @@ static int g_waiting_key = -1;
 static int g_confirm_world = 0;
 static int g_pending_world_slot = 0;
 static int g_pending_world_type = 1;
+static int g_pending_game_mode = 0; /* 0 survival, 1 creative */
 static int g_pending_map_features = 1;
 static int g_pending_seed_set = 0;
 static long long g_pending_world_seed = 0;
@@ -668,8 +677,10 @@ static int g_selected_world_index = -1;
 static int g_world_save_scroll = 0;
 static int g_world_drag_scroll_pixels = 0;
 static int g_world_type = 1; /* 0 superflat, 1 default terrain */
+static int g_game_mode = 0;  /* 0 survival, 1 creative */
 static int g_world_map_features = 1;
 static long long g_world_seed = 0;
+static int g_creative_scroll = 0;
 static WorldGenJob g_worldgen;
 static int g_load_state_skip_terrain_rebuild = 0;
 static int g_last_load_state_had_terrain = 0;
@@ -690,6 +701,9 @@ static int g_player_air = 300;
 static int g_player_xp_level = 0;
 static int g_player_xp_total = 0;
 static float g_player_xp_progress = 0.0f;
+
+static int player_is_creative(void) { return g_game_mode == 1; }
+
 static int g_ingame_ticks = 0;
 static int g_hearts_life = 0; /* Java EntityLiving.heartsLife countdown, in 20 Hz ticks. */
 
@@ -767,6 +781,7 @@ static int player_can_eat(int always_edible) {
 }
 
 static void player_add_exhaustion(float amount) {
+    if (player_is_creative()) return;
     if (amount <= 0.0f) return;
     g_player_food_exhaustion += amount;
     if (g_player_food_exhaustion > 40.0f) g_player_food_exhaustion = 40.0f;
@@ -1502,6 +1517,7 @@ typedef struct PexSaveSnapshot {
     long long world_seed;
     long long world_time;
     int world_type;
+    int game_mode;
     float player_x, player_y, player_z;
     float player_yaw, player_pitch;
     int player_health;
@@ -2024,6 +2040,8 @@ static void inventory_reset(void);
 static void inventory_tick(void);
 static void inventory_drop_selected_one(void);
 static void inventory_mouse_click(int mx, int my, int button);
+static void creative_mouse_click(int mx, int my, int button);
+static void creative_scroll_page(int delta);
 static ItemStack inventory_crafting_output(void);
 static ItemStack *chest_get_open_slot_ptr(int local_slot);
 static int chest_open_slot_count(void);
@@ -2053,6 +2071,7 @@ static void update_dig_particles(void);
 static void draw_item_stack_gui(const ItemStack *st, int x, int y);
 static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y);
 static void draw_carried_stack(void);
+static void draw_creative_screen(void);
 static void update_breaking(void);
 static void update_dropped_items(void);
 static void update_equipped_item(void);

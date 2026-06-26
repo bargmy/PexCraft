@@ -375,6 +375,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     ss->world_seed = g_world_seed;
     ss->world_time = g_world_time;
     ss->world_type = g_world_type;
+    ss->game_mode = g_game_mode;
     ss->player_x = g_player_x;
     ss->player_y = g_player_y;
     ss->player_z = g_player_z;
@@ -613,7 +614,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 19;
+    int version = 20;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -646,6 +647,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     fwrite(&ss->player_xp_total, sizeof(ss->player_xp_total), 1, f);
     fwrite(&ss->player_xp_progress, sizeof(ss->player_xp_progress), 1, f);
     fwrite(&ss->world_time, sizeof(ss->world_time), 1, f);
+    fwrite(&ss->game_mode, sizeof(ss->game_mode), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&ss->inventory[i].id, sizeof(int), 1, f);
@@ -836,7 +838,7 @@ static void save_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 19;
+    int version = 20;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -869,6 +871,7 @@ static void save_world_state_sync(void) {
     fwrite(&g_player_xp_total, sizeof(g_player_xp_total), 1, f);
     fwrite(&g_player_xp_progress, sizeof(g_player_xp_progress), 1, f);
     fwrite(&g_world_time, sizeof(g_world_time), 1, f);
+    fwrite(&g_game_mode, sizeof(g_game_mode), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&g_inventory[i].id, sizeof(int), 1, f);
@@ -1020,7 +1023,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -1096,6 +1099,13 @@ static int load_current_world_state(void) {
             }
         } else {
             g_world_time = 0;
+        }
+        if (version >= 20) {
+            if (fread(&g_game_mode, sizeof(g_game_mode), 1, f) != 1) {
+                fclose(f);
+                return 0;
+            }
+            g_game_mode = g_game_mode ? 1 : 0;
         }
     } else {
         player_food_reset();
@@ -1316,6 +1326,11 @@ static void finish_prepared_world_entry(int loaded_state) {
     g_last_autosave_tick = g_ingame_ticks;
     g_save_message_ticks = 0;
     hud_add_chat(loaded_state ? "Loaded saved world." : "Loaded world.");
+    if (player_is_creative()) {
+        g_player_dead = 0;
+        if (g_player_health <= 0) player_health_set_silent(20);
+        player_food_reset();
+    }
     if (g_player_dead || g_player_health <= 0) {
         g_player_dead = 1;
         player_health_set_silent(0);
@@ -1333,6 +1348,7 @@ static void enter_world_from_job(void) {
     snprintf(g_loaded_world_name, sizeof(g_loaded_world_name), "%s", g_worldgen.world_name[0] ? g_worldgen.world_name : "World");
     g_selected_hotbar_slot = 0;
     g_world_type = read_world_type_for_dir(g_loaded_world_dir);
+    { int gt = 0; if (read_level_int_tag_for_dir(g_loaded_world_dir, "GameType", &gt)) g_game_mode = gt ? 1 : 0; else g_game_mode = 0; }
     { int mf = 1; if (read_level_int_tag_for_dir(g_loaded_world_dir, "MapFeatures", &mf)) g_world_map_features = mf ? 1 : 0; else g_world_map_features = 1; }
     {
         long long seed = 0;
@@ -1388,6 +1404,7 @@ static void start_world_generation_in_dir(const char *world_dir, const char *wor
     else g_worldgen.seed = ((long long)time(NULL) << 32) ^ (long long)GetTickCount();
     g_world_seed = g_worldgen.seed;
     g_world_type = g_pending_world_type;
+    g_game_mode = g_pending_game_mode ? 1 : 0;
     g_world_map_features = g_pending_map_features ? 1 : 0;
     snprintf(g_worldgen.world_name, sizeof(g_worldgen.world_name), "%s", (world_name && world_name[0]) ? world_name : "World");
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
@@ -1481,12 +1498,14 @@ static void worldgen_tick(void) {
                  g_worldgen.world_name[0] ? g_worldgen.world_name : "World");
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
         g_world_type = g_pending_world_type;
+        g_game_mode = g_pending_game_mode ? 1 : 0;
         g_world_seed = g_worldgen.seed;
         g_worldgen.loaded_state = 0;
 #else
 #if defined(PEX_PLATFORM_WII)
         if (!g_wii_fat_ready || strncmp(g_loaded_world_dir, "memory:", 7) == 0) {
             g_world_type = g_pending_world_type;
+            g_game_mode = g_pending_game_mode ? 1 : 0;
             g_world_seed = g_worldgen.seed;
             g_worldgen.loaded_state = 0;
             wii_debug_logf("worldgen phase0: memory world type=%d seed=%lld", g_world_type, (long long)g_world_seed);
@@ -1494,6 +1513,7 @@ static void worldgen_tick(void) {
 #endif
         {
             g_world_type = read_world_type_for_dir(g_loaded_world_dir);
+            { int gt = 0; if (read_level_int_tag_for_dir(g_loaded_world_dir, "GameType", &gt)) g_game_mode = gt ? 1 : 0; else g_game_mode = 0; }
             { int mf = 1; if (read_level_int_tag_for_dir(g_loaded_world_dir, "MapFeatures", &mf)) g_world_map_features = mf ? 1 : 0; else g_world_map_features = 1; }
             {
                 long long seed = 0;

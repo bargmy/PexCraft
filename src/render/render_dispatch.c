@@ -94,6 +94,7 @@ static void draw_current_screen(float partial) {
         case SCREEN_INGAME: draw_ingame_screen(); break;
         case SCREEN_PAUSE: draw_pause_screen(); break;
         case SCREEN_INVENTORY: draw_inventory_screen(); break;
+        case SCREEN_CREATIVE: draw_creative_screen(); break;
         case SCREEN_WORKBENCH: draw_workbench_screen(); break;
         case SCREEN_FURNACE: draw_furnace_screen(); break;
         case SCREEN_CHEST: draw_chest_screen(); break;

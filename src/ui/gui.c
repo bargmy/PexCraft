@@ -828,6 +828,65 @@ static void draw_inventory_screen(void) {
     draw_carried_stack();
 }
 
+static void draw_creative_tooltip(int mx, int my) {
+    if (!stack_empty(&g_carried_stack)) return;
+    int idx = creative_item_index_at(mx, my);
+    if (idx < 0) {
+        int hb = creative_hotbar_slot_at(mx, my);
+        if (hb >= 0 && hb < 9 && !stack_empty(&g_inventory[hb])) {
+            const char *name = item_display_name(g_inventory[hb].id);
+            if (name && name[0]) {
+                const char *lines[1] = { name };
+                draw_hovering_text(lines, 1, mx, my);
+            }
+        }
+        return;
+    }
+    ItemStack st = creative_stack_for_index(idx);
+    const char *name = item_display_name(st.id);
+    if (name && name[0]) {
+        const char *lines[1] = { name };
+        draw_hovering_text(lines, 1, mx, my);
+    }
+}
+
+static void draw_creative_screen(void) {
+    draw_ingame_world_view(0);
+    draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
+    int x = (g_gui_w - 176) / 2;
+    int y = (g_gui_h - 166) / 2;
+    draw_textured_rect_tex(&tex_inventory, x, y, 0, 0, 176, 166, 0xFFFFFF);
+
+    draw_text_no_shadow("Creative Inventory", x + 8, y + 6, 0x404040);
+    char page[64];
+    snprintf(page, sizeof(page), "Page %d/%d", g_creative_scroll + 1, creative_max_scroll() + 1);
+    draw_text_no_shadow(page, x + 122, y + 6, 0x404040);
+
+    int start = g_creative_scroll * 9 * 5;
+    for (int row = 0; row < 5; row++) {
+        for (int col = 0; col < 9; col++) {
+            int sx = x + 7 + col * 18;
+            int sy = y + 19 + row * 18;
+            draw_rect(sx, sy, sx + 18, sy + 18, 0xFF8B8B8B);
+            draw_rect(sx + 1, sy + 1, sx + 17, sy + 17, 0xFFC6C6C6);
+            int idx = start + row * 9 + col;
+            if (idx < creative_catalog_count()) {
+                ItemStack st = creative_stack_for_index(idx);
+                draw_item_stack_gui(&st, sx + 1, sy + 1);
+            }
+        }
+    }
+
+    draw_text_no_shadow("Hotbar", x + 8, y + 126, 0x404040);
+    draw_text_no_shadow("Left: take/copy  Right: one/clear", x + 8, y + 154, 0x404040);
+    for (int col = 0; col < 9; col++) {
+        draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 142);
+    }
+
+    draw_creative_tooltip(g_mouse_x, g_mouse_y);
+    draw_carried_stack();
+}
+
 
 static void draw_player_inventory_stacks_at(int x, int y, int inv_y, int hotbar_y) {
     for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
@@ -975,8 +1034,13 @@ static void draw_create_world_screen(void) {
         const char *name = slash ? slash + 1 : g_pending_world_dir;
         snprintf(folder, sizeof(folder), "Will be saved in: %s", name && name[0] ? name : "New World");
         draw_text(folder, g_gui_w / 2 - 100, 85, 10526880);
-        draw_text("Search for resources, crafting, gain", g_gui_w / 2 - 100, 122, 10526880);
-        draw_text("levels, health and hunger", g_gui_w / 2 - 100, 134, 10526880);
+        if (g_pending_game_mode) {
+            draw_text("Unlimited blocks, instant mining", g_gui_w / 2 - 100, 122, 10526880);
+            draw_text("no health, hunger or item loss", g_gui_w / 2 - 100, 134, 10526880);
+        } else {
+            draw_text("Search for resources, crafting, gain", g_gui_w / 2 - 100, 122, 10526880);
+            draw_text("levels, health and hunger", g_gui_w / 2 - 100, 134, 10526880);
+        }
     } else {
         draw_text("Seed for the World Generator", g_gui_w / 2 - 100, 47, 10526880);
         draw_text_field_box(g_pending_seed_text, g_gui_w / 2 - 100, 60, 200, 20, g_create_edit_field == 1);

@@ -34,6 +34,101 @@ static int stack_limit_for_id(int id) {
 
 static ItemStack make_stack(int id, int count, int damage) { ItemStack s; s.id = id; s.count = count; s.damage = damage; s.pop_time = 0; return s; }
 
+typedef struct CreativeItemDef { int id; int damage; } CreativeItemDef;
+
+static const CreativeItemDef g_creative_catalog[] = {
+    {BLOCK_STONE,0}, {BLOCK_GRASS,0}, {BLOCK_DIRT,0}, {BLOCK_COBBLESTONE,0}, {BLOCK_PLANKS,0}, {BLOCK_SAPLING,0},
+    {BLOCK_BEDROCK,0}, {BLOCK_SAND,0}, {BLOCK_GRAVEL,0}, {BLOCK_LOG,0}, {BLOCK_LEAVES,0}, {BLOCK_GLASS,0},
+    {BLOCK_LAPIS_ORE,0}, {BLOCK_LAPIS_BLOCK,0}, {BLOCK_SANDSTONE,0}, {BLOCK_WOOL,0}, {BLOCK_YELLOW_FLOWER,0}, {BLOCK_RED_ROSE,0},
+    {BLOCK_BROWN_MUSHROOM,0}, {BLOCK_RED_MUSHROOM,0}, {BLOCK_GOLD_BLOCK,0}, {BLOCK_IRON_BLOCK,0}, {BLOCK_DOUBLE_SLAB,0}, {BLOCK_SLAB,0},
+    {BLOCK_BRICK,0}, {BLOCK_TNT,0}, {BLOCK_BOOKSHELF,0}, {BLOCK_MOSSY_COBBLESTONE,0}, {BLOCK_OBSIDIAN,0}, {BLOCK_TORCH,0},
+    {BLOCK_WOOD_STAIRS,0}, {BLOCK_CHEST,0}, {BLOCK_DIAMOND_ORE,0}, {BLOCK_DIAMOND_BLOCK,0}, {BLOCK_CRAFTING_TABLE,0}, {BLOCK_FURNACE,0},
+    {ITEM_DOOR_WOOD,0}, {BLOCK_LADDER,0}, {BLOCK_RAILS,0}, {BLOCK_COBBLE_STAIRS,0}, {BLOCK_LEVER,0}, {BLOCK_STONE_PRESSURE_PLATE,0},
+    {ITEM_DOOR_IRON,0}, {BLOCK_WOOD_PRESSURE_PLATE,0}, {ITEM_REDSTONE,0}, {BLOCK_REDSTONE_TORCH_ON,0}, {BLOCK_STONE_BUTTON,0}, {BLOCK_SNOW_LAYER,0},
+    {BLOCK_ICE,0}, {BLOCK_SNOW_BLOCK,0}, {BLOCK_CACTUS,0}, {BLOCK_CLAY,0}, {ITEM_REED,0}, {BLOCK_JUKEBOX,0},
+    {BLOCK_FENCE,0}, {BLOCK_PUMPKIN,0}, {BLOCK_NETHERRACK,0}, {BLOCK_SOUL_SAND,0}, {BLOCK_GLOWSTONE,0}, {BLOCK_JACK_O_LANTERN,0},
+    {BLOCK_TRAPDOOR,0}, {BLOCK_STONE_BRICK,0}, {BLOCK_IRON_BARS,0}, {BLOCK_GLASS_PANE,0}, {BLOCK_MELON,0}, {BLOCK_VINE,0},
+    {BLOCK_FENCE_GATE,0}, {BLOCK_BRICK_STAIRS,0}, {BLOCK_STONE_BRICK_STAIRS,0}, {BLOCK_MYCELIUM,0}, {BLOCK_LILY_PAD,0}, {BLOCK_END_STONE,0},
+    {ITEM_FLINT_AND_IRON,0}, {ITEM_BUCKET_EMPTY,0}, {ITEM_BUCKET_WATER,0}, {ITEM_BUCKET_LAVA,0}, {ITEM_SWORD_DIAMOND,0}, {ITEM_PICKAXE_DIAMOND,0},
+    {ITEM_AXE_DIAMOND,0}, {ITEM_SHOVEL_DIAMOND,0}, {ITEM_HOE_DIAMOND,0}, {ITEM_BOW,0}, {ITEM_ARROW,0}, {ITEM_COAL,0},
+    {ITEM_DIAMOND,0}, {ITEM_INGOT_IRON,0}, {ITEM_INGOT_GOLD,0}, {ITEM_STICK,0}, {ITEM_BREAD,0}, {ITEM_APPLE_RED,0},
+    {ITEM_SADDLE,0}, {ITEM_PAPER,0}, {ITEM_BOOK,0}, {ITEM_COMPASS,0}, {ITEM_CLOCK,0}, {ITEM_SHEARS,0},
+    {ITEM_BED,0}, {ITEM_REDSTONE_REPEATER,0}, {ITEM_MAP,0}, {ITEM_MELON,0}, {ITEM_PUMPKIN_SEEDS,0}
+};
+
+static int creative_catalog_count(void) { return (int)(sizeof(g_creative_catalog) / sizeof(g_creative_catalog[0])); }
+
+static int creative_max_scroll(void) {
+    int cols = 9;
+    int rows = 5;
+    int pages = (creative_catalog_count() + cols * rows - 1) / (cols * rows);
+    return pages > 0 ? pages - 1 : 0;
+}
+
+static void creative_scroll_page(int delta) {
+    g_creative_scroll += delta;
+    if (g_creative_scroll < 0) g_creative_scroll = 0;
+    int max_scroll = creative_max_scroll();
+    if (g_creative_scroll > max_scroll) g_creative_scroll = max_scroll;
+}
+
+static ItemStack creative_stack_for_index(int idx) {
+    if (idx < 0 || idx >= creative_catalog_count()) return make_stack(0, 0, 0);
+    int id = g_creative_catalog[idx].id;
+    int count = stack_limit_for_id(id);
+    if (count <= 0) count = 1;
+    return make_stack(id, count, g_creative_catalog[idx].damage);
+}
+
+static int creative_item_index_at(int mx, int my) {
+    const int cols = 9;
+    const int rows = 5;
+    int x = (g_gui_w - 176) / 2;
+    int y = (g_gui_h - 166) / 2;
+    int grid_x = x + 8;
+    int grid_y = y + 20;
+    if (mx < grid_x || my < grid_y || mx >= grid_x + cols * 18 || my >= grid_y + rows * 18) return -1;
+    int col = (mx - grid_x) / 18;
+    int row = (my - grid_y) / 18;
+    int idx = g_creative_scroll * cols * rows + row * cols + col;
+    return (idx >= 0 && idx < creative_catalog_count()) ? idx : -1;
+}
+
+static int creative_hotbar_slot_at(int mx, int my) {
+    int x = (g_gui_w - 176) / 2;
+    int y = (g_gui_h - 166) / 2;
+    int hx = x + 8;
+    int hy = y + 142;
+    if (mx < hx || my < hy || mx >= hx + 9 * 18 || my >= hy + 18) return -1;
+    return (mx - hx) / 18;
+}
+
+static void creative_mouse_click(int mx, int my, int button) {
+    int idx = creative_item_index_at(mx, my);
+    if (idx >= 0) {
+        g_carried_stack = creative_stack_for_index(idx);
+        if (button != 0 && g_carried_stack.count > 1) g_carried_stack.count = 1;
+        return;
+    }
+
+    int hotbar = creative_hotbar_slot_at(mx, my);
+    if (hotbar >= 0 && hotbar < 9) {
+        if (button != 0) {
+            stack_clear(&g_inventory[hotbar]);
+            return;
+        }
+        if (!stack_empty(&g_carried_stack)) {
+            g_inventory[hotbar] = g_carried_stack;
+            g_inventory[hotbar].pop_time = 5;
+            stack_clear(&g_carried_stack);
+        } else if (!stack_empty(&g_inventory[hotbar])) {
+            g_carried_stack = g_inventory[hotbar];
+            stack_clear(&g_inventory[hotbar]);
+        }
+        g_save_dirty = 1;
+    }
+}
+
 static int armor_stack_type(int id) {
     if (id == ITEM_HELMET_LEATHER || id == ITEM_HELMET_CHAIN || id == ITEM_HELMET_IRON || id == ITEM_HELMET_DIAMOND || id == ITEM_HELMET_GOLD) return 0;
     if (id == ITEM_PLATE_LEATHER || id == ITEM_PLATE_CHAIN || id == ITEM_PLATE_IRON || id == ITEM_PLATE_DIAMOND || id == ITEM_PLATE_GOLD) return 1;
@@ -3398,6 +3493,7 @@ static float held_item_strength_vs_block(int held_id, int block_id) {
 }
 
 static float block_relative_strength(int block_id) {
+    if (player_is_creative()) return 1.0f;
     float h = block_hardness(block_id);
     if (h < 0.0f) return 0.0f;
     if (h <= 0.0f) return 1.0f;
@@ -3698,6 +3794,22 @@ static void inventory_reset(void) {
     chest_clear_all_tiles();
     furnace_clear_all_tiles();
     stack_clear(&g_carried_stack);
+
+    if (player_is_creative()) {
+        g_inventory[0] = make_stack(BLOCK_STONE, 64, 0);
+        g_inventory[1] = make_stack(BLOCK_GRASS, 64, 0);
+        g_inventory[2] = make_stack(BLOCK_PLANKS, 64, 0);
+        g_inventory[3] = make_stack(BLOCK_GLASS, 64, 0);
+        g_inventory[4] = make_stack(BLOCK_TORCH, 64, 0);
+        g_inventory[5] = make_stack(BLOCK_CHEST, 64, 0);
+        g_inventory[6] = make_stack(ITEM_PICKAXE_DIAMOND, 1, 0);
+        g_inventory[7] = make_stack(ITEM_BUCKET_WATER, 1, 0);
+        g_inventory[8] = make_stack(ITEM_BUCKET_LAVA, 1, 0);
+        g_equipped_item = g_inventory[g_selected_hotbar_slot];
+        g_equipped_slot = g_selected_hotbar_slot;
+        g_equipped_progress = g_prev_equipped_progress = 1.0f;
+        return;
+    }
 
     /* Start hotbar stone tool set. Only the stone shovel gets the dirt/grass
        mining boost; sword/pickaxe/axe are added as usable visible items only. */
@@ -4221,8 +4333,10 @@ static void inventory_drop_selected_one(void) {
     ItemStack *s = &g_inventory[g_selected_hotbar_slot];
     if (stack_empty(s)) return;
     ItemStack one = make_stack(s->id, 1, s->damage);
-    s->count--;
-    if (s->count <= 0) stack_clear(s);
+    if (!player_is_creative()) {
+        s->count--;
+        if (s->count <= 0) stack_clear(s);
+    }
     if (g_mp_connected) pex_net_send_drop_item(one);
     else {
         spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, one, 0);
@@ -5373,7 +5487,7 @@ static void unsupported_block_neighbor_cleanup(int x, int y, int z) {
 }
 static void break_target_block(void) {
     int id = flat_get_block(g_break_x, g_break_y, g_break_z);
-    if (id == 0 || id == BLOCK_BEDROCK) return;
+    if (id == 0 || (id == BLOCK_BEDROCK && !player_is_creative())) return;
     player_add_exhaustion(0.025f);
     if (id == BLOCK_GLASS) pex_sound_play_at("random.glass", (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 1.0f);
     else pex_sound_play_at(pex_block_step_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
@@ -5384,7 +5498,7 @@ static void break_target_block(void) {
             pex_net_send_block_action(PEX_BLOCK_BREAK, g_break_x, g_break_y, g_break_z, g_break_face, 0);
             flat_set_block(g_break_x, g_break_y, g_break_z, 0);
         } else {
-            door_break_at(g_break_x, g_break_y, g_break_z, held_item_can_harvest_drop(id));
+            door_break_at(g_break_x, g_break_y, g_break_z, !player_is_creative() && held_item_can_harvest_drop(id));
             redstone_update_near(g_break_x, g_break_y, g_break_z);
         }
         return;
@@ -5402,9 +5516,9 @@ static void break_target_block(void) {
     }
 
     flat_begin_persistent_edit();
-    if (id == BLOCK_CHEST) {
+    if (!player_is_creative() && id == BLOCK_CHEST) {
         chest_drop_contents(g_break_x, g_break_y, g_break_z);
-    } else if (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT) {
+    } else if (!player_is_creative() && (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT)) {
         furnace_drop_contents(g_break_x, g_break_y, g_break_z);
     }
     if (id == BLOCK_ICE) {
@@ -5421,7 +5535,7 @@ static void break_target_block(void) {
     flat_end_persistent_edit();
     redstone_update_near(g_break_x, g_break_y, g_break_z);
     int drop = block_drop_id(id);
-    if (drop > 0 && held_item_can_harvest_drop(id)) {
+    if (!player_is_creative() && drop > 0 && held_item_can_harvest_drop(id)) {
         spawn_item_stack((float)g_break_x + 0.5f, (float)g_break_y + 0.7f, (float)g_break_z + 0.5f, make_stack(drop, 1, 0), 1);
     }
 }
@@ -5446,7 +5560,7 @@ static void update_breaking(void) {
     }
 
     int id = flat_get_block(hit.bx, hit.by, hit.bz);
-    if (id == 0 || id == BLOCK_BEDROCK || block_is_liquid(id)) {
+    if (id == 0 || (id == BLOCK_BEDROCK && !player_is_creative()) || block_is_liquid(id)) {
         reset_breaking_state();
         return;
     }
@@ -5513,7 +5627,7 @@ static void update_breaking(void) {
 static void world_left_mouse_released(void) { reset_breaking_state(); g_block_hit_delay = 0; g_break_swing_consumed = 0; g_break_swing_holding = 0; }
 
 static int item_is_placeable_block_id(int id) {
-    if (id <= 0 || id == BLOCK_BEDROCK) return 0;
+    if (id <= 0 || (id == BLOCK_BEDROCK && !player_is_creative())) return 0;
     if (id == ITEM_DOOR_WOOD || id == ITEM_DOOR_IRON || id == ITEM_REED || id == ITEM_SIGN ||
         id == ITEM_REDSTONE || id == ITEM_SEEDS) return 1;
     if (block_is_liquid(id)) return 0; /* water/lava need bucket logic, not block mining/placing */
@@ -5556,6 +5670,7 @@ static int item_food_always_edible(int id) {
 
 static void consume_held_stack_one(ItemStack *held, int replacement_id) {
     if (!held || stack_empty(held)) return;
+    if (player_is_creative()) return;
     if (held->count <= 1) {
         if (replacement_id > 0) *held = make_stack(replacement_id, 1, 0);
         else stack_clear(held);
@@ -5743,7 +5858,7 @@ static void ingame_right_click(void) {
             pex_net_send_player_action(PEX_ACTION_PLACE, px, py, pz, hit.face, held->id);
             pex_net_send_block_action(PEX_BLOCK_PLACE, px, py, pz, hit.face, held->id);
         }
-        if (--held->count <= 0) stack_clear(held);
+        if (!player_is_creative() && --held->count <= 0) stack_clear(held);
         if (!g_mp_connected) g_save_dirty = 1;
         pex_sound_play_at(pex_block_step_sound_key(held->id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
         restart_hand_swing();
@@ -5800,7 +5915,7 @@ static void ingame_right_click(void) {
         pex_net_send_player_action(PEX_ACTION_PLACE, px, py, pz, hit.face, place_id);
         pex_net_send_block_action(PEX_BLOCK_PLACE, px, py, pz, hit.face, place_id);
     }
-    if (--held->count <= 0) stack_clear(held);
+    if (!player_is_creative() && --held->count <= 0) stack_clear(held);
     if (!g_mp_connected) g_save_dirty = 1;
     pex_sound_play_at(pex_block_step_sound_key(place_id), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
     restart_hand_swing();

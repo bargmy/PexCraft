@@ -256,6 +256,7 @@ static void start_selected_world_save(void) {
     WorldSaveEntry *e = &g_world_saves[g_selected_world_index];
     g_pending_world_slot = g_selected_world_index + 1;
     g_pending_world_type = e->world_type;
+    g_pending_game_mode = e->game_mode ? 1 : 0;
     snprintf(g_pending_world_dir, sizeof(g_pending_world_dir), "%s", e->path);
     snprintf(g_pending_world_name, sizeof(g_pending_world_name), "%s", e->display_name[0] ? e->display_name : e->dir_name);
     start_world_generation_in_dir(g_pending_world_dir, g_pending_world_name, g_pending_world_slot);
@@ -318,6 +319,7 @@ static void create_world_prepare_defaults(void) {
     g_pending_world_seed = 0;
     g_pending_map_features = 1;
     g_pending_world_type = 1;
+    g_pending_game_mode = 0;
     g_create_more_options = 0;
     g_create_edit_field = 0;
     g_pending_world_slot = g_world_save_count + 1;
@@ -368,20 +370,28 @@ static void rename_selected_world_save(void) {
     if (!read_world_seed_for_dir(e->path, &seed)) seed = (long long)time(NULL);
     int old_type = read_world_type_for_dir(e->path);
     int old_features = 1;
+    int old_game_mode = 0;
     read_level_int_tag_for_dir(e->path, "MapFeatures", &old_features);
+    read_level_int_tag_for_dir(e->path, "GameType", &old_game_mode);
     int old_pending_type = g_pending_world_type;
     int old_pending_features = g_pending_map_features;
+    int old_pending_game_mode = g_pending_game_mode;
     int old_world_type = g_world_type;
     int old_world_features = g_world_map_features;
+    int old_active_game_mode = g_game_mode;
     g_pending_world_type = old_type;
     g_pending_map_features = old_features ? 1 : 0;
+    g_pending_game_mode = old_game_mode ? 1 : 0;
     g_world_type = old_type;
     g_world_map_features = old_features ? 1 : 0;
+    g_game_mode = old_game_mode ? 1 : 0;
     write_level_dat(e->path, g_rename_world_text, seed, 50, 5, 50, (long long)e->size_on_disk);
     g_pending_world_type = old_pending_type;
     g_pending_map_features = old_pending_features;
+    g_pending_game_mode = old_pending_game_mode;
     g_world_type = old_world_type;
     g_world_map_features = old_world_features;
+    g_game_mode = old_active_game_mode;
     set_screen(SCREEN_WORLD_SELECT);
 }
 
@@ -472,8 +482,8 @@ static void rebuild_screen(void) {
         Button *create = &g_buttons[g_button_count - 2];
         create->enabled = g_pending_world_name[0] != 0;
         if (!g_create_more_options) {
-            Button *gm = add_button_full(2, g_gui_w / 2 - 75, 100, 150, 20, "Game Mode: Survival", BUTTON_NORMAL);
-            gm->enabled = 0;
+            add_button_full(2, g_gui_w / 2 - 75, 100, 150, 20,
+                            g_pending_game_mode ? "Game Mode: Creative" : "Game Mode: Survival", BUTTON_NORMAL);
             add_button_full(3, g_gui_w / 2 - 75, 172, 150, 20, "More World Options...", BUTTON_NORMAL);
         } else {
             char mf[64];
@@ -533,6 +543,10 @@ static void rebuild_screen(void) {
         add_button(4, g_gui_w / 2 - 100, g_gui_h / 4 + 24, "Back to game");
         add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 48, g_mp_connected ? "Disconnect" : "Save and quit to title");
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Options...");
+    } else if (g_screen == SCREEN_CREATIVE) {
+        add_button_full(90, g_gui_w / 2 - 155, g_gui_h - 28, 70, 20, "Prev", BUTTON_NORMAL);
+        add_button_full(91, g_gui_w / 2 - 75, g_gui_h - 28, 70, 20, "Next", BUTTON_NORMAL);
+        add_button_full(92, g_gui_w / 2 + 5, g_gui_h - 28, 150, 20, "Done", BUTTON_NORMAL);
     } else if (g_screen == SCREEN_DEATH) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 72, "Respawn");
         add_button(2, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Title menu");
@@ -689,6 +703,9 @@ static void on_button(Button *b) {
             g_pending_world_dir[0] = 0;
             g_pending_world_name[0] = 0;
             set_screen(SCREEN_WORLD_SELECT);
+        } else if (b->id == 2) {
+            g_pending_game_mode = g_pending_game_mode ? 0 : 1;
+            rebuild_screen();
         } else if (b->id == 3) {
             g_create_more_options = !g_create_more_options;
             g_create_edit_field = g_create_more_options ? 1 : 0;
@@ -718,6 +735,7 @@ static void on_button(Button *b) {
             if (!strcmp(g_pending_world_dir, g_loaded_world_dir)) {
                 g_pending_world_slot = 0;
                 g_pending_world_type = 1;
+                g_pending_game_mode = 0;
             }
         }
         g_confirm_world = 0;
@@ -746,6 +764,10 @@ static void on_button(Button *b) {
         if (b->id == 4) set_screen(SCREEN_INGAME);
         else if (b->id == 0) { g_parent_screen = SCREEN_PAUSE; set_screen(SCREEN_OPTIONS); }
         else if (b->id == 1) leave_world_to_title();
+    } else if (g_screen == SCREEN_CREATIVE) {
+        if (b->id == 90) { creative_scroll_page(-1); rebuild_screen(); }
+        else if (b->id == 91) { creative_scroll_page(1); rebuild_screen(); }
+        else if (b->id == 92) set_screen(SCREEN_INGAME);
     } else if (g_screen == SCREEN_DEATH) {
         if (b->id == 1) player_respawn();
         else if (b->id == 2) leave_world_to_title();
@@ -818,6 +840,7 @@ static void texpack_mouse_drag(int my) {
 static void mouse_right_down(int mx, int my) {
     if (g_screen == SCREEN_DEATH) return;
 
+    if (g_screen == SCREEN_CREATIVE) { creative_mouse_click(mx, my, 1); return; }
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 1); return; }
     if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); if (passive_mobs_player_interact()) return; ingame_right_click(); return; }
     (void)mx; (void)my;
@@ -825,6 +848,7 @@ static void mouse_right_down(int mx, int my) {
 
 static void mouse_down(int mx, int my) {
     g_mouse_down = 1;
+    if (g_screen == SCREEN_CREATIVE) { creative_mouse_click(mx, my, 0); return; }
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 0); return; }
     if (g_screen == SCREEN_INGAME) {
         set_mouse_grabbed(1);
@@ -1080,6 +1104,31 @@ static int handle_local_chat_command(const char *text) {
         if (*p) *p++ = 0;
     }
     if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "traceplace")) return handle_traceplace_command(argc, argv);
+    if (argc >= 1 && (pex_chat_word_equals_ci(argv[0], "gamemode") || pex_chat_word_equals_ci(argv[0], "gm"))) {
+        if (argc < 2) {
+            hud_add_chat(g_game_mode ? "Game mode is Creative." : "Game mode is Survival.");
+            return 1;
+        }
+        if (pex_chat_word_equals_ci(argv[1], "creative") || pex_chat_word_equals_ci(argv[1], "c") || !strcmp(argv[1], "1")) {
+            g_game_mode = 1;
+            g_pending_game_mode = 1;
+            g_player_dead = 0;
+            player_health_set_silent(20);
+            player_food_reset();
+            hud_add_chat("Set game mode to Creative.");
+            g_save_dirty = 1;
+            return 1;
+        }
+        if (pex_chat_word_equals_ci(argv[1], "survival") || pex_chat_word_equals_ci(argv[1], "s") || !strcmp(argv[1], "0")) {
+            g_game_mode = 0;
+            g_pending_game_mode = 0;
+            hud_add_chat("Set game mode to Survival.");
+            g_save_dirty = 1;
+            return 1;
+        }
+        hud_add_chat("Usage: /gamemode <survival|creative|0|1>");
+        return 1;
+    }
     if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "time")) {
         if (argc == 1) {
             char msg[96];
@@ -1168,9 +1217,16 @@ static void handle_keydown(WPARAM vk) {
         if (g_debug_menu_shown && vk == 'X') { player_add_experience(key_down_vk(VK_SHIFT) ? 10 : 1); g_save_dirty = 1; return; }
         if (vk == VK_F5) { third_person_view_cycle(); return; }
         if ((int)vk == g_opts.keys[6]) { inventory_drop_selected_one(); return; }
-        if ((int)vk == g_opts.keys[7]) { set_screen(SCREEN_INVENTORY); return; }
+        if ((int)vk == g_opts.keys[7]) { set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY); return; }
         if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 1; set_screen(SCREEN_CHAT); return; }
         if (vk >= '1' && vk <= '9') { g_selected_hotbar_slot = (int)(vk - '1'); return; }
+        return;
+    }
+
+    if (g_screen == SCREEN_CREATIVE) {
+        if (vk == VK_ESCAPE || (int)vk == g_opts.keys[7]) { set_screen(SCREEN_INGAME); return; }
+        if (vk == VK_PRIOR) { creative_scroll_page(-1); rebuild_screen(); return; }
+        if (vk == VK_NEXT) { creative_scroll_page(1); rebuild_screen(); return; }
         return;
     }
 

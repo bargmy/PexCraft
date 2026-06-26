@@ -61,6 +61,7 @@ static float player_damage_hunger_exhaustion(const char *reason) {
 }
 
 static void player_take_damage(int amount, const char *reason) {
+    if (player_is_creative()) return;
     if (amount <= 0 || g_player_dead) return;
     int raw_amount = amount;
     if (!g_mp_connected) amount = armor_apply_damage_reduction(amount);
@@ -704,7 +705,7 @@ static void ingame_tick(void) {
         g_player_fall_distance += -previous_motion_y;
     }
 
-    if (g_player_y < -16.0f) {
+    if (!player_is_creative() && g_player_y < -16.0f) {
         player_die("fell out of the world");
     }
 
@@ -776,7 +777,7 @@ static void ingame_tick(void) {
     g_render_arm_yaw += (g_player_yaw - g_render_arm_yaw) * 0.5f;
     passive_mobs_apply_riding();
 
-    if (!g_player_dead && !g_mp_connected) player_foodstats_update();
+    if (!g_player_dead && !g_mp_connected && !player_is_creative()) player_foodstats_update();
 
     if (g_loaded_world_dir[0] && g_save_dirty &&
         (g_ingame_ticks - g_last_autosave_tick) >= AUTOSAVE_INTERVAL_TICKS) {
@@ -804,7 +805,7 @@ static void ingame_tick(void) {
 
 static int ingame_screen_allows_tick(void) {
     return g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
-           g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+           g_screen == SCREEN_INVENTORY || g_screen == SCREEN_CREATIVE || g_screen == SCREEN_WORKBENCH ||
            g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
            g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE);
 }
