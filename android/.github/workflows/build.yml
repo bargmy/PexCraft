@@ -1,0 +1,1113 @@
+name: Build all PexCraft targets and upload to Telegram
+
+run-name: Build "${{ github.event.head_commit.message || github.ref_name }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CHAT_ID: '-1004462705182'
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }} MinGW - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            msystem: MINGW32
+            msys_path: mingw32
+            gcc_package: mingw-w64-i686-gcc
+            zlib_package: mingw-w64-i686-zlib
+            ogg_package: mingw-w64-i686-libogg
+            vorbis_package: mingw-w64-i686-libvorbis
+            out_exe: pexcraft-win-x86.exe
+            artifact_prefix: pexcraft-windows-x86
+          - arch: x64
+            msystem: MINGW64
+            msys_path: mingw64
+            gcc_package: mingw-w64-x86_64-gcc
+            zlib_package: mingw-w64-x86_64-zlib
+            ogg_package: mingw-w64-x86_64-libogg
+            vorbis_package: mingw-w64-x86_64-libvorbis
+            out_exe: pexcraft-win-x64.exe
+            artifact_prefix: pexcraft-windows-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Set up MSYS2 MinGW
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            base-devel
+            ${{ matrix.gcc_package }}
+            ${{ matrix.zlib_package }}
+            ${{ matrix.ogg_package }}
+            ${{ matrix.vorbis_package }}
+            python
+            zip
+
+      - name: Build Windows client
+        shell: msys2 {0}
+        run: |
+          set +e
+          mkdir -p build logs dist
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Windows ${{ matrix.arch }} MinGW / ${{ matrix.msystem }}"
+            echo
+            gcc --version
+
+            gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
+              -static -static-libgcc \
+              -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
+              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
+
+            status=$?
+            echo "$status" > build/build-status.txt
+
+            if [ "$status" -eq 0 ]; then
+              objdump -p build/${{ matrix.out_exe }} | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > build/imported-dlls.txt || true
+              echo "BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+
+            exit 0
+          } 2>&1 | tee logs/build-windows-${{ matrix.arch }}.log
+
+      - name: Package Windows zip
+        if: env.BUILD_OK == '1'
+        shell: pwsh
+        run: |
+          $commitName = '${{ steps.commit.outputs.name }}'
+          $artifactPrefix = '${{ matrix.artifact_prefix }}'
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $packageDir = Join-Path 'dist' $artifactPrefix
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item 'build/${{ matrix.out_exe }}' $packageDir -Force
+
+          if (Test-Path 'assets') {
+            Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force
+          }
+
+          if (Test-Path 'build/imported-dlls.txt') {
+            Copy-Item 'build/imported-dlls.txt' $packageDir -Force
+          }
+
+          # Copy native audio DLLs if libvorbis is dynamically linked. Static builds will not need these,
+          # but copying them when present makes the artifact safe either way.
+          $mingwBin = 'C:\msys64\${{ matrix.msys_path }}\bin'
+          foreach ($dll in @('libogg-0.dll', 'libvorbis-0.dll', 'libvorbisfile-3.dll')) {
+            $dllPath = Join-Path $mingwBin $dll
+            if (Test-Path $dllPath) { Copy-Item $dllPath $packageDir -Force }
+          }
+
+          if (Test-Path 'logs') {
+            Copy-Item 'logs' (Join-Path $packageDir 'logs') -Recurse -Force
+          }
+
+          @"
+          Commit name: $commitName
+          Commit SHA:  $env:GITHUB_SHA
+          Builder:     Windows ${{ matrix.arch }} MinGW
+          "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
+
+          $zipPath = Join-Path 'dist' "$artifactPrefix.zip"
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
+          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload Windows artifact
+        if: env.BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_prefix }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: warn
+
+      - name: Mark failed build in summary
+        if: env.BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Windows ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libcurl4-openssl-dev \
+            zlib1g-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            zip
+
+      - name: Build Linux SDL2/OpenGL
+        shell: bash
+        run: |
+          set +e
+          mkdir -p build logs dist
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Linux SDL2/OpenGL"
+            echo
+            gcc --version
+            make -f Makefile.linux_sdl2
+
+            status=$?
+            echo "$status" > build/build-status.txt
+
+            if [ "$status" -eq 0 ]; then
+              echo "BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+
+            exit 0
+          } 2>&1 | tee logs/build-linux-sdl2.log
+
+      - name: Package Linux zip
+        if: env.BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          artifact_prefix="pexcraft-linux-x64"
+          package_dir="dist/$artifact_prefix"
+
+          mkdir -p "$package_dir"
+
+          find . -maxdepth 4 -type f \( -name 'pexcraft_sdl2' -o -name 'pexcraft' -o -name 'pexcraft-linux*' \) -exec cp -f {} "$package_dir/" \; || true
+
+          cp -R assets "$package_dir/assets" || true
+          cp -R logs "$package_dir/logs" || true
+
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     Linux SDL2/OpenGL
+          EOF
+
+          zip_path="dist/$artifact_prefix.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload Linux artifact
+        if: env.BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-linux-x64
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: warn
+
+      - name: Mark failed build in summary
+        if: env.BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Linux SDL2/OpenGL failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+
+  lgwebos:
+    name: LG webOS ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)')
+        )
+      }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: armv7
+            toolchain_url: https://github.com/openlgtv/buildroot-nc4/releases/latest/download/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Install LG webOS build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            make \
+            pkg-config \
+            python3 \
+            curl \
+            tar \
+            xz-utils \
+            bzip2 \
+            file \
+            nodejs \
+            npm
+          sudo npm install -g @webos-tools/cli
+
+      - name: Install LG webOS native toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          toolchain_root="$PWD/build/lgwebos_toolchain"
+          archive="$toolchain_root/toolchain.tar.gz"
+
+          rm -rf "$toolchain_root"
+          mkdir -p "$toolchain_root"
+
+          curl -L "${{ matrix.toolchain_url }}" -o "$archive"
+          file "$archive" || true
+          tar -xaf "$archive" -C "$toolchain_root"
+
+          echo "Extracted SDK layout:"
+          find "$toolchain_root" -maxdepth 3 -type d | sort > "$toolchain_root/sdk-dirs.txt"
+          sed -n '1,80{s#^#  #;p}' "$toolchain_root/sdk-dirs.txt"
+
+          sdk_dir="$(find "$toolchain_root" -type d -name 'arm-webos-linux-gnueabi_sdk-buildroot' -print -quit)"
+          if [ -z "$sdk_dir" ]; then
+            sdk_dir="$(find "$toolchain_root" -type f -name 'relocate-sdk.sh' -printf '%h\n' -quit)"
+          fi
+          test -n "$sdk_dir"
+
+          if [ -x "$sdk_dir/relocate-sdk.sh" ]; then
+            (cd "$sdk_dir" && ./relocate-sdk.sh)
+          fi
+
+          toolchain_file="$(find "$sdk_dir" -type f \( \
+              -name 'toolchainfile.cmake' -o \
+              -name '*toolchain*.cmake' -o \
+              -name 'OEToolchainConfig.cmake' \
+            \) -print -quit)"
+
+          if [ -z "$toolchain_file" ] || [ ! -f "$toolchain_file" ]; then
+            echo "No CMake toolchain file found under: $sdk_dir" >&2
+            find "$sdk_dir" -maxdepth 6 -type f | sort > "$toolchain_root/sdk-files.txt"
+            sed -n '1,200{s#^#  #;p}' "$toolchain_root/sdk-files.txt" >&2
+            exit 1
+          fi
+
+          toolchain_file="$(realpath "$toolchain_file")"
+          echo "Using LG webOS SDK dir: $sdk_dir"
+          echo "Using LG webOS CMake toolchain: $toolchain_file"
+          echo "LGWEBOS_TOOLCHAIN_FILE=$toolchain_file" >> "$GITHUB_ENV"
+
+      - name: Extract LG webOS icon from client.jar
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 tools/extract_lgwebos_icon.py webos/generated/icon.png build/lgwebos_work/client.jar
+          test -s webos/generated/icon.png
+
+      - name: Build LG webOS native client
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     LG webOS ${{ matrix.arch }}"
+            echo
+            cmake -S webos -B build/lgwebos-${{ matrix.arch }} \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TOOLCHAIN_FILE:FILEPATH="$LGWEBOS_TOOLCHAIN_FILE"
+            cmake --build build/lgwebos-${{ matrix.arch }} -- -j"$(nproc)"
+
+            status=$?
+            echo "$status" > build/lgwebos-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "LGWEBOS_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "LGWEBOS_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit 0
+          } 2>&1 | tee logs/build-lgwebos-${{ matrix.arch }}.log
+
+      - name: Package LG webOS IPK
+        if: env.LGWEBOS_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          package_dir="build/lgwebos-package-${{ matrix.arch }}"
+          rm -rf "$package_dir"
+          cmake --install build/lgwebos-${{ matrix.arch }} --prefix "$package_dir"
+          cp -R logs "$package_dir/logs" || true
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     LG webOS ${{ matrix.arch }}
+          EOF
+
+          rm -f ir.hienob.pexcraft_*.ipk ./*.ipk
+
+          # Newer npm/Node combinations can make @webos-tools/cli finish the
+          # package and then fail during cleanup with "rimraf is not a function".
+          # Keep the produced IPK if it exists; fail only when packaging produced none.
+          set +e
+          ares-package --no-minify "$package_dir"
+          ares_status=$?
+          set -e
+
+          ipk="$(find "$PWD" -maxdepth 1 -type f -name 'ir.hienob.pexcraft_*.ipk' -print -quit)"
+          if [ -z "$ipk" ]; then
+            ipk="$(find "$PWD" -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          fi
+
+          if [ -z "$ipk" ]; then
+            echo "ares-package failed with status $ares_status and produced no IPK" >&2
+            exit "${ares_status:-1}"
+          fi
+
+          if [ "$ares_status" -ne 0 ]; then
+            echo "ares-package exited with status $ares_status after producing $ipk; continuing" >&2
+          fi
+
+          mkdir -p dist
+          final="dist/pexcraft-lgwebos-${{ matrix.arch }}.ipk"
+          mv -f "$ipk" "$final"
+          echo "IPK_PATH=$final" >> "$GITHUB_ENV"
+
+      - name: Upload LG webOS artifact
+        if: env.LGWEBOS_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-lgwebos-${{ matrix.arch }}
+          path: ${{ env.IPK_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: env.LGWEBOS_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### LG webOS ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+
+  android:
+    name: Android arm64 APK - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Install Android build packages
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip python3
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;27.2.12479018"
+
+      - name: Prepare SDL2 Android dependency
+        shell: bash
+        run: |
+          chmod +x android/*.sh || true
+          bash android/prepare_sdl2.sh
+
+      - name: Decode release signing key
+        env:
+          SIGN_BASE64: ${{ secrets.sign }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "${SIGN_BASE64:-}" ]; then
+            mkdir -p android/app/signing
+            printf '%s' "$SIGN_BASE64" | tr -d '\r\n ' | base64 -d > android/app/signing/release.jks
+            echo "SIGNING_STORE_FILE=$PWD/android/app/signing/release.jks" >> "$GITHUB_ENV"
+            echo "Android signing key decoded from repository secret: sign"
+
+            if [ -n "${SIGNING_STORE_PASSWORD:-}" ]; then
+              alias_name="${SIGNING_KEY_ALIAS:-pexcraft_android_tv}"
+              keytool -list \
+                -keystore android/app/signing/release.jks \
+                -storepass "$SIGNING_STORE_PASSWORD" \
+                -alias "$alias_name" >/dev/null
+              echo "Android signing key alias validated: $alias_name"
+
+              key_password="${SIGNING_KEY_PASSWORD:-$SIGNING_STORE_PASSWORD}"
+              tmpdir="$(mktemp -d)"
+              printf 'pexcraft android signing smoke test\n' > "$tmpdir/test.txt"
+              (cd "$tmpdir" && jar cf signing-test.jar test.txt)
+              jarsigner \
+                -keystore android/app/signing/release.jks \
+                -storepass "$SIGNING_STORE_PASSWORD" \
+                -keypass "$key_password" \
+                "$tmpdir/signing-test.jar" \
+                "$alias_name" >/dev/null
+              echo "Android signing key password validated."
+            else
+              echo "Repository secret SIGNING_STORE_PASSWORD is missing. Gradle signing will fail unless the APK is built unsigned." >&2
+              exit 1
+            fi
+          else
+            echo "No repository secret named 'sign' was provided; Gradle will produce an unsigned release APK."
+          fi
+
+      - name: Build Android arm64 APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS || 'pexcraft_android_tv' }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Android arm64 APK"
+            echo
+            cd android
+            gradle assembleRelease
+            status=$?
+            cd ..
+            echo "$status" > build/android-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "ANDROID_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-android-arm64.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package Android arm64 APK
+        if: env.ANDROID_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apk="$(find android/app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          mkdir -p dist
+          final="dist/pexcraft-android-arm64.apk"
+          cp -f "$apk" "$final"
+          echo "APK_PATH=$final" >> "$GITHUB_ENV"
+
+      - name: Upload Android arm64 artifact
+        if: env.ANDROID_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-android-arm64
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: always() && env.ANDROID_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Android arm64 APK failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: `${{ steps.commit.outputs.name }}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+  android_tv:
+    name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Install Android build packages
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip python3
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;27.2.12479018"
+
+      - name: Prepare SDL2 Android dependency
+        shell: bash
+        run: |
+          chmod +x android_tv/*.sh || true
+          bash android_tv/prepare_sdl2.sh
+
+      - name: Decode release signing key
+        env:
+          SIGN_BASE64: ${{ secrets.sign }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "${SIGN_BASE64:-}" ]; then
+            mkdir -p android_tv/app/signing
+            printf '%s' "$SIGN_BASE64" | tr -d '\r\n ' | base64 -d > android_tv/app/signing/release.jks
+            echo "SIGNING_STORE_FILE=$PWD/android_tv/app/signing/release.jks" >> "$GITHUB_ENV"
+            echo "Android TV signing key decoded from repository secret: sign"
+
+            if [ -n "${SIGNING_STORE_PASSWORD:-}" ]; then
+              alias_name="${SIGNING_KEY_ALIAS:-pexcraft_android_tv}"
+              keytool -list \
+                -keystore android_tv/app/signing/release.jks \
+                -storepass "$SIGNING_STORE_PASSWORD" \
+                -alias "$alias_name" >/dev/null
+              echo "Android TV signing key alias validated: $alias_name"
+
+              key_password="${SIGNING_KEY_PASSWORD:-$SIGNING_STORE_PASSWORD}"
+              tmpdir="$(mktemp -d)"
+              printf 'pexcraft signing smoke test\n' > "$tmpdir/test.txt"
+              (cd "$tmpdir" && jar cf signing-test.jar test.txt)
+              jarsigner \
+                -keystore android_tv/app/signing/release.jks \
+                -storepass "$SIGNING_STORE_PASSWORD" \
+                -keypass "$key_password" \
+                "$tmpdir/signing-test.jar" \
+                "$alias_name" >/dev/null
+              echo "Android TV signing key password validated."
+            else
+              echo "Repository secret SIGNING_STORE_PASSWORD is missing. Gradle signing will fail unless the APK is built unsigned." >&2
+              exit 1
+            fi
+          else
+            echo "No repository secret named 'sign' was provided; Gradle will produce an unsigned release APK."
+          fi
+
+      - name: Build Android TV APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS || 'pexcraft_android_tv' }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Android TV APK"
+            echo
+            cd android_tv
+            gradle assembleRelease
+            status=$?
+            cd ..
+            echo "$status" > build/android-tv-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "ANDROID_TV_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_TV_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-android-tv.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package Android TV APK
+        if: env.ANDROID_TV_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apk="$(find android_tv/app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          mkdir -p dist
+          final="dist/pexcraft-android-tv.apk"
+          cp -f "$apk" "$final"
+          echo "APK_PATH=$final" >> "$GITHUB_ENV"
+
+      - name: Upload Android TV artifact
+        if: env.ANDROID_TV_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-android-tv
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: always() && env.ANDROID_TV_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Android TV APK failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+
+
+  wii:
+    name: Nintendo Wii DOL - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
+        )
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Wii embedded texture bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-pil
+          python3 tools/prepare_wii_assets.py \
+            build/wii_generated/assets \
+            build/wii_generated/wii_mcrw_assets.pak \
+            build/wii_generated/wii_mcrw_assets.S
+
+      - name: Build Wii DOL
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Nintendo Wii / devkitPPC + libogc"
+            echo "Textures:    client.jar-derived MCRW bundle linked into boot.dol"
+            echo
+            docker pull devkitpro/devkitppc:20260503
+            docker run --rm \
+              -v "$PWD:/work" \
+              -w /work \
+              devkitpro/devkitppc:20260503 \
+              bash -lc 'make -f platforms/wii/Makefile.wii'
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              dol_size=$(wc -c < build/wii/boot.dol)
+              echo "boot.dol size: ${dol_size} bytes"
+              # A normal embedded-texture Wii DOL should be single-digit MB.
+              # Anything near hundreds of MB means a bad linker section address/hole.
+              if [ "$dol_size" -gt 16777216 ]; then
+                echo "ERROR: boot.dol is too large (${dol_size} bytes). Refusing artifact. Check uncompressed size, not zip size."
+                status=1
+              fi
+            fi
+            echo "$status" > build/wii-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "WII_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "WII_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-wii.log
+
+      - name: Package Wii app zip
+        if: env.WII_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          artifact_prefix="pexcraft-wii"
+          package_dir="dist/$artifact_prefix"
+          app_dir="$package_dir/apps/pexcraft"
+
+          rm -rf "$package_dir"
+          mkdir -p "$app_dir"
+
+          cp -f build/wii/boot.dol "$app_dir/boot.dol"
+          cp -f build/wii/pexcraft-wii.map "$app_dir/pexcraft-wii.map" || true
+          cp -f build/wii/pexcraft-wii.symbols.txt "$app_dir/pexcraft-wii.symbols.txt" || true
+          dol_size=$(wc -c < "$app_dir/boot.dol")
+          printf "boot.dol uncompressed size: %s bytes\n" "$dol_size" > "$app_dir/DOL_SIZE.txt"
+          if [ "$dol_size" -gt 16777216 ]; then
+            echo "ERROR: packaged boot.dol is too large (${dol_size} bytes). Refusing zip." >&2
+            exit 1
+          fi
+          # Wii textures are embedded in boot.dol from client.jar-derived MCRW assets.
+          # Do not ship a required external assets/ texture folder for Wii.
+          cp -R platforms/wii "$app_dir/wii-port-source" || true
+          cp -R logs "$package_dir/logs" || true
+          if [ -f build/wii_generated/wii_mcrw_assets.pak ]; then
+            wc -c build/wii_generated/wii_mcrw_assets.pak > "$app_dir/EMBEDDED_TEXTURES.txt"
+          fi
+
+          cat > "$app_dir/meta.xml" <<EOF
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <app version="1">
+            <name>PexCraft</name>
+            <coder>PexCraft contributors</coder>
+            <version>${{ github.sha }}</version>
+            <release_date>$(date -u +%Y%m%d%H%M%S)</release_date>
+            <short_description>PexCraft Wii port</short_description>
+            <long_description>PexCraft Nintendo Wii homebrew build generated by GitHub Actions using devkitPPC/libogc. Minecraft Classic textures are converted from client.jar and embedded into boot.dol.</long_description>
+          </app>
+          EOF
+
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     Nintendo Wii / devkitPPC + libogc
+          EOF
+
+          zip_path="dist/$artifact_prefix.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "Wii zip listing with uncompressed sizes:"
+          unzip -lv "$zip_path"
+          zip_dol_size=$(unzip -l "$zip_path" "apps/pexcraft/boot.dol" | awk '/boot[.]dol$/ {print $1}')
+          if [ -z "$zip_dol_size" ] || [ "$zip_dol_size" -gt 16777216 ]; then
+            echo "ERROR: boot.dol inside zip is too large (${zip_dol_size:-missing} bytes)." >&2
+            exit 1
+          fi
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload Wii artifact
+        if: env.WII_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-wii
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: env.WII_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Nintendo Wii DOL failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+  telegram:
+    name: Upload successful builds to Telegram
+    runs-on: ubuntu-latest
+    needs:
+      - windows
+      - linux
+      - lgwebos
+      - android
+      - android_tv
+      - wii
+    if: always() && github.event_name != 'pull_request'
+
+    steps:
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Download successful artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          path: telegram_upload
+
+      - name: Upload successful build zips to Telegram
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TOKEN:-}" ]; then
+            echo "Missing Telegram bot token. Add repository secret TOKEN." >&2
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import os, sys, glob, json, uuid, mimetypes, urllib.request, urllib.parse
+
+          token = os.environ["TOKEN"]
+          chat_id = os.environ["CHAT_ID"]
+          commit_name = os.environ.get("COMMIT_NAME", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          sha = os.environ.get("GITHUB_SHA", "")
+
+          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True) + glob.glob("telegram_upload/**/*.apk", recursive=True))
+
+          caption = (
+              "PEXCraft successful builds\n"
+              f"Commit name: {commit_name}\n"
+              f"Repo: {repo}\n"
+              f"Commit: {sha[:12]}\n"
+              f"Built artifacts: {len(files)}"
+          )
+
+          def send_text(text):
+              data = urllib.parse.urlencode({
+                  "chat_id": chat_id,
+                  "text": text,
+              }).encode()
+              req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
+              with urllib.request.urlopen(req, timeout=120) as r:
+                  print(r.read().decode("utf-8", "replace"))
+
+          if not files:
+              send_text(caption + "\nNo successful build artifacts were produced.")
+              raise SystemExit(0)
+
+          def send_group(group, group_index):
+              boundary = "----pexcraft-" + uuid.uuid4().hex
+              parts = []
+              media = []
+
+              for i, path in enumerate(group):
+                  attach_name = f"file_{group_index}_{i}"
+                  entry = {
+                      "type": "document",
+                      "media": f"attach://{attach_name}",
+                  }
+                  if i == 0:
+                      entry["caption"] = caption
+                  media.append(entry)
+
+              def field(name, value):
+                  parts.append(
+                      (
+                          f"--{boundary}\r\n"
+                          f"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                          f"{value}\r\n"
+                      ).encode()
+                  )
+
+              def filefield(name, path):
+                  filename = os.path.basename(path)
+                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.android.package-archive" if filename.endswith(".apk") else ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else "application/zip"))
+                  parts.append(
+                      (
+                          f"--{boundary}\r\n"
+                          f"Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
+                          f"Content-Type: {ctype}\r\n\r\n"
+                      ).encode()
+                  )
+                  with open(path, "rb") as f:
+                      parts.append(f.read())
+                  parts.append(b"\r\n")
+
+              field("chat_id", chat_id)
+              field("media", json.dumps(media))
+
+              for i, path in enumerate(group):
+                  filefield(f"file_{group_index}_{i}", path)
+
+              parts.append(f"--{boundary}--\r\n".encode())
+
+              req = urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendMediaGroup",
+                  data=b"".join(parts),
+                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+              )
+
+              with urllib.request.urlopen(req, timeout=240) as r:
+                  print(r.read().decode("utf-8", "replace"))
+
+          for index in range(0, len(files), 10):
+              send_group(files[index:index + 10], index // 10)
+          PY

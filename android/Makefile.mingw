@@ -1,0 +1,22 @@
+# PEXCRAFT Windows cross-build Makefile.
+# GNU make has built-in CC=cc, so use WIN_CC instead of CC.
+
+WIN_CC ?= i686-w64-mingw32-gcc
+CFLAGS ?= -std=c99 -O2 -Wall -Wextra
+LDFLAGS ?= -mwindows
+LIBS = -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
+
+TARGET = pexcraft.exe
+
+.PHONY: all clean run
+
+all: $(TARGET)
+
+$(TARGET): main.c $(wildcard src/*/*.c) src/common/common.h
+	$(WIN_CC) $(CFLAGS) main.c -o $@ $(LDFLAGS) $(LIBS)
+
+run: $(TARGET)
+	./$(TARGET)
+
+clean:
+	rm -f $(TARGET)
