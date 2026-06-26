@@ -42,6 +42,14 @@ typedef struct PexMcpeJoinCallbacks {
     void (*on_inventory_content)(void *userdata, const PexMcpeContainerContentInfo *content);
     void (*on_inventory_slot)(void *userdata, const PexMcpeContainerSlotInfo *slot);
     void (*on_set_time)(void *userdata, int time);
+    void (*on_set_health)(void *userdata, int health);
+    void (*on_entity_event)(void *userdata, const PexMcpeEntityEventInfo *event);
+    void (*on_take_item)(void *userdata, const PexMcpeTakeItemInfo *take);
+    void (*on_entity_motion)(void *userdata, const PexMcpeEntityMotionInfo *motion);
+    void (*on_level_event)(void *userdata, const PexMcpeLevelEventInfo *event);
+    void (*on_attributes)(void *userdata, const PexMcpeAttributesInfo *attributes);
+    void (*on_armor)(void *userdata, const PexMcpeArmorInfo *armor);
+    void (*on_gamemode)(void *userdata, int gamemode);
     void (*on_disconnect)(void *userdata, const char *message);
 } PexMcpeJoinCallbacks;
 
@@ -91,6 +99,9 @@ int pex_mcpe_join_session_send_use_item(PexMcpeJoinSession *session, int x, int 
 int pex_mcpe_join_session_send_equipment(PexMcpeJoinSession *session,
                                          int slot, int item_id, int count, int damage);
 int pex_mcpe_join_session_send_animate(PexMcpeJoinSession *session, int action);
+int pex_mcpe_join_session_send_player_action(PexMcpeJoinSession *session, int action, int x, int y, int z, int face);
+int pex_mcpe_join_session_send_drop_item(PexMcpeJoinSession *session, int item_id, int count, int damage);
+int pex_mcpe_join_session_send_respawn(PexMcpeJoinSession *session, float x, float y, float z);
 int pex_mcpe_join_session_send_inventory_slot(PexMcpeJoinSession *session,
                                               int window_id, int slot, int hotbar_slot,
                                               int item_id, int count, int damage);

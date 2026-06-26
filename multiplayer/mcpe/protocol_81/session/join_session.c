@@ -34,7 +34,7 @@ void pex_mcpe_join_session_init(PexMcpeJoinSession *session,
     session->protocol_version = 82;
     session->chunk_radius = 4;
     session->state = PEX_MCPE_JOIN_IDLE;
-    pex_mcpe_join_set_status(session, "Connecting");
+    pex_mcpe_join_set_status(session, "Locating server");
 }
 
 void pex_mcpe_join_session_set_callbacks(PexMcpeJoinSession *session,
@@ -79,7 +79,7 @@ static int pex_mcpe_send_login(PexMcpeJoinSession *s) {
         return 0;
     }
     s->state = PEX_MCPE_JOIN_WAIT_PLAY_STATUS;
-    pex_mcpe_join_set_status(s, "Connecting");
+    pex_mcpe_join_set_status(s, "Locating server");
     return 1;
 }
 
@@ -131,7 +131,7 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
                 if (s->callbacks.on_status) s->callbacks.on_status(s->callback_userdata, st);
                 if (st == PEX_MCPE_PLAY_STATUS_LOGIN_SUCCESS) {
                     s->state = PEX_MCPE_JOIN_WAIT_START_GAME;
-                    pex_mcpe_join_set_status(s, "Connecting");
+                    pex_mcpe_join_set_status(s, "Locating server");
                 } else if (st == PEX_MCPE_PLAY_STATUS_PLAYER_SPAWN) {
                     s->spawn_status_received = 1;
                     if (s->chunks_received > 0) {
@@ -298,6 +298,81 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
             }
             break;
         }
+        case PEX_MCPE_PACKET_SET_HEALTH: {
+            PexMcpeReadBuffer hb;
+            int32_t health = 0;
+            pex_mcpe_read_buffer_init(&hb, body, body_size);
+            if (pex_mcpe_read_i32_be(&hb, &health) && s->callbacks.on_set_health) {
+                s->callbacks.on_set_health(s->callback_userdata, (int)health);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_ENTITY_EVENT: {
+            PexMcpeEntityEventInfo ev;
+            if (pex_mcpe_decode_entity_event_packet(body, body_size, &ev) && s->callbacks.on_entity_event) {
+                s->callbacks.on_entity_event(s->callback_userdata, &ev);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_TAKE_ITEM_ENTITY: {
+            PexMcpeTakeItemInfo take;
+            if (pex_mcpe_decode_take_item_entity_packet(body, body_size, &take) && s->callbacks.on_take_item) {
+                s->callbacks.on_take_item(s->callback_userdata, &take);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_SET_ENTITY_MOTION: {
+            PexMcpeEntityMotionInfo motions[32];
+            size_t count = 0;
+            if (pex_mcpe_decode_set_entity_motion_packet(body, body_size, motions, 32, &count) && s->callbacks.on_entity_motion) {
+                for (size_t i = 0; i < count; ++i) s->callbacks.on_entity_motion(s->callback_userdata, &motions[i]);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_LEVEL_EVENT: {
+            PexMcpeLevelEventInfo ev;
+            if (pex_mcpe_decode_level_event_packet(body, body_size, &ev) && s->callbacks.on_level_event) {
+                s->callbacks.on_level_event(s->callback_userdata, &ev);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_UPDATE_ATTRIBUTES: {
+            PexMcpeAttributesInfo attrs;
+            if (pex_mcpe_decode_update_attributes_packet(body, body_size, &attrs) && s->callbacks.on_attributes) {
+                s->callbacks.on_attributes(s->callback_userdata, &attrs);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_MOB_ARMOR_EQUIPMENT: {
+            PexMcpeArmorInfo armor;
+            if (pex_mcpe_decode_mob_armor_equipment_packet(body, body_size, &armor) && s->callbacks.on_armor) {
+                s->callbacks.on_armor(s->callback_userdata, &armor);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_SET_PLAYER_GAMETYPE: {
+            PexMcpeReadBuffer gb;
+            int32_t gm = 0;
+            pex_mcpe_read_buffer_init(&gb, body, body_size);
+            if (pex_mcpe_read_i32_be(&gb, &gm) && s->callbacks.on_gamemode) {
+                s->callbacks.on_gamemode(s->callback_userdata, (int)gm);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_RESPAWN: {
+            PexMcpeReadBuffer rb;
+            float x = 0, y = 0, z = 0;
+            pex_mcpe_read_buffer_init(&rb, body, body_size);
+            if (pex_mcpe_read_f32_be(&rb, &x) && pex_mcpe_read_f32_be(&rb, &y) && pex_mcpe_read_f32_be(&rb, &z)) {
+                PexMcpeEntityMoveInfo move;
+                memset(&move, 0, sizeof(move));
+                move.eid = s->entity_id;
+                move.is_self = 1;
+                move.x = x; move.y = y; move.z = z;
+                if (s->callbacks.on_move_entity) s->callbacks.on_move_entity(s->callback_userdata, &move);
+            }
+            break;
+        }
         case PEX_MCPE_PACKET_DISCONNECT: {
             char text[256];
             text[0] = 0;
@@ -330,7 +405,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
                 return 0;
             }
             session->state = PEX_MCPE_JOIN_RAKNET_CONNECTING;
-            pex_mcpe_join_set_status(session, "Connecting");
+            pex_mcpe_join_set_status(session, "Locating server");
         }
     }
 
@@ -346,7 +421,7 @@ int pex_mcpe_join_session_tick(PexMcpeJoinSession *session) {
         if (type == PEX_RAKNET_POLL_NONE) break;
         if (type == PEX_RAKNET_POLL_CONNECTED) {
             session->state = PEX_MCPE_JOIN_RAKNET_CONNECTED;
-            pex_mcpe_join_set_status(session, "Connecting");
+            pex_mcpe_join_set_status(session, "Locating server");
             pex_mcpe_send_login(session);
         } else if (type == PEX_RAKNET_POLL_DATA && n > 0) {
             pex_mcpe_process_one_packet(session, buf, n, 0);
@@ -399,6 +474,9 @@ int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, 
     if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 0, x, y, z, face)) {
         pex_raknet_client_send(session->raknet, buf, n, 0);
     }
+    if (pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, 2, x, y, z, face)) {
+        pex_raknet_client_send(session->raknet, buf, n, 0);
+    }
     if (pex_mcpe_encode_remove_block_packet(buf, sizeof(buf), &n, session->entity_id, x, y, z)) {
         return pex_raknet_client_send(session->raknet, buf, n, 0);
     }
@@ -434,6 +512,31 @@ int pex_mcpe_join_session_send_inventory_slot(PexMcpeJoinSession *session,
     return pex_raknet_client_send(session->raknet, buf, n, 0);
 }
 
+int pex_mcpe_join_session_send_player_action(PexMcpeJoinSession *session, int action, int x, int y, int z, int face) {
+    if (!session || !session->raknet || !session->entity_id_valid) return 0;
+    uint8_t buf[128];
+    size_t n = 0;
+    if (!pex_mcpe_encode_player_action_packet(buf, sizeof(buf), &n, session->entity_id, action, x, y, z, face)) return 0;
+    return pex_raknet_client_send(session->raknet, buf, n, 0);
+}
+
+int pex_mcpe_join_session_send_drop_item(PexMcpeJoinSession *session, int item_id, int count, int damage) {
+    if (!session || !session->raknet || item_id <= 0 || count <= 0) return 0;
+    uint8_t buf[128];
+    size_t n = 0;
+    if (!pex_mcpe_encode_drop_item_packet(buf, sizeof(buf), &n, item_id, count, damage)) return 0;
+    return pex_raknet_client_send(session->raknet, buf, n, 0);
+}
+
+int pex_mcpe_join_session_send_respawn(PexMcpeJoinSession *session, float x, float y, float z) {
+    if (!session || !session->raknet) return 0;
+    uint8_t buf[128];
+    size_t n = 0;
+    /* Genisys handles respawn from PlayerActionPacket ACTION_SPAWN_*; send the old RespawnPacket too for clients/servers that expect it. */
+    if (pex_mcpe_encode_respawn_packet(buf, sizeof(buf), &n, x, y, z)) pex_raknet_client_send(session->raknet, buf, n, 0);
+    return pex_mcpe_join_session_send_player_action(session, 13, 0, 0, 0, -1);
+}
+
 void pex_mcpe_join_session_disconnect(PexMcpeJoinSession *session) {
     if (!session) return;
     if (session->raknet) {
@@ -454,7 +557,7 @@ void pex_mcpe_join_session_disconnect(PexMcpeJoinSession *session) {
 }
 
 const char *pex_mcpe_join_session_status(const PexMcpeJoinSession *session) {
-    return session && session->status_text[0] ? session->status_text : "Connecting";
+    return session && session->status_text[0] ? session->status_text : "Locating server";
 }
 
 int pex_mcpe_join_session_progress(const PexMcpeJoinSession *session) {

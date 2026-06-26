@@ -44,7 +44,7 @@ static void player_die(const char *reason) {
     g_sprinting_ticks_left = 0;
     g_sprint_toggle_timer = 0;
     g_prev_sprint_forward = 0;
-    inventory_drop_death_items();
+    if (!g_mp_connected) inventory_drop_death_items();
     if (g_mp_connected) {
         pex_net_send_player_state();
         pex_net_send_player_action(PEX_ACTION_DIED, 0, 0, 0, 0, death_reason_code_from_text(reason));
@@ -168,6 +168,13 @@ static void update_equipped_item(void) {
 }
 
 static void player_respawn(void) {
+    if (g_mp_connected) {
+        g_chat_input[0] = 0;
+        g_mp_pending_respawn_sync = 1;
+        pex_net_send_respawn();
+        set_screen(SCREEN_INGAME);
+        return;
+    }
     g_player_dead = 0;
     g_player_death_time = 0;
     player_health_set_silent(20);
@@ -184,11 +191,6 @@ static void player_respawn(void) {
     g_chat_input[0] = 0;
     hud_add_chat("Respawned.");
     g_save_dirty = 1;
-    if (g_mp_connected) {
-        g_mp_pending_respawn_sync = 1;
-        pex_net_send_player_state();
-        net_request_chunks_around_player(1);
-    }
     set_screen(SCREEN_INGAME);
 }
 

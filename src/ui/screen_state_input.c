@@ -1200,6 +1200,9 @@ static int handle_traceplace_command(int argc, char **argv) {
 
 static int handle_local_chat_command(const char *text) {
     if (!text || text[0] != '/') return 0;
+    /* In multiplayer, slash commands belong to the server. Do not run any
+       local cheat/debug command client-side. */
+    if (g_mp_connected || pex_net_is_connecting()) return 0;
     char cmd[128];
     snprintf(cmd, sizeof(cmd), "%s", text + 1);
     char *argv[4] = {0,0,0,0};

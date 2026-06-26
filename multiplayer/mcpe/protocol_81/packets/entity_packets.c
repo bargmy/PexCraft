@@ -351,3 +351,139 @@ int pex_mcpe_encode_container_set_slot_packet(uint8_t *out_data, size_t out_capa
     if (out_size) *out_size = b.offset;
     return 1;
 }
+
+
+int pex_mcpe_decode_take_item_entity_packet(const uint8_t *data, size_t size, PexMcpeTakeItemInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t target = 0, eid = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &target)) return 0;
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->target = (uint64_t)target;
+    out_info->eid = (uint64_t)eid;
+    return 1;
+}
+
+int pex_mcpe_decode_set_entity_motion_packet(const uint8_t *data, size_t size, PexMcpeEntityMotionInfo *out_entries, size_t max_entries, size_t *out_count) {
+    if (out_count) *out_count = 0;
+    if (!data || !out_entries || max_entries == 0) return 0;
+    PexMcpeReadBuffer b;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    size_t count = 0;
+    while (pex_mcpe_buffer_remaining(&b) >= 20 && count < max_entries) {
+        int64_t eid = 0;
+        PexMcpeEntityMotionInfo *e = &out_entries[count];
+        memset(e, 0, sizeof(*e));
+        if (!pex_mcpe_read_i64_be(&b, &eid)) break;
+        e->eid = (uint64_t)eid;
+        if (!pex_mcpe_read_f32_be(&b, &e->mx)) break;
+        if (!pex_mcpe_read_f32_be(&b, &e->my)) break;
+        if (!pex_mcpe_read_f32_be(&b, &e->mz)) break;
+        count++;
+    }
+    if (out_count) *out_count = count;
+    return count > 0;
+}
+
+int pex_mcpe_decode_entity_event_packet(const uint8_t *data, size_t size, PexMcpeEntityEventInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t eid = 0;
+    uint8_t ev = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    if (!pex_mcpe_read_u8(&b, &ev)) return 0;
+    out_info->eid = (uint64_t)eid;
+    out_info->event = (int)ev;
+    return 1;
+}
+
+int pex_mcpe_decode_level_event_packet(const uint8_t *data, size_t size, PexMcpeLevelEventInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int16_t ev = 0;
+    int32_t d = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i16_be(&b, &ev)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->x)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->y)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->z)) return 0;
+    if (!pex_mcpe_read_i32_be(&b, &d)) return 0;
+    out_info->event_id = (int)ev;
+    out_info->data = (int)d;
+    return 1;
+}
+
+int pex_mcpe_decode_update_attributes_packet(const uint8_t *data, size_t size, PexMcpeAttributesInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t eid = 0;
+    int16_t count = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->eid = (uint64_t)eid;
+    if (!pex_mcpe_read_i16_be(&b, &count) || count < 0) return 0;
+    for (int i = 0; i < count; ++i) {
+        float minv = 0.0f, maxv = 0.0f, value = 0.0f;
+        char name[128];
+        if (!pex_mcpe_read_f32_be(&b, &minv)) return 0;
+        if (!pex_mcpe_read_f32_be(&b, &maxv)) return 0;
+        if (!pex_mcpe_read_f32_be(&b, &value)) return 0;
+        if (!pex_mcpe_read_string(&b, name, sizeof(name))) return 0;
+        (void)minv; (void)maxv;
+        if (strstr(name, "health") || strstr(name, "minecraft:health")) {
+            out_info->health = value;
+            out_info->has_health = 1;
+        } else if (strstr(name, "hunger") || strstr(name, "player.hunger") || strstr(name, "minecraft:player.hunger")) {
+            out_info->hunger = value;
+            out_info->has_hunger = 1;
+        }
+    }
+    return 1;
+}
+
+int pex_mcpe_decode_mob_armor_equipment_packet(const uint8_t *data, size_t size, PexMcpeArmorInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t eid = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->eid = (uint64_t)eid;
+    for (int i = 0; i < 4; ++i) {
+        if (!pex_mcpe_skip_slot(&b, &out_info->slots[i].id, &out_info->slots[i].count, &out_info->slots[i].damage)) return 0;
+    }
+    return 1;
+}
+
+int pex_mcpe_encode_drop_item_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size,
+                                     int item_id, int count, int damage) {
+    if (out_size) *out_size = 0;
+    PexMcpeBuffer b;
+    pex_mcpe_buffer_init(&b, out_data, out_capacity);
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
+        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_DROP_ITEM) ||
+        !pex_mcpe_write_u8(&b, 0) ||
+        !pex_mcpe_write_slot_info(&b, item_id, count, damage)) return 0;
+    if (out_size) *out_size = b.offset;
+    return 1;
+}
+
+int pex_mcpe_encode_respawn_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size,
+                                   float x, float y, float z) {
+    if (out_size) *out_size = 0;
+    PexMcpeBuffer b;
+    pex_mcpe_buffer_init(&b, out_data, out_capacity);
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
+        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_RESPAWN) ||
+        !pex_mcpe_write_f32_be(&b, x) ||
+        !pex_mcpe_write_f32_be(&b, y) ||
+        !pex_mcpe_write_f32_be(&b, z)) return 0;
+    if (out_size) *out_size = b.offset;
+    return 1;
+}

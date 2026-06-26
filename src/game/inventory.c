@@ -7447,15 +7447,7 @@ static void update_dropped_items(void) {
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &g_drops[i];
         if (!e->active) continue;
-        if (g_mp_connected) {
-            int in_world = (g_screen == SCREEN_INGAME || g_screen == SCREEN_INVENTORY ||
-                            g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE ||
-                            g_screen == SCREEN_CHEST || g_screen == SCREEN_CHAT);
-            if (!g_player_dead && in_world && e->pickup_delay <= 0 && dropped_item_touches_player(e)) {
-                pex_net_send_pickup_drop(e->net_id);
-            }
-            continue;
-        }
+        int multiplayer_drop = g_mp_connected && e->net_id > 0;
         e->prev_x = e->x; e->prev_y = e->y; e->prev_z = e->z;
         if (e->pickup_delay > 0) e->pickup_delay--;
         /* Deobf EntityItem has no magnetic pull; pickup happens on entity collision. */
@@ -7486,7 +7478,9 @@ static void update_dropped_items(void) {
         if (e->age >= 6000 || e->y < -24.0f) { e->active = 0; continue; }
 
         if (!g_player_dead && g_screen == SCREEN_INGAME && e->pickup_delay <= 0 && dropped_item_touches_player(e)) {
-            if (inventory_add_stack(e->stack)) {
+            if (multiplayer_drop) {
+                pex_net_send_pickup_drop(e->net_id);
+            } else if (inventory_add_stack(e->stack)) {
                 spawn_pickup_fx_from_drop(e);
                 pex_sound_play("random.pop", 0.20f, (((float)rand() / (float)RAND_MAX) - ((float)rand() / (float)RAND_MAX)) * 0.7f + 1.0f);
                 e->active = 0;
