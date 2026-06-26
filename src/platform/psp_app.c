@@ -352,7 +352,7 @@ int main(int argc, char **argv) {
     PEX_PSP_LOGF("pex_renderer_backend_init end OK");
     psp_boot_debug_stagef("renderer/backend initialized");
     PEX_PSP_LOGF("set_screen(SCREEN_TITLE) begin");
-    set_screen(SCREEN_TITLE);
+    set_screen(pex_startup_screen());
     PEX_PSP_LOGF("set_screen(SCREEN_TITLE) end: screen=%d", g_screen);
     psp_boot_debug_stagef("title screen selected");
     psp_redraw_gu_front("Reached title screen setup. Calling main_loop next.");

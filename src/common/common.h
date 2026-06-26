@@ -330,6 +330,7 @@ typedef enum ScreenId {
     SCREEN_OPTIONS,
     SCREEN_OPTIONS_MORE,
     SCREEN_LANGUAGE,
+    SCREEN_SET_NAME,
     SCREEN_SYSTEM_INFO,
     SCREEN_SKINS,
     SCREEN_CONTROLS,
@@ -434,6 +435,7 @@ typedef struct Options {
     char skin_path[MAX_PATHBUF];
     char last_server[64];
     char username[32];
+    int name_set;
     char language[16];
     int keys[10];
 } Options;
@@ -650,6 +652,9 @@ static char g_notice_line2[MAX_LABEL] = "";
 static char g_multiplayer_ip[64] = "";
 static char g_multiplayer_username[32] = "Player";
 static int g_multiplayer_edit_field = 0;
+static char g_name_edit_text[32] = "";
+static ScreenId g_name_return_screen = SCREEN_TITLE;
+static int g_name_screen_first_run = 0;
 static char g_multiplayer_status[MAX_LABEL] = "";
 static SOCKET g_mp_socket = INVALID_SOCKET;
 static int g_mp_winsock_started = 0;

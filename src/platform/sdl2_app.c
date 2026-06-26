@@ -358,7 +358,7 @@ int main(int argc, char **argv) {
     }
     if (should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
-    else set_screen(SCREEN_TITLE);
+    else set_screen(pex_startup_screen());
     InitializeCriticalSection(&g_save_cs);
     main_loop();
     set_mouse_grabbed(0);

@@ -811,7 +811,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
         snprintf(line, sizeof(line), "%s is unavailable on this system.", renderer_backend_label(g_opts.renderer_backend));
         open_notice("Renderer unavailable", line, "Falling back to OpenGL for this session.");
     }
-    else set_screen(SCREEN_TITLE);
+    else set_screen(pex_startup_screen());
     InitializeCriticalSection(&g_save_cs);
     main_loop();
     set_mouse_grabbed(0);

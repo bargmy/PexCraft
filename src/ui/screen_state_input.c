@@ -36,6 +36,8 @@ static void set_screen(ScreenId s) {
         g_world_drag_scroll_pixels = 0;
     }
     if (s == SCREEN_LANGUAGE && old_screen != SCREEN_LANGUAGE) language_ensure_selected_visible();
+    if (s == SCREEN_SET_NAME && old_screen != SCREEN_SET_NAME && !g_name_edit_text[0])
+        snprintf(g_name_edit_text, sizeof(g_name_edit_text), "%s", g_opts.username[0] ? g_opts.username : "");
     if (s == SCREEN_CREATE_WORLD) g_create_edit_field = g_create_more_options ? 1 : 0;
     g_waiting_key = -1;
     g_gamepad_menu_index = 0;
@@ -63,6 +65,57 @@ static void trim_ascii_in_place(char *s) {
     b = s + strlen(s);
     while (b > s && (b[-1] == ' ' || b[-1] == '\t' || b[-1] == '\r' || b[-1] == '\n')) --b;
     *b = 0;
+}
+
+
+static int pex_valid_nickname_char(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+static void pex_sanitize_nickname_in_place(char *s) {
+    char out[32];
+    int n = 0;
+    if (!s) return;
+    for (int i = 0; s[i] && n < 16; ++i) {
+        if (pex_valid_nickname_char(s[i])) out[n++] = s[i];
+    }
+    out[n] = 0;
+    snprintf(s, 32, "%s", out);
+}
+
+static int pex_nickname_valid(const char *s) {
+    size_t n;
+    if (!s) return 0;
+    n = strlen(s);
+    if (n < 3 || n > 16) return 0;
+    if (!strcmp(s, "rcon") || !strcmp(s, "RCON") || !strcmp(s, "console") || !strcmp(s, "CONSOLE")) return 0;
+    for (size_t i = 0; i < n; ++i) if (!pex_valid_nickname_char(s[i])) return 0;
+    return 1;
+}
+
+static void pex_name_screen_prepare(ScreenId return_screen, int first_run) {
+    g_name_return_screen = return_screen;
+    g_name_screen_first_run = first_run ? 1 : 0;
+    snprintf(g_name_edit_text, sizeof(g_name_edit_text), "%s", g_opts.username[0] ? g_opts.username : "Player");
+    if (!g_opts.name_set && !strcmp(g_name_edit_text, "Player")) g_name_edit_text[0] = 0;
+}
+
+static ScreenId pex_startup_screen(void) {
+    if (!g_opts.name_set) {
+        pex_name_screen_prepare(SCREEN_TITLE, 1);
+        return SCREEN_SET_NAME;
+    }
+    return SCREEN_TITLE;
+}
+
+static void pex_commit_nickname(void) {
+    pex_sanitize_nickname_in_place(g_name_edit_text);
+    if (!pex_nickname_valid(g_name_edit_text)) return;
+    snprintf(g_opts.username, sizeof(g_opts.username), "%s", g_name_edit_text);
+    snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username);
+    g_opts.name_set = 1;
+    save_options();
+    set_screen(g_name_return_screen);
 }
 
 static void choose_release_splash(char *out, size_t cap) {
@@ -443,7 +496,8 @@ static void rebuild_screen(void) {
         add_button_full(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, tr("Controls..."), BUTTON_NORMAL);
         add_button_full(302, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Language"), BUTTON_NORMAL);
         add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 168 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
-        add_button_full(200, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 200, 20, tr("Done"), BUTTON_NORMAL);
+        add_button_full(303, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 200, 20, "Nickname...", BUTTON_NORMAL);
+        add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         const OptionId video_options[] = {
             OPT_GRAPHICS, OPT_RENDER_DISTANCE, OPT_VIEW_BOBBING, OPT_LIMIT_FRAMERATE,
@@ -484,6 +538,10 @@ static void rebuild_screen(void) {
             }
         }
         add_button_full(200, g_gui_w / 2 - 75, g_gui_h - 38, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
+    } else if (g_screen == SCREEN_SET_NAME) {
+        Button *done = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 2 + 50, 200, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
+        done->enabled = pex_nickname_valid(g_name_edit_text);
+        if (!g_name_screen_first_run) add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 2 + 74, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SKINS) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h - 76, tr("Import Skin..."));
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Use Default"), BUTTON_NORMAL);
@@ -691,6 +749,7 @@ static void on_button(Button *b) {
         else if (b->id == 300) set_screen(SCREEN_OPTIONS_MORE);
         else if (b->id == 301) set_screen(SCREEN_SKINS);
         else if (b->id == 302) { g_language_return_screen = SCREEN_OPTIONS; set_screen(SCREEN_LANGUAGE); }
+        else if (b->id == 303) { pex_name_screen_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_SET_NAME); }
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         if (b->id < 100) {
             if (b->kind == BUTTON_NORMAL) {
@@ -714,6 +773,9 @@ static void on_button(Button *b) {
                 open_notice("Language", "Could not download languages from client.jar.", g_classic_install_error);
             }
         } else if (b->id == 200) { save_options(); set_screen(g_language_return_screen); }
+    } else if (g_screen == SCREEN_SET_NAME) {
+        if (b->id == 10) pex_commit_nickname();
+        else if (b->id == 1 && !g_name_screen_first_run) set_screen(g_name_return_screen);
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_SKINS) {
@@ -894,16 +956,16 @@ static void on_button(Button *b) {
             InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_UNKNOWN);
             save_options();
             if (classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
-            else set_screen(SCREEN_TITLE);
+            else set_screen(pex_startup_screen());
         } else {
             if (!pack_is_installed() || pack_missing_required_textures()) g_opts.ignore_classic_resources_warning = 1;
             if (g_opts.download_classic_sounds && !classic_sounds_installed()) g_opts.ignore_classic_sounds_warning = 1;
             save_options();
-            set_screen(SCREEN_TITLE);
+            set_screen(pex_startup_screen());
         }
     } else if (g_screen == SCREEN_CLASSIC_PACK_WARNING) {
         if (b->id == 0) pack_install_start();
-        else set_screen(SCREEN_TITLE);
+        else set_screen(pex_startup_screen());
     }
 }
 
@@ -976,6 +1038,11 @@ static void mouse_down(int mx, int my) {
     if (g_screen == SCREEN_RENAME_WORLD) {
         int x = g_gui_w / 2 - 100;
         int y = 60;
+        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) rebuild_screen();
+    }
+    if (g_screen == SCREEN_SET_NAME) {
+        int x = g_gui_w / 2 - 100;
+        int y = g_gui_h / 2 - 8;
         if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) rebuild_screen();
     }
     if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() != 0) {
@@ -1360,6 +1427,7 @@ static void handle_keydown(WPARAM vk) {
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
+        else if (g_screen == SCREEN_SET_NAME) { if (!g_name_screen_first_run) set_screen(g_name_return_screen); }
         else if (g_screen == SCREEN_SYSTEM_INFO) set_screen(SCREEN_OPTIONS_MORE);
         else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
@@ -1379,6 +1447,12 @@ static void handle_keydown(WPARAM vk) {
             set_screen(SCREEN_TITLE);
         }
         else if (g_screen == SCREEN_CLASSIC_PACK_WARNING) set_screen(SCREEN_TITLE);
+        return;
+    }
+    if (g_screen == SCREEN_SET_NAME) {
+        size_t len = strlen(g_name_edit_text);
+        if (vk == VK_BACK && len > 0) { g_name_edit_text[len - 1] = 0; rebuild_screen(); }
+        else if (vk == VK_RETURN && pex_nickname_valid(g_name_edit_text)) pex_commit_nickname();
         return;
     }
     if (g_screen == SCREEN_CREATE_WORLD) {
@@ -1431,6 +1505,16 @@ static void handle_char(WPARAM ch) {
             size_t len = strlen(g_chat_input);
             g_chat_input[len] = (char)ch;
             g_chat_input[len + 1] = 0;
+        }
+        return;
+    }
+    if (g_screen == SCREEN_SET_NAME) {
+        if (ch == 13 || ch == 8 || ch == 9 || ch == 27) return;
+        if (pex_valid_nickname_char((char)ch) && strlen(g_name_edit_text) < 16) {
+            size_t len = strlen(g_name_edit_text);
+            g_name_edit_text[len] = (char)ch;
+            g_name_edit_text[len + 1] = 0;
+            rebuild_screen();
         }
         return;
     }

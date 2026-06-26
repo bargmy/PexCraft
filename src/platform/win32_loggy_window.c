@@ -74,6 +74,7 @@ static const char *loggy_screen_name(int screen) {
         case SCREEN_TITLE: return "TITLE/main menu";
         case SCREEN_OPTIONS: return "OPTIONS";
         case SCREEN_OPTIONS_MORE: return "OPTIONS_MORE";
+        case SCREEN_SET_NAME: return "SET_NAME";
         case SCREEN_SYSTEM_INFO: return "SYSTEM_INFO";
         case SCREEN_SKINS: return "SKINS";
         case SCREEN_CONTROLS: return "CONTROLS";

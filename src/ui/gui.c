@@ -1198,6 +1198,19 @@ static void draw_rename_world_screen(void) {
     draw_all_buttons();
 }
 
+
+static void draw_set_name_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Choose your nickname", g_gui_w / 2, g_gui_h / 2 - 58, 16777215);
+    draw_text("Nickname", g_gui_w / 2 - 100, g_gui_h / 2 - 21, 10526880);
+    draw_text_field_box(g_name_edit_text, g_gui_w / 2 - 100, g_gui_h / 2 - 8, 200, 20, 1);
+    draw_centered_text("This can be changed later in Settings.", g_gui_w / 2, g_gui_h / 2 + 20, 10526880);
+    if (g_name_edit_text[0] && !pex_nickname_valid(g_name_edit_text)) {
+        draw_centered_text("Use 3-16 letters, numbers, or underscores.", g_gui_w / 2, g_gui_h / 2 + 32, 0xFF5555);
+    }
+    draw_all_buttons();
+}
+
 static void draw_world_type_screen(void) {
     draw_default_bg();
     draw_centered_text(tr_key_default("selectWorld.create", "Create New World"), g_gui_w / 2, 40, 16777215);
