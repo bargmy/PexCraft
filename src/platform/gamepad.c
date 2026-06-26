@@ -73,6 +73,44 @@ static void pex_gamepad_copy_edges(PexGamepadState *dst, const PexGamepadState *
     dst->prev_dpad_left = old->dpad_left; dst->prev_dpad_right = old->dpad_right;
 }
 
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+static void pex_tv_remote_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    if (!g_opts.tv_remote_mapped && !pex_tv_remote_any_action_down()) return;
+    if (!g_tv_remote_seen && !pex_tv_remote_any_action_down()) return;
+    if (g_gamepad_count >= PEX_GAMEPAD_MAX) return;
+
+    int slot = g_gamepad_count;
+    PexGamepadState *p = &g_gamepads[slot];
+    memset(p, 0, sizeof(*p));
+    pex_gamepad_copy_edges(p, &oldpads[slot]);
+    p->connected = 1;
+    p->slot = slot;
+#if defined(PEX_PLATFORM_LGWEBOS)
+    snprintf(p->name, sizeof(p->name), "LG webOS remote");
+#else
+    snprintf(p->name, sizeof(p->name), "Android TV remote");
+#endif
+    snprintf(p->kind, sizeof(p->kind), "TV remote");
+
+    p->dpad_up = pex_tv_remote_action_down(PEX_TV_REMOTE_UP);
+    p->dpad_down = pex_tv_remote_action_down(PEX_TV_REMOTE_DOWN);
+    p->dpad_left = pex_tv_remote_action_down(PEX_TV_REMOTE_LEFT);
+    p->dpad_right = pex_tv_remote_action_down(PEX_TV_REMOTE_RIGHT);
+    p->a = pex_tv_remote_action_down(PEX_TV_REMOTE_OK);
+    p->back = pex_tv_remote_action_down(PEX_TV_REMOTE_BACK);
+    p->rt = pex_tv_remote_action_down(PEX_TV_REMOTE_BREAK) ? 1.0f : 0.0f;
+    p->lt = pex_tv_remote_action_down(PEX_TV_REMOTE_PLACE) ? 1.0f : 0.0f;
+    p->y = pex_tv_remote_action_down(PEX_TV_REMOTE_INVENTORY);
+    p->b = pex_tv_remote_action_down(PEX_TV_REMOTE_SNEAK);
+    p->x = pex_tv_remote_action_down(PEX_TV_REMOTE_DROP);
+    p->lb = pex_tv_remote_action_down(PEX_TV_REMOTE_HOTBAR_PREV);
+    p->rb = pex_tv_remote_action_down(PEX_TV_REMOTE_HOTBAR_NEXT);
+
+    g_gamepad_count++;
+    g_gamepad_primary = slot;
+}
+#endif
+
 #ifdef PEX_PLATFORM_SDL2
 static SDL_GameController *g_sdl2_pads[PEX_GAMEPAD_MAX];
 static SDL_Joystick *g_sdl2_joys[PEX_GAMEPAD_MAX];
@@ -202,8 +240,13 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
         if (g_gamepad_primary < 0) g_gamepad_primary = g_gamepad_count;
         g_gamepad_count++;
     }
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    if (g_opts.tv_remote_mapped) pex_tv_remote_append_remote_pad(oldpads);
+    else {
 #ifdef PEX_PLATFORM_ANDROID_TV
-    pex_android_tv_append_remote_pad(oldpads);
+        pex_android_tv_append_remote_pad(oldpads);
+#endif
+    }
 #endif
 #ifdef PEX_PLATFORM_ANDROID
     (void)oldpads; /* Android touch is handled as touch/mouse focus, not as a controller. */
@@ -457,7 +500,7 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
 
 static int pex_gamepad_menu_screen(void) {
     return g_screen == SCREEN_TITLE || g_screen == SCREEN_OPTIONS || g_screen == SCREEN_OPTIONS_MORE ||
-           g_screen == SCREEN_SYSTEM_INFO || g_screen == SCREEN_SKINS || g_screen == SCREEN_CONTROLS ||
+           g_screen == SCREEN_SYSTEM_INFO || g_screen == SCREEN_SKINS || g_screen == SCREEN_CONTROLS || g_screen == SCREEN_TV_REMOTE_MAP ||
            g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_CREATE_WORLD || g_screen == SCREEN_WORLD_TYPE || g_screen == SCREEN_WORLD_DELETE || g_screen == SCREEN_RENAME_WORLD ||
            g_screen == SCREEN_CONFIRM_DELETE || g_screen == SCREEN_MULTIPLAYER || g_screen == SCREEN_CONNECTING ||
            g_screen == SCREEN_TEXPACK || g_screen == SCREEN_PAUSE || g_screen == SCREEN_DEATH ||

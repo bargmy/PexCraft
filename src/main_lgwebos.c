@@ -120,6 +120,31 @@ static void steve_set_tint(float r, float g, float b);
 
 #include "game/inventory.c"
 #include "game/passive_mobs.c"
+
+/* MCPE protocol_81 implementation must be included before multiplayer_client.c
+   because this project builds as one translation unit per platform. */
+#include "../multiplayer/mcpe/protocol_81/packets/packet_codec.c"
+#include "../multiplayer/mcpe/protocol_81/packets/login_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/play_status_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/start_game_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/full_chunk_data_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/move_player_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/request_chunk_radius_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/text_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/batch_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/player_action_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/remove_block_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/mob_equipment_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/use_item_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/update_block_packet.c"
+#include "../multiplayer/mcpe/protocol_81/packets/entity_packets.c"
+#include "../multiplayer/mcpe/protocol_81/transport/raknet_loader.c"
+#include "../multiplayer/mcpe/protocol_81/transport/raknet_wrapper.c"
+#include "../multiplayer/mcpe/protocol_81/session/motd_detect.c"
+#include "../multiplayer/mcpe/protocol_81/session/join_session.c"
+#include "../multiplayer/mcpe/protocol_81/session/bedrock_join.c"
+#include "../multiplayer/mcpe/protocol_81/world/chunk_convert.c"
+
 #include "platform/multiplayer_client.c"
 #include "ui/screen_state_input.c"
 #include "ui/title_menus.c"

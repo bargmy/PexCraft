@@ -1211,6 +1211,34 @@ static void draw_set_name_screen(void) {
     draw_all_buttons();
 }
 
+static void draw_tv_remote_map_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Remote Button Setup", g_gui_w / 2, 24, 16777215);
+    draw_centered_text("Press each button on your TV remote.", g_gui_w / 2, 48, 10526880);
+    draw_centered_text("This can be changed later in Settings.", g_gui_w / 2, 60, 10526880);
+
+    if (g_tv_remote_map_step < 0) g_tv_remote_map_step = 0;
+    if (g_tv_remote_map_step >= PEX_TV_REMOTE_ACTION_COUNT) g_tv_remote_map_step = PEX_TV_REMOTE_ACTION_COUNT - 1;
+
+    char line[160];
+    snprintf(line, sizeof(line), "%d/%d", g_tv_remote_map_step + 1, PEX_TV_REMOTE_ACTION_COUNT);
+    draw_centered_text(line, g_gui_w / 2, 86, 0xFFFFA0);
+    snprintf(line, sizeof(line), "Press: %s", pex_tv_remote_action_label(g_tv_remote_map_step));
+    draw_centered_text(line, g_gui_w / 2, 104, 16777215);
+
+    int x = g_gui_w / 2 - 120;
+    int y = 126;
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) {
+        int color = i < g_tv_remote_map_step ? 0x55FF55 : (i == g_tv_remote_map_step ? 0xFFFF55 : 0x808080);
+        snprintf(line, sizeof(line), "%s%s", i < g_tv_remote_map_step ? "OK  " : (i == g_tv_remote_map_step ? "->  " : "    "), pex_tv_remote_action_label(i));
+        draw_text(line, x, y, color);
+        y += 9;
+        if (y > g_gui_h - 62) break;
+    }
+
+    draw_all_buttons();
+}
+
 static void draw_world_type_screen(void) {
     draw_default_bg();
     draw_centered_text(tr_key_default("selectWorld.create", "Create New World"), g_gui_w / 2, 40, 16777215);

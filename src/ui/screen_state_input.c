@@ -2,6 +2,10 @@
 
 static void rebuild_screen(void);
 static void release_title_state_enter(void);
+static ScreenId pex_startup_screen(void);
+static void pex_ui_text_input_end(void);
+static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h);
+static void pex_ui_text_input_begin_for_current_field(void);
 
 /* GuiMainMenu owns panoramaTimer/viewportTexture per screen instance in Java.
    g_screen starts as SCREEN_TITLE before platform init calls set_screen(), so
@@ -44,8 +48,10 @@ static void set_screen(ScreenId s) {
     g_gamepad_virtual_cursor_active = 0;
     if (s == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) pack_install_start_size_fetch();
     set_mouse_grabbed(s == SCREEN_INGAME);
+    pex_ui_text_input_end();
     clear_buttons();
     rebuild_screen();
+    if (s == SCREEN_CHAT) pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
 }
 
 
@@ -100,7 +106,156 @@ static void pex_name_screen_prepare(ScreenId return_screen, int first_run) {
     if (!g_opts.name_set && !strcmp(g_name_edit_text, "Player")) g_name_edit_text[0] = 0;
 }
 
+static int g_ui_text_input_active = 0;
+
+static void pex_ui_text_input_end(void) {
+#if defined(PEX_PLATFORM_SDL2)
+    if (g_ui_text_input_active) SDL_StopTextInput();
+#endif
+    g_ui_text_input_active = 0;
+}
+
+static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h) {
+#if defined(PEX_PLATFORM_SDL2)
+    SDL_Rect r;
+    int ww = g_win_w ? g_win_w : 1;
+    int wh = g_win_h ? g_win_h : 1;
+    int gw = g_gui_w ? g_gui_w : 1;
+    int gh = g_gui_h ? g_gui_h : 1;
+    r.x = x * ww / gw;
+    r.y = y * wh / gh;
+    r.w = w * ww / gw;
+    r.h = h * wh / gh;
+    SDL_SetTextInputRect(&r);
+    SDL_StartTextInput();
+#endif
+    g_ui_text_input_active = 1;
+}
+
+static void pex_ui_text_input_begin_for_current_field(void) {
+    if (g_screen == SCREEN_CHAT) {
+        pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
+    } else if (g_screen == SCREEN_SET_NAME) {
+        pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, g_gui_h / 2 - 8, 200, 20);
+    } else if (g_screen == SCREEN_CREATE_WORLD || g_screen == SCREEN_RENAME_WORLD) {
+        pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, 60, 200, 20);
+    } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() != 0) {
+        int y = 96;
+        if (pex_mp_server_mode_get() != 1 && pex_mp_server_edit_field_get() == 0) y += 44;
+        pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, y, 200, 20);
+    }
+}
+
+static int pex_tv_remote_platform_enabled(void) {
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static void pex_tv_remote_clear_states(void) {
+    memset(g_tv_remote_state, 0, sizeof(g_tv_remote_state));
+}
+
+static void pex_tv_remote_apply_defaults(void) {
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    /* Android KeyEvent keyCode values. */
+    g_opts.tv_remote_map[PEX_TV_REMOTE_UP] = 19;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_DOWN] = 20;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_LEFT] = 21;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_RIGHT] = 22;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_OK] = 23;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_BACK] = 4;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_BREAK] = 183;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_PLACE] = 184;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_INVENTORY] = 185;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_SNEAK] = 186;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_DROP] = 66;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_PREV] = 7;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_NEXT] = 16;
+#elif defined(PEX_PLATFORM_LGWEBOS)
+    g_opts.tv_remote_map[PEX_TV_REMOTE_UP] = SDLK_UP;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_DOWN] = SDLK_DOWN;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_LEFT] = SDLK_LEFT;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_RIGHT] = SDLK_RIGHT;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_OK] = SDLK_RETURN;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_BACK] = SDLK_ESCAPE;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_BREAK] = 'r';
+    g_opts.tv_remote_map[PEX_TV_REMOTE_PLACE] = 'g';
+    g_opts.tv_remote_map[PEX_TV_REMOTE_INVENTORY] = 'y';
+    g_opts.tv_remote_map[PEX_TV_REMOTE_SNEAK] = 'b';
+    g_opts.tv_remote_map[PEX_TV_REMOTE_DROP] = 'q';
+    g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_PREV] = SDLK_PAGEUP;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_NEXT] = SDLK_PAGEDOWN;
+#else
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) g_opts.tv_remote_map[i] = 0;
+#endif
+    g_opts.tv_remote_mapped = 1;
+    save_options();
+    pex_tv_remote_clear_states();
+}
+
+static void pex_tv_remote_map_prepare(ScreenId return_screen, int first_run) {
+    (void)first_run;
+    g_tv_remote_return_screen = return_screen;
+    g_tv_remote_map_step = 0;
+    g_opts.tv_remote_mapped = 0;
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) g_opts.tv_remote_map[i] = 0;
+    pex_tv_remote_clear_states();
+}
+
+static int pex_tv_remote_action_from_raw(int raw_key) {
+    if (!g_opts.tv_remote_mapped) return -1;
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) {
+        if (g_opts.tv_remote_map[i] == raw_key) return i;
+    }
+    return -1;
+}
+
+static int pex_tv_remote_action_down(int action) {
+    if (action < 0 || action >= PEX_TV_REMOTE_ACTION_COUNT) return 0;
+    return g_tv_remote_state[action] != 0;
+}
+
+static int pex_tv_remote_any_action_down(void) {
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) if (g_tv_remote_state[i]) return 1;
+    return 0;
+}
+
+static void pex_tv_remote_finish_mapping(void) {
+    g_opts.tv_remote_mapped = 1;
+    pex_tv_remote_clear_states();
+    save_options();
+    if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen);
+    else set_screen(pex_startup_screen());
+}
+
+static int pex_tv_remote_handle_raw_key(int raw_key, int down) {
+    if (!pex_tv_remote_platform_enabled() || raw_key == 0) return 0;
+    g_tv_remote_seen = 1;
+    if (g_screen == SCREEN_TV_REMOTE_MAP) {
+        if (!down) return 1;
+        if (g_tv_remote_map_step >= 0 && g_tv_remote_map_step < PEX_TV_REMOTE_ACTION_COUNT) {
+            g_opts.tv_remote_map[g_tv_remote_map_step++] = raw_key;
+            if (g_tv_remote_map_step >= PEX_TV_REMOTE_ACTION_COUNT) pex_tv_remote_finish_mapping();
+            else rebuild_screen();
+        }
+        return 1;
+    }
+    int action = pex_tv_remote_action_from_raw(raw_key);
+    if (action >= 0) {
+        g_tv_remote_state[action] = down ? 1 : 0;
+        return 1;
+    }
+    return 0;
+}
+
 static ScreenId pex_startup_screen(void) {
+    if (pex_tv_remote_platform_enabled() && !g_opts.tv_remote_mapped) {
+        pex_tv_remote_map_prepare(SCREEN_TITLE, 1);
+        return SCREEN_TV_REMOTE_MAP;
+    }
     if (!g_opts.name_set) {
         pex_name_screen_prepare(SCREEN_TITLE, 1);
         return SCREEN_SET_NAME;
@@ -496,7 +651,12 @@ static void rebuild_screen(void) {
         add_button_full(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, tr("Controls..."), BUTTON_NORMAL);
         add_button_full(302, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Language"), BUTTON_NORMAL);
         add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 168 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+        add_button_full(303, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 98, 20, "Nickname...", BUTTON_NORMAL);
+        add_button_full(304, g_gui_w / 2 + 2, g_gui_h / 6 + 192 - 6, 98, 20, "Remote...", BUTTON_NORMAL);
+#else
         add_button_full(303, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 200, 20, "Nickname...", BUTTON_NORMAL);
+#endif
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         const OptionId video_options[] = {
@@ -542,6 +702,9 @@ static void rebuild_screen(void) {
         Button *done = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 2 + 50, 200, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
         done->enabled = pex_nickname_valid(g_name_edit_text);
         if (!g_name_screen_first_run) add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 2 + 74, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
+    } else if (g_screen == SCREEN_TV_REMOTE_MAP) {
+        add_button_full(20, g_gui_w / 2 - 100, g_gui_h - 52, 200, 20, "Use Defaults", BUTTON_NORMAL);
+        add_button_full(21, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SKINS) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h - 76, tr("Import Skin..."));
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Use Default"), BUTTON_NORMAL);
@@ -750,6 +913,7 @@ static void on_button(Button *b) {
         else if (b->id == 301) set_screen(SCREEN_SKINS);
         else if (b->id == 302) { g_language_return_screen = SCREEN_OPTIONS; set_screen(SCREEN_LANGUAGE); }
         else if (b->id == 303) { pex_name_screen_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_SET_NAME); }
+        else if (b->id == 304) { pex_tv_remote_map_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_TV_REMOTE_MAP); }
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         if (b->id < 100) {
             if (b->kind == BUTTON_NORMAL) {
@@ -776,6 +940,12 @@ static void on_button(Button *b) {
     } else if (g_screen == SCREEN_SET_NAME) {
         if (b->id == 10) pex_commit_nickname();
         else if (b->id == 1 && !g_name_screen_first_run) set_screen(g_name_return_screen);
+    } else if (g_screen == SCREEN_TV_REMOTE_MAP) {
+        if (b->id == 20) { pex_tv_remote_apply_defaults(); if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen); else set_screen(pex_startup_screen()); }
+        else if (b->id == 21) {
+            if (!g_opts.tv_remote_mapped) { pex_tv_remote_apply_defaults(); if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen); else set_screen(pex_startup_screen()); }
+            else set_screen(g_tv_remote_return_screen);
+        }
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
     } else if (g_screen == SCREEN_SKINS) {
@@ -1032,18 +1202,19 @@ static void mouse_down(int mx, int my) {
         int y = 60;
         if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
             g_create_edit_field = g_create_more_options ? 1 : 0;
+            pex_ui_text_input_begin_for_current_field();
             rebuild_screen();
         }
     }
     if (g_screen == SCREEN_RENAME_WORLD) {
         int x = g_gui_w / 2 - 100;
         int y = 60;
-        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) rebuild_screen();
+        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) { pex_ui_text_input_begin_for_current_field(); rebuild_screen(); }
     }
     if (g_screen == SCREEN_SET_NAME) {
         int x = g_gui_w / 2 - 100;
         int y = g_gui_h / 2 - 8;
-        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) rebuild_screen();
+        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) { pex_ui_text_input_begin_for_current_field(); rebuild_screen(); }
     }
     if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() != 0) {
         int x = g_gui_w / 2 - 100;
@@ -1051,12 +1222,14 @@ static void mouse_down(int mx, int my) {
         if (pex_mp_server_mode_get() != 1) {
             if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
                 g_mp_server_edit_field = 1;
+                pex_ui_text_input_begin_for_current_field();
                 rebuild_screen();
             }
             y += 44;
         }
         if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
             g_mp_server_edit_field = 0;
+            pex_ui_text_input_begin_for_current_field();
             rebuild_screen();
         }
     }
@@ -1428,6 +1601,7 @@ static void handle_keydown(WPARAM vk) {
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_SET_NAME) { if (!g_name_screen_first_run) set_screen(g_name_return_screen); }
+        else if (g_screen == SCREEN_TV_REMOTE_MAP) { if (!g_opts.tv_remote_mapped) pex_tv_remote_apply_defaults(); if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen); else set_screen(pex_startup_screen()); }
         else if (g_screen == SCREEN_SYSTEM_INFO) set_screen(SCREEN_OPTIONS_MORE);
         else if (g_screen == SCREEN_SKINS) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_CONTROLS) set_screen(SCREEN_OPTIONS);
@@ -1450,12 +1624,14 @@ static void handle_keydown(WPARAM vk) {
         return;
     }
     if (g_screen == SCREEN_SET_NAME) {
+        if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
         size_t len = strlen(g_name_edit_text);
         if (vk == VK_BACK && len > 0) { g_name_edit_text[len - 1] = 0; rebuild_screen(); }
         else if (vk == VK_RETURN && pex_nickname_valid(g_name_edit_text)) pex_commit_nickname();
         return;
     }
     if (g_screen == SCREEN_CREATE_WORLD) {
+        if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
         char *field = g_create_more_options ? g_pending_seed_text : g_pending_world_name;
         size_t len = strlen(field);
         if (vk == VK_BACK && len > 0) { field[len - 1] = 0; if (!g_create_more_options) create_world_update_folder(); rebuild_screen(); }
@@ -1464,6 +1640,7 @@ static void handle_keydown(WPARAM vk) {
         return;
     }
     if (g_screen == SCREEN_RENAME_WORLD) {
+        if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
         size_t len = strlen(g_rename_world_text);
         if (vk == VK_BACK && len > 0) { g_rename_world_text[len - 1] = 0; rebuild_screen(); }
         else if (vk == VK_RETURN && g_rename_world_text[0]) rename_selected_world_save();
@@ -1480,6 +1657,7 @@ static void handle_keydown(WPARAM vk) {
                 for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { on_button(&g_buttons[i]); break; }
             }
         } else {
+            if (vk == VK_RETURN && pex_tv_remote_platform_enabled() && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
             char *field = pex_mp_server_edit_field_get() == 1 ? g_mp_server_edit_name : g_mp_server_edit_address;
             size_t len = strlen(field);
             if (vk == VK_TAB) {

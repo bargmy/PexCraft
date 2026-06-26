@@ -128,7 +128,11 @@ Java_ir_hienob_pexcraft_tv_PexCraftActivity_nativeOnTvKey(JNIEnv *env, jobject t
     (void)env;
     (void)thiz;
     int key = (int)keyCode;
-    if (!pex_android_tv_supported_key(key)) return JNI_FALSE;
+    if (!pex_android_tv_supported_key(key) && g_screen != SCREEN_TV_REMOTE_MAP) return JNI_FALSE;
+    if (pex_tv_remote_handle_raw_key(key, down ? 1 : 0)) {
+        g_android_tv_remote_seen = 1;
+        if (g_screen == SCREEN_TV_REMOTE_MAP || g_opts.tv_remote_mapped) return JNI_TRUE;
+    }
     if (key >= 0 && key < (int)ARRAY_COUNT(g_android_tv_key_state)) {
         int was_down = g_android_tv_key_state[key] != 0;
         g_android_tv_key_state[key] = down ? 1 : 0;

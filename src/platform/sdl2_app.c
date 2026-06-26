@@ -251,7 +251,6 @@ static void sleep_for_max_fps(double frame_start_time) {
 static void main_loop(void) {
     g_last_time = now_seconds();
     double tick_accum = 0.0;
-    SDL_StartTextInput();
     while (g_running) {
         profile_begin_frame();
         double prof_start = profile_begin();

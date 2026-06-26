@@ -331,6 +331,7 @@ typedef enum ScreenId {
     SCREEN_OPTIONS_MORE,
     SCREEN_LANGUAGE,
     SCREEN_SET_NAME,
+    SCREEN_TV_REMOTE_MAP,
     SCREEN_SYSTEM_INFO,
     SCREEN_SKINS,
     SCREEN_CONTROLS,
@@ -382,6 +383,62 @@ typedef enum RendererBackend {
     RENDERER_D3D11,
     RENDERER_COUNT
 } RendererBackend;
+
+#define PEX_TV_REMOTE_ACTION_COUNT 13
+
+typedef enum PexTvRemoteAction {
+    PEX_TV_REMOTE_UP = 0,
+    PEX_TV_REMOTE_DOWN,
+    PEX_TV_REMOTE_LEFT,
+    PEX_TV_REMOTE_RIGHT,
+    PEX_TV_REMOTE_OK,
+    PEX_TV_REMOTE_BACK,
+    PEX_TV_REMOTE_BREAK,
+    PEX_TV_REMOTE_PLACE,
+    PEX_TV_REMOTE_INVENTORY,
+    PEX_TV_REMOTE_SNEAK,
+    PEX_TV_REMOTE_DROP,
+    PEX_TV_REMOTE_HOTBAR_PREV,
+    PEX_TV_REMOTE_HOTBAR_NEXT
+} PexTvRemoteAction;
+
+static const char *pex_tv_remote_action_key(int action) {
+    switch (action) {
+        case PEX_TV_REMOTE_UP: return "up";
+        case PEX_TV_REMOTE_DOWN: return "down";
+        case PEX_TV_REMOTE_LEFT: return "left";
+        case PEX_TV_REMOTE_RIGHT: return "right";
+        case PEX_TV_REMOTE_OK: return "ok";
+        case PEX_TV_REMOTE_BACK: return "back";
+        case PEX_TV_REMOTE_BREAK: return "break";
+        case PEX_TV_REMOTE_PLACE: return "place";
+        case PEX_TV_REMOTE_INVENTORY: return "inventory";
+        case PEX_TV_REMOTE_SNEAK: return "sneak";
+        case PEX_TV_REMOTE_DROP: return "drop";
+        case PEX_TV_REMOTE_HOTBAR_PREV: return "hotbarPrev";
+        case PEX_TV_REMOTE_HOTBAR_NEXT: return "hotbarNext";
+        default: return "unknown";
+    }
+}
+
+static const char *pex_tv_remote_action_label(int action) {
+    switch (action) {
+        case PEX_TV_REMOTE_UP: return "Move / menu up";
+        case PEX_TV_REMOTE_DOWN: return "Move / menu down";
+        case PEX_TV_REMOTE_LEFT: return "Move / menu left";
+        case PEX_TV_REMOTE_RIGHT: return "Move / menu right";
+        case PEX_TV_REMOTE_OK: return "OK / jump / select";
+        case PEX_TV_REMOTE_BACK: return "Back / pause";
+        case PEX_TV_REMOTE_BREAK: return "Break / attack";
+        case PEX_TV_REMOTE_PLACE: return "Place / use";
+        case PEX_TV_REMOTE_INVENTORY: return "Inventory";
+        case PEX_TV_REMOTE_SNEAK: return "Sneak";
+        case PEX_TV_REMOTE_DROP: return "Drop item";
+        case PEX_TV_REMOTE_HOTBAR_PREV: return "Hotbar previous";
+        case PEX_TV_REMOTE_HOTBAR_NEXT: return "Hotbar next";
+        default: return "Unknown";
+    }
+}
 
 typedef enum OptionId {
     OPT_MUSIC = 0,
@@ -436,6 +493,8 @@ typedef struct Options {
     char last_server[64];
     char username[32];
     int name_set;
+    int tv_remote_mapped;
+    int tv_remote_map[PEX_TV_REMOTE_ACTION_COUNT];
     char language[16];
     int keys[10];
 } Options;
@@ -655,6 +714,10 @@ static int g_multiplayer_edit_field = 0;
 static char g_name_edit_text[32] = "";
 static ScreenId g_name_return_screen = SCREEN_TITLE;
 static int g_name_screen_first_run = 0;
+static ScreenId g_tv_remote_return_screen = SCREEN_TITLE;
+static int g_tv_remote_map_step = 0;
+static int g_tv_remote_state[PEX_TV_REMOTE_ACTION_COUNT];
+static int g_tv_remote_seen = 0;
 static char g_multiplayer_status[MAX_LABEL] = "";
 static SOCKET g_mp_socket = INVALID_SOCKET;
 static int g_mp_winsock_started = 0;

@@ -38,6 +38,8 @@ static void set_default_options(void) {
     g_opts.last_server[0] = 0;
     snprintf(g_opts.username, sizeof(g_opts.username), "Player");
     g_opts.name_set = 0;
+    g_opts.tv_remote_mapped = 0;
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) g_opts.tv_remote_map[i] = 0;
     snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
     pex_set_language_code(g_opts.language);
     for (int i = 0; i < 10; i++) g_opts.keys[i] = default_keys[i];
@@ -128,6 +130,16 @@ static void load_options(void) {
         else if (!strcmp(k, "lastServer")) snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", v);
         else if (!strcmp(k, "username")) snprintf(g_opts.username, sizeof(g_opts.username), "%s", v);
         else if (!strcmp(k, "isnameset") || !strcmp(k, "isNameSet") || !strcmp(k, "nameSet")) g_opts.name_set = (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes"));
+        else if (!strcmp(k, "tvRemoteMapped") || !strcmp(k, "tvRemote.mapped")) g_opts.tv_remote_mapped = (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes"));
+        else if (!strncmp(k, "tvRemote.", 9)) {
+            const char *name = k + 9;
+            for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) {
+                if (!strcmp(name, pex_tv_remote_action_key(i))) {
+                    g_opts.tv_remote_map[i] = atoi(v);
+                    break;
+                }
+            }
+        }
         else if (!strcmp(k, "lang") || !strcmp(k, "language")) snprintf(g_opts.language, sizeof(g_opts.language), "%s", v);
         else if (!strncmp(k, "key_", 4)) {
             const char *name = k + 4;
@@ -197,6 +209,8 @@ static void save_options(void) {
     fprintf(f, "lastServer:%s\n", g_opts.last_server);
     fprintf(f, "username:%s\n", g_opts.username);
     fprintf(f, "isnameset:%s\n", g_opts.name_set ? "true" : "false");
+    fprintf(f, "tvRemoteMapped:%s\n", g_opts.tv_remote_mapped ? "true" : "false");
+    for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) fprintf(f, "tvRemote.%s:%d\n", pex_tv_remote_action_key(i), g_opts.tv_remote_map[i]);
     fprintf(f, "lang:%s\n", g_opts.language[0] ? g_opts.language : pex_current_language_code());
     const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};
     for (int i = 0; i < 10; i++) fprintf(f, "key_%s:%d\n", orig[i], vk_to_lwjgl(g_opts.keys[i]));

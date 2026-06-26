@@ -147,6 +147,11 @@ static void sdl2_handle_event(SDL_Event *e) {
             }
             break;
         case SDL_MOUSEMOTION:
+            if (g_screen == SCREEN_INGAME) {
+                /* LG Magic Remote pointer is not usable as an in-game camera.
+                   Gameplay camera/buttons are driven by the saved TV remote mapping. */
+                return;
+            }
             if (g_mouse_grabbed && g_screen == SCREEN_INGAME) {
                 handle_grabbed_mouse_move(e->motion.xrel, e->motion.yrel);
                 g_mouse_x = g_gui_w / 2; g_mouse_y = g_gui_h / 2;
@@ -159,6 +164,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             }
             break;
         case SDL_MOUSEBUTTONDOWN:
+            if (g_screen == SCREEN_INGAME) return;
             if (e->button.button < ARRAY_COUNT(g_sdl2_mouse_buttons)) g_sdl2_mouse_buttons[e->button.button] = 1;
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);
@@ -166,12 +172,14 @@ static void sdl2_handle_event(SDL_Event *e) {
             else if (e->button.button == SDL_BUTTON_RIGHT) mouse_right_down(g_mouse_x, g_mouse_y);
             break;
         case SDL_MOUSEBUTTONUP:
+            if (g_screen == SCREEN_INGAME) return;
             if (e->button.button < ARRAY_COUNT(g_sdl2_mouse_buttons)) g_sdl2_mouse_buttons[e->button.button] = 0;
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);
             if (e->button.button == SDL_BUTTON_LEFT) mouse_up(g_mouse_x, g_mouse_y);
             break;
         case SDL_MOUSEWHEEL:
+            if (g_screen == SCREEN_INGAME) return;
             if (g_screen == SCREEN_CREATIVE) {
                 if (e->wheel.y > 0) creative_scroll_by(-1);
                 else if (e->wheel.y < 0) creative_scroll_by(1);
@@ -184,6 +192,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             }
             break;
         case SDL_KEYDOWN: {
+            if (pex_tv_remote_handle_raw_key((int)e->key.keysym.sym, 1)) return;
             int vk = sdl2_vk_from_key(e->key.keysym.sym);
             if (vk) {
                 g_sdl2_key_state[sdl2_vk_index(vk)] = 1;
@@ -192,6 +201,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             break;
         }
         case SDL_KEYUP: {
+            if (pex_tv_remote_handle_raw_key((int)e->key.keysym.sym, 0)) return;
             int vk = sdl2_vk_from_key(e->key.keysym.sym);
             if (vk) g_sdl2_key_state[sdl2_vk_index(vk)] = 0;
             break;
@@ -255,7 +265,6 @@ static void sleep_for_max_fps(double frame_start_time) {
 static void main_loop(void) {
     g_last_time = now_seconds();
     double tick_accum = 0.0;
-    SDL_StartTextInput();
     while (g_running) {
         profile_begin_frame();
         double prof_start = profile_begin();
@@ -309,6 +318,11 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     pex_log_init();
     pex_install_crash_handlers();
+#ifdef SDL_HINT_IME_SHOW_UI
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+#else
+    SDL_SetHint("SDL_IME_SHOW_UI", "1");
+#endif
     pex_logf("app main enter: %s", APP_TITLE);
 #ifdef SDL_HINT_VIDEO_HIGHDPI_DISABLED
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "1");

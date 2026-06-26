@@ -244,7 +244,6 @@ static void sleep_for_max_fps(double frame_start_time) {
 static void main_loop(void) {
     g_last_time = now_seconds();
     double tick_accum = 0.0;
-    SDL_StartTextInput();
     while (g_running) {
         profile_begin_frame();
         double prof_start = profile_begin();
@@ -298,6 +297,11 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     pex_log_init();
     pex_install_crash_handlers();
+#ifdef SDL_HINT_IME_SHOW_UI
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+#else
+    SDL_SetHint("SDL_IME_SHOW_UI", "1");
+#endif
     pex_logf("app main enter: %s", APP_TITLE);
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
