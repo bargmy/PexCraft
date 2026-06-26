@@ -41,6 +41,8 @@ int pex_mcpe_read_i32_le(PexMcpeReadBuffer *buffer, int32_t *out_value);
 int pex_mcpe_read_i64_be(PexMcpeReadBuffer *buffer, int64_t *out_value);
 int pex_mcpe_read_f32_be(PexMcpeReadBuffer *buffer, float *out_value);
 int pex_mcpe_read_string(PexMcpeReadBuffer *buffer, char *out_value, size_t out_size);
+int pex_mcpe_read_string_bytes(PexMcpeReadBuffer *buffer, uint8_t **out_data, size_t *out_size);
+void pex_mcpe_free_string_bytes(uint8_t *data);
 
 /* Kept for old placeholder callers; MCPE 0.15.4 Genisys packets mostly use fixed ints. */
 int pex_mcpe_write_varint(PexMcpeBuffer *buffer, int32_t value);

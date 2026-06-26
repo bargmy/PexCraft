@@ -553,9 +553,36 @@ static void rebuild_screen(void) {
         add_button_full(0, g_gui_w / 2 - 155 + 0, g_gui_h / 6 + 96, 150, 20, tr_key_default("gui.yes", "Yes"), BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 - 155 + 160, g_gui_h / 6 + 96, 150, 20, tr_key_default("gui.no", "No"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_MULTIPLAYER) {
-        Button *connect = add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 120 + 12, tr_key_default("selectServer.select", "Connect"));
-        connect->enabled = (int)strlen(g_multiplayer_ip) > 0;
-        add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 144 + 12, tr_key_default("gui.cancel", "Cancel"));
+        pex_mp_server_list_ensure();
+        if (pex_mp_server_mode_get() == 0) {
+            int visible_rows = pex_mp_server_visible_rows();
+            int top = 32;
+            int scroll = pex_mp_server_scroll_get();
+            int bottom = g_gui_h - 64;
+            for (int i = 0; i < visible_rows; i++) {
+                int idx = scroll + i;
+                if (idx >= pex_mp_server_count_get()) break;
+                int y = top + 4 + i * 36;
+                int h = 32;
+                if (y + h > bottom) h = bottom - y;
+                if (h > 0) add_button_full(PEX_MP_SERVER_ROW_BASE + idx, g_gui_w / 2 - 110, y, 220, h, "", BUTTON_HITBOX);
+            }
+            int has_server = pex_mp_server_selected_get() >= 0 && pex_mp_server_selected_get() < pex_mp_server_count_get();
+            Button *select = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 100, 20, tr_key_default("selectServer.select", "Join Server"), BUTTON_NORMAL);
+            add_button_full(4, g_gui_w / 2 - 50, g_gui_h - 52, 100, 20, tr_key_default("selectServer.direct", "Direct Connect"), BUTTON_NORMAL);
+            add_button_full(3, g_gui_w / 2 + 54, g_gui_h - 52, 100, 20, tr_key_default("selectServer.add", "Add server"), BUTTON_NORMAL);
+            Button *edit = add_button_full(7, g_gui_w / 2 - 154, g_gui_h - 28, 70, 20, tr_key_default("selectServer.edit", "Edit"), BUTTON_NORMAL);
+            Button *del = add_button_full(2, g_gui_w / 2 - 74, g_gui_h - 28, 70, 20, tr_key_default("selectServer.delete", "Delete"), BUTTON_NORMAL);
+            add_button_full(8, g_gui_w / 2 + 4, g_gui_h - 28, 70, 20, tr_key_default("selectServer.refresh", "Refresh"), BUTTON_NORMAL);
+            add_button_full(1, g_gui_w / 2 + 80, g_gui_h - 28, 75, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
+            select->enabled = has_server;
+            edit->enabled = has_server;
+            del->enabled = has_server;
+        } else {
+            Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 108 + 12, 200, 20, tr_key_default("selectServer.select", "Select"), BUTTON_NORMAL);
+            select->enabled = pex_mp_server_edit_address_get()[0] != 0;
+            add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 132 + 12, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
+        }
     } else if (g_screen == SCREEN_CONNECTING) {
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 120 + 12, tr_key_default("gui.cancel", "Cancel"));
     } else if (g_screen == SCREEN_TEXPACK) {
@@ -780,14 +807,55 @@ static void on_button(Button *b) {
         g_pending_world_name[0] = 0;
         set_screen(SCREEN_WORLD_SELECT);
     } else if (g_screen == SCREEN_MULTIPLAYER) {
-        if (b->id == 1) set_screen(g_parent_screen);
-        else if (b->id == 0) {
-            snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", g_multiplayer_ip);
-            snprintf(g_opts.username, sizeof(g_opts.username), "%s", g_multiplayer_username[0] ? g_multiplayer_username : "Player");
-            save_options();
-            set_screen(SCREEN_CONNECTING);
-            if (!pex_net_connect_to_server(g_multiplayer_ip)) {
-                open_notice("Connection failed", g_multiplayer_status[0] ? g_multiplayer_status : "Could not connect to server.", "");
+        if (b->id >= PEX_MP_SERVER_ROW_BASE && b->id < PEX_MP_SERVER_ROW_BASE + PEX_MP_SERVER_LIST_MAX) {
+            int idx = b->id - PEX_MP_SERVER_ROW_BASE;
+            pex_mp_server_select(idx);
+            rebuild_screen();
+        } else if (pex_mp_server_mode_get() == 0) {
+            if (b->id == 1) set_screen(g_parent_screen);
+            else if (b->id == 10) {
+                if (!pex_mp_server_connect_selected()) return;
+                snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", g_multiplayer_ip);
+                snprintf(g_opts.username, sizeof(g_opts.username), "%s", g_multiplayer_username[0] ? g_multiplayer_username : "Player");
+                save_options();
+                set_screen(SCREEN_CONNECTING);
+                if (!pex_net_connect_to_server(g_multiplayer_ip)) {
+                    open_notice("Connection failed", g_multiplayer_status[0] ? g_multiplayer_status : "Could not connect to server.", "");
+                }
+            } else if (b->id == 4) {
+                pex_mp_server_begin_direct();
+                rebuild_screen();
+            } else if (b->id == 3) {
+                pex_mp_server_begin_add();
+                rebuild_screen();
+            } else if (b->id == 7) {
+                pex_mp_server_begin_edit();
+                rebuild_screen();
+            } else if (b->id == 2) {
+                pex_mp_server_delete_selected();
+                rebuild_screen();
+            } else if (b->id == 8) {
+                pex_mp_server_refresh_all();
+                rebuild_screen();
+            }
+        } else {
+            if (b->id == 1) {
+                pex_mp_server_cancel_edit();
+                rebuild_screen();
+            } else if (b->id == 10) {
+                if (pex_mp_server_mode_get() == 1) {
+                    snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", pex_mp_server_edit_address_get());
+                    snprintf(g_opts.last_server, sizeof(g_opts.last_server), "%s", g_multiplayer_ip);
+                    snprintf(g_opts.username, sizeof(g_opts.username), "%s", g_multiplayer_username[0] ? g_multiplayer_username : "Player");
+                    save_options();
+                    set_screen(SCREEN_CONNECTING);
+                    if (!pex_net_connect_to_server(g_multiplayer_ip)) {
+                        open_notice("Connection failed", g_multiplayer_status[0] ? g_multiplayer_status : "Could not connect to server.", "");
+                    }
+                } else {
+                    pex_mp_server_commit_edit();
+                    rebuild_screen();
+                }
             }
         }
     } else if (g_screen == SCREEN_CONNECTING) {
@@ -910,16 +978,18 @@ static void mouse_down(int mx, int my) {
         int y = 60;
         if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) rebuild_screen();
     }
-    if (g_screen == SCREEN_MULTIPLAYER) {
+    if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() != 0) {
         int x = g_gui_w / 2 - 100;
-        int server_y = g_gui_h / 4 - 10 + 50 + 18;
-        int name_y = server_y + 42;
-        if (mx >= x - 1 && mx < x + 201 && my >= server_y - 1 && my < server_y + 21) {
-            g_multiplayer_edit_field = 0;
-            rebuild_screen();
+        int y = 96;
+        if (pex_mp_server_mode_get() != 1) {
+            if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
+                g_mp_server_edit_field = 1;
+                rebuild_screen();
+            }
+            y += 44;
         }
-        if (mx >= x - 1 && mx < x + 201 && my >= name_y - 1 && my < name_y + 21) {
-            g_multiplayer_edit_field = 1;
+        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
+            g_mp_server_edit_field = 0;
             rebuild_screen();
         }
     }
@@ -1324,16 +1394,28 @@ static void handle_keydown(WPARAM vk) {
         return;
     }
     if (g_screen == SCREEN_MULTIPLAYER) {
-        char *field = g_multiplayer_edit_field == 1 ? g_multiplayer_username : g_multiplayer_ip;
-        size_t len = strlen(field);
-        if (vk == VK_TAB) {
-            g_multiplayer_edit_field = 1 - g_multiplayer_edit_field;
-            rebuild_screen();
-        } else if (vk == VK_BACK && len > 0) {
-            field[len - 1] = 0;
-            rebuild_screen();
-        } else if (vk == VK_RETURN && strlen(g_multiplayer_ip) > 0) {
-            on_button(&g_buttons[0]);
+        if (pex_mp_server_mode_get() == 0) {
+            int sel = pex_mp_server_selected_get();
+            if (vk == VK_UP) { pex_mp_server_select(sel > 0 ? sel - 1 : 0); rebuild_screen(); }
+            else if (vk == VK_DOWN) { pex_mp_server_select(sel + 1); rebuild_screen(); }
+            else if (vk == VK_PRIOR) { pex_mp_server_scroll_by(-5); rebuild_screen(); }
+            else if (vk == VK_NEXT) { pex_mp_server_scroll_by(5); rebuild_screen(); }
+            else if (vk == VK_RETURN && sel >= 0) {
+                for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { on_button(&g_buttons[i]); break; }
+            }
+        } else {
+            char *field = pex_mp_server_edit_field_get() == 1 ? g_mp_server_edit_name : g_mp_server_edit_address;
+            size_t len = strlen(field);
+            if (vk == VK_TAB) {
+                g_mp_server_edit_field = 1 - g_mp_server_edit_field;
+                if (pex_mp_server_mode_get() == 1) g_mp_server_edit_field = 0;
+                rebuild_screen();
+            } else if (vk == VK_BACK && len > 0) {
+                field[len - 1] = 0;
+                rebuild_screen();
+            } else if (vk == VK_RETURN && g_mp_server_edit_address[0]) {
+                for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { on_button(&g_buttons[i]); break; }
+            }
         }
     }
 }
@@ -1371,12 +1453,12 @@ static void handle_char(WPARAM ch) {
         return;
     }
     if (g_screen == SCREEN_MULTIPLAYER) {
-        if (ch == 13 || ch == 8 || ch == 9) return;
-        const char *server_allowed = ".-_:0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        const char *name_allowed = "_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        char *field = g_multiplayer_edit_field == 1 ? g_multiplayer_username : g_multiplayer_ip;
-        size_t cap = g_multiplayer_edit_field == 1 ? sizeof(g_multiplayer_username) : sizeof(g_multiplayer_ip);
-        const char *allowed = g_multiplayer_edit_field == 1 ? name_allowed : server_allowed;
+        if (ch == 13 || ch == 8 || ch == 9 || pex_mp_server_mode_get() == 0) return;
+        char *field = pex_mp_server_edit_field_get() == 1 ? g_mp_server_edit_name : g_mp_server_edit_address;
+        size_t cap = pex_mp_server_edit_field_get() == 1 ? sizeof(g_mp_server_edit_name) : sizeof(g_mp_server_edit_address);
+        const char *allowed_name = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        const char *allowed_server = ".-_:0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        const char *allowed = pex_mp_server_edit_field_get() == 1 ? allowed_name : allowed_server;
         if (strchr(allowed, (char)ch) && strlen(field) + 1 < cap) {
             size_t len = strlen(field);
             field[len] = (char)ch;

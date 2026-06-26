@@ -743,25 +743,94 @@ static void draw_confirm_delete(void) {
 }
 
 static void draw_multiplayer(void) {
+    pex_mp_server_list_ensure();
     draw_default_bg();
-    draw_centered_text(tr_key_default("multiplayer.title", "Play Multiplayer"), g_gui_w / 2, g_gui_h / 4 - 60 + 20, 16777215);
-    draw_text("Enter a server address. PXNet defaults to 25566; MCPE probe uses 19132.", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 0, 10526880);
-    draw_text("Use host or host:port.", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 9, 10526880);
-    if (g_multiplayer_status[0]) draw_text(g_multiplayer_status, g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 27, 10526880);
-    draw_text("Server address:", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 36, 10526880);
-    int x = g_gui_w / 2 - 100;
-    int y = g_gui_h / 4 - 10 + 50 + 18;
-    draw_rect(x - 1, y - 1, x + 201, y + 21, g_multiplayer_edit_field == 0 ? -1 : -6250336);
-    draw_rect(x, y, x + 200, y + 20, -16777216);
-    char field[80];
-    snprintf(field, sizeof(field), "%s%s", g_multiplayer_ip, (g_multiplayer_edit_field == 0 && g_ticks / 6 % 2 == 0) ? "_" : "");
-    draw_text(field, x + 4, y + 6, 14737632);
-    draw_text("Username:", g_gui_w / 2 - 140, y + 28, 10526880);
-    y += 42;
-    draw_rect(x - 1, y - 1, x + 201, y + 21, g_multiplayer_edit_field == 1 ? -1 : -6250336);
-    draw_rect(x, y, x + 200, y + 20, -16777216);
-    snprintf(field, sizeof(field), "%s%s", g_multiplayer_username, (g_multiplayer_edit_field == 1 && g_ticks / 6 % 2 == 0) ? "_" : "");
-    draw_text(field, x + 4, y + 6, 14737632);
+
+    if (pex_mp_server_mode_get() != 0) {
+        int mode = pex_mp_server_mode_get();
+        const char *title = mode == 1 ? tr_key_default("selectServer.direct", "Direct Connect") :
+                            mode == 2 ? tr_key_default("selectServer.add", "Add Server") :
+                                        tr_key_default("selectServer.edit", "Edit Server");
+        draw_centered_text(title, g_gui_w / 2, g_gui_h / 4 - 60 + 20, 16777215);
+        int x = g_gui_w / 2 - 100;
+        int y = 96;
+        if (mode != 1) {
+            draw_text(tr_key_default("addServer.enterName", "Server Name"), x, y - 14, 10526880);
+            draw_rect(x - 1, y - 1, x + 201, y + 21, pex_mp_server_edit_field_get() == 1 ? -1 : -6250336);
+            draw_rect(x, y, x + 200, y + 20, -16777216);
+            char name_line[96];
+            snprintf(name_line, sizeof(name_line), "%s%s", pex_mp_server_edit_name_get(), (pex_mp_server_edit_field_get() == 1 && g_ticks / 6 % 2 == 0) ? "_" : "");
+            draw_text(name_line, x + 4, y + 6, 14737632);
+            y += 44;
+        }
+        draw_text(tr_key_default("addServer.enterIp", "Server Address"), x, y - 14, 10526880);
+        draw_rect(x - 1, y - 1, x + 201, y + 21, pex_mp_server_edit_field_get() == 0 ? -1 : -6250336);
+        draw_rect(x, y, x + 200, y + 20, -16777216);
+        char address_line[128];
+        snprintf(address_line, sizeof(address_line), "%s%s", pex_mp_server_edit_address_get(), (pex_mp_server_edit_field_get() == 0 && g_ticks / 6 % 2 == 0) ? "_" : "");
+        draw_text(address_line, x + 4, y + 6, 14737632);
+        draw_text("Bedrock 0.15.4 / protocol 82 uses default port 19132.", x, y + 28, 8421504);
+        draw_all_buttons();
+        return;
+    }
+
+    int top = 32;
+    int bottom = g_gui_h - 64;
+    int left = g_gui_w / 2 - 110;
+    int right = g_gui_w / 2 + 110;
+    pex_mp_server_clamp_scroll();
+    draw_tiled_rect_tint(0, top, g_gui_w, bottom, 0x202020, 0);
+
+    int visible = pex_mp_server_visible_rows();
+    int scroll = pex_mp_server_scroll_get();
+    for (int row = 0; row < visible; ++row) {
+        int index = scroll + row;
+        const PexMpServerEntry *e = pex_mp_server_entry_get(index);
+        if (!e) break;
+        int y = top + 4 + row * 36;
+        if (index == pex_mp_server_selected_get()) {
+            draw_rect(left, y - 2, right, y + 34, 8421504);
+            draw_rect(left + 1, y - 1, right - 1, y + 33, 0);
+        }
+        draw_text(e->name[0] ? e->name : "Minecraft Server", left + 2, y + 1, 16777215);
+        int motd_color = (e->ping_ms < 0 && e->polled) ? 0xFF5555 : 8421504;
+        draw_text(e->motd[0] ? e->motd : (e->polling ? "Polling.." : ""), left + 2, y + 12, motd_color);
+        if (e->player_count[0]) {
+            int w = text_width(e->player_count);
+            draw_text(e->player_count, left + 215 - w, y + 12, 8421504);
+        }
+        draw_text(e->host, left + 2, y + 23, 3158064);
+        int bars = 5;
+        const char *tip = "Polling..";
+        if (e->polled && !e->polling) {
+            if (e->ping_ms < 0) { bars = 0; tip = "(no connection)"; }
+            else if (e->ping_ms < 150) { bars = 5; tip = "fast"; }
+            else if (e->ping_ms < 300) { bars = 4; tip = "good"; }
+            else if (e->ping_ms < 600) { bars = 3; tip = "slow"; }
+            else if (e->ping_ms < 1000) { bars = 2; tip = "very slow"; }
+            else { bars = 1; tip = "bad"; }
+        } else {
+            bars = 1 + ((g_ticks / 8 + index) % 5);
+        }
+        int bx = left + 205;
+        for (int b = 0; b < 5; ++b) {
+            int bh = 2 + b;
+            int col = (b < bars) ? 0x55FF55 : 0x555555;
+            draw_rect(bx + b * 2, y + 8 - bh, bx + b * 2 + 1, y + 8, col);
+        }
+        (void)tip;
+    }
+
+    if (pex_mp_server_count_get() == 0) {
+        draw_centered_text("No servers added", g_gui_w / 2, top + 24, 8421504);
+    }
+
+    draw_tiled_rect_tint(0, 0, g_gui_w, top, 0x404040, 0);
+    draw_tiled_rect_tint(0, bottom, g_gui_w, g_gui_h, 0x404040, 0);
+    draw_gradient(0, top, g_gui_w, top + 4, 0xFF000000, 0x00000000);
+    draw_gradient(0, bottom - 4, g_gui_w, bottom, 0x00000000, 0xFF000000);
+    draw_centered_text(tr_key_default("multiplayer.title", "Play Multiplayer"), g_gui_w / 2, 20, 16777215);
+    if (g_multiplayer_status[0]) draw_centered_text(g_multiplayer_status, g_gui_w / 2, bottom + 5, 10526880);
     draw_all_buttons();
 }
 

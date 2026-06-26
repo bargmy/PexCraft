@@ -15,6 +15,15 @@ int pex_mcpe_encode_login_packet(uint8_t *out_data,
                                  const char *username,
                                  int protocol_version,
                                  const char *server_address);
+int pex_mcpe_encode_login_packet_with_skin(uint8_t *out_data,
+                                           size_t out_capacity,
+                                           size_t *out_size,
+                                           const char *username,
+                                           int protocol_version,
+                                           const char *server_address,
+                                           const uint8_t *skin_rgba,
+                                           int skin_width,
+                                           int skin_height);
 
 #ifdef __cplusplus
 }

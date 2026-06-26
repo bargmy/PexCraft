@@ -116,12 +116,15 @@ static char *pex_make_jwt_alloc(const char *payload_json) {
     return out;
 }
 
-int pex_mcpe_encode_login_packet(uint8_t *out_data,
-                                 size_t out_capacity,
-                                 size_t *out_size,
-                                 const char *username,
-                                 int protocol_version,
-                                 const char *server_address) {
+int pex_mcpe_encode_login_packet_with_skin(uint8_t *out_data,
+                                           size_t out_capacity,
+                                           size_t *out_size,
+                                           const char *username,
+                                           int protocol_version,
+                                           const char *server_address,
+                                           const uint8_t *skin_rgba,
+                                           int skin_width,
+                                           int skin_height) {
     if (out_size) *out_size = 0;
     if (!out_data || out_capacity < 64) return 0;
     if (!server_address) server_address = "";
@@ -155,15 +158,21 @@ int pex_mcpe_encode_login_packet(uint8_t *out_data,
     snprintf(chain_json, chain_json_cap, "{\"chain\":[\"%s\"]}", chain_jwt);
     free(chain_jwt);
 
-    /* Genisys accepts 64x32x4 or 64x64x4. 64x32 is smaller and avoids needless login-packet size. */
-    uint8_t skin[64 * 32 * 4];
-    for (size_t i = 0; i < sizeof(skin); i += 4) {
-        skin[i + 0] = 0xb8;
-        skin[i + 1] = 0x7a;
-        skin[i + 2] = 0x4a;
-        skin[i + 3] = 0xff;
+    /* Genisys accepts 64x32x4 or 64x64x4. Prefer PexCraft's selected Steve/custom skin. */
+    uint8_t fallback_skin[64 * 32 * 4];
+    for (size_t i = 0; i < sizeof(fallback_skin); i += 4) {
+        fallback_skin[i + 0] = 0xb8;
+        fallback_skin[i + 1] = 0x7a;
+        fallback_skin[i + 2] = 0x4a;
+        fallback_skin[i + 3] = 0xff;
     }
-    char *skin_b64 = pex_b64_encode_alloc(skin, sizeof(skin));
+    const uint8_t *skin_src = fallback_skin;
+    size_t skin_bytes = sizeof(fallback_skin);
+    if (skin_rgba && skin_width == 64 && (skin_height == 32 || skin_height == 64)) {
+        skin_src = skin_rgba;
+        skin_bytes = (size_t)skin_width * (size_t)skin_height * 4u;
+    }
+    char *skin_b64 = pex_b64_encode_alloc(skin_src, skin_bytes);
     if (!skin_b64) {
         free(chain_json);
         return 0;
@@ -242,4 +251,13 @@ int pex_mcpe_encode_login_packet(uint8_t *out_data,
     if (!ok) return 0;
     if (out_size) *out_size = out.offset;
     return 1;
+}
+
+int pex_mcpe_encode_login_packet(uint8_t *out_data,
+                                 size_t out_capacity,
+                                 size_t *out_size,
+                                 const char *username,
+                                 int protocol_version,
+                                 const char *server_address) {
+    return pex_mcpe_encode_login_packet_with_skin(out_data, out_capacity, out_size, username, protocol_version, server_address, NULL, 0, 0);
 }

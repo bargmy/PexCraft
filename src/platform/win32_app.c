@@ -230,6 +230,10 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
                 } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
                     if (delta > 0) world_save_scroll_by(-1);
                     else if (delta < 0) world_save_scroll_by(1);
+                } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) {
+                    if (delta > 0) pex_mp_server_scroll_by(-1);
+                    else if (delta < 0) pex_mp_server_scroll_by(1);
+                    rebuild_screen();
                 } else if (g_screen == SCREEN_INGAME) {
                     if (delta > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
                     else if (delta < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;

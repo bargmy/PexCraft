@@ -155,3 +155,59 @@ int pex_mcpe_decode_remove_entity_packet(const uint8_t *data, size_t size, uint6
     if (out_eid) *out_eid = (uint64_t)eid;
     return 1;
 }
+
+int pex_mcpe_decode_player_list_packet(const uint8_t *data, size_t size, PexMcpePlayerListSkin *out_entries, size_t max_entries, size_t *out_count) {
+    if (out_count) *out_count = 0;
+    if (!data || !out_entries || max_entries == 0) return 0;
+    PexMcpeReadBuffer b;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    uint8_t type = 0;
+    int32_t count = 0;
+    if (!pex_mcpe_read_u8(&b, &type)) return 0;
+    if (!pex_mcpe_read_i32_be(&b, &count) || count < 0) return 0;
+    size_t written = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        const uint8_t *uuid = NULL;
+        if (!pex_mcpe_read_bytes(&b, &uuid, 16)) break;
+        if (written >= max_entries) {
+            if (type == 0) {
+                int64_t eid_ignored = 0;
+                uint8_t *skin_ignored = NULL;
+                size_t skin_ignored_size = 0;
+                char tmp[128];
+                if (!pex_mcpe_read_i64_be(&b, &eid_ignored)) break;
+                if (!pex_mcpe_read_string(&b, tmp, sizeof(tmp))) break;
+                if (!pex_mcpe_read_string(&b, tmp, sizeof(tmp))) break;
+                if (!pex_mcpe_read_string_bytes(&b, &skin_ignored, &skin_ignored_size)) break;
+                pex_mcpe_free_string_bytes(skin_ignored);
+            }
+            continue;
+        }
+        PexMcpePlayerListSkin *e = &out_entries[written];
+        memset(e, 0, sizeof(*e));
+        e->type = type;
+        memcpy(e->uuid, uuid, 16);
+        if (type == 0) {
+            int64_t eid = 0;
+            if (!pex_mcpe_read_i64_be(&b, &eid)) break;
+            e->eid = (uint64_t)eid;
+            if (!pex_mcpe_read_string(&b, e->username, sizeof(e->username))) break;
+            if (!pex_mcpe_read_string(&b, e->skin_id, sizeof(e->skin_id))) break;
+            if (!pex_mcpe_read_string_bytes(&b, &e->skin_data, &e->skin_size)) break;
+        }
+        written++;
+    }
+    if (out_count) *out_count = written;
+    return written > 0 || count == 0;
+}
+
+void pex_mcpe_free_player_list_entries(PexMcpePlayerListSkin *entries, size_t count) {
+    if (!entries) return;
+    for (size_t i = 0; i < count; ++i) {
+        if (entries[i].skin_data) {
+            pex_mcpe_free_string_bytes(entries[i].skin_data);
+            entries[i].skin_data = NULL;
+            entries[i].skin_size = 0;
+        }
+    }
+}

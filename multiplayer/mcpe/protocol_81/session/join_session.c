@@ -44,12 +44,29 @@ void pex_mcpe_join_session_set_callbacks(PexMcpeJoinSession *session,
     session->callback_userdata = userdata;
 }
 
+void pex_mcpe_join_session_set_skin(PexMcpeJoinSession *session,
+                                    const uint8_t *skin_rgba,
+                                    int width,
+                                    int height) {
+    if (!session) return;
+    if (skin_rgba && width == 64 && (height == 32 || height == 64)) {
+        session->skin_rgba = skin_rgba;
+        session->skin_width = width;
+        session->skin_height = height;
+    } else {
+        session->skin_rgba = NULL;
+        session->skin_width = 0;
+        session->skin_height = 0;
+    }
+}
+
 static int pex_mcpe_send_login(PexMcpeJoinSession *s) {
     uint8_t buf[65536];
     size_t n = 0;
     char address[320];
     snprintf(address, sizeof(address), "%s:%u", s->host, (unsigned)s->port);
-    if (!pex_mcpe_encode_login_packet(buf, sizeof(buf), &n, s->username, s->protocol_version, address)) {
+    if (!pex_mcpe_encode_login_packet_with_skin(buf, sizeof(buf), &n, s->username, s->protocol_version, address,
+                                                s->skin_rgba, s->skin_width, s->skin_height)) {
         pex_mcpe_join_set_status(s, "Could not encode LoginPacket.");
         s->state = PEX_MCPE_JOIN_FAILED;
         return 0;
@@ -219,6 +236,18 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
             if (pex_mcpe_decode_remove_entity_packet(body, body_size, &eid) && s->callbacks.on_remove_entity) {
                 s->callbacks.on_remove_entity(s->callback_userdata, eid);
             }
+            break;
+        }
+        case PEX_MCPE_PACKET_PLAYER_LIST: {
+            PexMcpePlayerListSkin entries[16];
+            size_t count = 0;
+            memset(entries, 0, sizeof(entries));
+            if (pex_mcpe_decode_player_list_packet(body, body_size, entries, 16, &count) && s->callbacks.on_player_skin) {
+                for (size_t i = 0; i < count; ++i) {
+                    s->callbacks.on_player_skin(s->callback_userdata, &entries[i]);
+                }
+            }
+            pex_mcpe_free_player_list_entries(entries, count);
             break;
         }
         case PEX_MCPE_PACKET_DISCONNECT: {

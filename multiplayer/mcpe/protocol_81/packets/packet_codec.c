@@ -1,5 +1,6 @@
 #include "packet_codec.h"
 #include <string.h>
+#include <stdlib.h>
 
 void pex_mcpe_buffer_init(PexMcpeBuffer *buffer, uint8_t *data, size_t size) {
     if (!buffer) return;
@@ -159,6 +160,30 @@ int pex_mcpe_read_string(PexMcpeReadBuffer *buffer, char *out_value, size_t out_
         out_value[n] = '\0';
     }
     return 1;
+}
+
+int pex_mcpe_read_string_bytes(PexMcpeReadBuffer *buffer, uint8_t **out_data, size_t *out_size) {
+    int16_t len16;
+    if (out_data) *out_data = NULL;
+    if (out_size) *out_size = 0;
+    if (!pex_mcpe_read_i16_be(buffer, &len16) || len16 < 0) return 0;
+    size_t len = (size_t)len16;
+    const uint8_t *p;
+    if (!pex_mcpe_read_bytes(buffer, &p, len)) return 0;
+    uint8_t *copy = NULL;
+    if (len > 0) {
+        copy = (uint8_t *)malloc(len);
+        if (!copy) return 0;
+        memcpy(copy, p, len);
+    }
+    if (out_data) *out_data = copy;
+    else if (copy) free(copy);
+    if (out_size) *out_size = len;
+    return 1;
+}
+
+void pex_mcpe_free_string_bytes(uint8_t *data) {
+    if (data) free(data);
 }
 
 int pex_mcpe_write_varint(PexMcpeBuffer *buffer, int32_t value) {

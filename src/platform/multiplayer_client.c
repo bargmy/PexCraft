@@ -41,6 +41,45 @@ typedef struct PexMpBedrockEntityMap {
 static PexMpBedrockEntityMap g_mp_bedrock_entities[PEX_NET_MAX_PLAYERS];
 static int g_mp_bedrock_next_player_id = 2;
 
+#define PEX_MP_SERVER_LIST_MAX 32
+#define PEX_MP_SERVER_ROW_BASE 6000
+typedef struct PexMpServerEntry {
+    char name[64];
+    char host[96];
+    char motd[128];
+    char player_count[32];
+    char version[24];
+    int protocol;
+    int ping_ms;
+    int polled;
+    int polling;
+    int valid_mcpe;
+    HANDLE thread;
+} PexMpServerEntry;
+static PexMpServerEntry g_mp_server_entries[PEX_MP_SERVER_LIST_MAX];
+static int g_mp_server_count = 0;
+static int g_mp_server_selected = -1;
+static int g_mp_server_scroll = 0;
+static int g_mp_server_mode = 0; /* 0=list, 1=direct, 2=add, 3=edit */
+static int g_mp_server_edit_field = 0; /* 0=address, 1=name */
+static char g_mp_server_edit_name[64] = "Minecraft Server";
+static char g_mp_server_edit_address[96] = "";
+static volatile LONG g_mp_server_threads_pending = 0;
+
+static LONG pex_mp_server_pending_get(void) {
+    return InterlockedCompareExchange(&g_mp_server_threads_pending, 0, 0);
+}
+
+static void pex_mp_server_pending_add(LONG delta) {
+    LONG cur;
+    LONG next;
+    do {
+        cur = pex_mp_server_pending_get();
+        next = cur + delta;
+        if (next < 0) next = 0;
+    } while (InterlockedCompareExchange(&g_mp_server_threads_pending, next, cur) != cur);
+}
+
 static void pex_mp_bedrock_on_status(void *userdata, PexMcpePlayStatus status);
 static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameInfo *info);
 static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *chunk);
@@ -49,6 +88,7 @@ static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, 
 static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlayerInfo *player);
 static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move);
 static void pex_mp_bedrock_on_remove_entity(void *userdata, uint64_t eid);
+static void pex_mp_bedrock_on_player_skin(void *userdata, const PexMcpePlayerListSkin *skin);
 static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message);
 
 #define PEX_MP_PACKET_QUEUE_MAX 384
@@ -556,13 +596,292 @@ static int pex_mcpe_begin_bedrock_protocol_81_join(const char *host, int port, i
     cb.on_add_player = pex_mp_bedrock_on_add_player;
     cb.on_move_entity = pex_mp_bedrock_on_move_entity;
     cb.on_remove_entity = pex_mp_bedrock_on_remove_entity;
+    cb.on_player_skin = pex_mp_bedrock_on_player_skin;
     cb.on_disconnect = pex_mp_bedrock_on_disconnect;
     pex_mcpe_join_session_set_callbacks(&g_mp_bedrock_session, &cb, NULL);
+    if (tex_steve.rgba && tex_steve.w == 64 && (tex_steve.h == 32 || tex_steve.h == 64)) {
+        pex_mcpe_join_session_set_skin(&g_mp_bedrock_session, tex_steve.rgba, tex_steve.w, tex_steve.h);
+    }
 
     snprintf(g_multiplayer_status, sizeof(g_multiplayer_status),
              "Detected MCPE %s/protocol %d. Opening RakLib v6 UDP...",
              g_mp_bedrock_detected_version[0] ? g_mp_bedrock_detected_version : "0.15.4",
              g_mp_bedrock_detected_protocol ? g_mp_bedrock_detected_protocol : 82);
+    return 1;
+}
+
+
+static void pex_mp_server_trim(char *s) {
+    if (!s) return;
+    char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = 0;
+}
+
+static void pex_mp_server_list_path(char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    if (g_mc_dir[0]) path_join(out, cap, g_mc_dir, "servers.txt");
+    else snprintf(out, cap, "servers.txt");
+}
+
+static int pex_mp_server_count_get(void) { return g_mp_server_count; }
+static int pex_mp_server_selected_get(void) { return g_mp_server_selected; }
+static int pex_mp_server_scroll_get(void) { return g_mp_server_scroll; }
+static int pex_mp_server_mode_get(void) { return g_mp_server_mode; }
+static int pex_mp_server_edit_field_get(void) { return g_mp_server_edit_field; }
+static const char *pex_mp_server_edit_name_get(void) { return g_mp_server_edit_name; }
+static const char *pex_mp_server_edit_address_get(void) { return g_mp_server_edit_address; }
+static const PexMpServerEntry *pex_mp_server_entry_get(int index) {
+    if (index < 0 || index >= g_mp_server_count) return NULL;
+    return &g_mp_server_entries[index];
+}
+
+static int pex_mp_server_visible_rows(void) {
+    int rows = (g_gui_h - 64 - 32) / 36;
+    if (rows < 1) rows = 1;
+    return rows;
+}
+
+static void pex_mp_server_clamp_scroll(void) {
+    int max_scroll = g_mp_server_count - pex_mp_server_visible_rows();
+    if (max_scroll < 0) max_scroll = 0;
+    if (g_mp_server_scroll < 0) g_mp_server_scroll = 0;
+    if (g_mp_server_scroll > max_scroll) g_mp_server_scroll = max_scroll;
+}
+
+static void pex_mp_server_scroll_by(int rows) {
+    g_mp_server_scroll += rows;
+    pex_mp_server_clamp_scroll();
+}
+
+static void pex_mp_server_list_save(void) {
+    char path[MAX_PATHBUF];
+    pex_mp_server_list_path(path, sizeof(path));
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    for (int i = 0; i < g_mp_server_count; ++i) {
+        if (!g_mp_server_entries[i].host[0]) continue;
+        fprintf(f, "%s\t%s\n", g_mp_server_entries[i].name[0] ? g_mp_server_entries[i].name : "Minecraft Server", g_mp_server_entries[i].host);
+    }
+    fclose(f);
+}
+
+static void pex_mp_server_list_load(void) {
+    static int loaded = 0;
+    if (loaded) return;
+    loaded = 1;
+    g_mp_server_count = 0;
+    char path[MAX_PATHBUF];
+    pex_mp_server_list_path(path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f) && g_mp_server_count < PEX_MP_SERVER_LIST_MAX) {
+            pex_mp_server_trim(line);
+            if (!line[0] || line[0] == '#') continue;
+            char *tab = strchr(line, '\t');
+            PexMpServerEntry *e = &g_mp_server_entries[g_mp_server_count];
+            memset(e, 0, sizeof(*e));
+            if (tab) {
+                *tab++ = 0;
+                snprintf(e->name, sizeof(e->name), "%s", line[0] ? line : "Minecraft Server");
+                snprintf(e->host, sizeof(e->host), "%s", tab);
+            } else {
+                snprintf(e->name, sizeof(e->name), "Minecraft Server");
+                snprintf(e->host, sizeof(e->host), "%s", line);
+            }
+            pex_mp_server_trim(e->name);
+            pex_mp_server_trim(e->host);
+            if (e->host[0]) {
+                e->ping_ms = -2;
+                snprintf(e->motd, sizeof(e->motd), "Polling..");
+                g_mp_server_count++;
+            }
+        }
+        fclose(f);
+    }
+    if (g_mp_server_count == 0 && g_opts.last_server[0]) {
+        PexMpServerEntry *e = &g_mp_server_entries[g_mp_server_count++];
+        memset(e, 0, sizeof(*e));
+        snprintf(e->name, sizeof(e->name), "Last Server");
+        snprintf(e->host, sizeof(e->host), "%s", g_opts.last_server);
+        e->ping_ms = -2;
+        snprintf(e->motd, sizeof(e->motd), "Polling..");
+    }
+    if (g_mp_server_selected >= g_mp_server_count) g_mp_server_selected = g_mp_server_count - 1;
+    if (g_mp_server_selected < 0 && g_mp_server_count > 0) g_mp_server_selected = 0;
+    pex_mp_server_clamp_scroll();
+}
+
+static void pex_mp_server_parse_player_count(const char *motd, char *out, size_t cap) {
+    if (out && cap) out[0] = 0;
+    if (!motd || !out || cap == 0) return;
+    char copy[256];
+    snprintf(copy, sizeof(copy), "%s", motd);
+    char *fields[8];
+    int n = 0;
+    char *p = copy;
+    while (n < (int)ARRAY_COUNT(fields)) {
+        fields[n++] = p;
+        char *semi = strchr(p, ';');
+        if (!semi) break;
+        *semi = 0;
+        p = semi + 1;
+    }
+    if (n >= 6) snprintf(out, cap, "%s/%s", fields[4], fields[5]);
+}
+
+static DWORD WINAPI pex_mp_server_ping_worker(LPVOID param) {
+    int index = (int)(intptr_t)param;
+    if (index < 0 || index >= PEX_MP_SERVER_LIST_MAX) return 0;
+    PexMpServerEntry *e = &g_mp_server_entries[index];
+    char host[96];
+    int port = 19132;
+    int port_was_given = 0;
+    pex_net_parse_host_port_ex(e->host, host, sizeof(host), &port, &port_was_given);
+    if (!port_was_given) port = 19132;
+    char motd[256];
+    motd[0] = 0;
+    double start = now_seconds();
+    if (!g_mp_winsock_started) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) g_mp_winsock_started = 1;
+    }
+    if (pex_mcpe_probe_unconnected_motd(host, port, motd, sizeof(motd))) {
+        double end = now_seconds();
+        PexMcpeMotdInfo info;
+        memset(&info, 0, sizeof(info));
+        pex_mcpe_protocol_81_parse_motd(motd, &info);
+        e->ping_ms = (int)((end - start) * 1000.0);
+        if (e->ping_ms < 0) e->ping_ms = 0;
+        e->valid_mcpe = info.is_mcpe;
+        e->protocol = info.protocol_version;
+        snprintf(e->version, sizeof(e->version), "%s", info.game_version[0] ? info.game_version : "?");
+        snprintf(e->motd, sizeof(e->motd), "%s", info.server_name[0] ? info.server_name : motd);
+        pex_mp_server_parse_player_count(motd, e->player_count, sizeof(e->player_count));
+    } else {
+        e->ping_ms = -1;
+        e->valid_mcpe = 0;
+        e->protocol = 0;
+        e->version[0] = 0;
+        e->player_count[0] = 0;
+        snprintf(e->motd, sizeof(e->motd), "Can't reach server");
+    }
+    e->polled = 1;
+    e->polling = 0;
+    pex_mp_server_pending_add(-1);
+    return 0;
+}
+
+static void pex_mp_server_refresh_one(int index) {
+    if (index < 0 || index >= g_mp_server_count) return;
+    PexMpServerEntry *e = &g_mp_server_entries[index];
+    if (e->polling) return;
+    if (pex_mp_server_pending_get() >= 5) return;
+    if (e->thread) { CloseHandle(e->thread); e->thread = NULL; }
+    e->polling = 1;
+    e->polled = 0;
+    e->ping_ms = -2;
+    e->motd[0] = 0;
+    snprintf(e->motd, sizeof(e->motd), "Polling..");
+    pex_mp_server_pending_add(1);
+    e->thread = CreateThread(NULL, 0, pex_mp_server_ping_worker, (LPVOID)(intptr_t)index, 0, NULL);
+    if (!e->thread) {
+        e->polling = 0;
+        e->polled = 1;
+        e->ping_ms = -1;
+        snprintf(e->motd, sizeof(e->motd), "Can't start ping thread");
+        pex_mp_server_pending_add(-1);
+    }
+}
+
+static void pex_mp_server_refresh_all(void) {
+    pex_mp_server_list_load();
+    for (int i = 0; i < g_mp_server_count; ++i) {
+        g_mp_server_entries[i].polled = 0;
+        pex_mp_server_refresh_one(i);
+    }
+}
+
+static void pex_mp_server_list_ensure(void) {
+    pex_mp_server_list_load();
+    for (int i = 0; i < g_mp_server_count; ++i) {
+        if (!g_mp_server_entries[i].polled && !g_mp_server_entries[i].polling) pex_mp_server_refresh_one(i);
+    }
+}
+
+static void pex_mp_server_select(int index) {
+    if (index < 0 || index >= g_mp_server_count) return;
+    g_mp_server_selected = index;
+    if (g_mp_server_selected < g_mp_server_scroll) g_mp_server_scroll = g_mp_server_selected;
+    if (g_mp_server_selected >= g_mp_server_scroll + pex_mp_server_visible_rows()) g_mp_server_scroll = g_mp_server_selected - pex_mp_server_visible_rows() + 1;
+    pex_mp_server_clamp_scroll();
+}
+
+static void pex_mp_server_begin_direct(void) {
+    g_mp_server_mode = 1;
+    g_mp_server_edit_field = 0;
+    snprintf(g_mp_server_edit_address, sizeof(g_mp_server_edit_address), "%s", g_multiplayer_ip[0] ? g_multiplayer_ip : (g_opts.last_server[0] ? g_opts.last_server : ""));
+    snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "Minecraft Server");
+}
+
+static void pex_mp_server_begin_add(void) {
+    g_mp_server_mode = 2;
+    g_mp_server_edit_field = 1;
+    snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "Minecraft Server");
+    g_mp_server_edit_address[0] = 0;
+}
+
+static void pex_mp_server_begin_edit(void) {
+    if (g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) return;
+    PexMpServerEntry *e = &g_mp_server_entries[g_mp_server_selected];
+    g_mp_server_mode = 3;
+    g_mp_server_edit_field = 1;
+    snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "%s", e->name);
+    snprintf(g_mp_server_edit_address, sizeof(g_mp_server_edit_address), "%s", e->host);
+}
+
+static void pex_mp_server_cancel_edit(void) {
+    g_mp_server_mode = 0;
+    g_mp_server_edit_field = 0;
+}
+
+static void pex_mp_server_delete_selected(void) {
+    if (g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) return;
+    for (int i = g_mp_server_selected; i + 1 < g_mp_server_count; ++i) g_mp_server_entries[i] = g_mp_server_entries[i + 1];
+    if (g_mp_server_count > 0) g_mp_server_count--;
+    if (g_mp_server_selected >= g_mp_server_count) g_mp_server_selected = g_mp_server_count - 1;
+    pex_mp_server_clamp_scroll();
+    pex_mp_server_list_save();
+}
+
+static void pex_mp_server_commit_edit(void) {
+    pex_mp_server_trim(g_mp_server_edit_name);
+    pex_mp_server_trim(g_mp_server_edit_address);
+    if (!g_mp_server_edit_address[0]) return;
+    if (!g_mp_server_edit_name[0]) snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "Minecraft Server");
+    if (g_mp_server_mode == 2) {
+        if (g_mp_server_count >= PEX_MP_SERVER_LIST_MAX) return;
+        g_mp_server_selected = g_mp_server_count++;
+    } else if (g_mp_server_mode != 3 || g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) {
+        return;
+    }
+    PexMpServerEntry *e = &g_mp_server_entries[g_mp_server_selected];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->name, sizeof(e->name), "%s", g_mp_server_edit_name);
+    snprintf(e->host, sizeof(e->host), "%s", g_mp_server_edit_address);
+    e->ping_ms = -2;
+    snprintf(e->motd, sizeof(e->motd), "Polling..");
+    g_mp_server_mode = 0;
+    pex_mp_server_list_save();
+    pex_mp_server_refresh_one(g_mp_server_selected);
+}
+
+static int pex_mp_server_connect_selected(void) {
+    if (g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) return 0;
+    snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_mp_server_entries[g_mp_server_selected].host);
     return 1;
 }
 
@@ -1130,7 +1449,8 @@ static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameI
     g_mp_bedrock_next_player_id = 2;
     g_mp_world_ready = 0;
     g_player_x = g_player_prev_x = info->x;
-    g_player_y = g_player_prev_y = info->y;
+    /* Genisys StartGame uses feet/body Y. PexCraft stores camera/eye Y. */
+    g_player_y = g_player_prev_y = info->y + 1.62f;
     g_player_z = g_player_prev_z = info->z;
     memset(&g_mp_players[0], 0, sizeof(g_mp_players[0]));
     g_mp_players[0].player_id = g_mp_player_id;
@@ -1227,7 +1547,8 @@ static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlay
     g_mp_players[idx].player_id = player_id;
     snprintf(g_mp_players[idx].name, sizeof(g_mp_players[idx].name), "%s", player->username[0] ? player->username : "BedrockPlayer");
     g_mp_players[idx].x = player->x;
-    g_mp_players[idx].y = player->y;
+    /* AddPlayerPacket uses entity feet Y; renderer/player state uses eye Y. */
+    g_mp_players[idx].y = player->y + 1.62f;
     g_mp_players[idx].z = player->z;
     g_mp_players[idx].yaw = player->yaw;
     g_mp_players[idx].pitch = player->pitch;
@@ -1244,7 +1565,7 @@ static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMov
     if (move->is_self) {
         /* Genisys uses eid=0 for self corrections/teleports. */
         g_player_x = g_player_prev_x = move->x;
-        g_player_y = g_player_prev_y = move->y - 1.62f;
+        g_player_y = g_player_prev_y = move->y;
         g_player_z = g_player_prev_z = move->z;
         g_player_yaw = move->yaw;
         g_player_pitch = move->pitch;
@@ -1627,6 +1948,30 @@ static void pex_net_apply_skin(const PexNetSkin *skin, uint32_t size) {
     } else {
         free_texture(&r->skin);
     }
+}
+
+static void pex_mp_bedrock_on_player_skin(void *userdata, const PexMcpePlayerListSkin *skin) {
+    (void)userdata;
+    if (!skin || skin->type != 0 || skin->eid == 0 || !skin->skin_data) return;
+    if (skin->username[0] && g_multiplayer_username[0] && strcmp(skin->username, g_multiplayer_username) == 0) return;
+    int width = 64;
+    int height = 0;
+    if (skin->skin_size == 64u * 32u * 4u) height = 32;
+    else if (skin->skin_size == 64u * 64u * 4u) height = 64;
+    else return;
+
+    int player_id = pex_mp_bedrock_get_or_add_player_id(skin->eid);
+    if (player_id <= 0) return;
+
+    PexNetSkin net_skin;
+    memset(&net_skin, 0, sizeof(net_skin));
+    net_skin.player_id = player_id;
+    net_skin.width = width;
+    net_skin.height = height;
+    net_skin.byte_count = (uint32_t)skin->skin_size;
+    if (net_skin.byte_count > PEX_NET_SKIN_MAX_BYTES) return;
+    memcpy(net_skin.rgba, skin->skin_data, net_skin.byte_count);
+    pex_net_apply_skin(&net_skin, pex_net_skin_packet_size_for(net_skin.byte_count));
 }
 
 static void pex_net_apply_snapshot(const PexNetSnapshot *snap) {
@@ -2352,7 +2697,7 @@ static void pex_net_send_player_state(void) {
         if (now - g_mp_bedrock_last_move_time < 0.05) return;
         g_mp_bedrock_last_move_time = now;
         if (pex_mcpe_join_session_send_move(&g_mp_bedrock_session,
-                                            g_player_x, g_player_y + 1.62f, g_player_z,
+                                            g_player_x, g_player_y, g_player_z,
                                             g_player_yaw, g_player_pitch)) {
             if (g_mp_player_count > 0 && g_mp_players[0].player_id == g_mp_player_id) {
                 g_mp_prev_players[0] = g_mp_players[0];
@@ -2395,7 +2740,7 @@ static void pex_net_send_block_action(int action, int x, int y, int z, int face,
             pex_mcpe_join_session_send_break(&g_mp_bedrock_session, x, y, z, face);
         } else {
             pex_mcpe_join_session_send_use_item(&g_mp_bedrock_session, x, y, z, face,
-                                                g_player_x, g_player_y + 1.62f, g_player_z,
+                                                g_player_x, g_player_y, g_player_z,
                                                 g_selected_hotbar_slot, block_id, 1, 0);
         }
         return;

@@ -35,6 +35,7 @@ typedef struct PexMcpeJoinCallbacks {
     void (*on_add_player)(void *userdata, const PexMcpeRemotePlayerInfo *player);
     void (*on_move_entity)(void *userdata, const PexMcpeEntityMoveInfo *move);
     void (*on_remove_entity)(void *userdata, uint64_t eid);
+    void (*on_player_skin)(void *userdata, const PexMcpePlayerListSkin *skin);
     void (*on_disconnect)(void *userdata, const char *message);
 } PexMcpeJoinCallbacks;
 
@@ -50,6 +51,9 @@ typedef struct PexMcpeJoinSession {
     uint64_t entity_id;
     int entity_id_valid;
     float x, y, z, yaw, pitch;
+    const uint8_t *skin_rgba;
+    int skin_width;
+    int skin_height;
     PexMcpeJoinState state;
     char status_text[256];
     struct PexRakNetClient *raknet;
@@ -64,6 +68,10 @@ void pex_mcpe_join_session_init(PexMcpeJoinSession *session,
 void pex_mcpe_join_session_set_callbacks(PexMcpeJoinSession *session,
                                          const PexMcpeJoinCallbacks *callbacks,
                                          void *userdata);
+void pex_mcpe_join_session_set_skin(PexMcpeJoinSession *session,
+                                    const uint8_t *skin_rgba,
+                                    int width,
+                                    int height);
 int pex_mcpe_join_session_tick(PexMcpeJoinSession *session);
 int pex_mcpe_join_session_send_move(PexMcpeJoinSession *session,
                                     float x, float y, float z,
