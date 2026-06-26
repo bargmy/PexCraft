@@ -5651,6 +5651,7 @@ static void break_target_block(void) {
             door_break_at(g_break_x, g_break_y, g_break_z, !player_is_creative() && held_item_can_harvest_drop(id));
             redstone_update_near(g_break_x, g_break_y, g_break_z);
         }
+        restart_hand_swing();
         return;
     }
 
@@ -5662,6 +5663,7 @@ static void break_target_block(void) {
         pex_net_send_player_action(PEX_ACTION_BREAK, g_break_x, g_break_y, g_break_z, g_break_face, id);
         flat_set_block(g_break_x, g_break_y, g_break_z, 0);
         pex_net_send_block_action(PEX_BLOCK_BREAK, g_break_x, g_break_y, g_break_z, g_break_face, 0);
+        restart_hand_swing();
         return;
     }
 
@@ -5688,6 +5690,7 @@ static void break_target_block(void) {
     if (!player_is_creative() && drop > 0 && held_item_can_harvest_drop(id)) {
         spawn_item_stack((float)g_break_x + 0.5f, (float)g_break_y + 0.7f, (float)g_break_z + 0.5f, make_stack(drop, 1, 0), 1);
     }
+    restart_hand_swing();
 }
 
 static void update_breaking(void) {
@@ -5714,8 +5717,6 @@ static void update_breaking(void) {
         reset_breaking_state();
         return;
     }
-
-    trigger_hand_swing();
 
     if (player_is_creative()) {
         /* Java PlayerControllerCreative: clickBlock destroys immediately and

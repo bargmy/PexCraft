@@ -760,8 +760,8 @@ static void setup_world_projection(void) {
     {
         float far_plane = current_render_distance_blocks() + 64.0f;
         if (far_plane < 1024.0f) far_plane = 1024.0f; /* clouds are independent from terrain distance */
-        double fov = (double)g_opts.fov;
-        if (flat_player_head_in_water() && fov > 60.0) fov = 60.0;
+        double fov = (double)g_opts.fov * (double)player_fov_multiplier_125();
+        if (flat_player_head_in_water()) fov = fov * 60.0 / 70.0;
         if (fov < 30.0) fov = 30.0;
         if (fov > 110.0) fov = 110.0;
         gluPerspective(fov, (double)aspect, 0.05, (double)far_plane);

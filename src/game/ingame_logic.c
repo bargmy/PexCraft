@@ -40,6 +40,10 @@ static void player_die(const char *reason) {
     g_player_hurt_time = g_player_max_hurt_time;
     g_player_motion_x = g_player_motion_z = 0.0f;
     g_player_motion_y = 0.10f; /* EntityPlayer.onDeath sets small upward motion. */
+    g_player_sprinting = 0;
+    g_sprinting_ticks_left = 0;
+    g_sprint_toggle_timer = 0;
+    g_prev_sprint_forward = 0;
     inventory_drop_death_items();
     if (g_mp_connected) {
         pex_net_send_player_state();
@@ -301,6 +305,40 @@ static void player_render_begin_frame(void) {
     player_render_capture_current(&g_player_render_frame);
 }
 
+static void player_set_sprinting_125(int sprinting) {
+    sprinting = sprinting ? 1 : 0;
+    if (g_player_sprinting == sprinting) {
+        if (sprinting && g_sprinting_ticks_left <= 0) g_sprinting_ticks_left = 600;
+        return;
+    }
+    g_player_sprinting = sprinting;
+    g_sprinting_ticks_left = sprinting ? 600 : 0;
+}
+
+static int player_can_sprint_125(void) {
+    /* Java 1.2.5 EntityPlayerSP uses FoodStats > 6.0F.  Creative players keep
+       damage disabled and effectively have food for client sprint gating. */
+    return player_is_creative() || g_player_food_level > 6;
+}
+
+static float player_fov_target_multiplier_125(void) {
+    /* EntityPlayerSP.getFOVMultiplier(): flying widens by 1.1 and sprinting
+       comes from landMovementFactor/speedOnGround = 1.3. */
+    float m = 1.0f;
+    if (g_creative_flying) m *= 1.1f;
+    float speed_ratio = g_player_sprinting ? 1.3f : 1.0f;
+    m *= (speed_ratio + 1.0f) * 0.5f;
+    return m;
+}
+
+static float player_fov_multiplier_125(void) {
+    /* EntityRenderer interpolates fovModifierHandPrev -> fovModifierHand. */
+    float partial = g_frame_partial;
+    if (partial < 0.0f) partial = 0.0f;
+    if (partial > 1.0f) partial = 1.0f;
+    return g_prev_fov_modifier_hand + (g_fov_modifier_hand - g_prev_fov_modifier_hand) * partial;
+}
+
 static void pex_update_time_light_bucket(void) {
     static int last_sub = -1;
     int sub = flat_skylight_subtracted();
@@ -494,18 +532,53 @@ static void ingame_tick(void) {
         if (in_lava && (g_ingame_ticks % 20) == 0) player_take_damage(4, "tried to swim in lava");
     }
 
+    if (g_sprinting_ticks_left > 0) {
+        g_sprinting_ticks_left--;
+        if (g_sprinting_ticks_left == 0) player_set_sprinting_125(0);
+    }
+    if (g_sprint_toggle_timer > 0) g_sprint_toggle_timer--;
+
     float strafe = 0.0f;
     float forward = 0.0f;
+    float raw_forward_input = 0.0f;
     int jumping = 0;
     int sneaking = 0;
+    int forward_for_sprint = 0;
     if (input_active) {
-        if (key_down_vk(g_opts.keys[0])) forward += 1.0f;
-        if (key_down_vk(g_opts.keys[2])) forward -= 1.0f;
+        if (key_down_vk(g_opts.keys[0])) { forward += 1.0f; raw_forward_input += 1.0f; }
+        if (key_down_vk(g_opts.keys[2])) { forward -= 1.0f; raw_forward_input -= 1.0f; }
         if (key_down_vk(g_opts.keys[1])) strafe += 1.0f;
         if (key_down_vk(g_opts.keys[3])) strafe -= 1.0f;
         jumping = key_down_vk(g_opts.keys[4]);
         sneaking = key_down_vk(g_opts.keys[5]);
-        if (sneaking) { strafe *= 0.3f; forward *= 0.3f; }
+        forward_for_sprint = (raw_forward_input >= 0.8f) ? 1 : 0;
+
+        /* Java 1.2.5 EntityPlayerSP double-tap sprint:
+           previous-tick forward must be false, current forward >= 0.8, on
+           ground, enough food, not sneaking/using/blind.  PexCraft has no item
+           use hold/blindness yet, so those gates are represented by available
+           systems only. */
+        if (g_player_on_ground && !g_prev_sprint_forward && forward_for_sprint &&
+            !g_player_sprinting && player_can_sprint_125() && !sneaking) {
+            if (g_sprint_toggle_timer == 0) {
+                g_sprint_toggle_timer = 7;
+            } else {
+                player_set_sprinting_125(1);
+                g_sprint_toggle_timer = 0;
+            }
+        }
+        if (sneaking) {
+            g_sprint_toggle_timer = 0;
+            strafe *= 0.3f;
+            forward *= 0.3f;
+        }
+        if (g_player_sprinting && (sneaking || !forward_for_sprint || g_player_collided_horiz || !player_can_sprint_125())) {
+            player_set_sprinting_125(0);
+        }
+    } else {
+        player_set_sprinting_125(0);
+        g_sprint_toggle_timer = 0;
+        g_prev_sprint_forward = 0;
     }
 
     if (!player_is_creative()) {
@@ -531,6 +604,10 @@ static void ingame_tick(void) {
         }
     }
     g_prev_jump_down = jumping;
+
+    g_prev_fov_modifier_hand = g_fov_modifier_hand;
+    g_fov_modifier_hand += (player_fov_target_multiplier_125() - g_fov_modifier_hand) * 0.5f;
+
     int normal_jump = jumping && !(player_is_creative() && g_creative_flying);
 
     float raw_strafe = strafe;
@@ -580,14 +657,20 @@ static void ingame_tick(void) {
         g_player_motion_y += 0.04f;
     } else if (normal_jump && g_player_on_ground) {
         g_player_motion_y = 0.50f;
+        if (g_player_sprinting) {
+            float yaw_rad = g_player_yaw * (float)M_PI / 180.0f;
+            g_player_motion_x -= sinf(yaw_rad) * 0.20f;
+            g_player_motion_z += cosf(yaw_rad) * 0.20f;
+        }
         g_player_on_ground = 0;
-        player_add_exhaustion(0.2f);
+        player_add_exhaustion(g_player_sprinting ? 0.8f : 0.2f);
     }
 
     float input_len = sqrtf(strafe * strafe + forward * forward);
     if (input_len >= 0.01f) {
         if (input_len < 1.0f) input_len = 1.0f;
         float accel = g_creative_flying ? 0.05f : (in_water ? 0.02f : (in_lava ? 0.02f : (g_player_on_ground ? 0.1f : 0.02f)));
+        if (g_player_sprinting && !g_creative_flying && !in_water && !in_lava && !in_ladder) accel *= 1.3f;
         strafe = strafe * accel / input_len;
         forward = forward * accel / input_len;
         float yaw_rad = g_player_yaw * (float)M_PI / 180.0f;
@@ -622,6 +705,7 @@ static void ingame_tick(void) {
     }
 
     int liquid_horizontal_collision = 0;
+    int player_collided_horiz_this_tick = 0;
     float step_base_y = g_player_y;
 
     float old_x = g_player_x;
@@ -632,6 +716,7 @@ static void ingame_tick(void) {
         if (!flat_player_try_step_move(try_x, step_base_y, g_player_z)) {
             g_player_motion_x = 0.0f;
             liquid_horizontal_collision = 1;
+            player_collided_horiz_this_tick = 1;
         }
     }
 
@@ -643,8 +728,12 @@ static void ingame_tick(void) {
         if (!flat_player_try_step_move(g_player_x, step_base_y, try_z)) {
             g_player_motion_z = 0.0f;
             liquid_horizontal_collision = 1;
+            player_collided_horiz_this_tick = 1;
         }
     }
+
+    g_player_collided_horiz = player_collided_horiz_this_tick;
+    if (g_player_sprinting && g_player_collided_horiz) player_set_sprinting_125(0);
 
     if (in_ladder && (liquid_horizontal_collision || (input_active && raw_forward > 0.01f))) {
         if (g_player_motion_y < 0.20f) g_player_motion_y = 0.20f;
@@ -779,7 +868,10 @@ static void ingame_tick(void) {
         if (dist_cm > 0) player_add_exhaustion(0.015f * (float)dist_cm * 0.01f);
     } else if (g_player_on_ground) {
         int dist_cm = (int)floorf(horizontal * 100.0f + 0.5f);
-        if (dist_cm > 0) player_add_exhaustion(0.01f * (float)dist_cm * 0.01f);
+        if (dist_cm > 0) {
+            if (g_player_sprinting) player_add_exhaustion(10.0f * 0.01f * (float)dist_cm * 0.01f);
+            else player_add_exhaustion(0.01f * (float)dist_cm * 0.01f);
+        }
     }
     g_distance_walked += horizontal * 0.6f;
     if (g_player_on_ground && horizontal > 0.015f && g_distance_walked >= g_next_footstep_distance) {
@@ -814,6 +906,8 @@ static void ingame_tick(void) {
     g_render_arm_pitch += (g_player_pitch - g_render_arm_pitch) * 0.5f;
     g_render_arm_yaw += (g_player_yaw - g_render_arm_yaw) * 0.5f;
     passive_mobs_apply_riding();
+
+    g_prev_sprint_forward = (input_active && !sneaking && forward_for_sprint) ? 1 : 0;
 
     if (!g_player_dead && !g_mp_connected && !player_is_creative()) player_foodstats_update();
 
