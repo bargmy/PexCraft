@@ -79,11 +79,18 @@ static int pxc_zip_name_is_safe(const char *name) {
     return 1;
 }
 
+static int pxc_zip_extract_lang_only = 0;
+static int pxc_zip_write_pack_txt_after_extract = 1;
+
 static int pxc_zip_entry_should_skip(const char *name) {
     if (!name || !name[0]) return 1;
     if (name[strlen(name) - 1] == '/') return 1;
     if (pxc_ascii_starts_ci(name, "META-INF/") || pxc_ascii_starts_ci(name, "META-INF\\")) return 1;
     if (pxc_ascii_ends_ci(name, ".class")) return 1;
+    if (pxc_zip_extract_lang_only) {
+        if (!pxc_ascii_starts_ci(name, "lang/")) return 1;
+        if (!pxc_ascii_ends_ci(name, ".lang") && !pxc_ascii_ends_ci(name, "languages.txt")) return 1;
+    }
     return 0;
 }
 
@@ -263,7 +270,7 @@ static int pxc_extract_zip_file(const char *zip_path, const char *dest_dir, char
         free(zip); snprintf(err, err_cap, "ZIP central directory is invalid"); return 0;
     }
 
-    delete_recursive(dest_dir);
+    if (!pxc_zip_extract_lang_only) delete_recursive(dest_dir);
     ensure_dir(dest_dir);
     cd = zip + cd_off;
     for (uint16_t n = 0; n < entries; ++n) {
@@ -282,9 +289,22 @@ static int pxc_extract_zip_file(const char *zip_path, const char *dest_dir, char
         if (err && err_cap && !err[0]) snprintf(err, err_cap, "Could not extract ZIP/JAR archive");
         return 0;
     }
-    if (!pxc_write_classic_pack_txt(dest_dir)) {
+    if (pxc_zip_write_pack_txt_after_extract && !pxc_write_classic_pack_txt(dest_dir)) {
         snprintf(err, err_cap, "Could not write pack.txt");
         return 0;
     }
     return 1;
+}
+
+static int pxc_extract_zip_lang_file(const char *zip_path, const char *dest_dir, char *err, size_t err_cap) {
+    int old_lang = pxc_zip_extract_lang_only;
+    int old_pack = pxc_zip_write_pack_txt_after_extract;
+    int ok;
+    pxc_zip_extract_lang_only = 1;
+    pxc_zip_write_pack_txt_after_extract = 0;
+    ensure_dir(dest_dir);
+    ok = pxc_extract_zip_file(zip_path, dest_dir, err, err_cap);
+    pxc_zip_extract_lang_only = old_lang;
+    pxc_zip_write_pack_txt_after_extract = old_pack;
+    return ok;
 }

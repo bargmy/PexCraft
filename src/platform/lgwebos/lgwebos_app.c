@@ -175,6 +175,9 @@ static void sdl2_handle_event(SDL_Event *e) {
             if (g_screen == SCREEN_CREATIVE) {
                 if (e->wheel.y > 0) creative_scroll_by(-1);
                 else if (e->wheel.y < 0) creative_scroll_by(1);
+            } else if (g_screen == SCREEN_LANGUAGE) {
+                if (e->wheel.y > 0) language_scroll_by(-1);
+                else if (e->wheel.y < 0) language_scroll_by(1);
             } else if (g_screen == SCREEN_INGAME) {
                 if (e->wheel.y > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
                 else if (e->wheel.y < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;

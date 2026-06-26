@@ -97,7 +97,6 @@ jobs:
             echo "Builder:     Windows ${{ matrix.arch }} MinGW / ${{ matrix.msystem }}"
             echo
             gcc --version
-            python tools/bundle_langs.py
 
             gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
               -static -static-libgcc \
@@ -236,7 +235,6 @@ jobs:
             echo "Builder:     Linux SDL2/OpenGL"
             echo
             gcc --version
-            python3 tools/bundle_langs.py
             make -f Makefile.linux_sdl2
 
             status=$?
@@ -418,7 +416,6 @@ jobs:
             echo "Commit SHA:  $GITHUB_SHA"
             echo "Builder:     LG webOS ${{ matrix.arch }}"
             echo
-            python3 tools/bundle_langs.py
             cmake -S webos -B build/lgwebos-${{ matrix.arch }} \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_TOOLCHAIN_FILE:FILEPATH="$LGWEBOS_TOOLCHAIN_FILE"
@@ -617,7 +614,6 @@ jobs:
             echo "Commit SHA:  $GITHUB_SHA"
             echo "Builder:     Android arm64 APK"
             echo
-            python3 tools/bundle_langs.py
             cd android
             gradle assembleRelease
             status=$?
@@ -782,7 +778,6 @@ jobs:
             echo "Commit SHA:  $GITHUB_SHA"
             echo "Builder:     Android TV APK"
             echo
-            python3 tools/bundle_langs.py
             cd android_tv
             gradle assembleRelease
             status=$?
@@ -888,7 +883,7 @@ jobs:
               -v "$PWD:/work" \
               -w /work \
               devkitpro/devkitppc:20260503 \
-              bash -lc 'python3 tools/bundle_langs.py && make -f platforms/wii/Makefile.wii'
+              bash -lc 'make -f platforms/wii/Makefile.wii'
             status=$?
             if [ "$status" -eq 0 ]; then
               dol_size=$(wc -c < build/wii/boot.dol)

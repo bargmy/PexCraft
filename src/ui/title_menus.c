@@ -521,23 +521,48 @@ static void draw_title_screen(float partial) {
 static void draw_language_screen(void) {
     draw_default_bg();
     draw_centered_text(tr_key_default("options.language", "Language"), g_gui_w / 2, 16, 16777215);
-    int count = pex_language_count();
-    int top = 38;
-    int row_h = 18;
-    int cur = pex_current_language_index();
-    for (int i = 0; i < count; ++i) {
-        int y = top + i * row_h;
-        if (y > g_gui_h - 68) break;
-        const char *name = pex_language_name_at(i);
-        int color = (i == cur) ? 0xFFFFA0 : 0xFFFFFF;
-        if (i == cur) draw_rect(g_gui_w / 2 - 105, y - 2, g_gui_w / 2 + 105, y + 12, (int)0x80404040u);
-        draw_centered_text(name, g_gui_w / 2, y, color);
+
+    if (!pex_language_runtime_files_available()) {
+        draw_centered_text("Minecraft 1.2.5 language files are not installed.", g_gui_w / 2, g_gui_h / 2 - 36, 16777215);
+        draw_centered_text("They will be extracted client-side from client.jar.", g_gui_w / 2, g_gui_h / 2 - 24, 10526880);
+    } else {
+        int count = pex_language_count();
+        int top = 32;
+        int bottom = g_gui_h - 65 + 4;
+        int row_h = 18;
+        int visible = (bottom - top) / row_h;
+        int cur = pex_current_language_index();
+        if (visible < 1) visible = 1;
+        for (int i = 0; i < visible; ++i) {
+            int idx = g_language_scroll + i;
+            int y = top + i * row_h;
+            const char *name;
+            if (idx >= count) break;
+            name = pex_language_name_at(idx);
+            if (idx == cur) {
+                draw_rect(g_gui_w / 2 - 112, y - 2, g_gui_w / 2 + 112, y + 16, (int)0x80505050u);
+                draw_rect(g_gui_w / 2 - 110, y, g_gui_w / 2 + 110, y + 14, (int)0x80202020u);
+            }
+            draw_centered_text(name, g_gui_w / 2, y + 1, 16777215);
+        }
+        if (count > visible) {
+            int track_x = g_gui_w / 2 + 114;
+            int max_scroll = count - visible;
+            int track_h = bottom - top;
+            int thumb_h = track_h * visible / count;
+            int thumb_y;
+            if (thumb_h < 16) thumb_h = 16;
+            if (thumb_h > track_h) thumb_h = track_h;
+            thumb_y = top + (max_scroll > 0 ? (g_language_scroll * (track_h - thumb_h)) / max_scroll : 0);
+            draw_rect(track_x, top, track_x + 6, bottom, (int)0x40000000u);
+            draw_rect(track_x + 1, thumb_y, track_x + 5, thumb_y + thumb_h, (int)0xFF808080u);
+        }
     }
-    char warn[256];
-    snprintf(warn, sizeof(warn), "(%s)", tr_key_default("options.languageWarning", "Language translations may not be 100% accurate"));
-    draw_centered_text(warn, g_gui_w / 2, g_gui_h - 56, 8421504);
-    if (pex_current_language_is_unicode()) {
-        draw_centered_text("Unicode glyph pages are not loaded yet", g_gui_w / 2, g_gui_h - 68, 0xFF8080);
+
+    {
+        char warn[256];
+        snprintf(warn, sizeof(warn), "(%s)", tr_key_default("options.languageWarning", "Language translations may not be 100% accurate"));
+        draw_centered_text(warn, g_gui_w / 2, g_gui_h - 56, 8421504);
     }
     draw_all_buttons();
 }

@@ -184,6 +184,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             if (g_mouse_down && g_drag_slider) update_slider(g_drag_slider, g_mouse_x);
             if (g_mouse_down && g_screen == SCREEN_TEXPACK) texpack_mouse_drag(g_mouse_y);
             if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
+            if (g_mouse_down && g_screen == SCREEN_LANGUAGE) language_drag_scroll(g_mouse_y - old_mouse_y);
             if (g_mouse_down && (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE)) world_save_drag_scroll(g_mouse_y - old_mouse_y);
             return 0;
         }
@@ -223,6 +224,9 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
                 if (g_screen == SCREEN_CREATIVE) {
                     if (delta > 0) creative_scroll_by(-1);
                     else if (delta < 0) creative_scroll_by(1);
+                } else if (g_screen == SCREEN_LANGUAGE) {
+                    if (delta > 0) language_scroll_by(-1);
+                    else if (delta < 0) language_scroll_by(1);
                 } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
                     if (delta > 0) world_save_scroll_by(-1);
                     else if (delta < 0) world_save_scroll_by(1);

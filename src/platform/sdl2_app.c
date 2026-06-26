@@ -147,6 +147,7 @@ static void sdl2_handle_event(SDL_Event *e) {
                 if (g_mouse_down && g_drag_slider) update_slider(g_drag_slider, g_mouse_x);
                 if (g_mouse_down && g_screen == SCREEN_TEXPACK) texpack_mouse_drag(g_mouse_y);
                 if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
+                if (g_mouse_down && g_screen == SCREEN_LANGUAGE) language_drag_scroll(g_mouse_y - old_mouse_y);
                 if (g_mouse_down && (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE)) world_save_drag_scroll(g_mouse_y - old_mouse_y);
             }
             break;
@@ -167,6 +168,9 @@ static void sdl2_handle_event(SDL_Event *e) {
             if (g_screen == SCREEN_CREATIVE) {
                 if (e->wheel.y > 0) creative_scroll_by(-1);
                 else if (e->wheel.y < 0) creative_scroll_by(1);
+            } else if (g_screen == SCREEN_LANGUAGE) {
+                if (e->wheel.y > 0) language_scroll_by(-1);
+                else if (e->wheel.y < 0) language_scroll_by(1);
             } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
                 if (e->wheel.y > 0) world_save_scroll_by(-1);
                 else if (e->wheel.y < 0) world_save_scroll_by(1);

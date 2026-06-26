@@ -466,15 +466,24 @@ static void rebuild_screen(void) {
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 24, 200, 20, tr("Back"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_LANGUAGE) {
-        int count = pex_language_count();
-        int top = 38;
-        int row_h = 18;
-        for (int i = 0; i < count; ++i) {
-            int y = top + i * row_h - 4;
-            if (y > g_gui_h - 72) break;
-            add_button_full(4000 + i, g_gui_w / 2 - 105, y, 210, 16, "", BUTTON_HITBOX);
+        language_ensure_selected_visible();
+        if (!pex_language_runtime_files_available()) {
+            add_button_full(300, g_gui_w / 2 - 120, g_gui_h / 2 - 10, 240, 20, "Download languages", BUTTON_NORMAL);
+        } else {
+            int count = pex_language_count();
+            int top = 32;
+            int bottom = g_gui_h - 65 + 4;
+            int row_h = 18;
+            int visible = (bottom - top) / row_h;
+            if (visible < 1) visible = 1;
+            for (int i = 0; i < visible; ++i) {
+                int idx = g_language_scroll + i;
+                int y = top + i * row_h;
+                if (idx >= count) break;
+                add_button_full(4000 + idx, g_gui_w / 2 - 110, y, 220, 18, "", BUTTON_HITBOX);
+            }
         }
-        add_button_full(200, g_gui_w / 2 - 75, g_gui_h - 38, 150, 20, tr("Done"), BUTTON_NORMAL);
+        add_button_full(200, g_gui_w / 2 - 75, g_gui_h - 38, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SKINS) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h - 76, tr("Import Skin..."));
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h - 52, 98, 20, tr("Use Default"), BUTTON_NORMAL);
@@ -667,6 +676,13 @@ static void on_button(Button *b) {
             pex_set_language_code(g_opts.language);
             save_options();
             rebuild_screen();
+        } else if (b->id == 300) {
+            if (pex_language_download_from_jar_blocking()) {
+                pex_set_language_code(g_opts.language);
+                rebuild_screen();
+            } else {
+                open_notice("Language", "Could not download languages from client.jar.", g_classic_install_error);
+            }
         } else if (b->id == 200) set_screen(g_parent_screen == SCREEN_TITLE ? SCREEN_TITLE : SCREEN_OPTIONS);
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         if (b->id == 200) set_screen(SCREEN_OPTIONS_MORE);
@@ -1242,6 +1258,13 @@ static void handle_keydown(WPARAM vk) {
         if ((int)vk == g_opts.keys[7]) { set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY); return; }
         if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 1; set_screen(SCREEN_CHAT); return; }
         if (vk >= '1' && vk <= '9') { g_selected_hotbar_slot = (int)(vk - '1'); return; }
+        return;
+    }
+
+    if (g_screen == SCREEN_LANGUAGE) {
+        if (vk == VK_ESCAPE) { set_screen(g_parent_screen == SCREEN_TITLE ? SCREEN_TITLE : SCREEN_OPTIONS); return; }
+        if (vk == VK_PRIOR) { language_scroll_by(-5); return; }
+        if (vk == VK_NEXT) { language_scroll_by(5); return; }
         return;
     }
 
