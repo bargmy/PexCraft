@@ -745,7 +745,7 @@ static void draw_confirm_delete(void) {
 static void draw_multiplayer(void) {
     draw_default_bg();
     draw_centered_text(tr_key_default("multiplayer.title", "Play Multiplayer"), g_gui_w / 2, g_gui_h / 4 - 60 + 20, 16777215);
-    draw_text("Enter a server address. Default port is 25566.", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 0, 10526880);
+    draw_text("Enter a server address. PXNet defaults to 25566; MCPE probe uses 19132.", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 0, 10526880);
     draw_text("Use host or host:port.", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 9, 10526880);
     if (g_multiplayer_status[0]) draw_text(g_multiplayer_status, g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 27, 10526880);
     draw_text("Server address:", g_gui_w / 2 - 140, g_gui_h / 4 - 60 + 60 + 36, 10526880);

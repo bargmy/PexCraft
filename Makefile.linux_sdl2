@@ -8,7 +8,7 @@ SDL_CFLAGS := $(shell pkg-config --cflags sdl2 SDL2_image)
 SDL_LIBS := $(shell pkg-config --libs sdl2 SDL2_image)
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl 2>/dev/null)
 CURL_LIBS := $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl)
-LIBS := $(SDL_LIBS) -lGL -lGLU $(CURL_LIBS) -lz -lm -pthread
+LIBS := $(SDL_LIBS) -lGL -lGLU $(CURL_LIBS) -lz -ldl -lm -pthread
 TARGET := pexcraft_sdl2
 
 .PHONY: all clean run

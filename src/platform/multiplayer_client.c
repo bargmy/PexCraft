@@ -21,6 +21,26 @@ static char g_mp_connect_thread_error[128] = "";
 static char g_mp_connect_thread_host[96] = "";
 static int g_mp_connect_thread_port = PEX_NET_DEFAULT_PORT;
 
+typedef enum PexMpJoinBackend {
+    PEX_MP_JOIN_BACKEND_PXNET = 0,
+    PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 = 1
+} PexMpJoinBackend;
+
+static PexMpJoinBackend g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
+static int g_mp_bedrock_detected_protocol = 0;
+static char g_mp_bedrock_detected_version[24] = "";
+static char g_mp_bedrock_detected_motd[192] = "";
+static PexMcpeJoinSession g_mp_bedrock_session;
+static int g_mp_bedrock_session_active = 0;
+static double g_mp_bedrock_last_move_time = 0.0;
+
+static void pex_mp_bedrock_on_status(void *userdata, PexMcpePlayStatus status);
+static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameInfo *info);
+static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *chunk);
+static void pex_mp_bedrock_on_text(void *userdata, const char *text);
+static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, int id, int meta);
+static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message);
+
 #define PEX_MP_PACKET_QUEUE_MAX 384
 typedef struct PexMpQueuedPacket {
     uint16_t type;
@@ -345,7 +365,7 @@ static int pex_net_send_packet(uint16_t type, const void *payload, uint32_t size
     return 1;
 }
 
-static int pex_net_parse_host_port(const char *input, char *host, size_t host_cap, int *port) {
+static int pex_net_parse_host_port_ex(const char *input, char *host, size_t host_cap, int *port, int *out_port_was_given) {
     if (!host || host_cap == 0 || !port) return 0;
     const char *src = input && input[0] ? input : "127.0.0.1";
     while (*src == ' ' || *src == '\t') src++;
@@ -356,15 +376,180 @@ static int pex_net_parse_host_port(const char *input, char *host, size_t host_ca
     if (!tmp[0]) snprintf(tmp, sizeof(tmp), "127.0.0.1");
 
     *port = PEX_NET_DEFAULT_PORT;
+    if (out_port_was_given) *out_port_was_given = 0;
     char *colon = strrchr(tmp, ':');
     if (colon && colon[1]) {
         int p = atoi(colon + 1);
         if (p > 0 && p < 65536) {
             *port = p;
             *colon = 0;
+            if (out_port_was_given) *out_port_was_given = 1;
         }
     }
     snprintf(host, host_cap, "%s", tmp[0] ? tmp : "127.0.0.1");
+    return 1;
+}
+
+static int pex_net_parse_host_port(const char *input, char *host, size_t host_cap, int *port) {
+    return pex_net_parse_host_port_ex(input, host, host_cap, port, NULL);
+}
+
+static void pex_mp_write_be64(unsigned char *dst, uint64_t value) {
+    for (int i = 7; i >= 0; --i) {
+        dst[7 - i] = (unsigned char)((value >> (i * 8)) & 0xffu);
+    }
+}
+
+static int pex_mcpe_parse_motd_protocol_81(const char *motd, int *out_protocol, char *out_version, size_t out_version_cap) {
+    if (out_protocol) *out_protocol = 0;
+    if (out_version && out_version_cap) out_version[0] = 0;
+    if (!motd || strncmp(motd, "MCPE;", 5) != 0) return 0;
+
+    char copy[256];
+    snprintf(copy, sizeof(copy), "%s", motd);
+    char *fields[8];
+    int field_count = 0;
+    char *p = copy;
+    while (field_count < (int)ARRAY_COUNT(fields)) {
+        fields[field_count++] = p;
+        char *semi = strchr(p, ';');
+        if (!semi) break;
+        *semi = 0;
+        p = semi + 1;
+    }
+
+    if (field_count >= 3 && out_protocol) *out_protocol = atoi(fields[2]);
+    if (field_count >= 4 && out_version && out_version_cap) {
+        snprintf(out_version, out_version_cap, "%s", fields[3]);
+    }
+    return 1;
+}
+
+static int pex_mcpe_motd_is_genisys_0154(const char *motd, int *out_protocol, char *out_version, size_t out_version_cap) {
+    int protocol = 0;
+    char version[24];
+    version[0] = 0;
+    if (!pex_mcpe_parse_motd_protocol_81(motd, &protocol, version, sizeof(version))) return 0;
+    if (out_protocol) *out_protocol = protocol;
+    if (out_version && out_version_cap) snprintf(out_version, out_version_cap, "%s", version);
+    return protocol == 82 || strcmp(version, "0.15.4") == 0;
+}
+
+static int pex_mcpe_probe_unconnected_motd(const char *host, int port, char *out_motd, size_t out_motd_cap) {
+    static const unsigned char raknet_magic[16] = {
+        0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe,
+        0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78
+    };
+    if (out_motd && out_motd_cap) out_motd[0] = 0;
+    if (!host || !host[0] || port <= 0 || port >= 65536) return 0;
+
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", port);
+
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+
+    if (getaddrinfo(host, port_text, &hints, &result) != 0 || !result) return 0;
+
+    SOCKET s = INVALID_SOCKET;
+    int ok = 0;
+    for (struct addrinfo *rp = result; rp && !ok; rp = rp->ai_next) {
+        s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (s == INVALID_SOCKET) continue;
+
+        unsigned char ping[1 + 8 + 16 + 8];
+        memset(ping, 0, sizeof(ping));
+        ping[0] = 0x01; /* RakNet ID_UNCONNECTED_PING */
+        pex_mp_write_be64(ping + 1, 0x0000000000000001ULL);
+        memcpy(ping + 9, raknet_magic, sizeof(raknet_magic));
+        pex_mp_write_be64(ping + 25, 0x5045584352414654ULL); /* "PEXCRAFT" guid */
+
+        int sent = sendto(s, (const char *)ping, (int)sizeof(ping), 0, rp->ai_addr, (int)rp->ai_addrlen);
+        if (sent == (int)sizeof(ping)) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(s, &rfds);
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = 700 * 1000;
+            int sr = select((int)(s + 1), &rfds, NULL, NULL, &tv);
+            if (sr > 0) {
+                unsigned char buf[2048];
+                int n = recvfrom(s, (char *)buf, (int)sizeof(buf), 0, NULL, NULL);
+                if (n > 35 && buf[0] == 0x1c && memcmp(buf + 17, raknet_magic, sizeof(raknet_magic)) == 0) {
+                    int off = 33;
+                    int motd_len = ((int)buf[off] << 8) | (int)buf[off + 1];
+                    off += 2;
+                    if (motd_len > 0 && off + motd_len <= n) {
+                        size_t copy_len = (size_t)motd_len;
+                        if (out_motd && out_motd_cap) {
+                            if (copy_len >= out_motd_cap) copy_len = out_motd_cap - 1;
+                            memcpy(out_motd, buf + off, copy_len);
+                            out_motd[copy_len] = 0;
+                        }
+                        ok = 1;
+                    }
+                }
+            }
+        }
+        closesocket(s);
+        s = INVALID_SOCKET;
+    }
+
+    freeaddrinfo(result);
+    return ok;
+}
+
+static int pex_mcpe_begin_bedrock_protocol_81_join(const char *host, int port, int protocol, const char *version, const char *motd) {
+    g_mp_join_backend = PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81;
+    g_mp_bedrock_detected_protocol = protocol;
+    snprintf(g_mp_bedrock_detected_version, sizeof(g_mp_bedrock_detected_version), "%s", version && version[0] ? version : "0.15.4");
+    snprintf(g_mp_bedrock_detected_motd, sizeof(g_mp_bedrock_detected_motd), "%s", motd ? motd : "");
+    snprintf(g_mp_server_name, sizeof(g_mp_server_name), "%s:%d", host && host[0] ? host : "127.0.0.1", port);
+
+    g_mp_socket = INVALID_SOCKET;
+    g_mp_connected = 0;
+    g_mp_connecting = 1;
+    g_mp_world_ready = 0;
+    g_mp_connect_start_time = now_seconds();
+    g_mp_connect_progress = 8;
+    g_mp_bedrock_session_active = 1;
+    memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
+    memset(g_flat_meta, 0, sizeof(g_flat_meta));
+    memset(g_flat_levels, 0, sizeof(g_flat_levels));
+    memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+    memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+
+    PexMcpeMotdInfo mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.is_mcpe = 1;
+    mi.should_use_bedrock_join = 1;
+    mi.protocol_version = protocol ? protocol : 82;
+    snprintf(mi.game_version, sizeof(mi.game_version), "%s", g_mp_bedrock_detected_version[0] ? g_mp_bedrock_detected_version : "0.15.4");
+
+    if (!pex_mcpe_protocol_81_begin_bedrock_join(&g_mp_bedrock_session, host, (uint16_t)port,
+                                                 g_multiplayer_username[0] ? g_multiplayer_username : "PexPlayer", &mi)) {
+        g_mp_bedrock_session_active = 0;
+        return 0;
+    }
+    PexMcpeJoinCallbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.on_status = pex_mp_bedrock_on_status;
+    cb.on_start_game = pex_mp_bedrock_on_start_game;
+    cb.on_chunk = pex_mp_bedrock_on_chunk;
+    cb.on_text = pex_mp_bedrock_on_text;
+    cb.on_block_update = pex_mp_bedrock_on_block_update;
+    cb.on_disconnect = pex_mp_bedrock_on_disconnect;
+    pex_mcpe_join_session_set_callbacks(&g_mp_bedrock_session, &cb, NULL);
+
+    snprintf(g_multiplayer_status, sizeof(g_multiplayer_status),
+             "Detected MCPE %s/protocol %d. Loading RakNetDLL...",
+             g_mp_bedrock_detected_version[0] ? g_mp_bedrock_detected_version : "0.15.4",
+             g_mp_bedrock_detected_protocol ? g_mp_bedrock_detected_protocol : 82);
     return 1;
 }
 
@@ -897,7 +1082,7 @@ static void pex_net_finish_world_download(void) {
     g_mp_connect_progress = 100;
     if (g_screen != SCREEN_INGAME) {
         g_chat_count = 0;
-        hud_add_chat("Connected to PEXCraft server.");
+        hud_add_chat(g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 ? "Connected to Genisys server." : "Connected to PEXCraft server.");
         set_screen(SCREEN_INGAME);
     }
 }
@@ -908,6 +1093,71 @@ static void pex_net_mark_chunk_ready(int chunk_x, int chunk_z) {
     if (lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS) {
         stream_mark_chunk_generated(lcx, lcz);
     }
+}
+
+static void pex_mp_bedrock_on_status(void *userdata, PexMcpePlayStatus status) {
+    (void)userdata;
+    if (status == PEX_MCPE_PLAY_STATUS_LOGIN_SUCCESS) {
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Genisys accepted login; waiting for StartGame.");
+    } else if (status == PEX_MCPE_PLAY_STATUS_PLAYER_SPAWN) {
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Genisys spawned player.");
+        if (g_mp_chunks_received > 0) pex_net_finish_world_download();
+    }
+}
+
+static void pex_mp_bedrock_on_start_game(void *userdata, const PexMcpeStartGameInfo *info) {
+    (void)userdata;
+    if (!info) return;
+    g_mp_connected = 1;
+    g_mp_player_id = 1;
+    g_mp_player_count = 1;
+    g_mp_world_ready = 0;
+    g_player_x = g_player_prev_x = info->x;
+    g_player_y = g_player_prev_y = info->y;
+    g_player_z = g_player_prev_z = info->z;
+    g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+    g_mp_expected_chunks = (g_mp_bedrock_session.chunk_radius * 2 + 1) * (g_mp_bedrock_session.chunk_radius * 2 + 1);
+    if (g_mp_expected_chunks <= 0) g_mp_expected_chunks = 1;
+    g_mp_chunks_received = 0;
+    g_mp_connect_progress = 60;
+    snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "StartGame received; requesting chunks around spawn.");
+}
+
+static void pex_mp_bedrock_on_chunk(void *userdata, const PexMcpeFullChunkData *chunk) {
+    (void)userdata;
+    if (!chunk || !chunk->payload) return;
+    if (pex_mcpe_convert_chunk_to_pexcraft(chunk->payload, chunk->payload_size, chunk->chunk_x, chunk->chunk_z, chunk->order)) {
+        pex_net_mark_chunk_ready(chunk->chunk_x, chunk->chunk_z);
+        pex_net_note_sections_received(1);
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "Genisys terrain: %d chunk%s received.",
+                 g_mp_chunks_received, g_mp_chunks_received == 1 ? "" : "s");
+        if (!g_mp_world_ready && g_mp_chunks_received >= 1) {
+            pex_net_finish_world_download();
+        }
+    }
+}
+
+static void pex_mp_bedrock_on_text(void *userdata, const char *text) {
+    (void)userdata;
+    if (text && text[0]) hud_add_chat(text);
+}
+
+static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, int id, int meta) {
+    (void)userdata;
+    if (!flat_in_bounds(x, y, z)) return;
+    int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
+    unsigned char old = g_flat_blocks[yi][zi][xi];
+    g_flat_blocks[yi][zi][xi] = (unsigned char)id;
+    g_flat_meta[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)(meta & 15) : (unsigned char)meta;
+    g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)(meta & 15) : 0;
+    flat_mark_sections_dirty_near_block(x, y, z);
+    flat_mark_chunks_dirty_near(x, z);
+    if (old != (unsigned char)id) flat_mark_light_dirty_for_change(x, y, z, old, id);
+}
+
+static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message) {
+    (void)userdata;
+    if (message && message[0]) snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "%s", message);
 }
 
 static void pex_net_apply_chunk(const PexNetChunk *chunk) {
@@ -1734,6 +1984,10 @@ static int pex_net_is_connecting(void) {
 }
 
 static void pex_net_connect_fail(const char *msg) {
+    if (g_mp_bedrock_session_active) {
+        pex_mcpe_join_session_disconnect(&g_mp_bedrock_session);
+        g_mp_bedrock_session_active = 0;
+    }
     if (g_mp_connect_socket != INVALID_SOCKET) {
         closesocket(g_mp_connect_socket);
         g_mp_connect_socket = INVALID_SOCKET;
@@ -1756,6 +2010,26 @@ static void pex_net_connect_fail(const char *msg) {
 
 static void pex_net_connect_tick(void) {
     if (!g_mp_connecting) return;
+
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+        if (!g_mp_bedrock_session_active) {
+            pex_net_connect_fail("Bedrock session was not initialized.");
+            return;
+        }
+        if (!pex_mcpe_join_session_tick(&g_mp_bedrock_session)) {
+            pex_net_connect_fail(pex_mcpe_join_session_status(&g_mp_bedrock_session));
+            return;
+        }
+        g_mp_connect_progress = pex_mcpe_join_session_progress(&g_mp_bedrock_session);
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "%s", pex_mcpe_join_session_status(&g_mp_bedrock_session));
+        if (g_mp_bedrock_session.state == PEX_MCPE_JOIN_WORLD_READY && g_mp_chunks_received > 0) {
+            g_mp_connecting = 0;
+            g_mp_connected = 1;
+            pex_net_finish_world_download();
+        }
+        return;
+    }
+
     double now = now_seconds();
     double elapsed = now - g_mp_connect_start_time;
 
@@ -1807,6 +2081,17 @@ static void pex_net_connect_tick(void) {
 
 static void pex_net_poll(void) {
     if (g_mp_connecting) pex_net_connect_tick();
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+        if (g_mp_bedrock_session_active) {
+            if (!pex_mcpe_join_session_tick(&g_mp_bedrock_session)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "%s", pex_mcpe_join_session_status(&g_mp_bedrock_session));
+                pex_net_disconnect();
+                open_notice("Disconnected", msg[0] ? msg : "Bedrock connection failed.", "");
+            }
+        }
+        return;
+    }
     if (!g_mp_connected || g_mp_socket == INVALID_SOCKET) return;
 
     if (InterlockedCompareExchange(&g_mp_rx_lost, 0, 0)) {
@@ -1867,9 +2152,14 @@ static void pex_net_poll(void) {
 static int pex_net_connect_to_server(const char *server) {
     char host[96];
     int port = PEX_NET_DEFAULT_PORT;
-    pex_net_parse_host_port(server, host, sizeof(host), &port);
+    int port_was_given = 0;
+    pex_net_parse_host_port_ex(server, host, sizeof(host), &port, &port_was_given);
     pex_net_disconnect();
     pex_net_clear_remote_state();
+    g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
+    g_mp_bedrock_detected_protocol = 0;
+    g_mp_bedrock_detected_version[0] = 0;
+    g_mp_bedrock_detected_motd[0] = 0;
     g_mp_connect_progress = 1;
     pex_net_set_status("Resolving/connecting... 1%");
 
@@ -1880,6 +2170,20 @@ static int pex_net_connect_to_server(const char *server) {
             return 0;
         }
         g_mp_winsock_started = 1;
+    }
+
+    {
+        int mcpe_port = port_was_given ? port : 19132;
+        char motd[256];
+        int protocol = 0;
+        char version[24];
+        motd[0] = 0;
+        version[0] = 0;
+        pex_net_set_status("Checking for Bedrock/Genisys MOTD...");
+        if (pex_mcpe_probe_unconnected_motd(host, mcpe_port, motd, sizeof(motd)) &&
+            pex_mcpe_motd_is_genisys_0154(motd, &protocol, version, sizeof(version))) {
+            return pex_mcpe_begin_bedrock_protocol_81_join(host, mcpe_port, protocol, version, motd);
+        }
     }
 
     if (g_mp_connect_thread) {
@@ -1913,6 +2217,16 @@ static int pex_net_connect_to_server(const char *server) {
 }
 
 static void pex_net_send_player_state(void) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+        if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
+        double now = now_seconds();
+        if (now - g_mp_bedrock_last_move_time < 0.05) return;
+        g_mp_bedrock_last_move_time = now;
+        pex_mcpe_join_session_send_move(&g_mp_bedrock_session,
+                                        g_player_x, g_player_y + 1.62f, g_player_z,
+                                        g_player_yaw, g_player_pitch);
+        return;
+    }
     if (!g_mp_connected || g_mp_player_id <= 0 || !g_mp_world_ready) return;
     PexNetPlayerState st;
     memset(&st, 0, sizeof(st));
@@ -1934,6 +2248,17 @@ static void pex_net_send_player_state(void) {
 }
 
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+        if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
+        if (action == PEX_BLOCK_BREAK) {
+            pex_mcpe_join_session_send_break(&g_mp_bedrock_session, x, y, z, face);
+        } else {
+            pex_mcpe_join_session_send_use_item(&g_mp_bedrock_session, x, y, z, face,
+                                                g_player_x, g_player_y + 1.62f, g_player_z,
+                                                g_selected_hotbar_slot, block_id, 1, 0);
+        }
+        return;
+    }
     if (!g_mp_connected || !g_mp_world_ready) return;
     PexNetBlockAction a;
     memset(&a, 0, sizeof(a));
@@ -2195,6 +2520,11 @@ static void pex_net_send_chest_update(void) {
 }
 
 static void pex_net_send_chat(const char *text) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+        if (!g_mp_connected || !g_mp_world_ready || !text || !text[0] || !g_mp_bedrock_session_active) return;
+        pex_mcpe_join_session_send_chat(&g_mp_bedrock_session, text);
+        return;
+    }
     if (!g_mp_connected || !g_mp_world_ready || !text || !text[0]) return;
     PexNetChat chat;
     memset(&chat, 0, sizeof(chat));
@@ -2205,6 +2535,10 @@ static void pex_net_send_chat(const char *text) {
 
 static void pex_net_disconnect(void) {
     pex_net_stop_rx_thread();
+    if (g_mp_bedrock_session_active) {
+        pex_mcpe_join_session_disconnect(&g_mp_bedrock_session);
+        g_mp_bedrock_session_active = 0;
+    }
     if (g_mp_connect_socket != INVALID_SOCKET) {
         closesocket(g_mp_connect_socket);
         g_mp_connect_socket = INVALID_SOCKET;
@@ -2218,6 +2552,7 @@ static void pex_net_disconnect(void) {
         g_mp_connect_thread = NULL;
     }
     g_mp_connecting = 0;
+    g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
     if (g_mp_socket != INVALID_SOCKET) {
         if (g_mp_connected) {
             PexNetPacketHeader h;
