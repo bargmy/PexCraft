@@ -107,7 +107,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"
-#include "platform/android_tv/android_tv_classic_pack_installer.c"
+#include "platform/android/android_classic_pack_installer.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"
 #include "i18n/language.c"

@@ -67,6 +67,34 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     return t->id != 0;
 }
 
+
+static int pex_make_fallback_texture(Texture *t, const char *name, int w, int h, int repeat) {
+    if (w <= 0) w = 16;
+    if (h <= 0) h = 16;
+    size_t n = (size_t)w * (size_t)h * 4u;
+    unsigned char *rgba = (unsigned char*)malloc(n);
+    if (!rgba) return 0;
+    unsigned int seed = 2166136261u;
+    if (name) {
+        const unsigned char *p = (const unsigned char*)name;
+        while (*p) seed = (seed ^ *p++) * 16777619u;
+    }
+    unsigned char r = (unsigned char)(80u + (seed & 0x7fu));
+    unsigned char g = (unsigned char)(80u + ((seed >> 8) & 0x7fu));
+    unsigned char b = (unsigned char)(80u + ((seed >> 16) & 0x7fu));
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int k = (y * w + x) * 4;
+            int checker = ((x >> 3) ^ (y >> 3)) & 1;
+            rgba[k + 0] = checker ? r : (unsigned char)(r / 2);
+            rgba[k + 1] = checker ? g : (unsigned char)(g / 2);
+            rgba[k + 2] = checker ? b : (unsigned char)(b / 2);
+            rgba[k + 3] = 255;
+        }
+    }
+    return upload_rgba_texture(t, w, h, rgba, repeat);
+}
+
 static void normalize_sky_alpha(Texture *t) {
     if (!t || !t->rgba || !t->id || t->w <= 0 || t->h <= 0) return;
     size_t pixels = (size_t)t->w * (size_t)t->h;
@@ -938,21 +966,33 @@ static int load_default_textures(void) {
     return 1;
 #else
     if (load_release_textures_from_pack()) return 1;
-    int ok = 1;
-    ok = load_mcrw(&tex_bg, "gui_background.mcrw", 1) && ok;
-    ok = load_mcrw(&tex_gui, "gui_gui.mcrw", 0) && ok;
-    ok = load_mcrw(&tex_font, "font_default.mcrw", 0) && ok;
-    ok = load_mcrw(&tex_terrain, "terrain.mcrw", 1) && ok;
-    ok = load_mcrw(&tex_black, "title_black.mcrw", 1) && ok;
-    load_mcrw(&tex_pack, "pack.mcrw", 0);
-    load_mcrw(&tex_default_pack_icon, "pack.mcrw", 0);
-    load_mcrw(&tex_unknown_pack, "unknown_pack.mcrw", 0);
-    ok = load_mcrw(&tex_icons, "gui_icons.mcrw", 0) && ok;
-    ok = load_mcrw(&tex_inventory, "gui_inventory.mcrw", 0) && ok;
-    load_mcrw(&tex_allitems, "gui_allitems.mcrw", 0);
-    load_mcrw(&tex_workbench, "gui_crafting_table.mcrw", 0);
-    load_mcrw(&tex_furnace_gui, "gui_furnace.mcrw", 0);
-    load_mcrw(&tex_chest_gui, "gui_chest.mcrw", 0);
+    int missing_required = 0;
+#define PEX_LOAD_REQ(tex, file, repeat, fw, fh) do { \
+        if (!load_mcrw((tex), (file), (repeat))) { \
+            ++missing_required; \
+            log_msg("Missing required asset %s; using temporary fallback so resource downloader can start", (file)); \
+            pex_make_fallback_texture((tex), (file), (fw), (fh), (repeat)); \
+        } \
+    } while (0)
+#define PEX_LOAD_OPT(tex, file, repeat, fw, fh) do { \
+        if (!load_mcrw((tex), (file), (repeat))) { \
+            pex_make_fallback_texture((tex), (file), (fw), (fh), (repeat)); \
+        } \
+    } while (0)
+    PEX_LOAD_REQ(&tex_bg, "gui_background.mcrw", 1, 16, 16);
+    PEX_LOAD_REQ(&tex_gui, "gui_gui.mcrw", 0, 256, 256);
+    PEX_LOAD_REQ(&tex_font, "font_default.mcrw", 0, 128, 128);
+    PEX_LOAD_REQ(&tex_terrain, "terrain.mcrw", 1, 256, 256);
+    PEX_LOAD_REQ(&tex_black, "title_black.mcrw", 1, 16, 16);
+    PEX_LOAD_OPT(&tex_pack, "pack.mcrw", 0, 32, 32);
+    PEX_LOAD_OPT(&tex_default_pack_icon, "pack.mcrw", 0, 32, 32);
+    PEX_LOAD_OPT(&tex_unknown_pack, "unknown_pack.mcrw", 0, 32, 32);
+    PEX_LOAD_REQ(&tex_icons, "gui_icons.mcrw", 0, 256, 256);
+    PEX_LOAD_REQ(&tex_inventory, "gui_inventory.mcrw", 0, 256, 256);
+    PEX_LOAD_OPT(&tex_allitems, "gui_allitems.mcrw", 0, 256, 256);
+    PEX_LOAD_OPT(&tex_workbench, "gui_crafting_table.mcrw", 0, 256, 256);
+    PEX_LOAD_OPT(&tex_furnace_gui, "gui_furnace.mcrw", 0, 256, 256);
+    PEX_LOAD_OPT(&tex_chest_gui, "gui_chest.mcrw", 0, 256, 256);
     free_texture(&tex_chest_entity);
     free_texture(&tex_large_chest_entity);
     free_texture(&tex_mob_pig);
@@ -962,26 +1002,28 @@ static int load_default_textures(void) {
     free_texture(&tex_mob_chicken);
     free_texture(&tex_mob_saddle);
     for (int m = 0; m < 5; m++) for (int l = 0; l < 2; l++) free_texture(&tex_armor[m][l]);
-    load_mcrw(&tex_items, "gui_items.mcrw", 0);
-    ok = load_mcrw(&tex_steve, "mob_char.mcrw", 0) && ok;
-    load_mcrw(&tex_mob_pig, "mob_pig.mcrw", 0);
-    load_mcrw(&tex_mob_sheep, "mob_sheep.mcrw", 0);
-    load_mcrw(&tex_mob_sheep_fur, "mob_sheep_fur.mcrw", 0);
-    load_mcrw(&tex_mob_cow, "mob_cow.mcrw", 0);
-    load_mcrw(&tex_mob_chicken, "mob_chicken.mcrw", 0);
-    load_mcrw(&tex_mob_saddle, "mob_saddle.mcrw", 0);
-    load_mcrw(&tex_clouds, "environment_clouds.mcrw", 1);
-    load_mcrw(&tex_sun, "terrain_sun.mcrw", 0);
-    load_mcrw(&tex_moon, "terrain_moon.mcrw", 0);
-    load_mcrw(&tex_moon_phases, "terrain_moon_phases.mcrw", 0);
+    PEX_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
+    PEX_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_mob_pig, "mob_pig.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_mob_sheep, "mob_sheep.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_mob_sheep_fur, "mob_sheep_fur.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_mob_cow, "mob_cow.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_mob_chicken, "mob_chicken.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_mob_saddle, "mob_saddle.mcrw", 0, 64, 32);
+    PEX_LOAD_OPT(&tex_clouds, "environment_clouds.mcrw", 1, 256, 256);
+    PEX_LOAD_OPT(&tex_sun, "terrain_sun.mcrw", 0, 32, 32);
+    PEX_LOAD_OPT(&tex_moon, "terrain_moon.mcrw", 0, 32, 32);
+    PEX_LOAD_OPT(&tex_moon_phases, "terrain_moon_phases.mcrw", 0, 64, 32);
     normalize_sky_sprite_alphas();
-    /* Java RenderGlobal.renderSky uses additive alpha for sun/moon sprites. */
-    load_mcrw(&tex_water_overlay, "misc_water.mcrw", 1);
-    load_mcrw(&tex_shadow, "misc_shadow.mcrw", 0);
-    load_mcrw(&tex_grasscolor, "misc_grasscolor.mcrw", 0);
-    load_mcrw(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0);
-    load_mcrw(&tex_particles, "particles.mcrw", 0);
-    return ok;
+    PEX_LOAD_OPT(&tex_water_overlay, "misc_water.mcrw", 1, 256, 256);
+    PEX_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
+    PEX_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
+    PEX_LOAD_OPT(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0, 256, 256);
+    PEX_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
+    if (missing_required) log_msg("Started with %d fallback required assets; showing resource download UI", missing_required);
+#undef PEX_LOAD_REQ
+#undef PEX_LOAD_OPT
+    return 1;
 #endif
 }
 

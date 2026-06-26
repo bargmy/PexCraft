@@ -7,6 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
 pkg_check_modules(SDL2_IMAGE REQUIRED SDL2_image)
+pkg_check_modules(CURL REQUIRED libcurl)
 
 add_executable(pexcraft_lgwebos ../main_lgwebos.c)
 
@@ -18,6 +19,7 @@ target_compile_definitions(pexcraft_lgwebos PRIVATE
 target_include_directories(pexcraft_lgwebos SYSTEM PRIVATE
     ${SDL2_INCLUDE_DIRS}
     ${SDL2_IMAGE_INCLUDE_DIRS}
+    ${CURL_INCLUDE_DIRS}
 )
 
 target_link_libraries(pexcraft_lgwebos PRIVATE
@@ -28,6 +30,8 @@ target_link_libraries(pexcraft_lgwebos PRIVATE
     z
     m
     pthread
+    dl
+    ${CURL_LIBRARIES}
 )
 
 configure_file(appinfo.json.in ${CMAKE_BINARY_DIR}/appinfo.json @ONLY)
