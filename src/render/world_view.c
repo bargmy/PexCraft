@@ -6669,7 +6669,7 @@ static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float
     if (render_item_as_block_id(id)) {
         glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
         draw_block_item_model(id, -0.5f, -0.5f, -0.5f);
-    } else if (is_block_id(id)) {
+    } else if (world_item_is_block_id(id)) {
         glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
         draw_dropped_terrain_sprite(world_block_item_tile(id));
     } else {
