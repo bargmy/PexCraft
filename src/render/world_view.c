@@ -463,6 +463,56 @@ static void draw_sky_only(void) {
     glDepthMask(GL_TRUE);
 }
 
+static int mcpe_chat_color_rgb(char code) {
+    if (code >= 'A' && code <= 'Z') code = (char)(code - 'A' + 'a');
+    switch (code) {
+        case '0': return 0x000000; case '1': return 0x0000AA;
+        case '2': return 0x00AA00; case '3': return 0x00AAAA;
+        case '4': return 0xAA0000; case '5': return 0xAA00AA;
+        case '6': return 0xFFAA00; case '7': return 0xAAAAAA;
+        case '8': return 0x555555; case '9': return 0x5555FF;
+        case 'a': return 0x55FF55; case 'b': return 0x55FFFF;
+        case 'c': return 0xFF5555; case 'd': return 0xFF55FF;
+        case 'e': return 0xFFFF55; case 'f': return 0xFFFFFF;
+        case 'r': return 0xFFFFFF;
+        default: return -1;
+    }
+}
+
+static void draw_text_mcpe_colored(const char *text, int x, int y, int argb) {
+    if (!text) return;
+    int alpha = argb & 0xFF000000;
+    int rgb = argb & 0x00FFFFFF;
+    int cur_x = x;
+    char seg[512];
+    int seg_n = 0;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        int section = 0;
+        char code = 0;
+        if (p[0] == 0xc2 && p[1] == 0xa7 && p[2]) { section = 1; code = (char)p[2]; }
+        else if (p[0] == 0xa7 && p[1]) { section = 2; code = (char)p[1]; }
+        if (section) {
+            if (seg_n > 0) {
+                seg[seg_n] = 0;
+                draw_text(seg, cur_x, y, alpha | rgb);
+                cur_x += text_width(seg);
+                seg_n = 0;
+            }
+            int c = mcpe_chat_color_rgb(code);
+            if (c >= 0) rgb = c;
+            p += section == 1 ? 3 : 2;
+            continue;
+        }
+        if (seg_n + 1 < (int)sizeof(seg)) seg[seg_n++] = (char)*p;
+        p++;
+    }
+    if (seg_n > 0) {
+        seg[seg_n] = 0;
+        draw_text(seg, cur_x, y, alpha | rgb);
+    }
+}
+
 static void draw_chat_lines(int force_visible) {
     glEnable(GL_BLEND);
     for (int i = 0; i < g_chat_count && i < (force_visible ? 20 : 10); i++) {
@@ -479,7 +529,7 @@ static void draw_chat_lines(int force_visible) {
         if (alpha <= 0) continue;
         int y = g_gui_h - 48 - i * 9;
         draw_rect(2, y - 1, 322, y + 8, (alpha / 2) << 24);
-        draw_text(g_chat_lines[i].text, 2, y, (alpha << 24) | 0xFFFFFF);
+        draw_text_mcpe_colored(g_chat_lines[i].text, 2, y, (alpha << 24) | 0xFFFFFF);
     }
 }
 
@@ -6604,6 +6654,31 @@ static int multiplayer_renderable_remote_player_count(void) {
     return count;
 }
 
+static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float arm_pitch, float arm_yaw, float arm_roll) {
+    if (!r || r->held_item_id <= 0 || r->held_item_count <= 0) return;
+    int id = r->held_item_id;
+    glPushMatrix();
+    glTranslatef(-5.0f * 0.0625f, 2.0f * 0.0625f, 0.0f);
+    glRotatef(arm_roll, 0.0f, 0.0f, 1.0f);
+    glRotatef(arm_yaw, 0.0f, 1.0f, 0.0f);
+    glRotatef(arm_pitch, 1.0f, 0.0f, 0.0f);
+    glTranslatef(-2.0f * 0.0625f, 10.0f * 0.0625f, -2.0f * 0.0625f);
+    glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
+    glScalef(0.375f, 0.375f, 0.375f);
+    glColor4f(1, 1, 1, 1);
+    if (render_item_as_block_id(id)) {
+        glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+        draw_block_item_model(id, -0.5f, -0.5f, -0.5f);
+    } else if (is_block_id(id)) {
+        glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+        draw_dropped_terrain_sprite(world_block_item_tile(id));
+    } else {
+        glBindTexture(GL_TEXTURE_2D, tex_items.id);
+        draw_dropped_item_sprite(item_icon_tile(id));
+    }
+    glPopMatrix();
+}
+
 static void draw_multiplayer_remote_players(void) {
     if (!g_mp_connected || !tex_steve.id) return;
 
@@ -6697,6 +6772,7 @@ static void draw_multiplayer_remote_players(void) {
         steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.0f, 1, left_leg_pitch, 0, 0);
         steve_part(0, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, pitch, 0, 0);
         steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
+        draw_remote_player_held_item(r, right_arm_pitch, right_arm_yaw, right_arm_roll);
         glPopMatrix();
     }
 

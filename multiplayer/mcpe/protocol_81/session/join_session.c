@@ -263,6 +263,41 @@ static void pex_mcpe_process_one_packet(PexMcpeJoinSession *s, const uint8_t *pa
             pex_mcpe_free_player_list_entries(entries, count);
             break;
         }
+        case PEX_MCPE_PACKET_MOB_EQUIPMENT: {
+            PexMcpeMobEquipmentInfo eq;
+            if (pex_mcpe_decode_mob_equipment_packet(body, body_size, &eq) && s->callbacks.on_mob_equipment) {
+                s->callbacks.on_mob_equipment(s->callback_userdata, &eq);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_ANIMATE: {
+            PexMcpeAnimateInfo anim;
+            if (pex_mcpe_decode_animate_packet(body, body_size, &anim) && s->callbacks.on_animate) {
+                s->callbacks.on_animate(s->callback_userdata, &anim);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_ADD_ITEM_ENTITY: {
+            PexMcpeDroppedItemInfo item;
+            if (pex_mcpe_decode_add_item_entity_packet(body, body_size, &item) && s->callbacks.on_add_item) {
+                s->callbacks.on_add_item(s->callback_userdata, &item);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_CONTAINER_SET_CONTENT: {
+            PexMcpeContainerContentInfo content;
+            if (pex_mcpe_decode_container_set_content_packet(body, body_size, &content) && s->callbacks.on_inventory_content) {
+                s->callbacks.on_inventory_content(s->callback_userdata, &content);
+            }
+            break;
+        }
+        case PEX_MCPE_PACKET_CONTAINER_SET_SLOT: {
+            PexMcpeContainerSlotInfo slot;
+            if (pex_mcpe_decode_container_set_slot_packet(body, body_size, &slot) && s->callbacks.on_inventory_slot) {
+                s->callbacks.on_inventory_slot(s->callback_userdata, &slot);
+            }
+            break;
+        }
         case PEX_MCPE_PACKET_DISCONNECT: {
             char text[256];
             text[0] = 0;
@@ -345,8 +380,8 @@ int pex_mcpe_join_session_send_chat(PexMcpeJoinSession *session, const char *mes
 }
 
 
-static int pex_mcpe_join_session_send_equipment(PexMcpeJoinSession *session,
-                                                    int slot, int item_id, int count, int damage) {
+int pex_mcpe_join_session_send_equipment(PexMcpeJoinSession *session,
+                                         int slot, int item_id, int count, int damage) {
     if (!session || !session->raknet || !session->entity_id_valid) return 0;
     uint8_t buf[128];
     size_t n = 0;
@@ -381,9 +416,37 @@ int pex_mcpe_join_session_send_use_item(PexMcpeJoinSession *session, int x, int 
     return pex_raknet_client_send(session->raknet, buf, n, 0);
 }
 
+int pex_mcpe_join_session_send_animate(PexMcpeJoinSession *session, int action) {
+    if (!session || !session->raknet || !session->entity_id_valid) return 0;
+    uint8_t buf[64];
+    size_t n = 0;
+    if (!pex_mcpe_encode_animate_packet(buf, sizeof(buf), &n, session->entity_id, action)) return 0;
+    return pex_raknet_client_send(session->raknet, buf, n, 0);
+}
+
+int pex_mcpe_join_session_send_inventory_slot(PexMcpeJoinSession *session,
+                                              int window_id, int slot, int hotbar_slot,
+                                              int item_id, int count, int damage) {
+    if (!session || !session->raknet) return 0;
+    uint8_t buf[128];
+    size_t n = 0;
+    if (!pex_mcpe_encode_container_set_slot_packet(buf, sizeof(buf), &n, window_id, slot, hotbar_slot, item_id, count, damage)) return 0;
+    return pex_raknet_client_send(session->raknet, buf, n, 0);
+}
+
 void pex_mcpe_join_session_disconnect(PexMcpeJoinSession *session) {
     if (!session) return;
     if (session->raknet) {
+        uint8_t buf[64];
+        size_t n = 0;
+        PexMcpeBuffer b;
+        pex_mcpe_buffer_init(&b, buf, sizeof(buf));
+        if (pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) &&
+            pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_DISCONNECT) &&
+            pex_mcpe_write_string(&b, "disconnect")) {
+            n = b.offset;
+            pex_raknet_client_send(session->raknet, buf, n, 0);
+        }
         pex_raknet_client_destroy(session->raknet);
         session->raknet = NULL;
     }

@@ -498,6 +498,10 @@ typedef struct PexNetRenderPlayerState {
     int mining_stage;
     float mining_time;
     int flags;
+    int held_item_id;
+    int held_item_count;
+    int held_item_damage;
+    int held_slot;
     int skin_only;
     int has_skin;
     Texture skin;

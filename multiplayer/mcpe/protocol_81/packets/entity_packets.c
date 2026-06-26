@@ -1,5 +1,6 @@
 #include "entity_packets.h"
 #include "packet_codec.h"
+#include "packet_ids.h"
 #include <string.h>
 
 static int pex_mcpe_read_i16_le(PexMcpeReadBuffer *b, int16_t *out_value) {
@@ -210,4 +211,143 @@ void pex_mcpe_free_player_list_entries(PexMcpePlayerListSkin *entries, size_t co
             entries[i].skin_size = 0;
         }
     }
+}
+
+
+static int pex_mcpe_write_slot_info(PexMcpeBuffer *b, int item_id, int count, int damage) {
+    if (!b) return 0;
+    if (item_id <= 0 || count <= 0) return pex_mcpe_write_i16_be(b, 0);
+    if (count > 255) count = 255;
+    return pex_mcpe_write_i16_be(b, (int16_t)item_id) &&
+           pex_mcpe_write_u8(b, (uint8_t)count) &&
+           pex_mcpe_write_i16_be(b, (int16_t)damage) &&
+           pex_mcpe_write_u8(b, 0) && pex_mcpe_write_u8(b, 0);
+}
+
+int pex_mcpe_decode_mob_equipment_packet(const uint8_t *data, size_t size, PexMcpeMobEquipmentInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t eid = 0;
+    uint8_t slot = 0, selected = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->eid = (uint64_t)eid;
+    if (!pex_mcpe_skip_slot(&b, &out_info->item.id, &out_info->item.count, &out_info->item.damage)) return 0;
+    if (!pex_mcpe_read_u8(&b, &slot)) return 0;
+    if (!pex_mcpe_read_u8(&b, &selected)) return 0;
+    out_info->slot = (int)slot;
+    out_info->selected_slot = (int)selected;
+    return 1;
+}
+
+int pex_mcpe_decode_animate_packet(const uint8_t *data, size_t size, PexMcpeAnimateInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    uint8_t action = 0;
+    int64_t eid = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_u8(&b, &action)) return 0;
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->action = (int)action;
+    out_info->eid = (uint64_t)eid;
+    return 1;
+}
+
+int pex_mcpe_decode_add_item_entity_packet(const uint8_t *data, size_t size, PexMcpeDroppedItemInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    int64_t eid = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_i64_be(&b, &eid)) return 0;
+    out_info->eid = (uint64_t)eid;
+    if (!pex_mcpe_skip_slot(&b, &out_info->item.id, &out_info->item.count, &out_info->item.damage)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->x)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->y)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->z)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->mx)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->my)) return 0;
+    if (!pex_mcpe_read_f32_be(&b, &out_info->mz)) return 0;
+    return out_info->eid != 0 && out_info->item.id > 0 && out_info->item.count > 0;
+}
+
+int pex_mcpe_decode_container_set_content_packet(const uint8_t *data, size_t size, PexMcpeContainerContentInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    uint8_t win = 0;
+    int16_t count = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_u8(&b, &win)) return 0;
+    out_info->window_id = (int)win;
+    if (!pex_mcpe_read_i16_be(&b, &count) || count < 0) return 0;
+    out_info->slot_count = count > PEX_MCPE_MAX_INVENTORY_SLOTS ? PEX_MCPE_MAX_INVENTORY_SLOTS : count;
+    for (int i = 0; i < count; ++i) {
+        int id = 0, cnt = 0, dmg = 0;
+        if (!pex_mcpe_skip_slot(&b, &id, &cnt, &dmg)) return 0;
+        if (i < PEX_MCPE_MAX_INVENTORY_SLOTS) {
+            out_info->slots[i].id = id;
+            out_info->slots[i].count = cnt;
+            out_info->slots[i].damage = dmg;
+        }
+    }
+    if (out_info->window_id == 0 && pex_mcpe_buffer_remaining(&b) >= 2) {
+        int16_t hotbar_count = 0;
+        if (!pex_mcpe_read_i16_be(&b, &hotbar_count) || hotbar_count < 0) return 0;
+        if (hotbar_count > 16) hotbar_count = 16;
+        out_info->hotbar_count = hotbar_count;
+        for (int i = 0; i < hotbar_count; ++i) {
+            int32_t hb = -1;
+            if (!pex_mcpe_read_i32_be(&b, &hb)) return 0;
+            out_info->hotbar[i] = hb;
+        }
+    }
+    return 1;
+}
+
+int pex_mcpe_decode_container_set_slot_packet(const uint8_t *data, size_t size, PexMcpeContainerSlotInfo *out_info) {
+    if (!data || !out_info) return 0;
+    memset(out_info, 0, sizeof(*out_info));
+    PexMcpeReadBuffer b;
+    uint8_t win = 0;
+    int16_t slot = 0, hotbar = 0;
+    pex_mcpe_read_buffer_init(&b, data, size);
+    if (!pex_mcpe_read_u8(&b, &win)) return 0;
+    if (!pex_mcpe_read_i16_be(&b, &slot)) return 0;
+    if (!pex_mcpe_read_i16_be(&b, &hotbar)) return 0;
+    out_info->window_id = (int)win;
+    out_info->slot = (int)slot;
+    out_info->hotbar_slot = (int)hotbar;
+    if (!pex_mcpe_skip_slot(&b, &out_info->item.id, &out_info->item.count, &out_info->item.damage)) return 0;
+    return 1;
+}
+
+int pex_mcpe_encode_animate_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size, uint64_t eid, int action) {
+    if (out_size) *out_size = 0;
+    PexMcpeBuffer b;
+    pex_mcpe_buffer_init(&b, out_data, out_capacity);
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
+        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_ANIMATE) ||
+        !pex_mcpe_write_u8(&b, (uint8_t)action) ||
+        !pex_mcpe_write_i64_be(&b, (int64_t)eid)) return 0;
+    if (out_size) *out_size = b.offset;
+    return 1;
+}
+
+int pex_mcpe_encode_container_set_slot_packet(uint8_t *out_data, size_t out_capacity, size_t *out_size,
+                                             int window_id, int slot, int hotbar_slot,
+                                             int item_id, int count, int damage) {
+    if (out_size) *out_size = 0;
+    PexMcpeBuffer b;
+    pex_mcpe_buffer_init(&b, out_data, out_capacity);
+    if (!pex_mcpe_write_u8(&b, PEX_MCPE_RAKLIB_GAME_PACKET) ||
+        !pex_mcpe_write_u8(&b, PEX_MCPE_PACKET_CONTAINER_SET_SLOT) ||
+        !pex_mcpe_write_u8(&b, (uint8_t)window_id) ||
+        !pex_mcpe_write_i16_be(&b, (int16_t)slot) ||
+        !pex_mcpe_write_i16_be(&b, (int16_t)hotbar_slot) ||
+        !pex_mcpe_write_slot_info(&b, item_id, count, damage)) return 0;
+    if (out_size) *out_size = b.offset;
+    return 1;
 }

@@ -33,10 +33,19 @@ static char g_mp_bedrock_detected_motd[192] = "";
 static PexMcpeJoinSession g_mp_bedrock_session;
 static int g_mp_bedrock_session_active = 0;
 static double g_mp_bedrock_last_move_time = 0.0;
+static int g_mp_bedrock_last_selected_slot = -1;
+static ItemStack g_mp_bedrock_last_held_item;
+static ItemStack g_mp_bedrock_last_sent_inventory[36];
+static int g_mp_bedrock_last_inventory_valid = 0;
+static int g_mp_bedrock_applying_inventory = 0;
 
 typedef struct PexMpBedrockEntityMap {
     uint64_t eid;
     int player_id;
+    int held_item_id;
+    int held_item_count;
+    int held_item_damage;
+    int held_slot;
 } PexMpBedrockEntityMap;
 static PexMpBedrockEntityMap g_mp_bedrock_entities[PEX_NET_MAX_PLAYERS];
 static int g_mp_bedrock_next_player_id = 2;
@@ -89,6 +98,11 @@ static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlay
 static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move);
 static void pex_mp_bedrock_on_remove_entity(void *userdata, uint64_t eid);
 static void pex_mp_bedrock_on_player_skin(void *userdata, const PexMcpePlayerListSkin *skin);
+static void pex_mp_bedrock_on_mob_equipment(void *userdata, const PexMcpeMobEquipmentInfo *equipment);
+static void pex_mp_bedrock_on_animate(void *userdata, const PexMcpeAnimateInfo *animate);
+static void pex_mp_bedrock_on_add_item(void *userdata, const PexMcpeDroppedItemInfo *item);
+static void pex_mp_bedrock_on_inventory_content(void *userdata, const PexMcpeContainerContentInfo *content);
+static void pex_mp_bedrock_on_inventory_slot(void *userdata, const PexMcpeContainerSlotInfo *slot);
 static void pex_mp_bedrock_on_set_time(void *userdata, int time);
 static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message);
 
@@ -598,6 +612,11 @@ static int pex_mcpe_begin_bedrock_protocol_81_join(const char *host, int port, i
     cb.on_move_entity = pex_mp_bedrock_on_move_entity;
     cb.on_remove_entity = pex_mp_bedrock_on_remove_entity;
     cb.on_player_skin = pex_mp_bedrock_on_player_skin;
+    cb.on_mob_equipment = pex_mp_bedrock_on_mob_equipment;
+    cb.on_animate = pex_mp_bedrock_on_animate;
+    cb.on_add_item = pex_mp_bedrock_on_add_item;
+    cb.on_inventory_content = pex_mp_bedrock_on_inventory_content;
+    cb.on_inventory_slot = pex_mp_bedrock_on_inventory_slot;
     cb.on_set_time = pex_mp_bedrock_on_set_time;
     cb.on_disconnect = pex_mp_bedrock_on_disconnect;
     pex_mcpe_join_session_set_callbacks(&g_mp_bedrock_session, &cb, NULL);
@@ -1378,6 +1397,11 @@ static void pex_net_clear_remote_state(void) {
     memset(g_mp_pending_pickups, 0, sizeof(g_mp_pending_pickups));
     memset(g_mp_bedrock_entities, 0, sizeof(g_mp_bedrock_entities));
     g_mp_bedrock_next_player_id = 2;
+    g_mp_bedrock_last_selected_slot = -1;
+    stack_clear(&g_mp_bedrock_last_held_item);
+    memset(g_mp_bedrock_last_sent_inventory, 0, sizeof(g_mp_bedrock_last_sent_inventory));
+    g_mp_bedrock_last_inventory_valid = 0;
+    g_mp_bedrock_applying_inventory = 0;
     g_mp_last_chunk_request_time = 0.0;
     g_mp_last_request_cx = 999999;
     g_mp_last_request_cz = 999999;
@@ -1522,13 +1546,65 @@ static int pex_mp_bedrock_get_or_add_player_id(uint64_t eid) {
     if (slot >= 0) return g_mp_bedrock_entities[slot].player_id;
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
         if (g_mp_bedrock_entities[i].eid == 0) {
+            memset(&g_mp_bedrock_entities[i], 0, sizeof(g_mp_bedrock_entities[i]));
             g_mp_bedrock_entities[i].eid = eid;
             g_mp_bedrock_entities[i].player_id = g_mp_bedrock_next_player_id++;
+            g_mp_bedrock_entities[i].held_slot = -1;
             if (g_mp_bedrock_next_player_id < 2) g_mp_bedrock_next_player_id = 2;
             return g_mp_bedrock_entities[i].player_id;
         }
     }
     return 0;
+}
+
+static PexMpBedrockEntityMap *pex_mp_bedrock_entity_by_player_id(int player_id) {
+    if (player_id <= 0) return NULL;
+    for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
+        if (g_mp_bedrock_entities[i].eid != 0 && g_mp_bedrock_entities[i].player_id == player_id) return &g_mp_bedrock_entities[i];
+    }
+    return NULL;
+}
+
+static void pex_mp_bedrock_apply_held_to_render(int player_id) {
+    PexMpBedrockEntityMap *m = pex_mp_bedrock_entity_by_player_id(player_id);
+    PexNetRenderPlayerState *r = pex_net_find_render_player(player_id);
+    if (!m || !r) return;
+    r->held_item_id = m->held_item_id;
+    r->held_item_count = m->held_item_count;
+    r->held_item_damage = m->held_item_damage;
+    r->held_slot = m->held_slot;
+}
+
+static void pex_mp_bedrock_trigger_swing_by_player_id(int player_id) {
+    PexNetRenderPlayerState *r = pex_net_find_render_player(player_id);
+    if (!r) return;
+    r->swing = 0.0f;
+    r->prev_swing = 0.0f;
+    r->swing_time = 0.0f;
+    r->swing_active = 1;
+    r->swing_ticks = 0;
+}
+
+static void pex_mp_bedrock_apply_item_to_stack(ItemStack *dst, const PexMcpeItemStackInfo *src) {
+    if (!dst || !src) return;
+    if (src->id <= 0 || src->count <= 0) { stack_clear(dst); return; }
+    dst->id = src->id;
+    dst->count = src->count;
+    dst->damage = src->damage;
+    dst->pop_time = 0;
+    int lim = stack_limit_for_id(dst->id);
+    if (dst->count > lim) dst->count = lim;
+}
+
+static int pex_mp_bedrock_find_or_create_drop_slot(uint64_t eid) {
+    if (eid == 0) return -1;
+    for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
+        if (g_drops[i].active && g_drops[i].net_id == (int)eid) return i;
+    }
+    for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
+        if (!g_drops[i].active) return i;
+    }
+    return -1;
 }
 
 static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlayerInfo *player) {
@@ -1545,7 +1621,7 @@ static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlay
     }
     g_mp_prev_players[idx] = g_mp_players[idx];
     g_mp_players[idx].player_id = player_id;
-    snprintf(g_mp_players[idx].name, sizeof(g_mp_players[idx].name), "%s", player->username[0] ? player->username : "BedrockPlayer");
+    snprintf(g_mp_players[idx].name, sizeof(g_mp_players[idx].name), "%s", player->username[0] ? player->username : "Player");
     g_mp_players[idx].x = player->x;
     /* AddPlayerPacket uses entity feet Y; renderer/player state uses eye Y. */
     g_mp_players[idx].y = player->y + 1.62f;
@@ -1554,8 +1630,16 @@ static void pex_mp_bedrock_on_add_player(void *userdata, const PexMcpeRemotePlay
     g_mp_players[idx].pitch = player->pitch;
     g_mp_players[idx].health = 20;
     g_mp_players[idx].armor = 0;
-    g_mp_players[idx].selected_slot = 0;
+    PexMpBedrockEntityMap *m = pex_mp_bedrock_entity_by_player_id(player_id);
+    if (m) {
+        m->held_item_id = player->held_item_id;
+        m->held_item_count = player->held_item_count;
+        m->held_item_damage = player->held_item_damage;
+        if (m->held_slot < 0) m->held_slot = 0;
+    }
+    g_mp_players[idx].selected_slot = m ? m->held_slot : 0;
     if (g_mp_prev_players[idx].player_id == 0) g_mp_prev_players[idx] = g_mp_players[idx];
+    pex_mp_bedrock_apply_held_to_render(player_id);
 }
 
 static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMoveInfo *move) {
@@ -1589,19 +1673,153 @@ static void pex_mp_bedrock_on_move_entity(void *userdata, const PexMcpeEntityMov
 static void pex_mp_bedrock_on_remove_entity(void *userdata, uint64_t eid) {
     (void)userdata;
     int slot = pex_mp_bedrock_find_player_slot_by_eid(eid);
-    if (slot < 0) return;
-    int player_id = g_mp_bedrock_entities[slot].player_id;
-    memset(&g_mp_bedrock_entities[slot], 0, sizeof(g_mp_bedrock_entities[slot]));
-    int idx = pex_mp_bedrock_find_player_index_by_id(player_id);
-    if (idx >= 0) {
-        for (int i = idx; i + 1 < g_mp_player_count; i++) {
-            g_mp_players[i] = g_mp_players[i + 1];
-            g_mp_prev_players[i] = g_mp_prev_players[i + 1];
+    if (slot >= 0) {
+        int player_id = g_mp_bedrock_entities[slot].player_id;
+        memset(&g_mp_bedrock_entities[slot], 0, sizeof(g_mp_bedrock_entities[slot]));
+        int idx = pex_mp_bedrock_find_player_index_by_id(player_id);
+        if (idx >= 0) {
+            for (int i = idx; i + 1 < g_mp_player_count; i++) {
+                g_mp_players[i] = g_mp_players[i + 1];
+                g_mp_prev_players[i] = g_mp_prev_players[i + 1];
+            }
+            if (g_mp_player_count > 0) g_mp_player_count--;
+            memset(&g_mp_players[g_mp_player_count], 0, sizeof(g_mp_players[g_mp_player_count]));
+            memset(&g_mp_prev_players[g_mp_player_count], 0, sizeof(g_mp_prev_players[g_mp_player_count]));
         }
-        if (g_mp_player_count > 0) g_mp_player_count--;
-        memset(&g_mp_players[g_mp_player_count], 0, sizeof(g_mp_players[g_mp_player_count]));
-        memset(&g_mp_prev_players[g_mp_player_count], 0, sizeof(g_mp_prev_players[g_mp_player_count]));
+        return;
     }
+    for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
+        if (g_drops[i].active && g_drops[i].net_id == (int)eid) {
+            memset(&g_drops[i], 0, sizeof(g_drops[i]));
+            break;
+        }
+    }
+    for (int i = 0; i < PEX_NET_MAX_DROPS; i++) {
+        if (g_mp_render_drops[i].active && g_mp_render_drops[i].net_id == (int)eid) {
+            memset(&g_mp_render_drops[i], 0, sizeof(g_mp_render_drops[i]));
+            break;
+        }
+    }
+}
+
+static void pex_mp_bedrock_on_mob_equipment(void *userdata, const PexMcpeMobEquipmentInfo *equipment) {
+    (void)userdata;
+    if (!equipment) return;
+    if (equipment->eid == 0) {
+        if (equipment->selected_slot >= 0 && equipment->selected_slot < 9) g_selected_hotbar_slot = equipment->selected_slot;
+        return;
+    }
+    int slot = pex_mp_bedrock_find_player_slot_by_eid(equipment->eid);
+    if (slot < 0) {
+        int player_id = pex_mp_bedrock_get_or_add_player_id(equipment->eid);
+        (void)player_id;
+        slot = pex_mp_bedrock_find_player_slot_by_eid(equipment->eid);
+    }
+    if (slot < 0) return;
+    PexMpBedrockEntityMap *m = &g_mp_bedrock_entities[slot];
+    m->held_slot = equipment->selected_slot;
+    m->held_item_id = equipment->item.id;
+    m->held_item_count = equipment->item.count;
+    m->held_item_damage = equipment->item.damage;
+    int idx = pex_mp_bedrock_find_player_index_by_id(m->player_id);
+    if (idx >= 0) g_mp_players[idx].selected_slot = equipment->selected_slot;
+    pex_mp_bedrock_apply_held_to_render(m->player_id);
+}
+
+static void pex_mp_bedrock_on_animate(void *userdata, const PexMcpeAnimateInfo *animate) {
+    (void)userdata;
+    if (!animate || animate->action != 1 || animate->eid == 0) return;
+    int slot = pex_mp_bedrock_find_player_slot_by_eid(animate->eid);
+    if (slot < 0) return;
+    pex_mp_bedrock_trigger_swing_by_player_id(g_mp_bedrock_entities[slot].player_id);
+}
+
+static void pex_mp_bedrock_on_add_item(void *userdata, const PexMcpeDroppedItemInfo *item) {
+    (void)userdata;
+    if (!item || item->eid == 0 || item->item.id <= 0 || item->item.count <= 0) return;
+    int idx = pex_mp_bedrock_find_or_create_drop_slot(item->eid);
+    if (idx < 0) return;
+    FlatDroppedItem *d = &g_drops[idx];
+    memset(d, 0, sizeof(*d));
+    d->active = 1;
+    d->net_id = (int)item->eid;
+    d->stack.id = item->item.id;
+    d->stack.count = item->item.count;
+    d->stack.damage = item->item.damage;
+    d->x = d->prev_x = item->x;
+    d->y = d->prev_y = item->y;
+    d->z = d->prev_z = item->z;
+    d->mx = item->mx;
+    d->my = item->my;
+    d->mz = item->mz;
+    d->rot = (float)((item->eid * 37u) & 255u) / 255.0f;
+    d->pickup_delay = 10;
+}
+
+static void pex_mp_bedrock_refresh_equipped_from_inventory(void) {
+    if (g_selected_hotbar_slot < 0 || g_selected_hotbar_slot > 8) g_selected_hotbar_slot = 0;
+    g_equipped_item = g_inventory[g_selected_hotbar_slot];
+    g_equipped_slot = g_selected_hotbar_slot;
+}
+
+static void pex_mp_bedrock_on_inventory_content(void *userdata, const PexMcpeContainerContentInfo *content) {
+    (void)userdata;
+    if (!content) return;
+    g_mp_bedrock_applying_inventory = 1;
+    if (content->window_id == 0) {
+        ItemStack mapped[36];
+        int used[PEX_MCPE_MAX_INVENTORY_SLOTS];
+        memset(mapped, 0, sizeof(mapped));
+        memset(used, 0, sizeof(used));
+        if (content->hotbar_count > 0) {
+            int hb_count = content->hotbar_count;
+            if (hb_count > 9) hb_count = 9;
+            for (int h = 0; h < hb_count; h++) {
+                int src = content->hotbar[h];
+                if (src >= content->hotbar_count) src -= content->hotbar_count;
+                if (src >= 0 && src < content->slot_count && src < PEX_MCPE_MAX_INVENTORY_SLOTS) {
+                    pex_mp_bedrock_apply_item_to_stack(&mapped[h], &content->slots[src]);
+                    used[src] = 1;
+                }
+            }
+            int dst = 9;
+            for (int src = 0; src < content->slot_count && src < PEX_MCPE_MAX_INVENTORY_SLOTS && dst < 36; src++) {
+                if (used[src]) continue;
+                pex_mp_bedrock_apply_item_to_stack(&mapped[dst++], &content->slots[src]);
+            }
+            memcpy(g_inventory, mapped, sizeof(mapped));
+        } else {
+            int count = content->slot_count;
+            if (count > 36) count = 36;
+            for (int i = 0; i < count; i++) pex_mp_bedrock_apply_item_to_stack(&g_inventory[i], &content->slots[i]);
+            for (int i = count; i < 36; i++) stack_clear(&g_inventory[i]);
+        }
+        memcpy(g_mp_bedrock_last_sent_inventory, g_inventory, sizeof(g_mp_bedrock_last_sent_inventory));
+        g_mp_bedrock_last_inventory_valid = 1;
+        pex_mp_bedrock_refresh_equipped_from_inventory();
+    } else if (content->window_id == 0x78) {
+        int count = content->slot_count;
+        if (count > 4) count = 4;
+        for (int i = 0; i < count; i++) pex_mp_bedrock_apply_item_to_stack(&g_armor_inventory[i], &content->slots[i]);
+        for (int i = count; i < 4; i++) stack_clear(&g_armor_inventory[i]);
+        armor_sync_player_armor();
+    }
+    g_mp_bedrock_applying_inventory = 0;
+}
+
+static void pex_mp_bedrock_on_inventory_slot(void *userdata, const PexMcpeContainerSlotInfo *slot) {
+    (void)userdata;
+    if (!slot) return;
+    g_mp_bedrock_applying_inventory = 1;
+    if (slot->window_id == 0 && slot->slot >= 0 && slot->slot < 36) {
+        pex_mp_bedrock_apply_item_to_stack(&g_inventory[slot->slot], &slot->item);
+        if (g_mp_bedrock_last_inventory_valid) g_mp_bedrock_last_sent_inventory[slot->slot] = g_inventory[slot->slot];
+        pex_mp_bedrock_refresh_equipped_from_inventory();
+    } else if (slot->window_id == 0x78 && slot->slot >= 0 && slot->slot < 4) {
+        pex_mp_bedrock_apply_item_to_stack(&g_armor_inventory[slot->slot], &slot->item);
+        armor_sync_player_armor();
+    }
+    g_mp_bedrock_applying_inventory = 0;
 }
 
 static void pex_mp_bedrock_on_disconnect(void *userdata, const char *message) {
@@ -2199,6 +2417,13 @@ static void pex_net_update_smoothing(void) {
         if (p->health > 0) r->death_time = 0.0f;
         r->health = p->health;
         r->flags = p->flags;
+        PexMpBedrockEntityMap *bm = pex_mp_bedrock_entity_by_player_id(p->player_id);
+        if (bm) {
+            r->held_item_id = bm->held_item_id;
+            r->held_item_count = bm->held_item_count;
+            r->held_item_damage = bm->held_item_damage;
+            r->held_slot = bm->held_slot;
+        }
 
         float dx = p->x - r->x;
         float dy = p->y - r->y;
@@ -2689,9 +2914,48 @@ static int pex_net_connect_to_server(const char *server) {
     return 1;
 }
 
+static int pex_mp_bedrock_stack_same_simple(const ItemStack *a, const ItemStack *b) {
+    if (!a || !b) return 0;
+    return a->id == b->id && a->count == b->count && a->damage == b->damage;
+}
+
+static void pex_mp_bedrock_sync_held_item(void) {
+    if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
+    if (g_selected_hotbar_slot < 0 || g_selected_hotbar_slot > 8) g_selected_hotbar_slot = 0;
+    ItemStack held = g_inventory[g_selected_hotbar_slot];
+    if (held.id <= 0 || held.count <= 0) stack_clear(&held);
+    if (g_mp_bedrock_last_selected_slot == g_selected_hotbar_slot &&
+        pex_mp_bedrock_stack_same_simple(&g_mp_bedrock_last_held_item, &held)) return;
+    pex_mcpe_join_session_send_equipment(&g_mp_bedrock_session, g_selected_hotbar_slot, held.id, held.count, held.damage);
+    g_mp_bedrock_last_selected_slot = g_selected_hotbar_slot;
+    g_mp_bedrock_last_held_item = held;
+}
+
+static void pex_mp_bedrock_sync_inventory_slots(void) {
+    if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active || g_mp_bedrock_applying_inventory) return;
+    if (!g_mp_bedrock_last_inventory_valid) {
+        memcpy(g_mp_bedrock_last_sent_inventory, g_inventory, sizeof(g_mp_bedrock_last_sent_inventory));
+        g_mp_bedrock_last_inventory_valid = 1;
+        return;
+    }
+    int sent = 0;
+    for (int i = 0; i < 36 && sent < 4; i++) {
+        ItemStack cur = g_inventory[i];
+        if (cur.id <= 0 || cur.count <= 0) stack_clear(&cur);
+        if (pex_mp_bedrock_stack_same_simple(&cur, &g_mp_bedrock_last_sent_inventory[i])) continue;
+        int hotbar_slot = (i >= 0 && i < 9) ? i : -1;
+        if (pex_mcpe_join_session_send_inventory_slot(&g_mp_bedrock_session, 0, i, hotbar_slot, cur.id, cur.count, cur.damage)) {
+            g_mp_bedrock_last_sent_inventory[i] = cur;
+            sent++;
+        }
+    }
+}
+
 static void pex_net_send_player_state(void) {
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
+        pex_mp_bedrock_sync_held_item();
+        pex_mp_bedrock_sync_inventory_slots();
         double now = now_seconds();
         if (now - g_mp_bedrock_last_move_time < 0.05) return;
         g_mp_bedrock_last_move_time = now;
@@ -2778,7 +3042,13 @@ static void pex_net_send_block_action(int action, int x, int y, int z, int face,
 }
 
 static void net_send_action_progress(int action, int x, int y, int z, int face, int block_id, int progress) {
-    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+        (void)x; (void)y; (void)z; (void)face; (void)block_id; (void)progress;
+        if (g_mp_connected && g_mp_world_ready && g_mp_bedrock_session_active && action == PEX_ACTION_MINE_HIT) {
+            pex_mcpe_join_session_send_animate(&g_mp_bedrock_session, 1);
+        }
+        return;
+    }
     if (!g_mp_connected || !g_mp_world_ready || g_mp_player_id <= 0) return;
     PexNetPlayerAction a;
     memset(&a, 0, sizeof(a));
@@ -3079,6 +3349,11 @@ static void pex_net_disconnect(void) {
     g_mp_chunks_received = 0;
     g_mp_expected_chunks = 0;
     g_mp_connect_progress = 0;
+    g_mp_bedrock_last_selected_slot = -1;
+    stack_clear(&g_mp_bedrock_last_held_item);
+    memset(g_mp_bedrock_last_sent_inventory, 0, sizeof(g_mp_bedrock_last_sent_inventory));
+    g_mp_bedrock_last_inventory_valid = 0;
+    g_mp_bedrock_applying_inventory = 0;
     g_mp_recv_len = 0;
     g_mp_render_last_time = 0.0;
 }

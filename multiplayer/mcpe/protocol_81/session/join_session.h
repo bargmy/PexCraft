@@ -36,6 +36,11 @@ typedef struct PexMcpeJoinCallbacks {
     void (*on_move_entity)(void *userdata, const PexMcpeEntityMoveInfo *move);
     void (*on_remove_entity)(void *userdata, uint64_t eid);
     void (*on_player_skin)(void *userdata, const PexMcpePlayerListSkin *skin);
+    void (*on_mob_equipment)(void *userdata, const PexMcpeMobEquipmentInfo *equipment);
+    void (*on_animate)(void *userdata, const PexMcpeAnimateInfo *animate);
+    void (*on_add_item)(void *userdata, const PexMcpeDroppedItemInfo *item);
+    void (*on_inventory_content)(void *userdata, const PexMcpeContainerContentInfo *content);
+    void (*on_inventory_slot)(void *userdata, const PexMcpeContainerSlotInfo *slot);
     void (*on_set_time)(void *userdata, int time);
     void (*on_disconnect)(void *userdata, const char *message);
 } PexMcpeJoinCallbacks;
@@ -83,6 +88,12 @@ int pex_mcpe_join_session_send_break(PexMcpeJoinSession *session, int x, int y, 
 int pex_mcpe_join_session_send_use_item(PexMcpeJoinSession *session, int x, int y, int z, int face,
                                         float pos_x, float pos_y, float pos_z,
                                         int slot, int item_id, int count, int damage);
+int pex_mcpe_join_session_send_equipment(PexMcpeJoinSession *session,
+                                         int slot, int item_id, int count, int damage);
+int pex_mcpe_join_session_send_animate(PexMcpeJoinSession *session, int action);
+int pex_mcpe_join_session_send_inventory_slot(PexMcpeJoinSession *session,
+                                              int window_id, int slot, int hotbar_slot,
+                                              int item_id, int count, int damage);
 void pex_mcpe_join_session_disconnect(PexMcpeJoinSession *session);
 const char *pex_mcpe_join_session_status(const PexMcpeJoinSession *session);
 int pex_mcpe_join_session_progress(const PexMcpeJoinSession *session);

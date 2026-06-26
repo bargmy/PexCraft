@@ -661,6 +661,11 @@ const char *pex_raknet_client_last_error(PexRakNetClient *client) {
 
 void pex_raknet_client_destroy(PexRakNetClient *client) {
     if (!client) return;
+    if (client->connected && client->sock != PEX_RAW_INVALID_SOCKET) {
+        unsigned char dc = 0x15; /* ID_DISCONNECTION_NOTIFICATION */
+        pex_raw_send_encapsulated(client, &dc, 1, 3, 1);
+        pex_raw_send_encapsulated(client, &dc, 1, 3, 1);
+    }
     for (int i = 0; i < PEX_RAKLIB_QUEUE_MAX; ++i) free(client->queue[i].data);
     for (int i = 0; i < PEX_RAKLIB_SPLIT_SLOTS; ++i) pex_raw_clear_split(&client->splits[i]);
     if (client->sock != PEX_RAW_INVALID_SOCKET) {

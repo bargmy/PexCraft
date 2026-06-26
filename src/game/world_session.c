@@ -1534,9 +1534,7 @@ static void enter_world_from_job(void) {
 
 
 static void leave_world_to_title(void) {
-    if (g_mp_connected) {
-        pex_net_disconnect();
-    }
+    pex_net_disconnect();
 #if !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY)
     if (!g_mp_connected && g_loaded_world_dir[0]) {
         save_current_world_state();
