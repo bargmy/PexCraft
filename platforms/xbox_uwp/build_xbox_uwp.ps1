@@ -72,7 +72,27 @@ if ($uwpUsingDirs.Count -eq 0) {
     $uwpUsingDirs | ForEach-Object { Write-Host "  $_" }
     $env:LIBPATH = (($uwpUsingDirs + @($env:LIBPATH)) -join ";")
 }
+# Do not pass semicolon-delimited WinMD paths through /p: on the MSBuild
+# command line. MSBuild treats semicolons in /p: as property separators,
+# so a value like C:\foo;C:\bar becomes a broken command-line switch.
+# Instead, generate a tiny props file and import it from the vcxproj.
+function Escape-XmlAttr([string]$value) {
+    if ($null -eq $value) { return "" }
+    return $value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace('"', "&quot;").Replace("'", "&apos;")
+}
+
 $uwpExtraUsingDirs = ($uwpUsingDirs -join ";")
+$generatedProps = Join-Path $PSScriptRoot "GeneratedWinmd.props"
+$escapedDirs = Escape-XmlAttr $uwpExtraUsingDirs
+@"
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <UwpExtraUsingDirs>$escapedDirs</UwpExtraUsingDirs>
+  </PropertyGroup>
+</Project>
+"@ | Out-File -Encoding utf8 $generatedProps
+Write-Host "Generated WinMD props: $generatedProps"
 
 Write-Host "Using MSBuild: $msbuild"
 & $msbuild $project `
@@ -83,8 +103,7 @@ Write-Host "Using MSBuild: $msbuild"
     /p:AppxBundle=Never `
     /p:GenerateAppxPackageOnBuild=true `
     /p:AppxPackageSigningEnabled=false `
-    /p:WindowsTargetPlatformMinVersion=10.0.14393.0 `
-    "/p:UwpExtraUsingDirs=$uwpExtraUsingDirs"
+    /p:WindowsTargetPlatformMinVersion=10.0.14393.0
 
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
 
