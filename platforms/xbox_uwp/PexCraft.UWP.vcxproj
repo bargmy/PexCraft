@@ -38,6 +38,11 @@
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <!-- /ZW needs platform.winmd. GitHub/VS images do not always put the WinMD
+           search paths on LIBPATH for hand-written UWP vcxproj files, so keep
+           explicit /AI directories here and allow the build script to inject
+           discovered paths through UwpExtraUsingDirs. -->
+      <AdditionalUsingDirectories>$(UwpExtraUsingDirs);$(VSInstallDir)Common7\IDE\VC\vcpackages;$(VSInstallDir)Common7\IDE\CommonExtensions\Microsoft\C++\WinRT;$(VCInstallDir)vcpackages;$(WindowsSdkDir)UnionMetadata;$(WindowsSdkDir)UnionMetadata\$(WindowsTargetPlatformVersion);$(WindowsSdkDir)References\Windows.Foundation.UniversalApiContract\1.0.0.0;$(WindowsSdkDir)References\Windows.Foundation.FoundationContract\1.0.0.0;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
       <CompileAsWinRT>true</CompileAsWinRT>
     </ClCompile>
     <Link>
