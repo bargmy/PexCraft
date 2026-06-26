@@ -389,6 +389,7 @@ static void ingame_tick(void) {
     }
 #endif
 
+    if (g_right_click_delay_timer > 0) g_right_click_delay_timer--;
     g_break_swing_holding = 0;
     g_prev_hand_swing = g_hand_swing;
     if (input_active) {
@@ -507,6 +508,31 @@ static void ingame_tick(void) {
         if (sneaking) { strafe *= 0.3f; forward *= 0.3f; }
     }
 
+    if (!player_is_creative()) {
+        g_creative_flying = 0;
+        g_creative_fly_toggle_timer = 0;
+    } else {
+        /* Java EntityPlayerSP: double-tap jump within 7 ticks toggles
+           capabilities.isFlying; while flying, sneak moves down and jump moves up. */
+        if (g_creative_fly_toggle_timer > 0) g_creative_fly_toggle_timer--;
+        if (!g_prev_jump_down && jumping) {
+            if (g_creative_fly_toggle_timer == 0) {
+                g_creative_fly_toggle_timer = 7;
+            } else {
+                g_creative_flying = !g_creative_flying;
+                g_creative_fly_toggle_timer = 0;
+                g_player_fall_distance = 0.0f;
+            }
+        }
+        if (g_creative_flying) {
+            if (sneaking) g_player_motion_y -= 0.15f;
+            if (jumping)  g_player_motion_y += 0.15f;
+            g_player_fall_distance = 0.0f;
+        }
+    }
+    g_prev_jump_down = jumping;
+    int normal_jump = jumping && !(player_is_creative() && g_creative_flying);
+
     float raw_strafe = strafe;
     float raw_forward = forward;
     float water_exit_dx = 0.0f;
@@ -518,7 +544,7 @@ static void ingame_tick(void) {
         water_exit_dx = raw_strafe * cy - raw_forward * sy;
         water_exit_dz = raw_forward * cy + raw_strafe * sy;
     }
-    int trying_water_exit = jumping && in_water &&
+    int trying_water_exit = normal_jump && in_water &&
         flat_player_has_water_exit_ledge(g_player_x, g_player_y, g_player_z, water_exit_dx, water_exit_dz);
 
     int suff_block = flat_player_suffocation_block();
@@ -532,10 +558,10 @@ static void ingame_tick(void) {
         g_suffocation_damage_timer = 0;
     }
 
-    if (jumping && in_ladder) {
+    if (normal_jump && in_ladder) {
         g_player_motion_y = 0.20f;
         g_player_on_ground = 0;
-    } else if (jumping && in_water) {
+    } else if (normal_jump && in_water) {
         if (trying_water_exit) {
             /* Strong lift is only for shore/ledge exit attempts. */
             g_player_motion_y += 0.08f;
@@ -549,10 +575,10 @@ static void ingame_tick(void) {
             if (g_player_motion_y < 0.08f) g_player_motion_y = 0.08f;
             if (g_player_motion_y > 0.16f) g_player_motion_y = 0.16f;
         }
-    } else if (jumping && in_lava) {
+    } else if (normal_jump && in_lava) {
         /* Lava remains heavy/slow. */
         g_player_motion_y += 0.04f;
-    } else if (jumping && g_player_on_ground) {
+    } else if (normal_jump && g_player_on_ground) {
         g_player_motion_y = 0.50f;
         g_player_on_ground = 0;
         player_add_exhaustion(0.2f);
@@ -561,7 +587,7 @@ static void ingame_tick(void) {
     float input_len = sqrtf(strafe * strafe + forward * forward);
     if (input_len >= 0.01f) {
         if (input_len < 1.0f) input_len = 1.0f;
-        float accel = in_water ? 0.02f : (in_lava ? 0.02f : (g_player_on_ground ? 0.1f : 0.02f));
+        float accel = g_creative_flying ? 0.05f : (in_water ? 0.02f : (in_lava ? 0.02f : (g_player_on_ground ? 0.1f : 0.02f)));
         strafe = strafe * accel / input_len;
         forward = forward * accel / input_len;
         float yaw_rad = g_player_yaw * (float)M_PI / 180.0f;
@@ -572,13 +598,16 @@ static void ingame_tick(void) {
     }
 
     float previous_motion_y = g_player_motion_y;
-    if (in_ladder) {
+    if (g_creative_flying) {
+        /* PlayerControllerCreative flying skips gravity; EntityPlayer restores
+           motionY from before super.moveEntityWithHeading and damps it later. */
+    } else if (in_ladder) {
         if (g_player_motion_y < -0.15f) g_player_motion_y = -0.15f;
     } else {
         g_player_motion_y -= (in_water ? 0.010f : (in_lava ? 0.02f : 0.08f));
     }
 
-    if (input_active && sneaking && flat_player_has_sneak_support(g_player_x, g_player_y, g_player_z)) {
+    if (!g_creative_flying && input_active && sneaking && flat_player_has_sneak_support(g_player_x, g_player_y, g_player_z)) {
         const float step = 0.05f;
         while (fabsf(g_player_motion_x) > 0.00001f &&
                !flat_player_has_sneak_support(g_player_x + g_player_motion_x, g_player_y, g_player_z)) {
@@ -661,7 +690,7 @@ static void ingame_tick(void) {
         g_player_on_ground = 1;
     }
 
-    if (jumping && in_water && trying_water_exit) {
+    if (normal_jump && in_water && trying_water_exit) {
         /* Shore mantle: only run when the player is pressing into a detected
            ledge.  Open water gets no direct Y teleport/lift, so it cannot fly. */
         if (!flat_player_aabb_collides(g_player_x, g_player_y + 0.06f, g_player_z)) {
@@ -709,7 +738,16 @@ static void ingame_tick(void) {
         player_die("fell out of the world");
     }
 
-    if (in_ladder) {
+    if (g_creative_flying && g_player_on_ground) {
+        g_creative_flying = 0;
+        g_creative_fly_toggle_timer = 0;
+    }
+
+    if (g_creative_flying) {
+        g_player_motion_y *= 0.60f;
+        g_player_motion_x *= 0.91f;
+        g_player_motion_z *= 0.91f;
+    } else if (in_ladder) {
         g_player_motion_x *= 0.50f;
         g_player_motion_z *= 0.50f;
         if (g_player_motion_y < -0.15f) g_player_motion_y = -0.15f;

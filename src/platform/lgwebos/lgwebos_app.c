@@ -155,6 +155,7 @@ static void sdl2_handle_event(SDL_Event *e) {
                 g_mouse_y = e->motion.y * g_gui_h / (g_win_h ? g_win_h : 1);
                 if (g_mouse_down && g_drag_slider) update_slider(g_drag_slider, g_mouse_x);
                 if (g_mouse_down && g_screen == SCREEN_TEXPACK) texpack_mouse_drag(g_mouse_y);
+                if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
             }
             break;
         case SDL_MOUSEBUTTONDOWN:
@@ -171,7 +172,10 @@ static void sdl2_handle_event(SDL_Event *e) {
             if (e->button.button == SDL_BUTTON_LEFT) mouse_up(g_mouse_x, g_mouse_y);
             break;
         case SDL_MOUSEWHEEL:
-            if (g_screen == SCREEN_INGAME) {
+            if (g_screen == SCREEN_CREATIVE) {
+                if (e->wheel.y > 0) creative_scroll_by(-1);
+                else if (e->wheel.y < 0) creative_scroll_by(1);
+            } else if (g_screen == SCREEN_INGAME) {
                 if (e->wheel.y > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
                 else if (e->wheel.y < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
             }

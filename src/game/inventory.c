@@ -33,99 +33,249 @@ static int stack_limit_for_id(int id) {
 }
 
 static ItemStack make_stack(int id, int count, int damage) { ItemStack s; s.id = id; s.count = count; s.damage = damage; s.pop_time = 0; return s; }
+static void spawn_item_stack(float x, float y, float z, ItemStack st, int random_spread);
 
 typedef struct CreativeItemDef { int id; int damage; } CreativeItemDef;
 
-static const CreativeItemDef g_creative_catalog[] = {
-    {BLOCK_STONE,0}, {BLOCK_GRASS,0}, {BLOCK_DIRT,0}, {BLOCK_COBBLESTONE,0}, {BLOCK_PLANKS,0}, {BLOCK_SAPLING,0},
-    {BLOCK_BEDROCK,0}, {BLOCK_SAND,0}, {BLOCK_GRAVEL,0}, {BLOCK_LOG,0}, {BLOCK_LEAVES,0}, {BLOCK_GLASS,0},
-    {BLOCK_LAPIS_ORE,0}, {BLOCK_LAPIS_BLOCK,0}, {BLOCK_SANDSTONE,0}, {BLOCK_WOOL,0}, {BLOCK_YELLOW_FLOWER,0}, {BLOCK_RED_ROSE,0},
-    {BLOCK_BROWN_MUSHROOM,0}, {BLOCK_RED_MUSHROOM,0}, {BLOCK_GOLD_BLOCK,0}, {BLOCK_IRON_BLOCK,0}, {BLOCK_DOUBLE_SLAB,0}, {BLOCK_SLAB,0},
-    {BLOCK_BRICK,0}, {BLOCK_TNT,0}, {BLOCK_BOOKSHELF,0}, {BLOCK_MOSSY_COBBLESTONE,0}, {BLOCK_OBSIDIAN,0}, {BLOCK_TORCH,0},
-    {BLOCK_WOOD_STAIRS,0}, {BLOCK_CHEST,0}, {BLOCK_DIAMOND_ORE,0}, {BLOCK_DIAMOND_BLOCK,0}, {BLOCK_CRAFTING_TABLE,0}, {BLOCK_FURNACE,0},
-    {ITEM_DOOR_WOOD,0}, {BLOCK_LADDER,0}, {BLOCK_RAILS,0}, {BLOCK_COBBLE_STAIRS,0}, {BLOCK_LEVER,0}, {BLOCK_STONE_PRESSURE_PLATE,0},
-    {ITEM_DOOR_IRON,0}, {BLOCK_WOOD_PRESSURE_PLATE,0}, {ITEM_REDSTONE,0}, {BLOCK_REDSTONE_TORCH_ON,0}, {BLOCK_STONE_BUTTON,0}, {BLOCK_SNOW_LAYER,0},
-    {BLOCK_ICE,0}, {BLOCK_SNOW_BLOCK,0}, {BLOCK_CACTUS,0}, {BLOCK_CLAY,0}, {ITEM_REED,0}, {BLOCK_JUKEBOX,0},
-    {BLOCK_FENCE,0}, {BLOCK_PUMPKIN,0}, {BLOCK_NETHERRACK,0}, {BLOCK_SOUL_SAND,0}, {BLOCK_GLOWSTONE,0}, {BLOCK_JACK_O_LANTERN,0},
-    {BLOCK_TRAPDOOR,0}, {BLOCK_STONE_BRICK,0}, {BLOCK_IRON_BARS,0}, {BLOCK_GLASS_PANE,0}, {BLOCK_MELON,0}, {BLOCK_VINE,0},
-    {BLOCK_FENCE_GATE,0}, {BLOCK_BRICK_STAIRS,0}, {BLOCK_STONE_BRICK_STAIRS,0}, {BLOCK_MYCELIUM,0}, {BLOCK_LILY_PAD,0}, {BLOCK_END_STONE,0},
-    {ITEM_FLINT_AND_IRON,0}, {ITEM_BUCKET_EMPTY,0}, {ITEM_BUCKET_WATER,0}, {ITEM_BUCKET_LAVA,0}, {ITEM_SWORD_DIAMOND,0}, {ITEM_PICKAXE_DIAMOND,0},
-    {ITEM_AXE_DIAMOND,0}, {ITEM_SHOVEL_DIAMOND,0}, {ITEM_HOE_DIAMOND,0}, {ITEM_BOW,0}, {ITEM_ARROW,0}, {ITEM_COAL,0},
-    {ITEM_DIAMOND,0}, {ITEM_INGOT_IRON,0}, {ITEM_INGOT_GOLD,0}, {ITEM_STICK,0}, {ITEM_BREAD,0}, {ITEM_APPLE_RED,0},
-    {ITEM_SADDLE,0}, {ITEM_PAPER,0}, {ITEM_BOOK,0}, {ITEM_COMPASS,0}, {ITEM_CLOCK,0}, {ITEM_SHEARS,0},
-    {ITEM_BED,0}, {ITEM_REDSTONE_REPEATER,0}, {ITEM_MAP,0}, {ITEM_MELON,0}, {ITEM_PUMPKIN_SEEDS,0}
+/* Minecraft Java 1.2.5 ContainerCreative ordering.  The creative container is
+   eight columns wide, nine rows tall, with a 72-slot temporary inventory and
+   the player's hotbar at y=184.  Do not sort this table by PexCraft IDs: Java
+   deliberately groups blocks before iterating Item.itemsList. */
+static const CreativeItemDef g_creative_blocks_125[] = {
+    {BLOCK_COBBLESTONE,0}, {BLOCK_STONE,0}, {BLOCK_DIAMOND_ORE,0}, {BLOCK_GOLD_ORE,0}, {BLOCK_IRON_ORE,0}, {BLOCK_COAL_ORE,0}, {BLOCK_LAPIS_ORE,0}, {BLOCK_REDSTONE_ORE,0},
+    {BLOCK_STONE_BRICK,0}, {BLOCK_STONE_BRICK,1}, {BLOCK_STONE_BRICK,2}, {BLOCK_STONE_BRICK,3}, {BLOCK_CLAY,0}, {BLOCK_DIAMOND_BLOCK,0}, {BLOCK_GOLD_BLOCK,0}, {BLOCK_IRON_BLOCK,0},
+    {BLOCK_BEDROCK,0}, {BLOCK_LAPIS_BLOCK,0}, {BLOCK_BRICK,0}, {BLOCK_MOSSY_COBBLESTONE,0}, {BLOCK_SLAB,0}, {BLOCK_SLAB,1}, {BLOCK_SLAB,2}, {BLOCK_SLAB,3},
+    {BLOCK_SLAB,4}, {BLOCK_SLAB,5}, {BLOCK_OBSIDIAN,0}, {BLOCK_NETHERRACK,0}, {BLOCK_SOUL_SAND,0}, {BLOCK_GLOWSTONE,0}, {BLOCK_LOG,0}, {BLOCK_LOG,1},
+    {BLOCK_LOG,2}, {BLOCK_LOG,3}, {BLOCK_LEAVES,0}, {BLOCK_LEAVES,1}, {BLOCK_LEAVES,2}, {BLOCK_LEAVES,3}, {BLOCK_DIRT,0}, {BLOCK_GRASS,0},
+    {BLOCK_SAND,0}, {BLOCK_SANDSTONE,0}, {BLOCK_SANDSTONE,1}, {BLOCK_SANDSTONE,2}, {BLOCK_GRAVEL,0}, {BLOCK_WEB,0}, {BLOCK_PLANKS,0}, {BLOCK_PLANKS,1},
+    {BLOCK_PLANKS,2}, {BLOCK_PLANKS,3}, {BLOCK_SAPLING,0}, {BLOCK_SAPLING,1}, {BLOCK_SAPLING,2}, {BLOCK_SAPLING,3}, {BLOCK_DEAD_BUSH,0}, {BLOCK_SPONGE,0},
+    {BLOCK_ICE,0}, {BLOCK_SNOW_BLOCK,0}, {BLOCK_YELLOW_FLOWER,0}, {BLOCK_RED_ROSE,0}, {BLOCK_BROWN_MUSHROOM,0}, {BLOCK_RED_MUSHROOM,0}, {BLOCK_CACTUS,0}, {BLOCK_MELON,0},
+    {BLOCK_PUMPKIN,0}, {BLOCK_JACK_O_LANTERN,0}, {BLOCK_VINE,0}, {BLOCK_IRON_BARS,0}, {BLOCK_GLASS_PANE,0}, {BLOCK_NETHER_BRICK,0}, {BLOCK_NETHER_BRICK_FENCE,0}, {BLOCK_NETHER_BRICK_STAIRS,0},
+    {BLOCK_END_STONE,0}, {BLOCK_MYCELIUM,0}, {BLOCK_LILY_PAD,0}, {BLOCK_TALL_GRASS,1}, {BLOCK_TALL_GRASS,2}, {BLOCK_CHEST,0}, {BLOCK_CRAFTING_TABLE,0}, {BLOCK_GLASS,0},
+    {BLOCK_TNT,0}, {BLOCK_BOOKSHELF,0}, {BLOCK_WOOL,0}, {BLOCK_WOOL,1}, {BLOCK_WOOL,2}, {BLOCK_WOOL,3}, {BLOCK_WOOL,4}, {BLOCK_WOOL,5},
+    {BLOCK_WOOL,6}, {BLOCK_WOOL,7}, {BLOCK_WOOL,8}, {BLOCK_WOOL,9}, {BLOCK_WOOL,10}, {BLOCK_WOOL,11}, {BLOCK_WOOL,12}, {BLOCK_WOOL,13},
+    {BLOCK_WOOL,14}, {BLOCK_WOOL,15}, {BLOCK_DISPENSER,0}, {BLOCK_FURNACE,0}, {BLOCK_NOTE_BLOCK,0}, {BLOCK_JUKEBOX,0}, {BLOCK_STICKY_PISTON,0}, {BLOCK_PISTON,0},
+    {BLOCK_FENCE,0}, {BLOCK_FENCE_GATE,0}, {BLOCK_LADDER,0}, {BLOCK_RAILS,0}, {BLOCK_POWERED_RAIL,0}, {BLOCK_DETECTOR_RAIL,0}, {BLOCK_TORCH,0}, {BLOCK_WOOD_STAIRS,0},
+    {BLOCK_COBBLE_STAIRS,0}, {BLOCK_BRICK_STAIRS,0}, {BLOCK_STONE_BRICK_STAIRS,0}, {BLOCK_LEVER,0}, {BLOCK_STONE_PRESSURE_PLATE,0}, {BLOCK_WOOD_PRESSURE_PLATE,0}, {BLOCK_REDSTONE_TORCH_ON,0}, {BLOCK_STONE_BUTTON,0},
+    {BLOCK_TRAPDOOR,0}, {BLOCK_ENCHANTMENT_TABLE,0}, {BLOCK_REDSTONE_LAMP_OFF,0}
 };
 
-static int creative_catalog_count(void) { return (int)(sizeof(g_creative_catalog) / sizeof(g_creative_catalog[0])); }
+static const int g_creative_items_125[] = {
+    ITEM_SHOVEL_IRON, ITEM_PICKAXE_IRON, ITEM_AXE_IRON, ITEM_FLINT_AND_IRON, ITEM_APPLE_RED, ITEM_BOW, ITEM_ARROW, ITEM_COAL,
+    ITEM_DIAMOND, ITEM_INGOT_IRON, ITEM_INGOT_GOLD, ITEM_SWORD_IRON, ITEM_WOODEN_SWORD, ITEM_WOODEN_SHOVEL, ITEM_WOODEN_PICKAXE, ITEM_WOODEN_AXE,
+    ITEM_STONE_SWORD, ITEM_STONE_SHOVEL, ITEM_STONE_PICKAXE, ITEM_STONE_AXE, ITEM_SWORD_DIAMOND, ITEM_SHOVEL_DIAMOND, ITEM_PICKAXE_DIAMOND, ITEM_AXE_DIAMOND,
+    ITEM_STICK, ITEM_BOWL_EMPTY, ITEM_BOWL_SOUP, ITEM_SWORD_GOLD, ITEM_SHOVEL_GOLD, ITEM_PICKAXE_GOLD, ITEM_AXE_GOLD, ITEM_STRING,
+    ITEM_FEATHER, ITEM_GUNPOWDER, ITEM_HOE_WOOD, ITEM_HOE_STONE, ITEM_HOE_IRON, ITEM_HOE_DIAMOND, ITEM_HOE_GOLD, ITEM_SEEDS,
+    ITEM_WHEAT, ITEM_BREAD, ITEM_HELMET_LEATHER, ITEM_PLATE_LEATHER, ITEM_LEGS_LEATHER, ITEM_BOOTS_LEATHER, ITEM_HELMET_CHAIN, ITEM_PLATE_CHAIN,
+    ITEM_LEGS_CHAIN, ITEM_BOOTS_CHAIN, ITEM_HELMET_IRON, ITEM_PLATE_IRON, ITEM_LEGS_IRON, ITEM_BOOTS_IRON, ITEM_HELMET_DIAMOND, ITEM_PLATE_DIAMOND,
+    ITEM_LEGS_DIAMOND, ITEM_BOOTS_DIAMOND, ITEM_HELMET_GOLD, ITEM_PLATE_GOLD, ITEM_LEGS_GOLD, ITEM_BOOTS_GOLD, ITEM_FLINT, ITEM_PORK_RAW,
+    ITEM_PORK_COOKED, ITEM_PAINTING, ITEM_APPLE_GOLD, ITEM_SIGN, ITEM_DOOR_WOOD, ITEM_BUCKET_EMPTY, ITEM_BUCKET_WATER, ITEM_BUCKET_LAVA,
+    ITEM_MINECART_EMPTY, ITEM_SADDLE, ITEM_DOOR_IRON, ITEM_REDSTONE, ITEM_SNOWBALL, ITEM_BOAT, ITEM_LEATHER, ITEM_BUCKET_MILK,
+    ITEM_BRICK, ITEM_CLAY, ITEM_REED, ITEM_PAPER, ITEM_BOOK, ITEM_SLIME_BALL, ITEM_MINECART_CRATE, ITEM_MINECART_POWERED,
+    ITEM_EGG, ITEM_COMPASS, ITEM_FISHING_ROD, ITEM_CLOCK, ITEM_GLOWSTONE_DUST, ITEM_FISH_RAW, ITEM_FISH_COOKED, ITEM_DYE_POWDER,
+    ITEM_BONE, ITEM_SUGAR, ITEM_CAKE, ITEM_BED, ITEM_REDSTONE_REPEATER, ITEM_COOKIE, ITEM_MAP, ITEM_SHEARS,
+    ITEM_MELON, ITEM_PUMPKIN_SEEDS, ITEM_MELON_SEEDS, ITEM_BEEF_RAW, ITEM_BEEF_COOKED, ITEM_CHICKEN_RAW, ITEM_CHICKEN_COOKED, ITEM_ROTTEN_FLESH,
+    ITEM_ENDER_PEARL, ITEM_BLAZE_ROD, ITEM_GHAST_TEAR, ITEM_GOLD_NUGGET, ITEM_NETHER_WART, ITEM_GLASS_BOTTLE, ITEM_SPIDER_EYE, ITEM_FERMENTED_SPIDER_EYE,
+    ITEM_BLAZE_POWDER, ITEM_MAGMA_CREAM, ITEM_BREWING_STAND, ITEM_CAULDRON, ITEM_EYE_OF_ENDER, ITEM_SPECKLED_MELON, ITEM_EXP_BOTTLE, ITEM_FIREBALL_CHARGE,
+    ITEM_RECORD13, ITEM_RECORD_CAT, ITEM_RECORD_BLOCKS, ITEM_RECORD_CHIRP, ITEM_RECORD_FAR, ITEM_RECORD_MALL, ITEM_RECORD_MELLOHI, ITEM_RECORD_STAL,
+    ITEM_RECORD_STRAD, ITEM_RECORD_WARD, ITEM_RECORD_11
+};
 
-static int creative_max_scroll(void) {
-    int cols = 9;
-    int rows = 5;
-    int pages = (creative_catalog_count() + cols * rows - 1) / (cols * rows);
-    return pages > 0 ? pages - 1 : 0;
+static const int g_creative_spawn_egg_damage_125[] = {
+    50, 51, 52, 54, 55, 56, 57, 58, 59, 60, 61, 62,
+    90, 91, 92, 93, 94, 95, 96, 98, 120
+};
+
+#define CREATIVE_COLS 8
+#define CREATIVE_ROWS 9
+#define CREATIVE_XSIZE 176
+#define CREATIVE_YSIZE 208
+
+static int creative_catalog_count(void) {
+    return (int)(sizeof(g_creative_blocks_125) / sizeof(g_creative_blocks_125[0])) +
+           (int)(sizeof(g_creative_items_125) / sizeof(g_creative_items_125[0])) +
+           15 +
+           (int)(sizeof(g_creative_spawn_egg_damage_125) / sizeof(g_creative_spawn_egg_damage_125[0]));
+}
+
+static int creative_total_rows(void) {
+    return (creative_catalog_count() + CREATIVE_COLS - 1) / CREATIVE_COLS;
+}
+
+static int creative_max_row_scroll(void) {
+    int max = creative_total_rows() - CREATIVE_ROWS;
+    return max > 0 ? max : 0;
+}
+
+static void creative_scroll_to_row(int row) {
+    int max = creative_max_row_scroll();
+    if (row < 0) row = 0;
+    if (row > max) row = max;
+    g_creative_scroll_row = row;
+    g_creative_scroll = max > 0 ? (float)row / (float)max : 0.0f;
+}
+
+static void creative_scroll_by(int rows) {
+    creative_scroll_to_row(g_creative_scroll_row + rows);
 }
 
 static void creative_scroll_page(int delta) {
-    g_creative_scroll += delta;
-    if (g_creative_scroll < 0) g_creative_scroll = 0;
-    int max_scroll = creative_max_scroll();
-    if (g_creative_scroll > max_scroll) g_creative_scroll = max_scroll;
+    creative_scroll_by(delta * CREATIVE_ROWS);
+}
+
+static void creative_set_scroll_fraction(float f) {
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    int max = creative_max_row_scroll();
+    g_creative_scroll = f;
+    g_creative_scroll_row = (int)((double)(f * (float)max) + 0.5);
+    if (g_creative_scroll_row < 0) g_creative_scroll_row = 0;
+    if (g_creative_scroll_row > max) g_creative_scroll_row = max;
+}
+
+static void creative_mouse_drag(int my) {
+    if (!g_creative_dragging_scroll) return;
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
+    (void)x;
+    int track_top = y + 17;
+    int track_bottom = y + 17 + 160 + 2;
+    float f = (float)(my - (track_top + 8)) / ((float)(track_bottom - track_top) - 16.0f);
+    creative_set_scroll_fraction(f);
 }
 
 static ItemStack creative_stack_for_index(int idx) {
     if (idx < 0 || idx >= creative_catalog_count()) return make_stack(0, 0, 0);
-    int id = g_creative_catalog[idx].id;
-    int count = stack_limit_for_id(id);
-    if (count <= 0) count = 1;
-    return make_stack(id, count, g_creative_catalog[idx].damage);
+    int nblocks = (int)(sizeof(g_creative_blocks_125) / sizeof(g_creative_blocks_125[0]));
+    if (idx < nblocks) return make_stack(g_creative_blocks_125[idx].id, 1, g_creative_blocks_125[idx].damage);
+    idx -= nblocks;
+    int nitems = (int)(sizeof(g_creative_items_125) / sizeof(g_creative_items_125[0]));
+    if (idx < nitems) return make_stack(g_creative_items_125[idx], 1, 0);
+    idx -= nitems;
+    if (idx < 15) return make_stack(ITEM_DYE_POWDER, 1, idx + 1);
+    idx -= 15;
+    int neggs = (int)(sizeof(g_creative_spawn_egg_damage_125) / sizeof(g_creative_spawn_egg_damage_125[0]));
+    if (idx < neggs) return make_stack(ITEM_MONSTER_PLACER, 1, g_creative_spawn_egg_damage_125[idx]);
+    return make_stack(0, 0, 0);
 }
 
 static int creative_item_index_at(int mx, int my) {
-    const int cols = 9;
-    const int rows = 5;
-    int x = (g_gui_w - 176) / 2;
-    int y = (g_gui_h - 166) / 2;
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
     int grid_x = x + 8;
-    int grid_y = y + 20;
-    if (mx < grid_x || my < grid_y || mx >= grid_x + cols * 18 || my >= grid_y + rows * 18) return -1;
+    int grid_y = y + 18;
+    if (mx < grid_x || my < grid_y || mx >= grid_x + CREATIVE_COLS * 18 || my >= grid_y + CREATIVE_ROWS * 18) return -1;
     int col = (mx - grid_x) / 18;
     int row = (my - grid_y) / 18;
-    int idx = g_creative_scroll * cols * rows + row * cols + col;
+    int idx = (g_creative_scroll_row + row) * CREATIVE_COLS + col;
     return (idx >= 0 && idx < creative_catalog_count()) ? idx : -1;
 }
 
 static int creative_hotbar_slot_at(int mx, int my) {
-    int x = (g_gui_w - 176) / 2;
-    int y = (g_gui_h - 166) / 2;
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
     int hx = x + 8;
-    int hy = y + 142;
+    int hy = y + 184;
     if (mx < hx || my < hy || mx >= hx + 9 * 18 || my >= hy + 18) return -1;
     return (mx - hx) / 18;
 }
 
+static int creative_scrollbar_hit(int mx, int my) {
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
+    int sx = x + 155;
+    int sy = y + 17;
+    return mx >= sx && mx < sx + 14 && my >= sy && my < sy + 162;
+}
+
+static void creative_click_hotbar_slot(int hotbar, int button) {
+    if (hotbar < 0 || hotbar >= 9) return;
+    ItemStack *s = &g_inventory[hotbar];
+    if (button == 0) {
+        if (stack_empty(&g_carried_stack)) {
+            if (!stack_empty(s)) { g_carried_stack = *s; stack_clear(s); }
+        } else if (stack_empty(s)) {
+            *s = g_carried_stack; stack_clear(&g_carried_stack); s->pop_time = 5;
+        } else if (stack_same_item(s, &g_carried_stack) && s->count < stack_limit_for_id(s->id)) {
+            int room = stack_limit_for_id(s->id) - s->count;
+            int move = g_carried_stack.count < room ? g_carried_stack.count : room;
+            s->count += move;
+            g_carried_stack.count -= move;
+            s->pop_time = 5;
+            if (g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
+        } else {
+            ItemStack tmp = *s; *s = g_carried_stack; g_carried_stack = tmp; s->pop_time = 5;
+        }
+    } else {
+        if (stack_empty(&g_carried_stack)) {
+            if (!stack_empty(s)) {
+                int take = (s->count + 1) / 2;
+                g_carried_stack = make_stack(s->id, take, s->damage);
+                s->count -= take;
+                if (s->count <= 0) stack_clear(s);
+            }
+        } else if (stack_empty(s)) {
+            *s = make_stack(g_carried_stack.id, 1, g_carried_stack.damage);
+            s->pop_time = 5;
+            if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
+        } else if (stack_same_item(s, &g_carried_stack) && s->count < stack_limit_for_id(s->id)) {
+            s->count++;
+            s->pop_time = 5;
+            if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
+        } else {
+            ItemStack tmp = *s; *s = g_carried_stack; g_carried_stack = tmp; s->pop_time = 5;
+        }
+    }
+    g_save_dirty = 1;
+}
+
 static void creative_mouse_click(int mx, int my, int button) {
+    if (button == 0 && creative_scrollbar_hit(mx, my)) {
+        g_creative_dragging_scroll = 1;
+        creative_mouse_drag(my);
+        return;
+    }
+
     int idx = creative_item_index_at(mx, my);
     if (idx >= 0) {
-        g_carried_stack = creative_stack_for_index(idx);
-        if (button != 0 && g_carried_stack.count > 1) g_carried_stack.count = 1;
+        ItemStack clicked = creative_stack_for_index(idx);
+        int shift = key_down_vk(VK_SHIFT);
+        if (!stack_empty(&g_carried_stack) && !stack_empty(&clicked) && g_carried_stack.id == clicked.id) {
+            if (button == 0) {
+                if (shift) g_carried_stack.count = stack_limit_for_id(g_carried_stack.id);
+                else if (g_carried_stack.count < stack_limit_for_id(g_carried_stack.id)) g_carried_stack.count++;
+            } else {
+                if (g_carried_stack.count <= 1) stack_clear(&g_carried_stack);
+                else g_carried_stack.count--;
+            }
+        } else if (!stack_empty(&g_carried_stack)) {
+            stack_clear(&g_carried_stack);
+        } else if (stack_empty(&clicked)) {
+            stack_clear(&g_carried_stack);
+        } else {
+            g_carried_stack = clicked;
+            if (shift) g_carried_stack.count = stack_limit_for_id(g_carried_stack.id);
+        }
         return;
     }
 
     int hotbar = creative_hotbar_slot_at(mx, my);
-    if (hotbar >= 0 && hotbar < 9) {
-        if (button != 0) {
-            stack_clear(&g_inventory[hotbar]);
-            return;
-        }
+    if (hotbar >= 0) {
+        creative_click_hotbar_slot(hotbar, button);
+        return;
+    }
+
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
+    if (mx < x || my < y || mx >= x + CREATIVE_XSIZE || my >= y + CREATIVE_YSIZE) {
         if (!stack_empty(&g_carried_stack)) {
-            g_inventory[hotbar] = g_carried_stack;
-            g_inventory[hotbar].pop_time = 5;
-            stack_clear(&g_carried_stack);
-        } else if (!stack_empty(&g_inventory[hotbar])) {
-            g_carried_stack = g_inventory[hotbar];
-            stack_clear(&g_inventory[hotbar]);
+            ItemStack drop = g_carried_stack;
+            if (button != 0) drop.count = 1;
+            if (g_mp_connected) pex_net_send_drop_item(drop);
+            else spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, drop, 0);
+            if (button == 0) stack_clear(&g_carried_stack);
+            else if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
         }
-        g_save_dirty = 1;
     }
 }
 
@@ -5521,7 +5671,7 @@ static void break_target_block(void) {
     } else if (!player_is_creative() && (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT)) {
         furnace_drop_contents(g_break_x, g_break_y, g_break_z);
     }
-    if (id == BLOCK_ICE) {
+    if (!player_is_creative() && id == BLOCK_ICE) {
         int below = flat_get_block(g_break_x, g_break_y - 1, g_break_z);
         if (flat_block_is_solid(below) || block_is_liquid(below)) {
             flat_place_fluid_source(g_break_x, g_break_y, g_break_z, BLOCK_WATER);
@@ -5566,6 +5716,22 @@ static void update_breaking(void) {
     }
 
     trigger_hand_swing();
+
+    if (player_is_creative()) {
+        /* Java PlayerControllerCreative: clickBlock destroys immediately and
+           sets a 5-tick delay; holding mine repeats one destroy every 5 ticks.
+           There is no crack-progress accumulation in creative. */
+        g_breaking_block = 1;
+        g_break_x = hit.bx; g_break_y = hit.by; g_break_z = hit.bz; g_break_face = hit.face;
+        g_break_damage = 0.0f;
+        g_prev_break_damage = 0.0f;
+        g_break_sound_counter = 0.0f;
+        g_last_sent_mine_stage = -1;
+        break_target_block();
+        g_block_hit_delay = 5;
+        g_break_swing_holding = 1;
+        return;
+    }
 
     if (!g_breaking_block || hit.bx != g_break_x || hit.by != g_break_y || hit.bz != g_break_z) {
         /* PlayerControllerSP.onPlayerDamageBlock(): changing target only resets
@@ -5789,6 +5955,8 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
 
 static void ingame_right_click(void) {
     if (g_screen != SCREEN_INGAME) return;
+    if (g_right_click_delay_timer > 0) return;
+    g_right_click_delay_timer = 4;
 
     FlatRayHit hit = flat_raycast();
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];

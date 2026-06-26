@@ -544,9 +544,7 @@ static void rebuild_screen(void) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 48, g_mp_connected ? "Disconnect" : "Save and quit to title");
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Options...");
     } else if (g_screen == SCREEN_CREATIVE) {
-        add_button_full(90, g_gui_w / 2 - 155, g_gui_h - 28, 70, 20, "Prev", BUTTON_NORMAL);
-        add_button_full(91, g_gui_w / 2 - 75, g_gui_h - 28, 70, 20, "Next", BUTTON_NORMAL);
-        add_button_full(92, g_gui_w / 2 + 5, g_gui_h - 28, 150, 20, "Done", BUTTON_NORMAL);
+        /* Java 1.2.5 GuiContainerCreative has no Prev/Next/Done buttons. */
     } else if (g_screen == SCREEN_DEATH) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 72, "Respawn");
         add_button(2, g_gui_w / 2 - 100, g_gui_h / 4 + 96, "Title menu");
@@ -765,9 +763,7 @@ static void on_button(Button *b) {
         else if (b->id == 0) { g_parent_screen = SCREEN_PAUSE; set_screen(SCREEN_OPTIONS); }
         else if (b->id == 1) leave_world_to_title();
     } else if (g_screen == SCREEN_CREATIVE) {
-        if (b->id == 90) { creative_scroll_page(-1); rebuild_screen(); }
-        else if (b->id == 91) { creative_scroll_page(1); rebuild_screen(); }
-        else if (b->id == 92) set_screen(SCREEN_INGAME);
+        (void)b;
     } else if (g_screen == SCREEN_DEATH) {
         if (b->id == 1) player_respawn();
         else if (b->id == 2) leave_world_to_title();
@@ -857,6 +853,9 @@ static void mouse_down(int mx, int my) {
         FlatRayHit hit = flat_raycast();
         if (hit.hit) restart_hand_swing();
         else start_air_swing_once();
+        /* Java clickMouse() calls PlayerControllerCreative.clickBlock() immediately
+           on the click edge, then holding uses the 5-tick creative repeat delay. */
+        if (player_is_creative()) update_breaking();
         return;
     }
     if (g_screen == SCREEN_CREATE_WORLD) {
@@ -913,6 +912,7 @@ static void mouse_up(int mx, int my) {
     if (g_drag_slider) g_drag_slider->dragging = 0;
     g_drag_slider = NULL;
     if (g_screen == SCREEN_TEXPACK) g_texpack_drag_anchor = -1;
+    if (g_screen == SCREEN_CREATIVE) g_creative_dragging_scroll = 0;
 }
 
 static void key_to_control(int vk) {
@@ -1122,6 +1122,8 @@ static int handle_local_chat_command(const char *text) {
         if (pex_chat_word_equals_ci(argv[1], "survival") || pex_chat_word_equals_ci(argv[1], "s") || !strcmp(argv[1], "0")) {
             g_game_mode = 0;
             g_pending_game_mode = 0;
+            g_creative_flying = 0;
+            g_creative_fly_toggle_timer = 0;
             hud_add_chat("Set game mode to Survival.");
             g_save_dirty = 1;
             return 1;
@@ -1225,8 +1227,8 @@ static void handle_keydown(WPARAM vk) {
 
     if (g_screen == SCREEN_CREATIVE) {
         if (vk == VK_ESCAPE || (int)vk == g_opts.keys[7]) { set_screen(SCREEN_INGAME); return; }
-        if (vk == VK_PRIOR) { creative_scroll_page(-1); rebuild_screen(); return; }
-        if (vk == VK_NEXT) { creative_scroll_page(1); rebuild_screen(); return; }
+        if (vk == VK_PRIOR) { creative_scroll_page(-1); return; }
+        if (vk == VK_NEXT) { creative_scroll_page(1); return; }
         return;
     }
 

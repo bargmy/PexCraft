@@ -680,7 +680,13 @@ static int g_world_type = 1; /* 0 superflat, 1 default terrain */
 static int g_game_mode = 0;  /* 0 survival, 1 creative */
 static int g_world_map_features = 1;
 static long long g_world_seed = 0;
-static int g_creative_scroll = 0;
+static int g_creative_scroll_row = 0;
+static float g_creative_scroll = 0.0f;
+static int g_creative_dragging_scroll = 0;
+static int g_right_click_delay_timer = 0;
+static int g_creative_flying = 0;
+static int g_creative_fly_toggle_timer = 0;
+static int g_prev_jump_down = 0;
 static WorldGenJob g_worldgen;
 static int g_load_state_skip_terrain_rebuild = 0;
 static int g_last_load_state_had_terrain = 0;
@@ -1921,7 +1927,7 @@ static double g_last_time = 0.0;
 static long long g_world_time = 0;
 
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
-static Texture tex_icons, tex_inventory, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
+static Texture tex_icons, tex_inventory, tex_allitems, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
@@ -2041,6 +2047,8 @@ static void inventory_tick(void);
 static void inventory_drop_selected_one(void);
 static void inventory_mouse_click(int mx, int my, int button);
 static void creative_mouse_click(int mx, int my, int button);
+static void creative_mouse_drag(int my);
+static void creative_scroll_by(int rows);
 static void creative_scroll_page(int delta);
 static ItemStack inventory_crafting_output(void);
 static ItemStack *chest_get_open_slot_ptr(int local_slot);

@@ -338,96 +338,102 @@ static void draw_hud(void) {
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    int hp = player_health_clamp(g_player_health);
-    int prev_hp = player_health_clamp(g_player_prev_health);
-    int flash_old = ((g_hearts_life / 3) % 2) == 1;
-    if (g_hearts_life < 10) flash_old = 0;
     int left = w / 2 - 91;
     int right = w / 2 + 91;
     int row_y = h - 39;
     int upper_y = row_y - 10;
-    int armor = g_player_armor;
-    if (armor < 0) armor = 0;
-    if (armor > 20) armor = 20;
-    PexJavaRandom heart_rng;
-    pex_java_random_set_seed(&heart_rng, (int64_t)g_ingame_ticks * 312871LL);
 
-    for (int i = 0; i < 10; i++) {
-        if (armor > 0) {
-            int ax = left + i * 8;
-            if (i * 2 + 1 < armor) draw_textured_rect_256(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == armor) draw_textured_rect_256(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
-            else draw_textured_rect_256(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
-        }
+    /* Java 1.2.5 GuiIngame gates health/armor/food/air/XP behind
+       PlayerController.shouldDrawHUD(); PlayerControllerCreative returns false.
+       Keep the hotbar and crosshair, but hide survival HUD in creative. */
+    if (!player_is_creative()) {
+        int hp = player_health_clamp(g_player_health);
+        int prev_hp = player_health_clamp(g_player_prev_health);
+        int flash_old = ((g_hearts_life / 3) % 2) == 1;
+        if (g_hearts_life < 10) flash_old = 0;
+        int armor = g_player_armor;
+        if (armor < 0) armor = 0;
+        if (armor > 20) armor = 20;
+        PexJavaRandom heart_rng;
+        pex_java_random_set_seed(&heart_rng, (int64_t)g_ingame_ticks * 312871LL);
 
-        int x = left + i * 8;
-        int y = row_y;
-        if (hp <= 4 && hp > 0) {
-            y += pex_java_random_next_int(&heart_rng, 2);
-        }
-        draw_textured_rect_256(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
-        if (flash_old) {
-            if (i * 2 + 1 < prev_hp) draw_textured_rect_256(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == prev_hp) draw_textured_rect_256(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
-        }
-        if (i * 2 + 1 < hp) draw_textured_rect_256(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
-        else if (i * 2 + 1 == hp) draw_textured_rect_256(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
-    }
-
-    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
-        int food = player_food_clamp(g_player_food_level);
-        int prev_food = player_food_clamp(g_player_prev_food_level);
-        int food_flash = 0; /* GuiIngame 1.2.5 leaves this false unless the later highlight path toggles it. */
         for (int i = 0; i < 10; i++) {
-            int x = right - i * 8 - 9;
+            if (armor > 0) {
+                int ax = left + i * 8;
+                if (i * 2 + 1 < armor) draw_textured_rect_256(&tex_icons, ax, upper_y, 34, 9, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == armor) draw_textured_rect_256(&tex_icons, ax, upper_y, 25, 9, 9, 9, 0xFFFFFF);
+                else draw_textured_rect_256(&tex_icons, ax, upper_y, 16, 9, 9, 9, 0xFFFFFF);
+            }
+
+            int x = left + i * 8;
             int y = row_y;
-            int icon_base = 16;
-            int container_offset = food_flash ? 1 : 0;
-            if (g_player_food_saturation <= 0.0f && food > 0 && (g_ingame_ticks % (food * 3 + 1)) == 0) {
-                y += pex_java_random_next_int(&heart_rng, 3) - 1;
+            if (hp <= 4 && hp > 0) {
+                y += pex_java_random_next_int(&heart_rng, 2);
             }
-            draw_textured_rect_256(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
-            if (food_flash) {
-                if (i * 2 + 1 < prev_food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
-                else if (i * 2 + 1 == prev_food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
+            draw_textured_rect_256(&tex_icons, x, y, 16 + (flash_old ? 9 : 0), 0, 9, 9, 0xFFFFFF);
+            if (flash_old) {
+                if (i * 2 + 1 < prev_hp) draw_textured_rect_256(&tex_icons, x, y, 70, 0, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == prev_hp) draw_textured_rect_256(&tex_icons, x, y, 79, 0, 9, 9, 0xFFFFFF);
             }
-            if (i * 2 + 1 < food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
-            else if (i * 2 + 1 == food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
+            if (i * 2 + 1 < hp) draw_textured_rect_256(&tex_icons, x, y, 52, 0, 9, 9, 0xFFFFFF);
+            else if (i * 2 + 1 == hp) draw_textured_rect_256(&tex_icons, x, y, 61, 0, 9, 9, 0xFFFFFF);
         }
-    }
 
-    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0 && flat_player_head_in_water()) {
-        int air = g_player_air;
-        if (air < 0) air = 0;
-        if (air > 300) air = 300;
-        int full = (int)ceil((double)(air - 2) * 10.0 / 300.0);
-        int partial = (int)ceil((double)air * 10.0 / 300.0) - full;
-        if (full < 0) full = 0;
-        if (partial < 0) partial = 0;
-        for (int i = 0; i < full + partial && i < 10; i++) {
-            draw_textured_rect_256(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
+        if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0) {
+            int food = player_food_clamp(g_player_food_level);
+            int prev_food = player_food_clamp(g_player_prev_food_level);
+            int food_flash = 0; /* GuiIngame 1.2.5 leaves this false unless the later highlight path toggles it. */
+            for (int i = 0; i < 10; i++) {
+                int x = right - i * 8 - 9;
+                int y = row_y;
+                int icon_base = 16;
+                int container_offset = food_flash ? 1 : 0;
+                if (g_player_food_saturation <= 0.0f && food > 0 && (g_ingame_ticks % (food * 3 + 1)) == 0) {
+                    y += pex_java_random_next_int(&heart_rng, 3) - 1;
+                }
+                draw_textured_rect_256(&tex_icons, x, y, 16 + container_offset * 9, 27, 9, 9, 0xFFFFFF);
+                if (food_flash) {
+                    if (i * 2 + 1 < prev_food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 54, 27, 9, 9, 0xFFFFFF);
+                    else if (i * 2 + 1 == prev_food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 63, 27, 9, 9, 0xFFFFFF);
+                }
+                if (i * 2 + 1 < food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 36, 27, 9, 9, 0xFFFFFF);
+                else if (i * 2 + 1 == food) draw_textured_rect_256(&tex_icons, x, y, icon_base + 45, 27, 9, 9, 0xFFFFFF);
+            }
         }
-    }
 
-    int xp_cap = player_xp_bar_cap();
-    if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0 && xp_cap > 0) {
-        int fill = (int)(g_player_xp_progress * 183.0f);
-        if (fill < 0) fill = 0;
-        if (fill > 183) fill = 183;
-        int xp_y = h - 32 + 3;
-        draw_textured_rect_256(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
-        if (fill > 0) draw_textured_rect_256(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
-    }
-    if (g_player_xp_level > 0) {
-        char lvl[16];
-        snprintf(lvl, sizeof(lvl), "%d", g_player_xp_level);
-        int lx = (w - text_width(lvl)) / 2;
-        int ly = h - 31 - 4;
-        draw_text_no_shadow(lvl, lx + 1, ly, 0);
-        draw_text_no_shadow(lvl, lx - 1, ly, 0);
-        draw_text_no_shadow(lvl, lx, ly + 1, 0);
-        draw_text_no_shadow(lvl, lx, ly - 1, 0);
-        draw_text_no_shadow(lvl, lx, ly, 0x80FF20);
+        if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0 && flat_player_head_in_water()) {
+            int air = g_player_air;
+            if (air < 0) air = 0;
+            if (air > 300) air = 300;
+            int full = (int)ceil((double)(air - 2) * 10.0 / 300.0);
+            int partial = (int)ceil((double)air * 10.0 / 300.0) - full;
+            if (full < 0) full = 0;
+            if (partial < 0) partial = 0;
+            for (int i = 0; i < full + partial && i < 10; i++) {
+                draw_textured_rect_256(&tex_icons, right - i * 8 - 9, upper_y, i < full ? 16 : 25, 18, 9, 9, 0xFFFFFF);
+            }
+        }
+
+        int xp_cap = player_xp_bar_cap();
+        if (tex_icons.id && tex_icons.w > 0 && tex_icons.h > 0 && xp_cap > 0) {
+            int fill = (int)(g_player_xp_progress * 183.0f);
+            if (fill < 0) fill = 0;
+            if (fill > 183) fill = 183;
+            int xp_y = h - 32 + 3;
+            draw_textured_rect_256(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
+            if (fill > 0) draw_textured_rect_256(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
+        }
+        if (g_player_xp_level > 0) {
+            char lvl[16];
+            snprintf(lvl, sizeof(lvl), "%d", g_player_xp_level);
+            int lx = (w - text_width(lvl)) / 2;
+            int ly = h - 31 - 4;
+            draw_text_no_shadow(lvl, lx + 1, ly, 0);
+            draw_text_no_shadow(lvl, lx - 1, ly, 0);
+            draw_text_no_shadow(lvl, lx, ly + 1, 0);
+            draw_text_no_shadow(lvl, lx, ly - 1, 0);
+            draw_text_no_shadow(lvl, lx, ly, 0x80FF20);
+        }
     }
 
     for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
@@ -850,26 +856,44 @@ static void draw_creative_tooltip(int mx, int my) {
     }
 }
 
+static void draw_creative_slot_bg(int x, int y) {
+    draw_rect(x, y, x + 18, y + 18, 0xFF8A8A8A);
+    draw_rect(x + 1, y + 1, x + 17, y + 17, 0xFFC6C6C6);
+    draw_rect(x + 1, y + 1, x + 16, y + 2, 0xFFE0E0E0);
+    draw_rect(x + 1, y + 1, x + 2, y + 16, 0xFFE0E0E0);
+    draw_rect(x + 16, y + 2, x + 17, y + 17, 0xFF555555);
+    draw_rect(x + 2, y + 16, x + 17, y + 17, 0xFF555555);
+}
+
 static void draw_creative_screen(void) {
     draw_ingame_world_view(0);
     draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
-    int x = (g_gui_w - 176) / 2;
-    int y = (g_gui_h - 166) / 2;
-    draw_textured_rect_tex(&tex_inventory, x, y, 0, 0, 176, 166, 0xFFFFFF);
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
+
+    /* Java 1.2.5 GuiContainerCreative uses /gui/allitems.png, 176x208.
+       If that exact texture exists in the selected pack, draw it.  The code-drawn
+       fallback keeps creative usable with older beta packs that do not ship it. */
+    int textured_bg = tex_allitems.id && tex_allitems.w >= 176 && tex_allitems.h >= 224;
+    if (textured_bg) {
+        draw_textured_rect_tex(&tex_allitems, x, y, 0, 0, CREATIVE_XSIZE, CREATIVE_YSIZE, 0xFFFFFF);
+    } else {
+        draw_rect(x, y, x + CREATIVE_XSIZE, y + CREATIVE_YSIZE, 0xFFC6C6C6);
+        draw_rect(x, y, x + CREATIVE_XSIZE, y + 1, 0xFFFFFFFF);
+        draw_rect(x, y, x + 1, y + CREATIVE_YSIZE, 0xFFFFFFFF);
+        draw_rect(x + CREATIVE_XSIZE - 1, y + 1, x + CREATIVE_XSIZE, y + CREATIVE_YSIZE, 0xFF555555);
+        draw_rect(x + 1, y + CREATIVE_YSIZE - 1, x + CREATIVE_XSIZE, y + CREATIVE_YSIZE, 0xFF555555);
+    }
 
     draw_text_no_shadow("Creative Inventory", x + 8, y + 6, 0x404040);
-    char page[64];
-    snprintf(page, sizeof(page), "Page %d/%d", g_creative_scroll + 1, creative_max_scroll() + 1);
-    draw_text_no_shadow(page, x + 122, y + 6, 0x404040);
 
-    int start = g_creative_scroll * 9 * 5;
-    for (int row = 0; row < 5; row++) {
-        for (int col = 0; col < 9; col++) {
-            int sx = x + 7 + col * 18;
-            int sy = y + 19 + row * 18;
-            draw_rect(sx, sy, sx + 18, sy + 18, 0xFF8B8B8B);
-            draw_rect(sx + 1, sy + 1, sx + 17, sy + 17, 0xFFC6C6C6);
-            int idx = start + row * 9 + col;
+    int start = g_creative_scroll_row * CREATIVE_COLS;
+    for (int row = 0; row < CREATIVE_ROWS; row++) {
+        for (int col = 0; col < CREATIVE_COLS; col++) {
+            int sx = x + 8 + col * 18;
+            int sy = y + 18 + row * 18;
+            if (!textured_bg) draw_creative_slot_bg(sx, sy);
+            int idx = start + row * CREATIVE_COLS + col;
             if (idx < creative_catalog_count()) {
                 ItemStack st = creative_stack_for_index(idx);
                 draw_item_stack_gui(&st, sx + 1, sy + 1);
@@ -877,15 +901,32 @@ static void draw_creative_screen(void) {
         }
     }
 
-    draw_text_no_shadow("Hotbar", x + 8, y + 126, 0x404040);
-    draw_text_no_shadow("Left: take/copy  Right: one/clear", x + 8, y + 154, 0x404040);
+    /* Scrollbar track and thumb placement copied from GuiContainerCreative. */
+    int track_x = x + 155;
+    int track_y = y + 17;
+    int track_h = 160 + 2;
+    int thumb_y = y + 17 + (int)((float)(track_h - 17) * g_creative_scroll);
+    if (textured_bg) {
+        draw_textured_rect_tex(&tex_allitems, x + 154, thumb_y, 0, 208, 16, 16, 0xFFFFFF);
+    } else {
+        draw_rect(track_x, track_y, track_x + 14, track_y + track_h, 0xFF8A8A8A);
+        draw_rect(track_x + 1, track_y + 1, track_x + 13, track_y + track_h - 1, 0xFFB0B0B0);
+        draw_rect(x + 154, thumb_y, x + 170, thumb_y + 16, 0xFFC6C6C6);
+        draw_rect(x + 154, thumb_y, x + 170, thumb_y + 1, 0xFFFFFFFF);
+        draw_rect(x + 154, thumb_y, x + 155, thumb_y + 16, 0xFFFFFFFF);
+        draw_rect(x + 169, thumb_y + 1, x + 170, thumb_y + 16, 0xFF555555);
+        draw_rect(x + 155, thumb_y + 15, x + 170, thumb_y + 16, 0xFF555555);
+    }
+
     for (int col = 0; col < 9; col++) {
-        draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 142);
+        if (!textured_bg) draw_creative_slot_bg(x + 8 + col * 18, y + 184);
+        draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18 + 1, y + 185);
     }
 
     draw_creative_tooltip(g_mouse_x, g_mouse_y);
     draw_carried_stack();
 }
+
 
 
 static void draw_player_inventory_stacks_at(int x, int y, int inv_y, int hotbar_y) {

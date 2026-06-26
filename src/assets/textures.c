@@ -181,6 +181,7 @@ static void psp_drop_gui_texture_cpu_copies(void) {
     psp_drop_texture_cpu_copy(&tex_unknown_pack);
     psp_drop_texture_cpu_copy(&tex_icons);
     psp_drop_texture_cpu_copy(&tex_inventory);
+    psp_drop_texture_cpu_copy(&tex_allitems);
     psp_drop_texture_cpu_copy(&tex_workbench);
     psp_drop_texture_cpu_copy(&tex_furnace_gui);
     psp_drop_texture_cpu_copy(&tex_chest_gui);
@@ -818,6 +819,7 @@ static int load_release_textures_from_pack(void) {
     } else make_solid_texture(&tex_unknown_pack, 32, 32, 96, 96, 96, 255, 0);
     ok = try_release_texture(&tex_icons, "gui\\icons.png", 0) && ok;
     ok = try_release_texture(&tex_inventory, "gui\\inventory.png", 0) && ok;
+    try_release_texture(&tex_allitems, "gui\\allitems.png", 0);
     try_release_texture(&tex_workbench, "gui\\crafting.png", 0);
     try_release_texture(&tex_furnace_gui, "gui\\furnace.png", 0);
     try_release_texture(&tex_chest_gui, "gui\\container.png", 0);
@@ -884,6 +886,7 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_unknown_pack, "unknown_pack.mcrw", 0, 32, 32);
     PEX_PSP_LOAD_REQ(&tex_icons, "gui_icons.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_REQ(&tex_inventory, "gui_inventory.mcrw", 0, 256, 256);
+    PEX_PSP_LOAD_OPT(&tex_allitems, "gui_allitems.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_workbench, "gui_crafting_table.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_furnace_gui, "gui_furnace.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_chest_gui, "gui_chest.mcrw", 0, 256, 256);
@@ -946,6 +949,7 @@ static int load_default_textures(void) {
     load_mcrw(&tex_unknown_pack, "unknown_pack.mcrw", 0);
     ok = load_mcrw(&tex_icons, "gui_icons.mcrw", 0) && ok;
     ok = load_mcrw(&tex_inventory, "gui_inventory.mcrw", 0) && ok;
+    load_mcrw(&tex_allitems, "gui_allitems.mcrw", 0);
     load_mcrw(&tex_workbench, "gui_crafting_table.mcrw", 0);
     load_mcrw(&tex_furnace_gui, "gui_furnace.mcrw", 0);
     load_mcrw(&tex_chest_gui, "gui_chest.mcrw", 0);
@@ -1013,6 +1017,7 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_pack, "pack.png", 0);
         try_pack_texture(e, &tex_icons, "gui\\icons.png", 0);
         try_pack_texture(e, &tex_inventory, "gui\\inventory.png", 0);
+        try_pack_texture(e, &tex_allitems, "gui\\allitems.png", 0);
         try_pack_texture(e, &tex_workbench, "gui\\crafting.png", 0);
         try_pack_texture(e, &tex_furnace_gui, "gui\\furnace.png", 0);
         try_pack_texture(e, &tex_chest_gui, "gui\\container.png", 0);
