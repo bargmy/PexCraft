@@ -43,6 +43,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
     <Link>
+      <AdditionalLibraryDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\lib;$(VcpkgRoot)\installed\$(VcpkgTriplet)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>windowsapp.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;runtimeobject.lib;windowscodecs.lib;ole32.lib;ws2_32.lib;zlib.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
     </Link>

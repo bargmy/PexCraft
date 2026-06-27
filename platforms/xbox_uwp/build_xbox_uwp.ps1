@@ -31,6 +31,7 @@ if ($vcpkg -and (Test-Path (Join-Path $vcpkg "vcpkg.exe"))) {
     Write-Host "Installing UWP zlib through vcpkg: $vcpkg"
     & (Join-Path $vcpkg "vcpkg.exe") install zlib:x64-uwp
     if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:x64-uwp failed with $LASTEXITCODE" }
+    $env:VcpkgRoot = $vcpkg
     $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\\"
 } else {
     Write-Warning "vcpkg not found; build will rely on system zlib headers/libs if present."
