@@ -15,8 +15,28 @@ env:
   CHAT_ID: '-1004462705182'
 
 jobs:
+
+  telegram_status:
+    name: Start Telegram build status
+    runs-on: ubuntu-latest
+    outputs:
+      message_id: ${{ steps.status.outputs.message_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Send one Telegram build status message
+        id: status
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          REF_TEXT: ${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start-all || python .github/scripts/telegram_build_status.py start-all
   windows:
     name: Windows ${{ matrix.arch }} MinGW - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') ||
@@ -73,15 +93,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Windows ${{ matrix.arch }} MinGW
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Set up MSYS2 MinGW
         uses: msys2/setup-msys2@v2
@@ -188,18 +199,9 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Windows ${{ matrix.arch }} MinGW
-          RESULT: ${{ env.BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
   windows_arm64:
-    name: Windows arm64 MSVC - ${{ github.event.head_commit.message || github.ref_name }}
+    name: Windows arm64 Clang/MinGW - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') ||
@@ -234,72 +236,55 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Windows arm64 MSVC
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Set up MSYS2 Clang ARM64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-clang-aarch64-clang
+            mingw-w64-clang-aarch64-binutils
+            mingw-w64-clang-aarch64-zlib
+            mingw-w64-clang-aarch64-libogg
+            mingw-w64-clang-aarch64-libvorbis
+            python
+            zip
 
       - name: Build Windows arm64 client
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          New-Item -ItemType Directory -Force -Path build,logs,dist | Out-Null
-          $status = 1
-          try {
-            $vcpkg = $env:VCPKG_ROOT
-            if (!$vcpkg -and (Test-Path 'C:\vcpkg\vcpkg.exe')) { $vcpkg = 'C:\vcpkg' }
-            if (!$vcpkg -or !(Test-Path (Join-Path $vcpkg 'vcpkg.exe'))) { throw 'vcpkg not found on the runner' }
+          set +e
+          mkdir -p build logs dist
 
-            & (Join-Path $vcpkg 'vcpkg.exe') install zlib:arm64-windows-static libogg:arm64-windows-static libvorbis:arm64-windows-static 2>&1 | Tee-Object -FilePath logs/build-windows-arm64.log
-            if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed with $LASTEXITCODE" }
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Windows arm64 Clang/MinGW / CLANGARM64"
+            echo
+            clang --version
+            clang -print-target-triple || true
 
-            $triplet = Join-Path $vcpkg 'installed\arm64-windows-static'
-            $includeDir = Join-Path $triplet 'include'
-            $libDir = Join-Path $triplet 'lib'
-            if (!(Test-Path $includeDir) -or !(Test-Path $libDir)) { throw "missing vcpkg arm64-windows-static include/lib dirs" }
+            clang -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/pexcraft-win-arm64.exe \
+              -static \
+              -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
+              -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
 
-            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-            $vsInstall = ''
-            if (Test-Path $vswhere) {
-              $vsInstall = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
-              if (!$vsInstall) { $vsInstall = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath }
-            }
-            if (!$vsInstall) { throw 'Visual Studio install with ARM64 C++ tools was not found' }
-            $vcvars = Join-Path $vsInstall 'VC\Auxiliary\Build\vcvarsall.bat'
-            if (!(Test-Path $vcvars)) { throw "missing vcvarsall.bat: $vcvars" }
+            status=$?
+            echo "$status" > build/windows-arm64-build-status.txt
 
-            $zlib = Get-ChildItem -Path $libDir -File -Filter '*.lib' | Where-Object { $_.Name -in @('zlib.lib', 'zlibstatic.lib') } | Select-Object -First 1
-            $ogg = Get-ChildItem -Path $libDir -File -Filter 'ogg.lib' | Select-Object -First 1
-            $vorbis = Get-ChildItem -Path $libDir -File -Filter 'vorbis.lib' | Select-Object -First 1
-            $vorbisfile = Get-ChildItem -Path $libDir -File -Filter 'vorbisfile.lib' | Select-Object -First 1
-            if (!$zlib -or !$ogg -or !$vorbis -or !$vorbisfile) { throw "missing one or more vcpkg libs in $libDir" }
+            if [ "$status" -eq 0 ]; then
+              { llvm-objdump -p build/pexcraft-win-arm64.exe || objdump -p build/pexcraft-win-arm64.exe; } \
+                | sed -n 's/^[[:space:]]*DLL Name: //p' \
+                | sort -u > build/imported-dlls.txt || true
+              echo "WIN_ARM64_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "WIN_ARM64_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
 
-            $compile = @"
-          call "$vcvars" arm64
-          cl /nologo /TC /std:c11 /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DWIN32_LEAN_AND_MEAN /I "$includeDir" main.c /Fe:build\pexcraft-win-arm64.exe /link /SUBSYSTEM:WINDOWS /LIBPATH:"$libDir" d3d11.lib dxgi.lib d3dcompiler.lib d3d9.lib opengl32.lib glu32.lib gdi32.lib user32.lib shell32.lib ole32.lib windowscodecs.lib comdlg32.lib "$($vorbisfile.FullName)" "$($vorbis.FullName)" "$($ogg.FullName)" winmm.lib mfplat.lib mfreadwrite.lib mfuuid.lib ws2_32.lib "$($zlib.FullName)"
-          exit /b %ERRORLEVEL%
-          "@
-            $compile | Out-File -FilePath build\windows-arm64-build.cmd -Encoding ascii
-            cmd /c build\windows-arm64-build.cmd 2>&1 | Tee-Object -FilePath logs/build-windows-arm64.log -Append
-            $status = $LASTEXITCODE
-          } catch {
-            $_ | Out-File -FilePath logs/build-windows-arm64.log -Append
-            $status = 1
-          }
-
-          $status | Out-File -FilePath build\windows-arm64-build-status.txt -Encoding ascii
-          if ($status -eq 0 -and (Test-Path build\pexcraft-win-arm64.exe)) {
-            "WIN_ARM64_BUILD_OK=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-            "WIN_ARM64_BUILD_OK=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            exit $status
-          }
+            exit "$status"
+          } 2>&1 | tee logs/build-windows-arm64.log
+          exit ${PIPESTATUS[0]}
 
       - name: Package Windows arm64 zip
         if: env.WIN_ARM64_BUILD_OK == '1'
@@ -312,11 +297,21 @@ jobs:
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
           Copy-Item 'build\pexcraft-win-arm64.exe' $packageDir -Force
           if (Test-Path 'assets') { Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force }
+          if (Test-Path 'build/imported-dlls.txt') { Copy-Item 'build/imported-dlls.txt' $packageDir -Force }
+
+          # Copy native audio DLLs if the linker used dynamic libraries. Static builds will not need these,
+          # but copying them when present makes the artifact safe either way.
+          $clangBin = 'C:\msys64\clangarm64\bin'
+          foreach ($dll in @('libogg-0.dll', 'libvorbis-0.dll', 'libvorbisfile-3.dll')) {
+            $dllPath = Join-Path $clangBin $dll
+            if (Test-Path $dllPath) { Copy-Item $dllPath $packageDir -Force }
+          }
+
           if (Test-Path 'logs') { Copy-Item 'logs' (Join-Path $packageDir 'logs') -Recurse -Force }
           @"
           Commit name: $commitName
           Commit SHA:  $env:GITHUB_SHA
-          Builder:     Windows arm64 MSVC
+          Builder:     Windows arm64 Clang/MinGW
           "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
           $zipPath = Join-Path 'dist' "$artifactPrefix.zip"
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
@@ -334,23 +329,13 @@ jobs:
         if: always() && env.WIN_ARM64_BUILD_OK != '1'
         shell: bash
         run: |
-          echo "### Windows arm64 failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Windows arm64 Clang/MinGW failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Windows arm64 MSVC
-          RESULT: ${{ env.WIN_ARM64_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
-
   linux:
     name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') ||
@@ -384,15 +369,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Linux SDL2/OpenGL
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Install Linux dependencies
         shell: bash
@@ -477,19 +453,9 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Linux SDL2/OpenGL
-          RESULT: ${{ env.BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
-
   lgwebos:
     name: LG webOS ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)') &&
@@ -532,15 +498,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: LG webOS ${{ matrix.arch }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Install LG webOS build dependencies
         shell: bash
@@ -703,19 +660,9 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: LG webOS ${{ matrix.arch }}
-          RESULT: ${{ env.LGWEBOS_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
-
   android:
     name: Android arm64 APK - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') ||
@@ -749,15 +696,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Android arm64 APK
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -890,18 +828,9 @@ jobs:
           echo "Commit name: `${{ steps.commit.outputs.name }}`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Android arm64 APK
-          RESULT: ${{ env.ANDROID_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
   android_tv:
     name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') ||
@@ -936,15 +865,6 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Android TV APK
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -1077,20 +997,9 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Android TV APK
-          RESULT: ${{ env.ANDROID_TV_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
-
-
   wii:
     name: Nintendo Wii DOL - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') ||
@@ -1115,15 +1024,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Nintendo Wii DOL
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Prepare Wii embedded texture bundle
         shell: bash
@@ -1248,19 +1148,9 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Nintendo Wii DOL
-          RESULT: ${{ env.WII_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
-
   psp:
     name: Sony PSP EBOOT - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') ||
@@ -1285,15 +1175,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Sony PSP EBOOT
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Prepare PSP embedded texture bundle
         shell: bash
@@ -1375,19 +1256,9 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Sony PSP EBOOT
-          RESULT: ${{ env.PSP_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
-
   xbox_uwp:
     name: Xbox One UWP Dev Mode - ${{ github.event.head_commit.message || github.ref_name }}
+    needs: telegram_status
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') ||
@@ -1415,15 +1286,6 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
-
-      - name: Telegram build started
-        if: github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Xbox One UWP Dev Mode
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Build Xbox One UWP Dev Mode appx
         shell: pwsh
@@ -1466,20 +1328,11 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Telegram build finished
-        if: always() && github.event_name != 'pull_request'
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          TASK_NAME: Xbox One UWP Dev Mode
-          RESULT: ${{ env.XBOX_UWP_BUILD_OK == '1' && 'success' || 'failure' }}
-        shell: bash
-        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
-
   telegram:
     name: Upload successful builds to Telegram
     runs-on: ubuntu-latest
     needs:
+      - telegram_status
       - windows
       - windows_arm64
       - linux
@@ -1514,6 +1367,7 @@ jobs:
           CHAT_ID: ${{ env.CHAT_ID }}
           COMMIT_NAME: ${{ steps.commit.outputs.name }}
           NEEDS_JSON: ${{ toJson(needs) }}
+          TG_STATUS_MESSAGE_ID: ${{ needs.telegram_status.outputs.message_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1542,7 +1396,7 @@ jobs:
 
           job_labels = {
               "windows": "Windows MinGW",
-              "windows_arm64": "Windows arm64",
+              "windows_arm64": "Windows arm64 Clang/MinGW",
               "linux": "Linux",
               "lgwebos": "LG webOS",
               "android": "Android",
@@ -1633,3 +1487,12 @@ jobs:
           for index in range(0, len(files), 10):
               send_group(files[index:index + 10], index // 10)
           PY
+
+      - name: Delete Telegram build status message
+        if: always()
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TG_STATUS_MESSAGE_ID: ${{ needs.telegram_status.outputs.message_id }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py delete || python .github/scripts/telegram_build_status.py delete
