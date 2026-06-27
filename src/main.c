@@ -1,4 +1,4 @@
-/* PEXCRAFT b1.0 C port split-source unity entry. */
+/* PEXCRAFT r1.2.5-style custom client split-source unity entry. */
 #include "common/common.h"
 
 static int init_gl(HWND hwnd);

@@ -1,4 +1,4 @@
-name: Build all PexCraft targets and upload to Telegram
+name: Build all PexCraft targets, safe artifacts, and Telegram
 
 run-name: Build "${{ github.event.head_commit.message || github.ref_name }}"
 
@@ -183,13 +183,31 @@ jobs:
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
           "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Windows artifact
+      - name: Upload Windows build as safe GitHub artifact
         if: env.BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_prefix }}
+          name: pexcraft-windows-${{ matrix.arch }}
           path: ${{ env.ZIP_PATH }}
-          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Upload Windows build to Telegram
+        if: env.BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.ZIP_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Windows ${{ matrix.arch }} MinGW
+        shell: pwsh
+        run: |
+          if (Get-Command python -ErrorAction SilentlyContinue) {
+            python .github/scripts/telegram_upload_file.py
+          } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            py -3 .github/scripts/telegram_upload_file.py
+          } else {
+            throw "Python was not found for Telegram upload"
+          }
 
       - name: Mark failed build in summary
         if: always() && env.BUILD_OK != '1'
@@ -197,7 +215,7 @@ jobs:
         run: |
           echo "### Windows ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   windows_arm64:
     name: Windows arm64 Clang/MinGW - ${{ github.event.head_commit.message || github.ref_name }}
@@ -317,13 +335,31 @@ jobs:
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
           "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Windows arm64 artifact
+      - name: Upload Windows arm64 build as safe GitHub artifact
         if: env.WIN_ARM64_BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-windows-arm64
           path: ${{ env.ZIP_PATH }}
-          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Upload Windows arm64 build to Telegram
+        if: env.WIN_ARM64_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.ZIP_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Windows arm64 Clang/MinGW
+        shell: pwsh
+        run: |
+          if (Get-Command python -ErrorAction SilentlyContinue) {
+            python .github/scripts/telegram_upload_file.py
+          } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            py -3 .github/scripts/telegram_upload_file.py
+          } else {
+            throw "Python was not found for Telegram upload"
+          }
 
       - name: Mark failed build in summary
         if: always() && env.WIN_ARM64_BUILD_OK != '1'
@@ -331,7 +367,7 @@ jobs:
         run: |
           echo "### Windows arm64 Clang/MinGW failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   linux:
     name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
@@ -437,13 +473,24 @@ jobs:
           (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
-      - name: Upload Linux artifact
+      - name: Upload Linux build as safe GitHub artifact
         if: env.BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-linux-x64
           path: ${{ env.ZIP_PATH }}
-          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Upload Linux build to Telegram
+        if: env.BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.ZIP_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Linux SDL2/OpenGL
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
 
       - name: Mark failed build in summary
         if: always() && env.BUILD_OK != '1'
@@ -451,7 +498,7 @@ jobs:
         run: |
           echo "### Linux SDL2/OpenGL failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   lgwebos:
     name: LG webOS ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
@@ -565,11 +612,11 @@ jobs:
           echo "Using LG webOS CMake toolchain: $toolchain_file"
           echo "LGWEBOS_TOOLCHAIN_FILE=$toolchain_file" >> "$GITHUB_ENV"
 
-      - name: Extract LG webOS icon from client.jar
+      - name: Generate original LG webOS icon
         shell: bash
         run: |
           set -euxo pipefail
-          python3 tools/extract_lgwebos_icon.py webos/generated/icon.png build/lgwebos_work/client.jar
+          python3 tools/extract_lgwebos_icon.py webos/generated/icon.png
           test -s webos/generated/icon.png
 
       - name: Build LG webOS native client
@@ -644,13 +691,24 @@ jobs:
           mv -f "$ipk" "$final"
           echo "IPK_PATH=$final" >> "$GITHUB_ENV"
 
-      - name: Upload LG webOS artifact
+      - name: Upload LG webOS build as safe GitHub artifact
         if: env.LGWEBOS_BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-lgwebos-${{ matrix.arch }}
           path: ${{ env.IPK_PATH }}
-          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload LG webOS build to Telegram
+        if: env.LGWEBOS_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.IPK_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: LG webOS ${{ matrix.arch }}
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
 
       - name: Mark failed build in summary
         if: always() && env.LGWEBOS_BUILD_OK != '1'
@@ -658,7 +716,7 @@ jobs:
         run: |
           echo "### LG webOS ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   android:
     name: Android arm64 APK - ${{ github.event.head_commit.message || github.ref_name }}
@@ -812,13 +870,24 @@ jobs:
           cp -f "$apk" "$final"
           echo "APK_PATH=$final" >> "$GITHUB_ENV"
 
-      - name: Upload Android arm64 artifact
+      - name: Upload Android arm64 build as safe GitHub artifact
         if: env.ANDROID_BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-android-arm64
           path: ${{ env.APK_PATH }}
-          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Android arm64 build to Telegram
+        if: env.ANDROID_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.APK_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Android arm64 APK
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
 
       - name: Mark failed build in summary
         if: always() && env.ANDROID_BUILD_OK != '1'
@@ -826,7 +895,7 @@ jobs:
         run: |
           echo "### Android arm64 APK failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: `${{ steps.commit.outputs.name }}`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   android_tv:
     name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
@@ -981,13 +1050,24 @@ jobs:
           cp -f "$apk" "$final"
           echo "APK_PATH=$final" >> "$GITHUB_ENV"
 
-      - name: Upload Android TV artifact
+      - name: Upload Android TV build as safe GitHub artifact
         if: env.ANDROID_TV_BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
           name: pexcraft-android-tv
           path: ${{ env.APK_PATH }}
-          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Android TV build to Telegram
+        if: env.ANDROID_TV_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.APK_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Android TV APK
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
 
       - name: Mark failed build in summary
         if: always() && env.ANDROID_TV_BUILD_OK != '1'
@@ -995,7 +1075,7 @@ jobs:
         run: |
           echo "### Android TV APK failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   wii:
     name: Nintendo Wii DOL - ${{ github.event.head_commit.message || github.ref_name }}
@@ -1132,13 +1212,16 @@ jobs:
           fi
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
-      - name: Upload Wii artifact
-        if: env.WII_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-wii
-          path: ${{ env.ZIP_PATH }}
-          if-no-files-found: error
+      - name: Upload Wii build to Telegram
+        if: env.WII_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.ZIP_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Nintendo Wii DOL
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
 
       - name: Mark failed build in summary
         if: always() && env.WII_BUILD_OK != '1'
@@ -1146,7 +1229,7 @@ jobs:
         run: |
           echo "### Nintendo Wii DOL failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   psp:
     name: Sony PSP EBOOT - ${{ github.event.head_commit.message || github.ref_name }}
@@ -1240,13 +1323,16 @@ jobs:
           (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
-      - name: Upload PSP artifact
-        if: env.PSP_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-psp
-          path: ${{ env.ZIP_PATH }}
-          if-no-files-found: error
+      - name: Upload PSP build to Telegram
+        if: env.PSP_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.ZIP_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Sony PSP EBOOT
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
 
       - name: Mark failed build in summary
         if: always() && env.PSP_BUILD_OK != '1'
@@ -1254,7 +1340,7 @@ jobs:
         run: |
           echo "### Sony PSP EBOOT failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   xbox_uwp:
     name: Xbox One UWP Dev Mode - ${{ github.event.head_commit.message || github.ref_name }}
@@ -1309,7 +1395,7 @@ jobs:
           if (!$pkg) { throw "missing Xbox UWP appx/msix package in dist" }
           "XBOX_UWP_PATH=$($pkg.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Xbox One UWP artifact
+      - name: Upload Xbox One UWP build as safe GitHub artifact
         if: env.XBOX_UWP_BUILD_OK == '1'
         uses: actions/upload-artifact@v4
         with:
@@ -1318,7 +1404,28 @@ jobs:
             ${{ env.XBOX_UWP_PATH }}
             dist/pexcraft-xbox-one-uwp-devmode-build-notes.txt
             dist/pexcraft-xbox-one-uwp-devmode-testcert.cer
-          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Xbox One UWP build to Telegram
+        if: env.XBOX_UWP_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATHS: |
+            ${{ env.XBOX_UWP_PATH }}
+            dist/pexcraft-xbox-one-uwp-devmode-build-notes.txt
+            dist/pexcraft-xbox-one-uwp-devmode-testcert.cer
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Xbox One UWP Dev Mode
+        shell: pwsh
+        run: |
+          if (Get-Command python -ErrorAction SilentlyContinue) {
+            python .github/scripts/telegram_upload_file.py
+          } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            py -3 .github/scripts/telegram_upload_file.py
+          } else {
+            throw "Python was not found for Telegram upload"
+          }
 
       - name: Mark failed build in summary
         if: always() && env.XBOX_UWP_BUILD_OK != '1'
@@ -1326,10 +1433,10 @@ jobs:
         run: |
           echo "### Xbox One UWP Dev Mode failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   telegram:
-    name: Upload successful builds to Telegram
+    name: Finish Telegram build status
     runs-on: ubuntu-latest
     needs:
       - telegram_status
@@ -1345,6 +1452,9 @@ jobs:
     if: always() && github.event_name != 'pull_request'
 
     steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+
       - name: Read commit name
         id: commit
         shell: bash
@@ -1355,45 +1465,21 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-      - name: Download successful artifacts
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          path: telegram_upload
-
-      - name: Upload successful build zips to Telegram
+      - name: Send Telegram final summary
         env:
           TOKEN: ${{ secrets.TOKEN }}
           CHAT_ID: ${{ env.CHAT_ID }}
           COMMIT_NAME: ${{ steps.commit.outputs.name }}
           NEEDS_JSON: ${{ toJson(needs) }}
-          TG_STATUS_MESSAGE_ID: ${{ needs.telegram_status.outputs.message_id }}
         shell: bash
         run: |
-          set -euo pipefail
-
-          if [ -z "${TOKEN:-}" ]; then
-            echo "Missing Telegram bot token. Add repository secret TOKEN." >&2
-            exit 1
-          fi
-
           python3 - <<'PY'
-          import os, sys, glob, json, uuid, mimetypes, urllib.request, urllib.parse
-
-          token = os.environ["TOKEN"]
-          chat_id = os.environ["CHAT_ID"]
-          commit_name = os.environ.get("COMMIT_NAME", "")
-          sha = os.environ.get("GITHUB_SHA", "")
-
-          files = sorted(
-              glob.glob("telegram_upload/**/*.zip", recursive=True)
-              + glob.glob("telegram_upload/**/*.ipk", recursive=True)
-              + glob.glob("telegram_upload/**/*.apk", recursive=True)
-              + glob.glob("telegram_upload/**/*.appx", recursive=True)
-              + glob.glob("telegram_upload/**/*.appxbundle", recursive=True)
-              + glob.glob("telegram_upload/**/*.msixbundle", recursive=True)
-          )
-
+          import json, os, urllib.parse, urllib.request
+          token = os.environ.get("TOKEN", "")
+          chat_id = os.environ.get("CHAT_ID", "")
+          if not token or not chat_id:
+              print("Telegram token/chat id missing; skipping final summary.")
+              raise SystemExit(0)
           job_labels = {
               "windows": "Windows MinGW",
               "windows_arm64": "Windows arm64 Clang/MinGW",
@@ -1405,87 +1491,20 @@ jobs:
               "wii": "Wii",
               "xbox_uwp": "Xbox One UWP",
           }
-
           needs = json.loads(os.environ.get("NEEDS_JSON", "{}") or "{}")
           failed = [job_labels.get(name, name) for name, data in needs.items() if data.get("result") in {"failure", "cancelled", "timed_out"}]
-          failed_text = ", ".join(failed) if failed else "None"
-
-          caption = (
-              "PexCraft built!\n"
-              f"Commit : {commit_name} - {sha[:12]}\n"
-              f"Failed : {failed_text}"
+          skipped = [job_labels.get(name, name) for name, data in needs.items() if data.get("result") == "skipped"]
+          text = (
+              "PexCraft build finished.\n"
+              f"Commit: {os.environ.get('COMMIT_NAME', '')} - {os.environ.get('GITHUB_SHA', '')[:12]}\n"
+              f"Failed: {', '.join(failed) if failed else 'None'}\n"
+              f"Skipped: {', '.join(skipped) if skipped else 'None'}\n"
+              "GitHub artifacts are enabled only for builds that do not bundle Mojang-derived resources. Wii and PSP stay Telegram-only; all successful builds are still sent to Telegram."
           )
-
-          def send_text(text):
-              data = urllib.parse.urlencode({
-                  "chat_id": chat_id,
-                  "text": text,
-              }).encode()
-              req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-              with urllib.request.urlopen(req, timeout=120) as r:
-                  print(r.read().decode("utf-8", "replace"))
-
-          if not files:
-              send_text("Build failed o_o")
-              raise SystemExit(0)
-
-          def send_group(group, group_index):
-              boundary = "----pexcraft-" + uuid.uuid4().hex
-              parts = []
-              media = []
-
-              for i, path in enumerate(group):
-                  attach_name = f"file_{group_index}_{i}"
-                  entry = {
-                      "type": "document",
-                      "media": f"attach://{attach_name}",
-                  }
-                  if i == 0:
-                      entry["caption"] = caption
-                  media.append(entry)
-
-              def field(name, value):
-                  parts.append(
-                      (
-                          f"--{boundary}\r\n"
-                          f"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n"
-                          f"{value}\r\n"
-                      ).encode()
-                  )
-
-              def filefield(name, path):
-                  filename = os.path.basename(path)
-                  ctype = mimetypes.guess_type(filename)[0] or ("application/vnd.android.package-archive" if filename.endswith(".apk") else ("application/vnd.debian.binary-package" if filename.endswith(".ipk") else ("application/vnd.ms-appx" if filename.endswith((".appx", ".appxbundle", ".msixbundle")) else "application/zip")))
-                  parts.append(
-                      (
-                          f"--{boundary}\r\n"
-                          f"Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
-                          f"Content-Type: {ctype}\r\n\r\n"
-                      ).encode()
-                  )
-                  with open(path, "rb") as f:
-                      parts.append(f.read())
-                  parts.append(b"\r\n")
-
-              field("chat_id", chat_id)
-              field("media", json.dumps(media))
-
-              for i, path in enumerate(group):
-                  filefield(f"file_{group_index}_{i}", path)
-
-              parts.append(f"--{boundary}--\r\n".encode())
-
-              req = urllib.request.Request(
-                  f"https://api.telegram.org/bot{token}/sendMediaGroup",
-                  data=b"".join(parts),
-                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-              )
-
-              with urllib.request.urlopen(req, timeout=240) as r:
-                  print(r.read().decode("utf-8", "replace"))
-
-          for index in range(0, len(files), 10):
-              send_group(files[index:index + 10], index // 10)
+          data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+          req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
+          with urllib.request.urlopen(req, timeout=120) as r:
+              print(r.read().decode("utf-8", "replace"))
           PY
 
       - name: Delete Telegram build status message
