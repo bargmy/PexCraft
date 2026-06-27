@@ -8,15 +8,20 @@
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.Core.h>
 #include <stdint.h>
 #include <string>
+#include <cstdlib>
 
 namespace winrt_app = winrt::Windows::ApplicationModel;
 namespace activation = winrt::Windows::ApplicationModel::Activation;
 namespace coreapp = winrt::Windows::ApplicationModel::Core;
 namespace storage = winrt::Windows::Storage;
+namespace streams = winrt::Windows::Storage::Streams;
+namespace webhttp = winrt::Windows::Web::Http;
 namespace win_system = winrt::Windows::System;
 namespace coreui = winrt::Windows::UI::Core;
 
@@ -33,6 +38,83 @@ extern "C" {
 }
 
 static std::wstring g_local_folder;
+
+
+static std::wstring pex_wide_from_utf8(const char *text) {
+    if (!text || !*text) return std::wstring();
+    int need = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+    if (need <= 0) return std::wstring();
+    std::wstring out;
+    out.resize((size_t)need);
+    MultiByteToWideChar(CP_UTF8, 0, text, -1, &out[0], need);
+    if (!out.empty() && out.back() == L'\0') out.pop_back();
+    return out;
+}
+
+extern "C" int pex_xbox_uwp_http_download_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len, volatile long *cancel_flag) {
+    if (out_data) *out_data = nullptr;
+    if (out_len) *out_len = 0;
+    if (!url || !*url || !out_data || !out_len || max_len == 0) return 0;
+    if (cancel_flag && *cancel_flag) return 0;
+    try {
+        webhttp::HttpClient client;
+        std::wstring wurl = pex_wide_from_utf8(url);
+        if (wurl.empty()) return 0;
+        auto response = client.GetAsync(winrt::Windows::Foundation::Uri(winrt::hstring(wurl.c_str()))).get();
+        if (cancel_flag && *cancel_flag) return 0;
+        if (!response.IsSuccessStatusCode()) return 0;
+        streams::IBuffer buffer = response.Content().ReadAsBufferAsync().get();
+        uint32_t len = buffer.Length();
+        if (len == 0 || (size_t)len > max_len) return 0;
+        char *mem = (char *)std::malloc((size_t)len + 1);
+        if (!mem) return 0;
+        streams::DataReader reader = streams::DataReader::FromBuffer(buffer);
+        reader.ReadBytes(winrt::array_view<uint8_t>((uint8_t *)mem, (uint8_t *)mem + len));
+        mem[len] = 0;
+        *out_data = mem;
+        *out_len = (size_t)len;
+        return 1;
+    } catch (...) {
+        return 0;
+    }
+}
+
+extern "C" int pex_xbox_uwp_http_download_to_file(const char *url, const char *path, unsigned int expect_size, volatile long *cancel_flag, volatile long *progress_out, volatile long *total_out) {
+    if (!url || !*url || !path || !*path) return 0;
+    if (progress_out) *progress_out = 0;
+    if (total_out) *total_out = 0;
+    if (cancel_flag && *cancel_flag) return 0;
+    try {
+        webhttp::HttpClient client;
+        std::wstring wurl = pex_wide_from_utf8(url);
+        if (wurl.empty()) return 0;
+        auto response = client.GetAsync(winrt::Windows::Foundation::Uri(winrt::hstring(wurl.c_str()))).get();
+        if (cancel_flag && *cancel_flag) return 0;
+        if (!response.IsSuccessStatusCode()) return 0;
+        streams::IBuffer buffer = response.Content().ReadAsBufferAsync().get();
+        uint32_t len = buffer.Length();
+        if (len == 0) return 0;
+        if (expect_size && len != expect_size) return 0;
+        if (total_out) *total_out = (long)len;
+        std::wstring wpath = pex_wide_from_utf8(path);
+        if (wpath.empty()) return 0;
+        HANDLE h = CreateFile2(wpath.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return 0;
+        char *mem = (char *)std::malloc((size_t)len);
+        if (!mem) { CloseHandle(h); DeleteFileW(wpath.c_str()); return 0; }
+        streams::DataReader reader = streams::DataReader::FromBuffer(buffer);
+        reader.ReadBytes(winrt::array_view<uint8_t>((uint8_t *)mem, (uint8_t *)mem + len));
+        DWORD written = 0;
+        BOOL ok = WriteFile(h, mem, len, &written, nullptr);
+        std::free(mem);
+        CloseHandle(h);
+        if (!ok || written != len) { DeleteFileW(wpath.c_str()); return 0; }
+        if (progress_out) *progress_out = 100;
+        return 1;
+    } catch (...) {
+        return 0;
+    }
+}
 
 extern "C" const wchar_t *pex_xbox_uwp_get_local_folder_w(void) {
     if (g_local_folder.empty()) {

@@ -13,6 +13,11 @@ static HANDLE g_classic_install_thread = NULL;
 static char g_classic_install_status[MAX_LABEL] = "";
 static char g_classic_install_error[MAX_LABEL] = "";
 
+#if defined(PEX_PLATFORM_XBOX_UWP)
+extern int pex_xbox_uwp_http_download_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len, volatile LONG *cancel_flag);
+extern int pex_xbox_uwp_http_download_to_file(const char *url, const char *path, unsigned int expect_size, volatile LONG *cancel_flag, volatile LONG *progress_out, volatile LONG *total_out);
+#endif
+
 static void pack_install_reset_cancel(void) {
     InterlockedExchange(&g_classic_install_cancel_requested, 0);
 }
@@ -286,6 +291,9 @@ static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAs
 }
 
 static int http_download_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    return pex_xbox_uwp_http_download_to_memory(url, out_data, out_len, max_len, &g_classic_install_cancel_requested);
+#else
     HMODULE wininet;
     PxcInternetOpenA pInternetOpenA;
     PxcInternetOpenUrlA pInternetOpenUrlA;
@@ -340,9 +348,15 @@ done:
     if (out_data) *out_data = buf; else free(buf);
     if (out_len) *out_len = len;
     return 1;
+#endif
 }
 
 static int http_download_to_file(const char *url, const char *path, unsigned int expect_size) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    volatile LONG dummy_progress = 0;
+    volatile LONG dummy_total = 0;
+    return pex_xbox_uwp_http_download_to_file(url, path, expect_size, &g_classic_install_cancel_requested, &dummy_progress, &dummy_total);
+#else
     HMODULE wininet = LoadLibraryA("wininet.dll");
     PxcInternetOpenA pInternetOpenA;
     PxcInternetOpenUrlA pInternetOpenUrlA;
@@ -387,6 +401,7 @@ done:
     FreeLibrary(wininet);
     if (!ok) DeleteFileA(path);
     return ok;
+#endif
 }
 
 static int legacy_sound_index_download_size(unsigned long long *out_bytes, int *out_count) {
@@ -686,6 +701,20 @@ static void pack_install_fail(const char *msg) {
 }
 
 static int pack_install_download_client_jar(const char *url, const char *zip_path) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    if (pack_install_is_cancelled()) { pack_install_fail("Download cancelled"); return 0; }
+    DeleteFileA(zip_path);
+    pxc_mkdirs_for_file(zip_path);
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 1, "Connecting to Mojang...");
+    volatile LONG total = 0;
+    if (!pex_xbox_uwp_http_download_to_file(url, zip_path, 0, &g_classic_install_cancel_requested, &g_classic_install_progress, &total)) {
+        pack_install_fail(pack_install_is_cancelled() ? "Download cancelled" : "Could not download Release resources");
+        return 0;
+    }
+    if (pack_install_is_cancelled()) { DeleteFileA(zip_path); pack_install_fail("Download cancelled"); return 0; }
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 99, "Download complete");
+    return 1;
+#else
     HMODULE wininet = LoadLibraryA("wininet.dll");
     PxcInternetOpenA pInternetOpenA;
     PxcInternetOpenUrlA pInternetOpenUrlA;

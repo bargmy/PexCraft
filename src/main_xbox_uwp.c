@@ -116,5 +116,9 @@ static void steve_set_tint(float r, float g, float b);
 #include "ui/gui.c"
 #include "platform/gamepad.c"
 #include "render/render_dispatch.c"
-#include "platform/loggy_window.c"
+/* Xbox/UWP has no SDL diagnostic side-window.  Keep Loggy counters in the
+   engine, but do not compile the SDL-only window implementation here. */
+static int loggy_init(void) { g_loggy_enabled = 0; return 0; }
+static void loggy_draw(void) { }
+static void loggy_shutdown(void) { }
 #include "platform/xbox_uwp/xbox_uwp_app.c"
