@@ -38,6 +38,8 @@ typedef int GLsizei;
 typedef float GLfloat;
 typedef double GLdouble;
 typedef unsigned char GLboolean;
+typedef unsigned char GLubyte;
+typedef unsigned short GLushort;
 typedef void GLvoid;
 #ifndef GL_FALSE
 #define GL_FALSE 0
@@ -257,6 +259,44 @@ typedef float GLclampf;
 #define GL_TEXTURE_WRAP_T 0x2803
 #endif
 
+
+#ifndef GL_FLOAT
+#define GL_FLOAT 0x1406
+#endif
+#ifndef GL_UNSIGNED_SHORT
+#define GL_UNSIGNED_SHORT 0x1403
+#endif
+#ifndef GL_VERTEX_ARRAY
+#define GL_VERTEX_ARRAY 0x8074
+#endif
+#ifndef GL_NORMAL_ARRAY
+#define GL_NORMAL_ARRAY 0x8075
+#endif
+#ifndef GL_COLOR_ARRAY
+#define GL_COLOR_ARRAY 0x8076
+#endif
+#ifndef GL_TEXTURE_COORD_ARRAY
+#define GL_TEXTURE_COORD_ARRAY 0x8078
+#endif
+#ifndef GL_VENDOR
+#define GL_VENDOR 0x1F00
+#endif
+#ifndef GL_RENDERER
+#define GL_RENDERER 0x1F01
+#endif
+#ifndef GL_VERSION
+#define GL_VERSION 0x1F02
+#endif
+#ifndef GL_EXTENSIONS
+#define GL_EXTENSIONS 0x1F03
+#endif
+#ifndef SEM_FAILCRITICALERRORS
+#define SEM_FAILCRITICALERRORS 0x0001u
+#endif
+#ifndef SEM_NOOPENFILEERRORBOX
+#define SEM_NOOPENFILEERRORBOX 0x8000u
+#endif
+
 /* UWP has no desktop OpenGL import library.  backend_compat.c keeps fallback
    calls in shared code, but the Xbox target forces D3D11.  These stubs satisfy
    the C compiler/linker for unreachable fallback branches. */
@@ -302,6 +342,16 @@ static __inline void glTexParameteri(GLenum t, GLenum p, GLint v) { (void)t;(voi
 static __inline void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels) { (void)target;(void)level;(void)internalformat;(void)width;(void)height;(void)border;(void)format;(void)type;(void)pixels; }
 static __inline void glDeleteTextures(GLsizei n, const GLuint *tex) { (void)n;(void)tex; }
 static __inline void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) { (void)target;(void)level;(void)xoffset;(void)yoffset;(void)x;(void)y;(void)width;(void)height; }
+static __inline void glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) { (void)r;(void)g;(void)b;(void)a; }
+static __inline void glEnableClientState(GLenum array) { (void)array; }
+static __inline void glDisableClientState(GLenum array) { (void)array; }
+static __inline void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { (void)size;(void)type;(void)stride;(void)ptr; }
+static __inline void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { (void)size;(void)type;(void)stride;(void)ptr; }
+static __inline void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { (void)size;(void)type;(void)stride;(void)ptr; }
+static __inline void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) { (void)mode;(void)count;(void)type;(void)indices; }
+static __inline void glDeleteLists(GLuint list, GLsizei range) { (void)list;(void)range; }
+static __inline const GLubyte *glGetString(GLenum name) { (void)name; return (const GLubyte *)"PexCraft Xbox UWP D3D11"; }
+static __inline int gluProject(GLdouble objx, GLdouble objy, GLdouble objz, const GLdouble *model, const GLdouble *proj, const GLint *view, GLdouble *winx, GLdouble *winy, GLdouble *winz) { (void)objx;(void)objy;(void)objz;(void)model;(void)proj;(void)view; if(winx)*winx=0; if(winy)*winy=0; if(winz)*winz=0; return 0; }
 
 /* Small Win32-style shims that shared code already uses on Android/SDL2. */
 #ifndef MAPVK_VK_TO_VSC
@@ -315,6 +365,20 @@ static __inline BOOL MoveFileA(const char *src, const char *dst) { return rename
 static __inline HRESULT CoInitialize(void *reserved) { (void)reserved; return S_OK; }
 static __inline BOOL GetClientRect(HWND hwnd, RECT *rc) { (void)hwnd; if (rc) { rc->left=0; rc->top=0; rc->right=1280; rc->bottom=720; } return TRUE; }
 static __inline BOOL SwapBuffers(HDC dc) { (void)dc; return TRUE; }
+static __inline HDC GetDC(HWND hwnd) { (void)hwnd; return NULL; }
+#ifndef VREFRESH
+#define VREFRESH 116
+#endif
+#ifndef HORZRES
+#define HORZRES 8
+#endif
+#ifndef VERTRES
+#define VERTRES 10
+#endif
+static __inline int GetDeviceCaps(HDC dc, int index) { (void)dc; (void)index; return 0; }
+static __inline int ReleaseDC(HWND hwnd, HDC dc) { (void)hwnd; (void)dc; return 1; }
+static __inline HINSTANCE ShellExecuteA(HWND hwnd, const char *op, const char *file, const char *params, const char *dir, int show) { (void)hwnd;(void)op;(void)file;(void)params;(void)dir;(void)show; return (HINSTANCE)33; }
+static __inline void PostQuitMessage(int code) { (void)code; }
 
 #ifndef MAX_PATH
 #define MAX_PATH 260

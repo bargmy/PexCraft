@@ -2,6 +2,7 @@
    This is the real engine translation unit for the UWP package.  The C++/WinRT
    CoreWindow shell calls the exported pex_xbox_uwp_engine_* functions below. */
 #define PEX_PLATFORM_XBOX_UWP 1
+#include "platform/xbox_uwp/xbox_uwp_compat.h"
 #include "common/common.h"
 
 static void scan_texture_packs(void);

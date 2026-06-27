@@ -775,7 +775,7 @@ static void pex_gamepad_shutdown(void) {
 #ifdef PEX_PLATFORM_SDL2
     gamepad_sdl2_close_all();
 #endif
-#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII) && !defined(PEX_PLATFORM_XBOX_UWP)
     if (g_xinput_dll) { FreeLibrary(g_xinput_dll); g_xinput_dll = NULL; g_xinput_get_state = NULL; }
 #endif
 }

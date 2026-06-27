@@ -303,7 +303,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
       }}
     runs-on: ubuntu-latest
