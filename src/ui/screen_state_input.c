@@ -775,16 +775,21 @@ static void rebuild_screen(void) {
             b->opt = opt;
             if (b->kind == BUTTON_SLIDER) b->slider_value = get_option_float(opt);
         }
-        add_button_full(300, g_gui_w / 2 - 100, g_gui_h / 6 + 96 - 6, 200, 20, tr("Video Settings..."), BUTTON_NORMAL);
-        add_button_full(100, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, tr("Controls..."), BUTTON_NORMAL);
-        add_button_full(302, g_gui_w / 2 - 100, g_gui_h / 6 + 144 - 6, 200, 20, tr("Language"), BUTTON_NORMAL);
-        add_button_full(301, g_gui_w / 2 - 100, g_gui_h / 6 + 168 - 6, 200, 20, tr("Skins..."), BUTTON_NORMAL);
+        /* Keep player customization inside the regular two-column options grid.
+           These used to be full-width lower action buttons, which made the
+           options screen feel too tall on touch devices. */
+        add_button_full(301, g_gui_w / 2 - 155, g_gui_h / 6 + 72, 150, 20, tr("Skins..."), BUTTON_NORMAL);
+        add_button_full(303, g_gui_w / 2 + 5,   g_gui_h / 6 + 72, 150, 20, "Nickname...", BUTTON_NORMAL);
+
+        {
+            int nav_y = g_gui_h / 6 + 100;
+            add_button_full(300, g_gui_w / 2 - 100, nav_y,      200, 20, tr("Video Settings..."), BUTTON_NORMAL);
+            add_button_full(100, g_gui_w / 2 - 100, nav_y + 24, 200, 20, tr("Controls..."), BUTTON_NORMAL);
+            add_button_full(302, g_gui_w / 2 - 100, nav_y + 48, 200, 20, tr("Language"), BUTTON_NORMAL);
 #if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
-        add_button_full(303, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 98, 20, "Nickname...", BUTTON_NORMAL);
-        add_button_full(304, g_gui_w / 2 + 2, g_gui_h / 6 + 192 - 6, 98, 20, "Remote...", BUTTON_NORMAL);
-#else
-        add_button_full(303, g_gui_w / 2 - 100, g_gui_h / 6 + 192 - 6, 200, 20, "Nickname...", BUTTON_NORMAL);
+            add_button_full(304, g_gui_w / 2 - 100, nav_y + 72, 200, 20, "Remote...", BUTTON_NORMAL);
 #endif
+        }
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         const OptionId video_options[] = {

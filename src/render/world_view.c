@@ -1376,6 +1376,22 @@ static int flat_async_section_mesh_enabled(void) {
 #endif
 }
 
+/* Android/GLES2 Fast graphics must still keep liquids out of the huge opaque
+   terrain mesh.  That reuses Fancy's stable two-pass liquid split and avoids
+   the slow CPU DrawElements fallback, while leaves/grass remain true Fast-mode
+   visuals: solid leaves, no fancy grass overlay, and no alpha-tested leaf pass. */
+static int flat_separate_liquid_pass_enabled(void) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    return 1;
+#else
+    return g_opts.fancy_graphics;
+#endif
+}
+
+static int flat_fancy_cutout_terrain_enabled(void) {
+    return g_opts.fancy_graphics;
+}
+
 static int flat_display_lists_supported(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
     return 0;
@@ -1697,7 +1713,7 @@ static int dig_particle_tile_for_block_face(int id, int face) {
     if (id == BLOCK_SAND) return 18;
     if (id == BLOCK_GRAVEL) return 19;
     if (id == BLOCK_LOG) return (face == 0 || face == 1) ? 21 : 20;
-    if (id == BLOCK_LEAVES) return g_opts.fancy_graphics ? 52 : 53;
+    if (id == BLOCK_LEAVES) return flat_fancy_cutout_terrain_enabled() ? 52 : 53;
     if (id == BLOCK_GLASS) return 49;
     if (id == BLOCK_GOLD_ORE) return 32;
     if (id == BLOCK_IRON_ORE) return 33;
@@ -3001,7 +3017,7 @@ static void draw_block_selection_border(void) {
 
 static int block_occludes_render_face(int id) {
     if (id == 0) return 0;
-    if (block_is_liquid(id)) return g_opts.fancy_graphics ? 0 : 1;
+    if (block_is_liquid(id)) return flat_separate_liquid_pass_enabled() ? 0 : 1;
     if (id == BLOCK_CHEST) return 0; /* chest model is smaller than a full cube; never cull neighboring faces behind it */
     if (id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS ||
         id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
@@ -3011,7 +3027,7 @@ static int block_occludes_render_face(int id) {
         id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_STONE_BUTTON ||
         id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON ||
         id == BLOCK_WEB || id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME) return 0;
-    if (id == BLOCK_LEAVES) return g_opts.fancy_graphics ? 0 : 1;
+    if (id == BLOCK_LEAVES) return flat_fancy_cutout_terrain_enabled() ? 0 : 1;
     if (id == BLOCK_GLASS || id == BLOCK_SAPLING ||
         id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
         id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM ||
@@ -3124,7 +3140,7 @@ static int flat_face_exposed_for_block(int id, int x, int y, int z, int face) {
          quads.  That preserves the Java fancy-leaf visible interior without
          z-fighting or texture overlap. */
     if (id == BLOCK_LEAVES && n == BLOCK_LEAVES) {
-        if (!g_opts.fancy_graphics) return 0;
+        if (!flat_fancy_cutout_terrain_enabled()) return 0;
         return (face == 1 || face == 3 || face == 5);
     }
 
@@ -3312,7 +3328,7 @@ static int block_texture_resolve(int block_id, int meta, int face) {
                 default: return 20;
             }
         case BLOCK_LEAVES: {
-            int base = g_opts.fancy_graphics ? 52 : 53;
+            int base = flat_fancy_cutout_terrain_enabled() ? 52 : 53;
             int type = meta & 3;
             if (type == BLOCK_META_WOOD_SPRUCE) return base + 80;
             if (type == BLOCK_META_WOOD_JUNGLE) return base + 144;
@@ -3525,10 +3541,9 @@ static void world_face_style(int id, int face, int *tile) {
     if (id == BLOCK_BOOKSHELF) { *tile = 35; world_set_shade(shade); return; }
     if (id == BLOCK_MOSSY_COBBLESTONE) { *tile = 36; world_set_shade(shade); return; }
     if (id == BLOCK_LEAVES) {
-        /* BlockLeaves.setGraphicsLevel(): Fancy uses base texture 52, Fast uses
-           the opaque leaf texture 53.  Fast graphics must not alpha-test the
-           transparent leaf tile. */
-        *tile = g_opts.fancy_graphics ? 52 : 53;
+        /* BlockLeaves.setGraphicsLevel(): Fancy/minimal-Fancy terrain uses base
+           texture 52; the legacy opaque Fast path uses texture 53. */
+        *tile = flat_fancy_cutout_terrain_enabled() ? 52 : 53;
         world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
         return;
     }
@@ -3658,7 +3673,7 @@ static void draw_snow_layer_block(float x, float y, float z) {
 }
 
 static int grass_side_overlay_face_needed(int x, int y, int z, int face) {
-    if (!g_opts.fancy_graphics) return 0;
+    if (!flat_fancy_cutout_terrain_enabled()) return 0;
     if (face < 2 || face > 5) return 0;
     int above = flat_get_block(x, y + 1, z);
     if (above == BLOCK_SNOW_LAYER || above == BLOCK_SNOW_BLOCK) return 0;
@@ -3721,7 +3736,7 @@ static void emit_world_block_face_at(int id, int x, int y, int z, int face) {
     float z0 = (float)z, z1 = (float)z + 1.0f;
     float u0,v0,u1,v1;
     int tile = 2;
-    if (id == BLOCK_LEAVES && g_opts.fancy_graphics && neighbor_for_face(x, y, z, face) == BLOCK_LEAVES) {
+    if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled() && neighbor_for_face(x, y, z, face) == BLOCK_LEAVES) {
         /* For the single canonical fancy-leaf interior quad, keep the local
            block light sample instead of sampling from the neighboring leaf.
            That keeps connected leaf faces the same color/brightness family as
@@ -4737,7 +4752,7 @@ static void draw_liquid_block(int id, float x, float y, float z) {
 static void draw_world_block_exposed(int id, int x, int y, int z) {
     if (id == 0) return;
     if (id == BLOCK_SNOW_LAYER) { glBegin(GL_QUADS); emit_snow_layer_block(x, y, z); glEnd(); glColor4f(1,1,1,1); return; }
-    if (block_is_liquid(id) && g_opts.fancy_graphics) { draw_liquid_block(id, (float)x, (float)y, (float)z); return; }
+    if (block_is_liquid(id) && flat_separate_liquid_pass_enabled()) { draw_liquid_block(id, (float)x, (float)y, (float)z); return; }
     if (block_uses_special_model(id)) { draw_special_block_model(id, x, y, z); return; }
     if (block_uses_cross_plant_model(id)) { draw_cross_plant_block(id, (float)x, (float)y, (float)z); return; }
     for (int face = 0; face < 6; face++) {
@@ -4783,9 +4798,9 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
     glNewList(g_flat_world_chunk_lists[cz][cx], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
 
-    /* Solid opaque pass.  Fast graphics deliberately draws leaves and water here
-       with alpha ignored, matching the "solid/fast" visual path and removing the
-       transparent-water cost. */
+    /* Solid opaque pass.  On Android/Android TV, Fast only reuses Fancy's
+       separate liquid pass.  Leaves stay in the opaque Fast path so they remain
+       solid and avoid an alpha-tested leaf pass. */
     glDisable(GL_ALPHA_TEST);
     glBegin(GL_QUADS);
     for (int y = FLAT_WORLD_Y_MIN; y <= chunk_ymax; y++) {
@@ -4798,13 +4813,13 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
                     continue;
                 }
                 if (block_is_liquid(id)) {
-                    if (g_opts.fancy_graphics) { chunk_has_liquid = 1; continue; }
-                    /* Fast graphics: opaque full-cube water/lava. */
+                    if (flat_separate_liquid_pass_enabled()) { chunk_has_liquid = 1; continue; }
+                    /* Non-Android Fast: opaque full-cube water/lava. */
                 }
                 if (block_uses_special_model(id)) { chunk_has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { chunk_has_cutout = 1; continue; }
-                if (id == BLOCK_LEAVES && g_opts.fancy_graphics) { chunk_has_cutout = 1; continue; }
-                if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { chunk_has_cutout = 1; continue; }
+                if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
                     for (int face = 2; face <= 5; face++) {
                         if (grass_side_overlay_face_needed(x, y, z, face)) { chunk_has_cutout = 1; break; }
                     }
@@ -4843,12 +4858,12 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
                         emit_cross_plant_block(id, x, y, z);
                         continue;
                     }
-                    if (id == BLOCK_LEAVES && g_opts.fancy_graphics) {
+                    if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) emit_world_block_face(id, x, y, z, face);
                         }
                     }
-                    if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                    if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 2; face <= 5; face++) {
                             if (grass_side_overlay_face_needed(x, y, z, face)) emit_grass_side_overlay_face(x, y, z, face);
                         }
@@ -4864,7 +4879,7 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
 
     glNewList(g_flat_world_chunk_liquid_lists[cz][cx], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    if (chunk_has_liquid && g_opts.fancy_graphics) {
+    if (chunk_has_liquid && flat_separate_liquid_pass_enabled()) {
         glBegin(GL_QUADS);
         for (int y = FLAT_WORLD_Y_MIN; y <= chunk_ymax; y++) {
             for (int z = z0; z <= z1; z++) {
@@ -4881,7 +4896,7 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
 
     g_flat_world_chunk_dirty[cz][cx] = 0;
     g_flat_world_chunk_valid[cz][cx] = 1;
-    g_flat_world_chunk_has_liquid[cz][cx] = chunk_has_liquid && g_opts.fancy_graphics;
+    g_flat_world_chunk_has_liquid[cz][cx] = chunk_has_liquid && flat_separate_liquid_pass_enabled();
 }
 
 
@@ -5042,11 +5057,11 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
                 if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
-                if (block_is_liquid(id)) { if (g_opts.fancy_graphics) { has1 = 1; continue; } }
+                if (block_is_liquid(id)) { if (flat_separate_liquid_pass_enabled()) { has1 = 1; continue; } }
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
-                if (id == BLOCK_LEAVES && g_opts.fancy_graphics) { has_cutout = 1; continue; }
-                if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { has_cutout = 1; continue; }
+                if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
                     for (int face = 2; face <= 5; face++) {
                         if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
                     }
@@ -5074,12 +5089,12 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
                     if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); has0 = 1; continue; }
-                    if (id == BLOCK_LEAVES && g_opts.fancy_graphics) {
+                    if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
                         }
                     }
-                    if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                    if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 2; face <= 5; face++) {
                             if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }
@@ -5094,7 +5109,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
 
     flat_direct_begin(&mb1);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    if (has1 && g_opts.fancy_graphics) {
+    if (has1 && flat_separate_liquid_pass_enabled()) {
         for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
             int id = flat_get_block(x, y, z);
             if (block_is_liquid(id)) emit_liquid_block_faces(id, x, y, z);
@@ -5107,7 +5122,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
         if (g_flat_direct_capture_out0) *g_flat_direct_capture_out0 = mb0;
         if (g_flat_direct_capture_out1) *g_flat_direct_capture_out1 = mb1;
         if (g_flat_direct_capture_skip0) *g_flat_direct_capture_skip0 = !has0;
-        if (g_flat_direct_capture_skip1) *g_flat_direct_capture_skip1 = !(has1 && g_opts.fancy_graphics);
+        if (g_flat_direct_capture_skip1) *g_flat_direct_capture_skip1 = !(has1 && flat_separate_liquid_pass_enabled());
         g_flat_direct_capture_success = 1;
         g_flat_bake_stable_mesh_light = old_stable_mesh_light;
         return;
@@ -5122,7 +5137,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     g_flat_section_dirty[sy][cz][cx] = 0;
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
-    g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && g_opts.fancy_graphics);
+    g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && flat_separate_liquid_pass_enabled());
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
     g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
@@ -5165,12 +5180,12 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
                     continue;
                 }
                 if (block_is_liquid(id)) {
-                    if (g_opts.fancy_graphics) { has1 = 1; continue; }
+                    if (flat_separate_liquid_pass_enabled()) { has1 = 1; continue; }
                 }
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
-                if (id == BLOCK_LEAVES && g_opts.fancy_graphics) { has_cutout = 1; continue; }
-                if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { has_cutout = 1; continue; }
+                if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
                     for (int face = 2; face <= 5; face++) {
                         if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
                     }
@@ -5206,12 +5221,12 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
                     if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); has0 = 1; continue; }
-                    if (id == BLOCK_LEAVES && g_opts.fancy_graphics) {
+                    if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
                         }
                     }
-                    if (id == BLOCK_GRASS && g_opts.fancy_graphics) {
+                    if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 2; face <= 5; face++) {
                             if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }
@@ -5227,7 +5242,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
 
     glNewList(g_flat_section_lists[sy][cz][cx][1], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    if (has1 && g_opts.fancy_graphics) {
+    if (has1 && flat_separate_liquid_pass_enabled()) {
         glBegin(GL_QUADS);
         for (int y = y0; y <= y1; y++) {
             for (int z = z0; z <= z1; z++) {
@@ -5246,7 +5261,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
     g_flat_section_dirty[sy][cz][cx] = 0;
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
-    g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && g_opts.fancy_graphics);
+    g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && flat_separate_liquid_pass_enabled());
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
     g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
@@ -5950,13 +5965,13 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
         if (!dirty_or_invalid) {
             if (direct) {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) payload_missing = 1;
-                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) payload_missing = 1;
+                if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) payload_missing = 1;
             } else if (async_mesh) {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) payload_missing = 1;
-                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) payload_missing = 1;
+                if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) payload_missing = 1;
             } else {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && g_flat_section_lists[sy][cz][cx][0] == 0) payload_missing = 1;
-                if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && g_flat_section_lists[sy][cz][cx][1] == 0) payload_missing = 1;
+                if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && g_flat_section_lists[sy][cz][cx][1] == 0) payload_missing = 1;
             }
         }
 
@@ -6034,17 +6049,17 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                 needs = 1;
             } else if (direct) {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) needs = 1;
-                else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) needs = 1;
+                else if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) needs = 1;
             } else {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) needs = 1;
-                else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) needs = 1;
+                else if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) needs = 1;
             }
         } else if (direct) {
             if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
                 needs = 1;
             } else if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) {
                 needs = 1;
-            } else if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) {
+            } else if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) {
                 needs = 1;
             }
         } else {
@@ -6080,23 +6095,23 @@ static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx) {
     if (g_flat_world_chunk_generated[cz][cx] &&
         g_flat_section_mesh_light_version[sy][cz][cx] != g_flat_chunk_light_version[cz][cx]) return 1;
     if (g_flat_section_skip_pass[sy][cz][cx][0] &&
-        (!g_opts.fancy_graphics || g_flat_section_skip_pass[sy][cz][cx][1]) &&
+        (!flat_separate_liquid_pass_enabled() || g_flat_section_skip_pass[sy][cz][cx][1]) &&
         !g_flat_section_dirty[sy][cz][cx]) return 0;
     if (flat_async_section_mesh_enabled()) {
         if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) return 1;
         if (flat_direct_backend()) {
             if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) return 1;
-            if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
+            if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
         } else {
             if (!g_flat_section_skip_pass[sy][cz][cx][0] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 0)) return 1;
-            if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) return 1;
+            if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) return 1;
         }
         return 0;
     }
     if (flat_direct_backend()) {
         if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) return 1;
         if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) return 1;
-        if (g_opts.fancy_graphics && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
+        if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !g_flat_section_direct_mesh[sy][cz][cx][1]) return 1;
         return 0;
     }
     if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
@@ -6363,7 +6378,7 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
 
 static void draw_translucent_sections_direct(const FlatRenderSectionRef *refs, int count) {
     PexRendererBackend *rb = flat_direct_backend();
-    if (!rb || !g_opts.fancy_graphics) return;
+    if (!rb || !flat_separate_liquid_pass_enabled()) return;
     PexRenderState st;
     flat_direct_make_state(&st, 1);
     for (int i = count - 1; i >= 0; i--) {
@@ -6408,7 +6423,7 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
 }
 
 static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, int count) {
-    if (!g_opts.fancy_graphics) return;
+    if (!flat_separate_liquid_pass_enabled()) return;
     GLint old_shade_model = pex_gl_save_shade_model();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -6456,7 +6471,7 @@ static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count
 }
 
 static void draw_translucent_sections(const FlatRenderSectionRef *refs, int count) {
-    if (!g_opts.fancy_graphics) return;
+    if (!flat_separate_liquid_pass_enabled()) return;
     if (flat_direct_backend()) { draw_translucent_sections_direct(refs, count); return; }
     if (flat_async_section_mesh_enabled()) { draw_translucent_sections_gl_cpu(refs, count); return; }
     GLint old_shade_model = pex_gl_save_shade_model();
