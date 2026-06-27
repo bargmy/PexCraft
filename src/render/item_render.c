@@ -184,7 +184,6 @@ static int spawn_egg_color(int damage, int layer) {
         case 96: return layer == 0 ? 10489616 : 12040119;
         case 98: return layer == 0 ? 15720061 : 5653556;
         case 120: return layer == 0 ? 5651507 : 12422002;
-        case 121: return layer == 0 ? 0x2B2142 : 0xF0C8D8;
         default: return 0xFFFFFF;
     }
 }
@@ -1164,7 +1163,6 @@ static const char *spawn_egg_entity_name(int damage) {
         case 96: return tr_key_default("entity.MushroomCow.name", "Mooshroom");
         case 98: return tr_key_default("entity.Ozelot.name", "Ocelot");
         case 120: return tr_key_default("entity.Villager.name", "Villager");
-        case 121: return tr_key_default("entity.Conflict.name", "Conflict");
         default: return NULL;
     }
 }

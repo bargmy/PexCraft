@@ -611,8 +611,7 @@ typedef enum PassiveMobType {
     PASSIVE_MOB_PIG = 1,
     PASSIVE_MOB_SHEEP = 2,
     PASSIVE_MOB_COW = 3,
-    PASSIVE_MOB_CHICKEN = 4,
-    PASSIVE_MOB_CONFLICT = 5
+    PASSIVE_MOB_CHICKEN = 4
 } PassiveMobType;
 
 typedef struct PassiveMob {
