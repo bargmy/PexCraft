@@ -28,7 +28,7 @@ namespace activation = winrt::Windows::ApplicationModel::Activation;
 namespace coreapp = winrt::Windows::ApplicationModel::Core;
 namespace foundation = winrt::Windows::Foundation;
 namespace storage = winrt::Windows::Storage;
-namespace system = winrt::Windows::System;
+namespace win_system = winrt::Windows::System;
 namespace coreui = winrt::Windows::UI::Core;
 
 static std::wstring g_local_folder;
@@ -124,8 +124,8 @@ private:
         // Engine binding is intentionally small here; controller-friendly UI paths
         // consume mapped keys inside the shared PexCraft code once the full engine
         // is attached to the UWP shell.
-        if (args.VirtualKey() == system::VirtualKey::Escape ||
-            args.VirtualKey() == system::VirtualKey::GamepadB) {
+        if (args.VirtualKey() == win_system::VirtualKey::Escape ||
+            args.VirtualKey() == win_system::VirtualKey::GamepadB) {
             args.Handled(true);
         }
     }
