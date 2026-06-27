@@ -1,4 +1,4 @@
-name: Build all PexCraft targets, safe artifacts, and Telegram
+name: Build all PexCraft targets and upload to Telegram
 
 run-name: Build "${{ github.event.head_commit.message || github.ref_name }}"
 
@@ -183,14 +183,6 @@ jobs:
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
           "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Windows build as safe GitHub artifact
-        if: env.BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-windows-${{ matrix.arch }}
-          path: ${{ env.ZIP_PATH }}
-          retention-days: 1
-
       - name: Upload Windows build to Telegram
         if: env.BUILD_OK == '1' && github.event_name != 'pull_request'
         env:
@@ -335,14 +327,6 @@ jobs:
           Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
           "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Windows arm64 build as safe GitHub artifact
-        if: env.WIN_ARM64_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-windows-arm64
-          path: ${{ env.ZIP_PATH }}
-          retention-days: 1
-
       - name: Upload Windows arm64 build to Telegram
         if: env.WIN_ARM64_BUILD_OK == '1' && github.event_name != 'pull_request'
         env:
@@ -472,14 +456,6 @@ jobs:
           zip_path="dist/$artifact_prefix.zip"
           (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
-
-      - name: Upload Linux build as safe GitHub artifact
-        if: env.BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-linux-x64
-          path: ${{ env.ZIP_PATH }}
-          retention-days: 1
 
       - name: Upload Linux build to Telegram
         if: env.BUILD_OK == '1' && github.event_name != 'pull_request'
@@ -612,11 +588,11 @@ jobs:
           echo "Using LG webOS CMake toolchain: $toolchain_file"
           echo "LGWEBOS_TOOLCHAIN_FILE=$toolchain_file" >> "$GITHUB_ENV"
 
-      - name: Generate original LG webOS icon
+      - name: Extract LG webOS icon from client.jar
         shell: bash
         run: |
           set -euxo pipefail
-          python3 tools/extract_lgwebos_icon.py webos/generated/icon.png
+          python3 tools/extract_lgwebos_icon.py webos/generated/icon.png build/lgwebos_work/client.jar
           test -s webos/generated/icon.png
 
       - name: Build LG webOS native client
@@ -690,14 +666,6 @@ jobs:
           final="dist/pexcraft-lgwebos-${{ matrix.arch }}.ipk"
           mv -f "$ipk" "$final"
           echo "IPK_PATH=$final" >> "$GITHUB_ENV"
-
-      - name: Upload LG webOS build as safe GitHub artifact
-        if: env.LGWEBOS_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-lgwebos-${{ matrix.arch }}
-          path: ${{ env.IPK_PATH }}
-          retention-days: 1
 
       - name: Upload LG webOS build to Telegram
         if: env.LGWEBOS_BUILD_OK == '1' && github.event_name != 'pull_request'
@@ -870,14 +838,6 @@ jobs:
           cp -f "$apk" "$final"
           echo "APK_PATH=$final" >> "$GITHUB_ENV"
 
-      - name: Upload Android arm64 build as safe GitHub artifact
-        if: env.ANDROID_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-android-arm64
-          path: ${{ env.APK_PATH }}
-          retention-days: 1
-
       - name: Upload Android arm64 build to Telegram
         if: env.ANDROID_BUILD_OK == '1' && github.event_name != 'pull_request'
         env:
@@ -1049,14 +1009,6 @@ jobs:
           final="dist/pexcraft-android-tv.apk"
           cp -f "$apk" "$final"
           echo "APK_PATH=$final" >> "$GITHUB_ENV"
-
-      - name: Upload Android TV build as safe GitHub artifact
-        if: env.ANDROID_TV_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-android-tv
-          path: ${{ env.APK_PATH }}
-          retention-days: 1
 
       - name: Upload Android TV build to Telegram
         if: env.ANDROID_TV_BUILD_OK == '1' && github.event_name != 'pull_request'
@@ -1395,17 +1347,6 @@ jobs:
           if (!$pkg) { throw "missing Xbox UWP appx/msix package in dist" }
           "XBOX_UWP_PATH=$($pkg.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload Xbox One UWP build as safe GitHub artifact
-        if: env.XBOX_UWP_BUILD_OK == '1'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pexcraft-xbox-one-uwp-devmode
-          path: |
-            ${{ env.XBOX_UWP_PATH }}
-            dist/pexcraft-xbox-one-uwp-devmode-build-notes.txt
-            dist/pexcraft-xbox-one-uwp-devmode-testcert.cer
-          retention-days: 1
-
       - name: Upload Xbox One UWP build to Telegram
         if: env.XBOX_UWP_BUILD_OK == '1' && github.event_name != 'pull_request'
         env:
@@ -1499,7 +1440,7 @@ jobs:
               f"Commit: {os.environ.get('COMMIT_NAME', '')} - {os.environ.get('GITHUB_SHA', '')[:12]}\n"
               f"Failed: {', '.join(failed) if failed else 'None'}\n"
               f"Skipped: {', '.join(skipped) if skipped else 'None'}\n"
-              "GitHub artifacts are enabled only for builds that do not bundle Mojang-derived resources. Wii and PSP stay Telegram-only; all successful builds are still sent to Telegram."
+              "GitHub artifact upload is disabled; files were sent directly from each build job."
           )
           data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
           req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)

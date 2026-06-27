@@ -9,14 +9,10 @@ PexCraft is an experimental custom client written in C. It is trying to work lik
 
 ## Current platform state
 
-- Windows = playable.
-- Linux SDL2 = playable.
-- Android = playable.
-- Android TV = broken everything.
-- LG webOS = worked last time.
-- PSP = barely playable.
-- Wii = does not load world.
-- Xbox One (UWP) = does not work.
+- PSP State = barely playable.
+- Windows State = playable.
+- Linux SDL2 State = playable.
+- Android TV State = build target added; uses SDL2/OpenGL ES and TV remote/gamepad input.
 
 ## Renderer states
 
@@ -25,3 +21,6 @@ PexCraft is an experimental custom client written in C. It is trying to work lik
 - OpenGL = working.
 - SDL2-OpenGL = working.
 
+## Android TV
+
+See `android_tv/README.md` for the APK build, signing, TV remote mapping, and Google TV channel integration.
