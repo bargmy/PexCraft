@@ -35,6 +35,7 @@ static int g_android_world_cur_y = 0;
 static double g_android_world_down_time = 0.0;
 static int g_android_world_moved = 0;
 static int g_android_world_breaking = 0;
+static double g_android_world_next_attack_time = 0.0;
 
 static int g_android_touch_seen = 0;
 static int g_android_jump_down = 0;
@@ -259,8 +260,26 @@ static void pex_android_touch_stop_break(void) {
     pex_android_touch_clear_pick_ray();
 }
 
+static int pex_android_touch_try_attack_center(void) {
+    double now = now_seconds();
+    if (now < g_android_world_next_attack_time) return 0;
+    int cx, cy;
+    pex_android_touch_center(&cx, &cy);
+    g_mouse_x = cx;
+    g_mouse_y = cy;
+    pex_android_touch_clear_pick_ray();
+    set_mouse_grabbed(1);
+    if (pex_net_try_attack_player() || passive_mobs_attack_from_player()) {
+        g_android_world_next_attack_time = now + 0.35;
+        return 1;
+    }
+    return 0;
+}
+
 static void pex_android_touch_begin_break(void) {
     if (g_android_world_breaking) return;
+    if (now_seconds() < g_android_world_next_attack_time) return;
+    if (pex_android_touch_try_attack_center()) return;
     int cx, cy;
     pex_android_touch_center(&cx, &cy);
     g_android_world_breaking = 1;
@@ -436,10 +455,12 @@ static void pex_android_touch_ingame_up(SDL_FingerID id, int x, int y) {
         if (!was_breaking && !g_android_world_moved && held < 0.55) {
             int cx, cy;
             pex_android_touch_center(&cx, &cy);
-            pex_android_touch_clear_pick_ray();
-            g_mouse_x = cx;
-            g_mouse_y = cy;
-            mouse_right_down(cx, cy);
+            if (!pex_android_touch_try_attack_center()) {
+                pex_android_touch_clear_pick_ray();
+                g_mouse_x = cx;
+                g_mouse_y = cy;
+                mouse_right_down(cx, cy);
+            }
         }
         g_android_world_finger = PEX_ANDROID_TOUCH_NONE;
         g_android_world_moved = 0;

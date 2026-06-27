@@ -1376,19 +1376,29 @@ static int flat_async_section_mesh_enabled(void) {
 #endif
 }
 
-/* Android/GLES2 Fast graphics must still keep liquids out of the huge opaque
-   terrain mesh.  That reuses Fancy's stable two-pass liquid split and avoids
-   the slow CPU DrawElements fallback, while leaves/grass remain true Fast-mode
-   visuals: solid leaves, no fancy grass overlay, and no alpha-tested leaf pass. */
-static int flat_separate_liquid_pass_enabled(void) {
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+/* Fast graphics no longer has its own terrain renderer.  Both Fast and Fancy
+   now use the same stable Java/Fancy terrain pipeline: separate liquid pass,
+   cutout pass, and the same face-visibility rules.  Fast only disables visual
+   extras through g_opts.fancy_graphics (smooth lighting, fancy clouds, shadows,
+   transparent leaf textures, grass-side overlay), not through a different mesh
+   topology. */
+static int flat_fancy_terrain_pipeline_enabled(void) {
     return 1;
-#else
-    return g_opts.fancy_graphics;
-#endif
+}
+
+static int flat_separate_liquid_pass_enabled(void) {
+    return flat_fancy_terrain_pipeline_enabled();
 }
 
 static int flat_fancy_cutout_terrain_enabled(void) {
+    return flat_fancy_terrain_pipeline_enabled();
+}
+
+static int flat_fancy_leaf_texture_enabled(void) {
+    return g_opts.fancy_graphics;
+}
+
+static int flat_fancy_grass_overlay_enabled(void) {
     return g_opts.fancy_graphics;
 }
 
@@ -1782,7 +1792,7 @@ static int dig_particle_tile_for_block_face(int id, int face) {
     if (id == BLOCK_SAND) return 18;
     if (id == BLOCK_GRAVEL) return 19;
     if (id == BLOCK_LOG) return (face == 0 || face == 1) ? 21 : 20;
-    if (id == BLOCK_LEAVES) return flat_fancy_cutout_terrain_enabled() ? 52 : 53;
+    if (id == BLOCK_LEAVES) return flat_fancy_leaf_texture_enabled() ? 52 : 53;
     if (id == BLOCK_GLASS) return 49;
     if (id == BLOCK_GOLD_ORE) return 32;
     if (id == BLOCK_IRON_ORE) return 33;
@@ -3397,7 +3407,7 @@ static int block_texture_resolve(int block_id, int meta, int face) {
                 default: return 20;
             }
         case BLOCK_LEAVES: {
-            int base = flat_fancy_cutout_terrain_enabled() ? 52 : 53;
+            int base = flat_fancy_leaf_texture_enabled() ? 52 : 53;
             int type = meta & 3;
             if (type == BLOCK_META_WOOD_SPRUCE) return base + 80;
             if (type == BLOCK_META_WOOD_JUNGLE) return base + 144;
@@ -3612,7 +3622,7 @@ static void world_face_style(int id, int face, int *tile) {
     if (id == BLOCK_LEAVES) {
         /* BlockLeaves.setGraphicsLevel(): Fancy/minimal-Fancy terrain uses base
            texture 52; the legacy opaque Fast path uses texture 53. */
-        *tile = flat_fancy_cutout_terrain_enabled() ? 52 : 53;
+        *tile = flat_fancy_leaf_texture_enabled() ? 52 : 53;
         world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
         return;
     }
@@ -3742,7 +3752,7 @@ static void draw_snow_layer_block(float x, float y, float z) {
 }
 
 static int grass_side_overlay_face_needed(int x, int y, int z, int face) {
-    if (!flat_fancy_cutout_terrain_enabled()) return 0;
+    if (!flat_fancy_grass_overlay_enabled()) return 0;
     if (face < 2 || face > 5) return 0;
     int above = flat_get_block(x, y + 1, z);
     if (above == BLOCK_SNOW_LAYER || above == BLOCK_SNOW_BLOCK) return 0;
@@ -4867,9 +4877,9 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
     glNewList(g_flat_world_chunk_lists[cz][cx], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
 
-    /* Solid opaque pass.  On Android/Android TV, Fast only reuses Fancy's
-       separate liquid pass.  Leaves stay in the opaque Fast path so they remain
-       solid and avoid an alpha-tested leaf pass. */
+    /* Solid opaque pass.  Fast and Fancy now share the same terrain topology.
+       Fast visuals still use opaque leaf textures/no grass overlay, but liquids
+       and cutouts are no longer merged into the legacy Fast solid mesh. */
     glDisable(GL_ALPHA_TEST);
     glBegin(GL_QUADS);
     for (int y = FLAT_WORLD_Y_MIN; y <= chunk_ymax; y++) {
@@ -4888,7 +4898,7 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
                 if (block_uses_special_model(id)) { chunk_has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { chunk_has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { chunk_has_cutout = 1; continue; }
-                if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
+                if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                     for (int face = 2; face <= 5; face++) {
                         if (grass_side_overlay_face_needed(x, y, z, face)) { chunk_has_cutout = 1; break; }
                     }
@@ -4932,7 +4942,7 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) emit_world_block_face(id, x, y, z, face);
                         }
                     }
-                    if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
+                    if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                         for (int face = 2; face <= 5; face++) {
                             if (grass_side_overlay_face_needed(x, y, z, face)) emit_grass_side_overlay_face(x, y, z, face);
                         }
@@ -5130,7 +5140,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { has_cutout = 1; continue; }
-                if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
+                if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                     for (int face = 2; face <= 5; face++) {
                         if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
                     }
@@ -5163,7 +5173,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
                         }
                     }
-                    if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
+                    if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                         for (int face = 2; face <= 5; face++) {
                             if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }
@@ -5254,7 +5264,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { has_cutout = 1; continue; }
-                if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
+                if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                     for (int face = 2; face <= 5; face++) {
                         if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
                     }
@@ -5295,7 +5305,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
                         }
                     }
-                    if (id == BLOCK_GRASS && flat_fancy_cutout_terrain_enabled()) {
+                    if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                         for (int face = 2; face <= 5; face++) {
                             if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }

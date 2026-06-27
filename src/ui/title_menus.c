@@ -364,8 +364,8 @@ static void draw_release_panorama_cube_android_direct(float partial) {
     /* Android GLES2 had trouble with the Java-style 256x256 feedback texture:
        the copy/blur path could remain visible as a small corner square and
        flicker.  Draw the panorama cube directly to the real framebuffer on
-       Android instead.  It loses the heavy blur feedback, but it fills the
-       screen correctly and is much cheaper/stable on mobile. */
+       Android instead.  Blur is done by direct multi-sampling, not by copying
+       a 256x256 viewport texture, so it fills the screen without corner flicker. */
     double aspect = (g_render_h > 0) ? (double)g_render_w / (double)g_render_h : 16.0 / 9.0;
     float timer = (float)g_release_panorama_timer + partial;
 
@@ -381,36 +381,52 @@ static void draw_release_panorama_cube_android_direct(float partial) {
     glPushMatrix();
     glLoadIdentity();
     glColor4f(1,1,1,1);
-    glRotatef(180.0f, 1.0f, 0.0f, 0.0f);
-    glRotatef(sinf(timer / 400.0f) * 25.0f + 20.0f, 1.0f, 0.0f, 0.0f);
-    glRotatef(-timer * 0.1f, 0.0f, 1.0f, 0.0f);
     glDisable(GL_ALPHA_TEST);
     glDisable(GL_CULL_FACE);
     glDepthMask(GL_FALSE);
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
-    glDisable(GL_BLEND);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    for (int face = 0; face < 6; ++face) {
-        if (!tex_panorama[face].id) continue;
+    /* Keep Android on the full-screen direct path, but restore the title-menu
+       blur look.  The old feedback-copy blur was the source of the 256x256
+       corner flicker; this uses the same sub-pixel multi-sample idea directly
+       in the real framebuffer instead of copying a tiny viewport texture. */
+    const int samples = 4;
+    for (int pass = 0; pass < samples * samples; ++pass) {
         glPushMatrix();
-        if (face == 1) glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
-        if (face == 2) glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
-        if (face == 3) glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
-        if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
-        if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
-        glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        glBegin(GL_QUADS);
-        glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
-        glTexCoord2f(1.0f, 0.0f); glVertex3f( 1.0f, -1.0f, 1.0f);
-        glTexCoord2f(1.0f, 1.0f); glVertex3f( 1.0f,  1.0f, 1.0f);
-        glTexCoord2f(0.0f, 1.0f); glVertex3f(-1.0f,  1.0f, 1.0f);
-        glEnd();
+        float ox = (((float)(pass % samples) / (float)samples) - 0.5f) / 64.0f;
+        float oy = (((float)(pass / samples) / (float)samples) - 0.5f) / 64.0f;
+        glTranslatef(ox, oy, 0.0f);
+        glRotatef(180.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(sinf(timer / 400.0f) * 25.0f + 20.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(-timer * 0.1f, 0.0f, 1.0f, 0.0f);
+
+        for (int face = 0; face < 6; ++face) {
+            if (!tex_panorama[face].id) continue;
+            glPushMatrix();
+            if (face == 1) glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
+            if (face == 2) glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
+            if (face == 3) glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
+            if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+            if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
+            glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glColor4f(1.0f, 1.0f, 1.0f, 1.0f / (float)(pass + 1));
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
+            glTexCoord2f(1.0f, 0.0f); glVertex3f( 1.0f, -1.0f, 1.0f);
+            glTexCoord2f(1.0f, 1.0f); glVertex3f( 1.0f,  1.0f, 1.0f);
+            glTexCoord2f(0.0f, 1.0f); glVertex3f(-1.0f,  1.0f, 1.0f);
+            glEnd();
+            glPopMatrix();
+        }
         glPopMatrix();
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();

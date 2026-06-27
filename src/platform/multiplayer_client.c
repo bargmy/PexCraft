@@ -3349,7 +3349,7 @@ static int pex_net_player_ray_distance(float max_dist, float *out_t) {
     if (!g_mp_connected || !g_mp_world_ready || g_player_dead) return 0;
 
     float lx, ly, lz;
-    player_look_vector(&lx, &ly, &lz);
+    pex_touch_aware_look_vector(&lx, &ly, &lz);
     int found = 0;
     float best_t = max_dist;
     if (best_t <= 0.0f) best_t = 5.0f;
@@ -3412,7 +3412,7 @@ static int pex_net_try_attack_player(void) {
     if (!pex_net_player_ray_distance(block_dist, &player_t)) return 0;
 
     float lx, ly, lz;
-    player_look_vector(&lx, &ly, &lz);
+    pex_touch_aware_look_vector(&lx, &ly, &lz);
     int best_id = 0;
     float best_t = block_dist;
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
