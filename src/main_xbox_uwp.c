@@ -14,6 +14,7 @@ static void pex_renderer_present(void);
 static void pex_renderer_resize(int w, int h);
 static void pex_renderer_shutdown(void);
 static void pex_gl_suppress_immediate(int on);
+static void pex_join_save_thread_for_exit(void);
 static void save_world_state_for_exit(void);
 
 #include "render/renderer_backend.h"
@@ -121,4 +122,40 @@ static void steve_set_tint(float r, float g, float b);
 static int loggy_init(void) { g_loggy_enabled = 0; return 0; }
 static void loggy_draw(void) { }
 static void loggy_shutdown(void) { }
+
+/* UWP uses the same real save/drain path as the desktop and TV targets.
+   This is engine shutdown glue only; it does not stub gameplay or resources. */
+static void pex_join_save_thread_for_exit(void) {
+    if (g_save_thread != NULL) {
+        EnterCriticalSection(&g_save_cs);
+        g_save_thread_shutdown = 1;
+        LeaveCriticalSection(&g_save_cs);
+        if (g_save_event) SetEvent(g_save_event);
+        WaitForSingleObject(g_save_thread, INFINITE);
+        CloseHandle(g_save_thread);
+        g_save_thread = NULL;
+        g_save_thread_done = 1;
+    }
+    if (g_save_event != NULL) {
+        CloseHandle(g_save_event);
+        g_save_event = NULL;
+    }
+    while (g_save_queue_head) {
+        PexSaveSnapshot *ss = g_save_queue_head;
+        g_save_queue_head = ss->next;
+        pex_save_snapshot_free(ss);
+    }
+    g_save_queue_tail = NULL;
+    g_save_thread_shutdown = 0;
+}
+
+static void save_world_state_for_exit(void) {
+    pex_join_save_thread_for_exit();
+    if (g_mp_connected) {
+        pex_net_disconnect();
+        return;
+    }
+    save_world_state_sync();
+}
+
 #include "platform/xbox_uwp/xbox_uwp_app.c"
