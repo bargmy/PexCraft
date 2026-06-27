@@ -527,11 +527,11 @@ static int choose_and_import_skin(void) {
 #ifdef PEX_PLATFORM_PSP
     open_notice("Skins", "Skin import is not available on PSP.", "Copy converted assets before building the EBOOT.");
     return 0;
-#elif defined(PEX_PLATFORM_SDL2)
+#elif defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_XBOX_UWP)
     char path[MAX_PATHBUF];
     snprintf(path, sizeof(path), "%s/custom.png", g_skin_dir);
     if (load_custom_skin_path(path, 1)) return 1;
-    open_notice("Skins", "Linux/SDL2 has no native file dialog here.", "Copy your PNG to ~/.pexcraft/skins/custom.png first.");
+    open_notice("Skins", "Skin import is not available here.", "Copy your PNG to the PexCraft skins folder as custom.png first.");
     return 0;
 #else
     char chosen[MAX_PATHBUF] = "";

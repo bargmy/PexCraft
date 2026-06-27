@@ -258,10 +258,15 @@ static HRESULT compat_d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
                 desc.BufferCount = 1;
             }
 
+#if defined(PEX_PLATFORM_XBOX_UWP)
+            hr = E_FAIL;
+            (void)levels; (void)level_count; (void)got_level;
+#else
             hr = D3D11CreateDeviceAndSwapChain(NULL, drivers[d], NULL, 0,
                                                levels, level_count, D3D11_SDK_VERSION,
                                                &desc, &g_d3d11.swap, &g_d3d11.dev,
                                                got_level, &g_d3d11.ctx);
+#endif
             if (SUCCEEDED(hr)) {
                 g_d3d11.allow_tearing = (attempt == 0);
                 g_d3d11.swap_flags = desc.Flags;

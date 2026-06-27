@@ -45,6 +45,9 @@ static void pex_sound_add_file(const char *root, const char *rel) {
 }
 
 #if defined(PEX_PLATFORM_XBOX_UWP)
+static void pex_sound_scan_dir_recursive(const char *root, const char *rel_dir) {
+    (void)root; (void)rel_dir;
+}
 static int pex_sound_backend_play_file(const char *path, float volume, float pitch) {
     (void)path; (void)volume; (void)pitch;
     return 0;
@@ -355,7 +358,7 @@ static void pex_sound_shutdown(void) {
     g_mix_lib = NULL;
     g_mix_ready = 0;
 }
-#elif defined(_WIN32)
+#elif defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)
 /* Windows uses libvorbisfile directly.  Do not use MCI or Media Foundation for
    .ogg: they are codec-dependent on many Windows installs and silently fail.
    The CI workflow installs mingw-w64 libogg/libvorbis and packages/link them. */
