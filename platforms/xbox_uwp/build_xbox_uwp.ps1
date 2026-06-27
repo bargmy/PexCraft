@@ -23,6 +23,20 @@ if (!$msbuild -or !(Test-Path $msbuild)) { throw "MSBuild not found" }
 
 # C++/WinRT shell does not use /ZW, so no platform.winmd /AI path hack is needed.
 
+# The real engine uses zlib for save files, texturepack zip extraction, and MCPE batch/login payloads.
+# Use the hosted runner vcpkg when available; the project consumes x64-uwp headers/libs via MSBuild.
+$vcpkg = $env:VCPKG_ROOT
+if (!$vcpkg -and (Test-Path "C:\vcpkg\vcpkg.exe")) { $vcpkg = "C:\vcpkg" }
+if ($vcpkg -and (Test-Path (Join-Path $vcpkg "vcpkg.exe"))) {
+    Write-Host "Installing UWP zlib through vcpkg: $vcpkg"
+    & (Join-Path $vcpkg "vcpkg.exe") install zlib:x64-uwp
+    if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:x64-uwp failed with $LASTEXITCODE" }
+    $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\\"
+} else {
+    Write-Warning "vcpkg not found; build will rely on system zlib headers/libs if present."
+}
+
+
 Write-Host "Using MSBuild: $msbuild"
 & $msbuild $project `
     /m `
@@ -32,7 +46,9 @@ Write-Host "Using MSBuild: $msbuild"
     /p:AppxBundle=Never `
     /p:GenerateAppxPackageOnBuild=true `
     /p:AppxPackageSigningEnabled=false `
-    /p:WindowsTargetPlatformMinVersion=10.0.14393.0
+    /p:WindowsTargetPlatformMinVersion=10.0.14393.0 `
+    /p:VcpkgTriplet=x64-uwp `
+    /p:VcpkgEnabled=true
 
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
 

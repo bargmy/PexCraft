@@ -1334,6 +1334,17 @@ static void compat_queue_or_draw_batch(const PexD3DBatch *b) {
 
 
 static int pex_renderer_backend_init(HWND hwnd) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    g_runtime_renderer_backend = RENDERER_D3D11;
+    g_selected_renderer_backend = RENDERER_D3D11;
+    if (!pex_renderer_d3d11_xbox_init_corewindow((void*)hwnd, g_win_w, g_win_h)) return 0;
+    renderer_d3d11_attach_device((void*)g_d3d11.dev, (void*)g_d3d11.ctx, g_d3d11.width, g_d3d11.height);
+    scan_texture_packs();
+    if (!load_default_textures()) return 0;
+    if (g_selected_texpack > 0) apply_texture_pack_index(g_selected_texpack);
+    else { if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0); init_font_widths(); }
+    return 1;
+#else
     if (g_runtime_renderer_backend == RENDERER_D3D9) {
         if (!pex_renderer_d3d9_init(hwnd)) return 0;
         renderer_d3d9_attach_device((void*)g_d3d9.dev, g_d3d9.width, g_d3d9.height);
@@ -1353,6 +1364,7 @@ static int pex_renderer_backend_init(HWND hwnd) {
         return 1;
     }
     return init_gl(hwnd);
+#endif
 }
 
 static int pex_renderer_begin_frame(void) {

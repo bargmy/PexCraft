@@ -318,6 +318,13 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
     g_psp_buttons_prev_raw = b;
 }
 
+#elif defined(PEX_PLATFORM_XBOX_UWP)
+static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
+    (void)oldpads;
+    g_gamepad_count = 0;
+    g_gamepad_primary = -1;
+    memset(g_gamepads, 0, sizeof(g_gamepads));
+}
 #else
 /* Minimal dynamic XInput declarations: avoids an xinput import dependency. */
 typedef struct PexXInputGamepad {

@@ -92,7 +92,7 @@
 #define CLASSIC_PACK_URL "https://piston-data.mojang.com/v1/objects/4a2fac7504182a97dcbcd7560c6392d7c8139928/client.jar"
 #define CLASSIC_SOUNDS_INDEX_URL "https://launchermeta.mojang.com/v1/packages/770572e819335b6c0a053f8378ad88eda189fc14/legacy.json"
 #define CLASSIC_SOUND_OBJECT_URL_PREFIX "https://resources.download.minecraft.net"
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
 #define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 0
 #else
 #define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 1

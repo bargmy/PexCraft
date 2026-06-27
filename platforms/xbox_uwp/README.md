@@ -1,14 +1,25 @@
 # PexCraft Xbox One UWP Dev Mode
 
-This target is for Xbox One Developer Mode UWP testing.
+This target is no longer a fake clear-screen shell.  The UWP CoreWindow shell in
+`platforms/xbox_uwp/Source/App.cpp` now calls the real C engine in
+`src/main_xbox_uwp.c`.
 
-The CI job now invokes MSBuild and requires a real `.appx`/`.msix` package. It no longer uploads a zipped source layout as a fake build.
+Important pieces:
 
-Compatibility target:
+- `src/render/renderer_d3d11_xbox.c`
+  - creates a UWP `CreateSwapChainForCoreWindow` Direct3D 11 swapchain
+  - attaches it to PexCraft's existing D3D11 compatibility renderer
+- `src/main_xbox_uwp.c`
+  - includes the real PexCraft engine unity build
+  - uses UWP LocalFolder storage
+  - drives the real tick/render loop from CoreWindow
+- `src/platform/xbox_uwp/xbox_uwp_input.c`
+  - controller/key state bridge
+  - no desktop mouse grab APIs
+- `build_xbox_uwp.ps1`
+  - builds with MSBuild
+  - packages a real `.appx`
+  - installs `zlib:x64-uwp` through vcpkg when available
 
-- Target family: Windows.Universal
-- MinVersion: 10.0.14393.0
-- Architecture: x64
-- Storage: `ApplicationData.Current.LocalFolder\\PexCraft`
-
-The native shell owns CoreWindow and a D3D11 swapchain. It uses C++/WinRT instead of C++/CX, so the CI build avoids /ZW, platform.winmd, and the MSVC vccorlib internal compiler error. The engine-side virtual keyboard remains the text-input path for Xbox builds because Xbox One UWP Dev Mode should not rely on a desktop IME.
+The artifact should show the actual PexCraft title/resource-download UI, not a
+blank D3D clear screen.

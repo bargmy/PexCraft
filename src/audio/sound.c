@@ -44,7 +44,14 @@ static void pex_sound_add_file(const char *root, const char *rel) {
 #endif
 }
 
-#if defined(PEX_PLATFORM_SDL2)
+#if defined(PEX_PLATFORM_XBOX_UWP)
+static int pex_sound_backend_play_file(const char *path, float volume, float pitch) {
+    (void)path; (void)volume; (void)pitch;
+    return 0;
+}
+static void sound_backend_stop_menu_music(void) { }
+static void pex_sound_shutdown(void) { }
+#elif defined(PEX_PLATFORM_SDL2)
 static void pex_sound_scan_dir_recursive(const char *root, const char *rel_dir) {
     char dir[MAX_PATHBUF];
     if (rel_dir && rel_dir[0]) path_join(dir, sizeof(dir), root, rel_dir);

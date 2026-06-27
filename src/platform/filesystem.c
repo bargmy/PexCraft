@@ -129,7 +129,7 @@ extern const char *pex_xbox_uwp_get_local_folder(void);
 static void init_dirs(void) {
 #if defined(PEX_PLATFORM_XBOX_UWP)
     const char *local = pex_xbox_uwp_get_local_folder();
-    if (local && local[0]) snprintf(g_mc_dir, sizeof(g_mc_dir), "%s\\PexCraft", local);
+    if (local && local[0]) snprintf(g_mc_dir, sizeof(g_mc_dir), "%s", local);
     else snprintf(g_mc_dir, sizeof(g_mc_dir), ".\\PexCraft");
 #else
     const char *appdata = getenv("APPDATA");
