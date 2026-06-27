@@ -357,8 +357,24 @@ static __inline int gluProject(GLdouble objx, GLdouble objy, GLdouble objz, cons
 #ifndef MAPVK_VK_TO_VSC
 #define MAPVK_VK_TO_VSC 0
 #endif
-static __inline UINT MapVirtualKeyA(UINT code, UINT maptype) { (void)maptype; return code; }
-static __inline int GetKeyNameTextA(LONG lparam, char *buf, int cap) { (void)lparam; if (buf && cap > 0) buf[0] = 0; return 0; }
+/* UWP must not link the desktop user32 keyboard helpers.  windows.h may
+   declare MapVirtualKeyA/GetKeyNameTextA as dllimport before we get here, so
+   do not try to redefine those symbols directly.  Redirect shared-engine calls
+   to local UWP-safe helpers instead. */
+static __inline UINT pex_uwp_MapVirtualKeyA(UINT code, UINT maptype) { (void)maptype; return code; }
+static __inline int pex_uwp_GetKeyNameTextA(LONG lparam, char *buf, int cap) {
+    (void)lparam;
+    if (buf && cap > 0) {
+        buf[0] = 0;
+    }
+    return 0;
+}
+#ifndef PEX_UWP_KEEP_USER32_KEYBOARD_APIS
+#undef MapVirtualKeyA
+#undef GetKeyNameTextA
+#define MapVirtualKeyA pex_uwp_MapVirtualKeyA
+#define GetKeyNameTextA pex_uwp_GetKeyNameTextA
+#endif
 static __inline char *lstrcpynA(char *dst, const char *src, int cap) { if (!dst || cap <= 0) return dst; snprintf(dst, (size_t)cap, "%s", src ? src : ""); return dst; }
 static __inline BOOL CopyFileA(const char *src, const char *dst, BOOL fail_if_exists) { (void)fail_if_exists; FILE *in=fopen(src,"rb"); if(!in) return FALSE; FILE *out=fopen(dst,"wb"); if(!out){fclose(in);return FALSE;} char buf[8192]; size_t n; while((n=fread(buf,1,sizeof(buf),in))>0) fwrite(buf,1,n,out); fclose(in); fclose(out); return TRUE; }
 static __inline BOOL MoveFileA(const char *src, const char *dst) { return rename(src, dst) == 0; }
