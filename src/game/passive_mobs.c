@@ -1,5 +1,6 @@
 /* Beta 1.0 passive mobs: pig, sheep, cow, chicken. Included in the unity build
    after inventory.c so it can reuse the existing world/item/collision helpers. */
+#include "../render/conflict_model_data.h"
 
 #define PASSIVE_MOB_SAVE_VERSION 18
 
@@ -96,16 +97,20 @@ static const char *passive_mob_name(int type) {
         case PASSIVE_MOB_SHEEP: return "Sheep";
         case PASSIVE_MOB_COW: return "Cow";
         case PASSIVE_MOB_CHICKEN: return "Chicken";
+        case PASSIVE_MOB_CONFLICT: return "Conflict";
         default: return "Mob";
     }
 }
 
 static float passive_mob_width_for_type(int type) {
-    return type == PASSIVE_MOB_CHICKEN ? 0.3f : 0.9f;
+    if (type == PASSIVE_MOB_CHICKEN) return 0.3f;
+    if (type == PASSIVE_MOB_CONFLICT) return 0.9f;
+    return 0.9f;
 }
 static float passive_mob_height_for_type(int type) {
     if (type == PASSIVE_MOB_CHICKEN) return 0.4f;
     if (type == PASSIVE_MOB_PIG) return 0.9f;
+    if (type == PASSIVE_MOB_CONFLICT) return 1.8f;
     return 1.3f;
 }
 
@@ -120,7 +125,7 @@ static int passive_sheep_random_fleece_color(void) {
 }
 
 static int passive_mob_type_valid(int type) {
-    return type >= PASSIVE_MOB_PIG && type <= PASSIVE_MOB_CHICKEN;
+    return type >= PASSIVE_MOB_PIG && type <= PASSIVE_MOB_CONFLICT;
 }
 
 static int passive_mob_health_for_type(int type) {
@@ -129,11 +134,14 @@ static int passive_mob_health_for_type(int type) {
         case PASSIVE_MOB_COW: return 10;
         case PASSIVE_MOB_SHEEP: return 8;
         case PASSIVE_MOB_CHICKEN: return 4;
+        case PASSIVE_MOB_CONFLICT: return 2147483647;
         default: return 1;
     }
 }
 static float passive_mob_sound_volume(int type) {
-    return type == PASSIVE_MOB_COW ? 0.4f : 1.0f;
+    if (type == PASSIVE_MOB_COW) return 0.4f;
+    if (type == PASSIVE_MOB_CONFLICT) return 0.6f;
+    return 1.0f;
 }
 static const char *passive_mob_living_sound(int type) {
     switch (type) {
@@ -141,6 +149,7 @@ static const char *passive_mob_living_sound(int type) {
         case PASSIVE_MOB_SHEEP: return "mob.sheep";
         case PASSIVE_MOB_COW: return "mob.cow";
         case PASSIVE_MOB_CHICKEN: return "mob.chicken";
+        case PASSIVE_MOB_CONFLICT: return NULL;
         default: return NULL;
     }
 }
@@ -150,6 +159,7 @@ static const char *passive_mob_hurt_sound(int type) {
         case PASSIVE_MOB_SHEEP: return "mob.sheep";
         case PASSIVE_MOB_COW: return "mob.cowhurt";
         case PASSIVE_MOB_CHICKEN: return "mob.chickenhurt";
+        case PASSIVE_MOB_CONFLICT: return NULL;
         default: return NULL;
     }
 }
@@ -159,6 +169,7 @@ static const char *passive_mob_death_sound(int type) {
         case PASSIVE_MOB_SHEEP: return "mob.sheep";
         case PASSIVE_MOB_COW: return "mob.cowhurt";
         case PASSIVE_MOB_CHICKEN: return "mob.chickenhurt";
+        case PASSIVE_MOB_CONFLICT: return NULL;
         default: return NULL;
     }
 }
@@ -530,6 +541,7 @@ static int passive_mobs_spawn_from_egg_damage(int egg_damage, float x, float y, 
         case 91: type = PASSIVE_MOB_SHEEP; break;
         case 92: type = PASSIVE_MOB_COW; break;
         case 93: type = PASSIVE_MOB_CHICKEN; break;
+        case 121: type = PASSIVE_MOB_CONFLICT; break;
         default: return 0; /* hostile/water/NPC mobs are still missing entity classes. */
     }
     if (!passive_mob_type_valid(type)) return 0;
@@ -574,6 +586,7 @@ static void passive_mob_apply_player_knockback(PassiveMob *m) {
 
 static void passive_mob_start_death(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
+    if (m->type == PASSIVE_MOB_CONFLICT) { m->health = passive_mob_health_for_type(m->type); return; }
     const char *s = passive_mob_death_sound(m->type);
     if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
                              (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
@@ -593,6 +606,14 @@ static void passive_mob_take_damage(PassiveMob *m, int damage) {
     if (!m || !m->active || m->death_time > 0) return;
     if (damage <= 0) return;
     if (m->damage_cooldown > 0) return;
+    if (m->type == PASSIVE_MOB_CONFLICT) {
+        m->damage_cooldown = 10;
+        m->hurt_time = 10;
+        passive_mob_apply_player_knockback(m);
+        restart_hand_swing();
+        g_save_dirty = 1;
+        return;
+    }
     if (damage < 1) damage = 1;
 
     m->damage_cooldown = 10;
@@ -723,6 +744,12 @@ static void passive_mob_request_jump(PassiveMob *m, const char *why) {
 
 static void passive_mob_tick_potions(PassiveMob *m) {
     if (!m || !m->active || m->death_time > 0) return;
+    if (m->type == PASSIVE_MOB_CONFLICT) {
+        m->health = passive_mob_health_for_type(m->type);
+        memset(m->potion_duration, 0, sizeof(m->potion_duration));
+        memset(m->potion_amplifier, 0, sizeof(m->potion_amplifier));
+        return;
+    }
     for (int i = 1; i < 32; ++i) {
         if (m->potion_duration[i] <= 0) continue;
         int amp = m->potion_amplifier[i];
@@ -1435,6 +1462,26 @@ static void passive_sheep_fleece_color(int meta, float *r, float *g, float *b) {
     *r = table[meta][0]; *g = table[meta][1]; *b = table[meta][2];
 }
 
+
+static void passive_render_conflict_model(float br, int hurt) {
+    if (br < 0.22f) br = 0.22f;
+    if (br > 1.0f) br = 1.0f;
+    glDisable(GL_TEXTURE_2D);
+    glBegin(GL_TRIANGLES);
+    for (int vi = 0; vi < PEX_CONFLICT_MODEL_VERTEX_COUNT; ++vi) {
+        const PexConflictModelVertex *cv = &g_pex_conflict_model_vertices[vi];
+        float rr = ((float)cv->r / 255.0f) * br;
+        float gg = ((float)cv->g / 255.0f) * br;
+        float bb = ((float)cv->b / 255.0f) * br;
+        if (hurt) { rr = 1.0f; gg *= 0.35f; bb *= 0.35f; }
+        glColor4f(rr, gg, bb, 1.0f);
+        glVertex3f(cv->x, cv->y, cv->z);
+    }
+    glEnd();
+    glEnable(GL_TEXTURE_2D);
+    glColor4f(1, 1, 1, 1);
+}
+
 static void draw_passive_mobs(float partial) {
     /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
     if (g_mp_connected) return;
@@ -1458,15 +1505,18 @@ static void draw_passive_mobs(float partial) {
         PassiveMobRenderEntry *e = &entries[i];
         if (!e->active || !passive_mob_type_valid(e->type)) continue;
         Texture *t = passive_mob_texture_for_type(e->type);
-        if (!t || !t->id) continue;
+        if (e->type != PASSIVE_MOB_CONFLICT && (!t || !t->id)) continue;
 
         float shadow_size = 0.7f;
         if (e->type == PASSIVE_MOB_CHICKEN) shadow_size = 0.3f;
+        if (e->type == PASSIVE_MOB_CONFLICT) shadow_size = 0.45f;
         draw_java_entity_shadow(e->x, e->y, e->z, shadow_size, 1.0f);
 
         glPushMatrix();
-        glBindTexture(GL_TEXTURE_2D, t->id);
-        passive_fast_set_texture_dims(t);
+        if (e->type != PASSIVE_MOB_CONFLICT) {
+            glBindTexture(GL_TEXTURE_2D, t->id);
+            passive_fast_set_texture_dims(t);
+        }
         {
             float entity_br = flat_light_brightness((int)floorf(e->x), (int)floorf(e->y + 1.0f), (int)floorf(e->z));
             if (entity_br < 0.18f) entity_br = 0.18f;
@@ -1476,6 +1526,16 @@ static void draw_passive_mobs(float partial) {
         }
         glTranslatef(e->x, e->y, e->z);
         glRotatef(180.0f - e->yaw, 0.0f, 1.0f, 0.0f);
+        if (e->type == PASSIVE_MOB_CONFLICT) {
+            float br = flat_light_brightness((int)floorf(e->x), (int)floorf(e->y + 1.0f), (int)floorf(e->z));
+            if (e->move > 0.01f) {
+                glTranslatef(0.0f, fabsf(sinf(e->limb * 0.6662f)) * 0.035f * e->move, 0.0f);
+                glRotatef(sinf(e->limb * 0.6662f) * 3.5f * e->move, 0.0f, 0.0f, 1.0f);
+            }
+            passive_render_conflict_model(br, e->hurt);
+            glPopMatrix();
+            continue;
+        }
         if (e->death_time > 0.0f) {
             float d = ((e->death_time - 1.0f) / 20.0f) * 1.6f;
             if (d < 0.0f) d = 0.0f;

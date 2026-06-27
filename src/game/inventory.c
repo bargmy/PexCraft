@@ -89,7 +89,7 @@ static const int g_creative_items_125[] = {
 
 static const int g_creative_spawn_egg_damage_125[] = {
     50, 51, 52, 54, 55, 56, 57, 58, 59, 60, 61, 62,
-    90, 91, 92, 93, 94, 95, 96, 98, 120
+    90, 91, 92, 93, 94, 95, 96, 98, 120, 121
 };
 
 #define CREATIVE_COLS 8
@@ -6496,6 +6496,7 @@ static int pex_passive_health_cap_for_type(int type) {
         case PASSIVE_MOB_COW: return 10;
         case PASSIVE_MOB_SHEEP: return 8;
         case PASSIVE_MOB_CHICKEN: return 4;
+        case PASSIVE_MOB_CONFLICT: return 2147483647;
         default: return 1;
     }
 }
@@ -6511,11 +6512,13 @@ static int pex_passive_potion_amplifier(const PassiveMob *m, int potion_id) {
 
 static void pex_passive_start_death_direct(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
+    if (m->type == PASSIVE_MOB_CONFLICT) { m->health = pex_passive_health_cap_for_type(m->type); return; }
     const char *s = NULL;
     if (m->type == PASSIVE_MOB_PIG) s = "mob.pig.death";
     else if (m->type == PASSIVE_MOB_COW) s = "mob.cowhurt";
     else if (m->type == PASSIVE_MOB_SHEEP) s = "mob.sheep";
     else if (m->type == PASSIVE_MOB_CHICKEN) s = "mob.chickenhurt";
+    else if (m->type == PASSIVE_MOB_CONFLICT) s = "mob.cowhurt";
     if (s) pex_sound_play_at(s, m->x, m->y, m->z, 1.0f, 1.0f);
     m->health = 0;
     m->death_time = 1;
@@ -6524,6 +6527,7 @@ static void pex_passive_start_death_direct(PassiveMob *m) {
 
 static void pex_passive_apply_potion_effect(PassiveMob *m, int id, int duration, int amplifier, float splash_scale) {
     if (!m || !m->active || m->death_time > 0 || id <= 0 || id >= 32) return;
+    if (m->type == PASSIVE_MOB_CONFLICT) return;
     if (splash_scale < 0.0f) splash_scale = 0.0f;
     if (splash_scale > 1.0f) splash_scale = 1.0f;
     if (id == PEX_POTION_HEAL || id == PEX_POTION_HARM) {
