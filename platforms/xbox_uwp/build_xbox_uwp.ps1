@@ -27,29 +27,61 @@ if (!$msbuild -or !(Test-Path $msbuild)) { throw "MSBuild not found" }
 # Use the hosted runner vcpkg when available; the project consumes x64-uwp headers/libs via MSBuild.
 $vcpkg = $env:VCPKG_ROOT
 if (!$vcpkg -and (Test-Path "C:\vcpkg\vcpkg.exe")) { $vcpkg = "C:\vcpkg" }
+$zlibLibDir = $null
+$zlibLib = $null
+$zlibIncludeDir = $null
+
 if ($vcpkg -and (Test-Path (Join-Path $vcpkg "vcpkg.exe"))) {
     Write-Host "Installing UWP zlib through vcpkg: $vcpkg"
     & (Join-Path $vcpkg "vcpkg.exe") install zlib:x64-uwp
     if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:x64-uwp failed with $LASTEXITCODE" }
+
+    $zlibRoot = Join-Path $vcpkg "installed\x64-uwp"
+    $zlibLibDir = Join-Path $zlibRoot "lib"
+    $zlibLib = Join-Path $zlibLibDir "zlib.lib"
+    $zlibIncludeDir = Join-Path $zlibRoot "include"
+
+    if (!(Test-Path $zlibLib)) {
+        $found = Get-ChildItem -Path (Join-Path $vcpkg "installed") -Recurse -Filter "zlib*.lib" -ErrorAction SilentlyContinue | Select-Object -First 20
+        $list = ($found | ForEach-Object { $_.FullName }) -join "`n"
+        throw "vcpkg installed zlib:x64-uwp, but expected library was not found: $zlibLib`nFound zlib libraries:`n$list"
+    }
+
+    # Make the dependency visible both to MSBuild properties and to link.exe's LIB search path.
+    $env:VCPKG_ROOT = $vcpkg
     $env:VcpkgRoot = $vcpkg
-    $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\\"
+    $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\"
+    $env:LIB = "$zlibLibDir;$env:LIB"
+    $env:INCLUDE = "$zlibIncludeDir;$env:INCLUDE"
+    Write-Host "Using zlib library: $zlibLib"
 } else {
     Write-Warning "vcpkg not found; build will rely on system zlib headers/libs if present."
 }
 
 
 Write-Host "Using MSBuild: $msbuild"
-& $msbuild $project `
-    /m `
-    /restore `
-    /p:Configuration=$Configuration `
-    /p:Platform=$Platform `
-    /p:AppxBundle=Never `
-    /p:GenerateAppxPackageOnBuild=true `
-    /p:AppxPackageSigningEnabled=false `
-    /p:WindowsTargetPlatformMinVersion=10.0.14393.0 `
-    /p:VcpkgTriplet=x64-uwp `
-    /p:VcpkgEnabled=true
+$msbuildArgs = @(
+    $project,
+    "/m",
+    "/restore",
+    "/p:Configuration=$Configuration",
+    "/p:Platform=$Platform",
+    "/p:AppxBundle=Never",
+    "/p:GenerateAppxPackageOnBuild=true",
+    "/p:AppxPackageSigningEnabled=false",
+    "/p:WindowsTargetPlatformMinVersion=10.0.14393.0",
+    "/p:VcpkgTriplet=x64-uwp",
+    "/p:VcpkgEnabled=true"
+)
+
+if ($vcpkg) {
+    $msbuildArgs += "/p:VcpkgRoot=$vcpkg"
+    $msbuildArgs += "/p:VcpkgInstalledDir=$((Join-Path $vcpkg 'installed') + '\')"
+}
+if ($zlibLibDir) { $msbuildArgs += "/p:ZlibLibraryDir=$zlibLibDir" }
+if ($zlibLib) { $msbuildArgs += "/p:ZlibLibrary=$zlibLib" }
+
+& $msbuild @msbuildArgs
 
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
 
