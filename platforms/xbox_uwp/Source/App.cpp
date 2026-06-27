@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <string>
 #include <cstdlib>
+#include <cstdio>
 
 namespace winrt_app = winrt::Windows::ApplicationModel;
 namespace activation = winrt::Windows::ApplicationModel::Activation;
@@ -38,6 +39,42 @@ extern "C" {
 }
 
 static std::wstring g_local_folder;
+
+
+static void pex_activation_log(const wchar_t *message) {
+    if (!message) return;
+    OutputDebugStringW(message);
+    OutputDebugStringW(L"\r\n");
+    try {
+        auto folder = storage::ApplicationData::Current().LocalFolder();
+        std::wstring path(folder.Path().c_str());
+        path.append(L"\\pexcraft-uwp-activation.log");
+        HANDLE h = CreateFile2(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, OPEN_ALWAYS, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            wchar_t line[1024];
+            swprintf_s(line, L"[%04u-%02u-%02u %02u:%02u:%02u] %s\r\n",
+                       st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, message);
+            int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, nullptr, 0, nullptr, nullptr);
+            if (bytes > 1) {
+                std::string utf8;
+                utf8.resize((size_t)bytes);
+                WideCharToMultiByte(CP_UTF8, 0, line, -1, &utf8[0], bytes, nullptr, nullptr);
+                DWORD written = 0;
+                WriteFile(h, utf8.data(), (DWORD)(bytes - 1), &written, nullptr);
+            }
+            CloseHandle(h);
+        }
+    } catch (...) {
+    }
+}
+
+static void pex_activation_log_hr(const wchar_t *where, winrt::hresult_error const& e) {
+    wchar_t line[1024];
+    swprintf_s(line, L"%s failed hr=0x%08X message=%s", where ? where : L"UWP activation", (unsigned int)e.code(), e.message().c_str());
+    pex_activation_log(line);
+}
 
 
 static std::wstring pex_wide_from_utf8(const char *text) {
@@ -246,7 +283,18 @@ struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFra
 } // namespace PexCraftUwp
 
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    winrt::init_apartment();
-    coreapp::CoreApplication::Run(winrt::make<PexCraftUwp::App>());
-    return 0;
+    try {
+        pex_activation_log(L"wWinMain begin");
+        winrt::init_apartment();
+        pex_activation_log(L"CoreApplication::Run begin");
+        coreapp::CoreApplication::Run(winrt::make<PexCraftUwp::App>());
+        pex_activation_log(L"CoreApplication::Run returned");
+        return 0;
+    } catch (winrt::hresult_error const& e) {
+        pex_activation_log_hr(L"wWinMain/CoreApplication::Run", e);
+        return (int)e.code();
+    } catch (...) {
+        pex_activation_log(L"wWinMain/CoreApplication::Run failed with unknown exception");
+        return -1;
+    }
 }

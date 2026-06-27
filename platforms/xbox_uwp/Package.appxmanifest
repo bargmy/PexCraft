@@ -5,7 +5,7 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
-  <Identity Name="ir.hienob.pexcraft.xboxuwp" Publisher="CN=PexCraft" Version="1.0.0.0" />
+  <Identity Name="ir.hienob.pexcraft.xboxuwp" Publisher="CN=PexCraft" Version="1.0.0.0" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>PexCraft</DisplayName>
     <PublisherDisplayName>PexCraft contributors</PublisherDisplayName>
@@ -21,7 +21,7 @@
   </Resources>
 
   <Applications>
-    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
+    <Application Id="App" Executable="PexCraft.UWP.exe" EntryPoint="PexCraftUwp.App">
       <uap:VisualElements DisplayName="PexCraft" Description="PexCraft Xbox One UWP Dev Mode build" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" BackgroundColor="#000000">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#000000" />

@@ -142,75 +142,122 @@ if ($zlibLib) { $msbuildArgs += "/p:ZlibLibrary=$zlibLib" }
 
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
 
-$appx = Get-ChildItem -Path (Join-Path $root "build") -Recurse -Include *.appx,*.msix,*.appxbundle,*.msixbundle -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$packagingMode = "MSBuild"
+
+# Always create a controlled appx layout ourselves after MSBuild.
+# The MSBuild-generated package can leave activation-critical placeholders or
+# omit app-local VC runtime files on CI/loose dev-mode installs.  The manual
+# layout below has a literal manifest, x64 architecture, and copied runtime DLLs.
+$appx = $null
+$packagingMode = "MakeAppx controlled layout"
 $certOut = $null
 
-if (!$appx) {
-    Write-Host "MSBuild produced the UWP executable but no appx/msix. Falling back to MakeAppx packaging."
+$exe = Get-ChildItem -Path (Join-Path $root "build\xbox_uwp") -Recurse -Filter "PexCraft.UWP.exe" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (!$exe) { throw "UWP build succeeded but PexCraft.UWP.exe was not found; cannot package." }
 
-    $exe = Get-ChildItem -Path (Join-Path $root "build\xbox_uwp") -Recurse -Filter "PexCraft.UWP.exe" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (!$exe) { throw "UWP build succeeded but PexCraft.UWP.exe was not found; cannot package." }
+$makeappx = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "makeappx.exe" -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "\\x64\\makeappx\.exe$" } |
+    Sort-Object FullName -Descending |
+    Select-Object -First 1
+if (!$makeappx) { throw "makeappx.exe not found. Install the Windows 10 SDK app packaging tools on the runner." }
 
-    $makeappx = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "makeappx.exe" -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "\\x64\\makeappx\.exe$" } |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if (!$makeappx) { throw "makeappx.exe not found. Install the Windows 10 SDK app packaging tools on the runner." }
+$layout = Join-Path $root "build\xbox_uwp\appx_layout"
+if (Test-Path $layout) { Remove-Item $layout -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $layout | Out-Null
 
-    $layout = Join-Path $root "build\xbox_uwp\appx_layout"
-    if (Test-Path $layout) { Remove-Item $layout -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $layout | Out-Null
+Copy-Item $exe.FullName (Join-Path $layout "PexCraft.UWP.exe") -Force
+Copy-Item (Join-Path $PSScriptRoot "Assets") (Join-Path $layout "Assets") -Recurse -Force
 
-    Copy-Item $exe.FullName (Join-Path $layout "PexCraft.UWP.exe") -Force
-    Copy-Item (Join-Path $PSScriptRoot "Assets") (Join-Path $layout "Assets") -Recurse -Force
+$manifestSrc = Join-Path $PSScriptRoot "Package.appxmanifest"
+$manifestDst = Join-Path $layout "AppxManifest.xml"
+$manifestText = Get-Content -Raw $manifestSrc
+$manifestText = $manifestText.Replace('$targetnametoken$', 'PexCraft.UWP')
+$manifestText = $manifestText.Replace('$targetentrypoint$', 'PexCraftUwp.App')
+if ($manifestText -notmatch 'ProcessorArchitecture=') {
+    $manifestText = $manifestText -replace '<Identity ([^>]+?) />', '<Identity $1 ProcessorArchitecture="x64" />'
+}
+$manifestText | Out-File -FilePath $manifestDst -Encoding utf8
 
-    $manifestSrc = Join-Path $PSScriptRoot "Package.appxmanifest"
-    $manifestDst = Join-Path $layout "AppxManifest.xml"
-    $manifestText = Get-Content -Raw $manifestSrc
-    $manifestText = $manifestText.Replace('$targetnametoken$', 'PexCraft.UWP')
-    $manifestText = $manifestText.Replace('$targetentrypoint$', 'PexCraftUwp.App')
-    $manifestText | Out-File -FilePath $manifestDst -Encoding utf8
+function Copy-UwpVcRuntimeDlls([string]$LayoutDir) {
+    $wanted = @(
+        'vcruntime140_app.dll',
+        'vcruntime140_1_app.dll',
+        'msvcp140_app.dll',
+        'concrt140_app.dll'
+    )
 
-    $manualAppx = Join-Path $root "build\xbox_uwp\PexCraft.UWP.appx"
-    if (Test-Path $manualAppx) { Remove-Item $manualAppx -Force }
-    & $makeappx.FullName pack /d $layout /p $manualAppx /o
-    if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed with $LASTEXITCODE" }
-
-    $signtool = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "signtool.exe" -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if ($signtool) {
-        try {
-            $cert = New-SelfSignedCertificate `
-                -Type Custom `
-                -Subject "CN=PexCraft" `
-                -KeyUsage DigitalSignature `
-                -FriendlyName "PexCraft Xbox UWP Dev Mode Test Certificate" `
-                -CertStoreLocation "Cert:\CurrentUser\My" `
-                -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-            $cerPath = Join-Path $dist "pexcraft-xbox-one-uwp-devmode-testcert.cer"
-            Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
-            & $signtool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint $manualAppx
-            if ($LASTEXITCODE -eq 0) {
-                $certOut = $cerPath
-                Write-Host "Signed fallback appx with temporary CI test certificate: $cerPath"
-            } else {
-                Write-Warning "SignTool failed with $LASTEXITCODE; appx was created but may need signing before install."
-            }
-        } catch {
-            Write-Warning "Could not generate/sign with a test certificate: $_"
+    $roots = @()
+    if ($env:VCToolsRedistDir) { $roots += $env:VCToolsRedistDir }
+    if ($env:VCINSTALLDIR) { $roots += (Join-Path $env:VCINSTALLDIR 'Redist') }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        $vsInstall = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($vsInstall) {
+            $roots += (Join-Path $vsInstall 'VC\Redist')
+            $roots += (Join-Path $vsInstall 'VC\Tools\MSVC')
         }
-    } else {
-        Write-Warning "signtool.exe not found; appx was created but may need signing before install."
     }
+    $roots += (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio')
+    $roots = $roots | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 
-    $appx = Get-Item $manualAppx
-    $packagingMode = "MakeAppx fallback"
+    $copied = New-Object System.Collections.Generic.List[string]
+    foreach ($dll in $wanted) {
+        $match = $null
+        foreach ($rootPath in $roots) {
+            $candidates = Get-ChildItem -Path $rootPath -Recurse -File -Filter $dll -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match '\\x64\\' -and ($_.FullName -match 'onecore|uwp|appx|Microsoft\.VC') } |
+                Sort-Object FullName -Descending
+            $match = $candidates | Select-Object -First 1
+            if ($match) { break }
+        }
+        if ($match) {
+            Copy-Item $match.FullName (Join-Path $LayoutDir $dll) -Force
+            $copied.Add($match.FullName) | Out-Null
+            Write-Host "Copied UWP VC runtime: $($match.FullName)"
+        } else {
+            Write-Warning "UWP VC runtime DLL not found on builder: $dll"
+        }
+    }
+    return $copied
 }
 
-if (!$appx) { throw "UWP build succeeded but no appx/msix package was produced. Fake source zips are intentionally disabled." }
+$runtimeCopied = Copy-UwpVcRuntimeDlls -LayoutDir $layout
+$runtimeCopied | Out-File -FilePath (Join-Path $layout 'copied-vc-runtime-files.txt') -Encoding utf8
+
+$manualAppx = Join-Path $root "build\xbox_uwp\PexCraft.UWP.appx"
+if (Test-Path $manualAppx) { Remove-Item $manualAppx -Force }
+& $makeappx.FullName pack /d $layout /p $manualAppx /o
+if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed with $LASTEXITCODE" }
+
+$signtool = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "signtool.exe" -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+    Sort-Object FullName -Descending |
+    Select-Object -First 1
+if ($signtool) {
+    try {
+        $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject "CN=PexCraft" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "PexCraft Xbox UWP Dev Mode Test Certificate" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+        $cerPath = Join-Path $dist "pexcraft-xbox-one-uwp-devmode-testcert.cer"
+        Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
+        & $signtool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint $manualAppx
+        if ($LASTEXITCODE -eq 0) {
+            $certOut = $cerPath
+            Write-Host "Signed controlled appx with temporary CI test certificate: $cerPath"
+        } else {
+            Write-Warning "SignTool failed with $LASTEXITCODE; appx was created but may need signing before install."
+        }
+    } catch {
+        Write-Warning "Could not generate/sign with a test certificate: $_"
+    }
+} else {
+    Write-Warning "signtool.exe not found; appx was created but may need signing before install."
+}
+
+$appx = Get-Item $manualAppx
 
 $out = Join-Path $dist "pexcraft-xbox-one-uwp-devmode$($appx.Extension)"
 Copy-Item $appx.FullName $out -Force
