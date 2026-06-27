@@ -24,7 +24,6 @@
     <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="GeneratedWinmd.props" Condition="Exists('GeneratedWinmd.props')" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
@@ -36,26 +35,21 @@
     <ClCompile>
       <PreprocessorDefinitions>PEX_PLATFORM_XBOX_UWP=1;WINAPI_FAMILY=WINAPI_FAMILY_APP;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\cppwinrt;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <ExceptionHandling>Sync</ExceptionHandling>
-      <!-- /ZW needs platform.winmd. GitHub/VS images do not always put the WinMD
-           search paths on LIBPATH for hand-written UWP vcxproj files, so keep
-           explicit /AI directories here and allow the build script to inject
-           discovered paths through UwpExtraUsingDirs. -->
-      <AdditionalUsingDirectories>$(UwpExtraUsingDirs);$(VSInstallDir)Common7\IDE\VC\vcpackages;$(VSInstallDir)Common7\IDE\CommonExtensions\Microsoft\C++\WinRT;$(VCInstallDir)vcpackages;$(WindowsSdkDir)UnionMetadata;$(WindowsSdkDir)UnionMetadata\$(WindowsTargetPlatformVersion);$(WindowsSdkDir)References\Windows.Foundation.UniversalApiContract\1.0.0.0;$(WindowsSdkDir)References\Windows.Foundation.FoundationContract\1.0.0.0;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
-      <CompileAsWinRT>true</CompileAsWinRT>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>windowsapp.lib;d3d11.lib;dxgi.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <SubSystem>Windows</SubSystem>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Source\App.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Package.appxmanifest" />
+    <AppxManifest Include="Package.appxmanifest" />
     <None Include="README.md" />
     <None Include="build_xbox_uwp.ps1" />
   </ItemGroup>

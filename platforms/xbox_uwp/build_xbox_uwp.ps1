@@ -21,78 +21,7 @@ if (!$msbuild) {
 }
 if (!$msbuild -or !(Test-Path $msbuild)) { throw "MSBuild not found" }
 
-
-function Find-UwpWinmdUsingDirs {
-    $roots = @()
-    if ($env:ProgramFiles) { $roots += (Join-Path $env:ProgramFiles "Microsoft Visual Studio") }
-    if (${env:ProgramFiles(x86)}) {
-        $roots += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio")
-        $roots += (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10")
-    }
-
-    $dirs = New-Object System.Collections.Generic.List[string]
-    foreach ($rootPath in $roots) {
-        if (!(Test-Path $rootPath)) { continue }
-        try {
-            Get-ChildItem -Path $rootPath -Filter platform.winmd -Recurse -ErrorAction SilentlyContinue |
-                Select-Object -First 8 | ForEach-Object { $dirs.Add($_.DirectoryName) }
-        } catch {}
-    }
-
-    if (${env:ProgramFiles(x86)}) {
-        $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10"
-        $union = Join-Path $kits "UnionMetadata"
-        if (Test-Path $union) {
-            $dirs.Add($union)
-            Get-ChildItem -Path $union -Directory -ErrorAction SilentlyContinue |
-                Sort-Object Name -Descending | Select-Object -First 3 | ForEach-Object { $dirs.Add($_.FullName) }
-        }
-        $refs = Join-Path $kits "References"
-        foreach ($contract in @("Windows.Foundation.UniversalApiContract", "Windows.Foundation.FoundationContract")) {
-            $contractRoot = Join-Path $refs $contract
-            if (Test-Path $contractRoot) {
-                Get-ChildItem -Path $contractRoot -Directory -ErrorAction SilentlyContinue |
-                    Sort-Object Name -Descending | Select-Object -First 3 | ForEach-Object { $dirs.Add($_.FullName) }
-            }
-        }
-    }
-
-    $unique = @()
-    foreach ($d in $dirs) {
-        if ($d -and (Test-Path $d) -and ($unique -notcontains $d)) { $unique += $d }
-    }
-    return $unique
-}
-
-$uwpUsingDirs = Find-UwpWinmdUsingDirs
-if ($uwpUsingDirs.Count -eq 0) {
-    Write-Warning "No explicit UWP WinMD paths were found. MSBuild property paths will still be used."
-} else {
-    Write-Host "UWP WinMD /AI paths:"
-    $uwpUsingDirs | ForEach-Object { Write-Host "  $_" }
-    $env:LIBPATH = (($uwpUsingDirs + @($env:LIBPATH)) -join ";")
-}
-# Do not pass semicolon-delimited WinMD paths through /p: on the MSBuild
-# command line. MSBuild treats semicolons in /p: as property separators,
-# so a value like C:\foo;C:\bar becomes a broken command-line switch.
-# Instead, generate a tiny props file and import it from the vcxproj.
-function Escape-XmlAttr([string]$value) {
-    if ($null -eq $value) { return "" }
-    return $value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace('"', "&quot;").Replace("'", "&apos;")
-}
-
-$uwpExtraUsingDirs = ($uwpUsingDirs -join ";")
-$generatedProps = Join-Path $PSScriptRoot "GeneratedWinmd.props"
-$escapedDirs = Escape-XmlAttr $uwpExtraUsingDirs
-@"
-<?xml version="1.0" encoding="utf-8"?>
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <PropertyGroup>
-    <UwpExtraUsingDirs>$escapedDirs</UwpExtraUsingDirs>
-  </PropertyGroup>
-</Project>
-"@ | Out-File -Encoding utf8 $generatedProps
-Write-Host "Generated WinMD props: $generatedProps"
+# C++/WinRT shell does not use /ZW, so no platform.winmd /AI path hack is needed.
 
 Write-Host "Using MSBuild: $msbuild"
 & $msbuild $project `
