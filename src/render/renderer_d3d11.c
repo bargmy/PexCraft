@@ -130,6 +130,13 @@ static HRESULT d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
                                                   const D3D_FEATURE_LEVEL *levels,
                                                   UINT level_count,
                                                   D3D_FEATURE_LEVEL *got_level) {
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    /* UWP/Xbox must create the swapchain with CreateSwapChainForCoreWindow in
+       renderer_d3d11_xbox.c. Keep the desktop creation routine compiled out so
+       the UWP build never references D3D11CreateDeviceAndSwapChain. */
+    (void)base_desc; (void)levels; (void)level_count; (void)got_level;
+    return E_FAIL;
+#else
     D3D_DRIVER_TYPE drivers[] = { D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP };
     HRESULT hr = E_FAIL;
 
@@ -159,6 +166,7 @@ static HRESULT d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
         }
     }
     return hr;
+#endif
 }
 
 static void d3d11_set_latency_for_unlimited_fps(void) {

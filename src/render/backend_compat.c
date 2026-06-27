@@ -3,7 +3,11 @@
    native devices and GPU vertex buffers; no OpenGL context/wrapper is created
    for the D3D backends. */
 
+#if defined(PEX_PLATFORM_XBOX_UWP)
+#include "render/d3d9_uwp_stub.h"
+#else
 #include <d3d9.h>
+#endif
 #include <d3d11.h>
 #include <dxgi.h>
 #include <d3dcompiler.h>
