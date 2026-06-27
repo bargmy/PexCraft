@@ -1573,6 +1573,71 @@ static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
            g_flat_section_mesh_light_version[sy][cz][cx] == g_flat_chunk_light_version[cz][cx];
 }
 
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static GLushort *g_flat_android_index16_tmp = NULL;
+static uint32_t g_flat_android_index16_cap = 0;
+
+static int flat_android_ensure_index16_tmp(uint32_t count) {
+    if (count <= g_flat_android_index16_cap) return 1;
+    uint32_t cap = g_flat_android_index16_cap ? g_flat_android_index16_cap : 4096u;
+    while (cap < count) cap *= 2u;
+    GLushort *nv = (GLushort*)realloc(g_flat_android_index16_tmp, (size_t)cap * sizeof(*nv));
+    if (!nv) return 0;
+    g_flat_android_index16_tmp = nv;
+    g_flat_android_index16_cap = cap;
+    return 1;
+}
+
+static void flat_gl_draw_cpu_mesh_android16(const FlatGLCpuMesh *m) {
+    /* Android GLES2 cannot draw GL_UNSIGNED_INT indices natively.  The shim has
+       a fast path for 16-bit indices, but falls back to allocating/duplicating
+       every indexed vertex when a section references more than 65535 vertices.
+       Fast graphics can still produce those big solid-pass sections, so split
+       the mesh into triangle windows, rebase each window to zero, and feed the
+       GLES2 fast path with GL_UNSIGNED_SHORT. */
+    const uint32_t max_window_vertices = 65535u;
+    uint32_t tri = 0;
+    while (tri + 2u < m->icount) {
+        uint32_t first = tri;
+        uint32_t min_idx = UINT32_MAX;
+        uint32_t max_idx = 0;
+        uint32_t out_count = 0;
+
+        while (tri + 2u < m->icount) {
+            uint32_t a = m->i[tri + 0u];
+            uint32_t b = m->i[tri + 1u];
+            uint32_t c = m->i[tri + 2u];
+            uint32_t tmin = a < b ? (a < c ? a : c) : (b < c ? b : c);
+            uint32_t tmax = a > b ? (a > c ? a : c) : (b > c ? b : c);
+            uint32_t nmin = min_idx == UINT32_MAX || tmin < min_idx ? tmin : min_idx;
+            uint32_t nmax = tmax > max_idx ? tmax : max_idx;
+
+            if (out_count > 0u && (nmax - nmin) >= max_window_vertices) break;
+            min_idx = nmin;
+            max_idx = nmax;
+            out_count += 3u;
+            tri += 3u;
+        }
+
+        if (out_count == 0u || min_idx == UINT32_MAX || max_idx >= m->vcount) {
+            tri = first + 3u;
+            continue;
+        }
+        if (!flat_android_ensure_index16_tmp(out_count)) return;
+        for (uint32_t i = 0; i < out_count; ++i) {
+            uint32_t idx = m->i[first + i];
+            g_flat_android_index16_tmp[i] = (GLushort)(idx - min_idx);
+        }
+
+        const PexVertex *base = &m->v[min_idx];
+        glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&base[0].x);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&base[0].u);
+        glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&base[0].color);
+        glDrawElements(GL_TRIANGLES, (GLsizei)out_count, GL_UNSIGNED_SHORT, (const GLvoid*)g_flat_android_index16_tmp);
+    }
+}
+#endif
+
 static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
 #if defined(PEX_PLATFORM_PSP)
     (void)m;
@@ -1588,10 +1653,14 @@ static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    flat_gl_draw_cpu_mesh_android16(m);
+#else
     glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&m->v[0].x);
     glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&m->v[0].u);
     glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&m->v[0].color);
     glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)m->i);
+#endif
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);

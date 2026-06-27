@@ -358,6 +358,70 @@ static void draw_release_panorama_cube(float partial) {
     glColor4f(1,1,1,1);
 }
 
+
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static void draw_release_panorama_cube_android_direct(float partial) {
+    /* Android GLES2 had trouble with the Java-style 256x256 feedback texture:
+       the copy/blur path could remain visible as a small corner square and
+       flicker.  Draw the panorama cube directly to the real framebuffer on
+       Android instead.  It loses the heavy blur feedback, but it fills the
+       screen correctly and is much cheaper/stable on mobile. */
+    double aspect = (g_render_h > 0) ? (double)g_render_w / (double)g_render_h : 16.0 / 9.0;
+    float timer = (float)g_release_panorama_timer + partial;
+
+    panorama_reset_gl_state();
+    glViewport(0, 0, g_render_w, g_render_h);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    gluPerspective(120.0, aspect, 0.05, 10.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    glColor4f(1,1,1,1);
+    glRotatef(180.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(sinf(timer / 400.0f) * 25.0f + 20.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(-timer * 0.1f, 0.0f, 1.0f, 0.0f);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
+
+    for (int face = 0; face < 6; ++face) {
+        if (!tex_panorama[face].id) continue;
+        glPushMatrix();
+        if (face == 1) glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
+        if (face == 2) glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
+        if (face == 3) glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
+        if (face == 4) glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+        if (face == 5) glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
+        glBindTexture(GL_TEXTURE_2D, tex_panorama[face].id);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, 0.0f); glVertex3f(-1.0f, -1.0f, 1.0f);
+        glTexCoord2f(1.0f, 0.0f); glVertex3f( 1.0f, -1.0f, 1.0f);
+        glTexCoord2f(1.0f, 1.0f); glVertex3f( 1.0f,  1.0f, 1.0f);
+        glTexCoord2f(0.0f, 1.0f); glVertex3f(-1.0f,  1.0f, 1.0f);
+        glEnd();
+        glPopMatrix();
+    }
+
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glDepthMask(GL_TRUE);
+    glColor4f(1,1,1,1);
+    setup_gui_projection();
+}
+#endif
+
 static void release_panorama_blur_pass(void) {
     ensure_panorama_viewport_texture();
     glBindTexture(GL_TEXTURE_2D, g_release_panorama_viewport_tex);
@@ -406,6 +470,14 @@ static void draw_release_skybox(float partial) {
     static double s_last_panorama_update = -1000.0;
     static int s_have_panorama_frame = 0;
     static int s_cached_panorama_size = 0;
+
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    (void)s_last_panorama_update;
+    (void)s_have_panorama_frame;
+    (void)s_cached_panorama_size;
+    draw_release_panorama_cube_android_direct(partial);
+    return;
+#endif
 
     panorama_reset_gl_state();
     ensure_panorama_viewport_texture();

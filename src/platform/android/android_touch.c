@@ -79,6 +79,21 @@ static float pex_android_touch_clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+static float pex_android_touch_sensitivity_ratio(void) {
+    /* The desktop slider label is v*200, so the visible 100% setting is
+       g_opts.sensitivity == 0.5.  Touch needs to feel like the same slider is
+       50 percentage-points higher: 100% behaves like 150%, 50% like 100%, etc. */
+    float base = g_opts.sensitivity;
+    float touch = base + 0.25f;
+    if (touch > 1.0f) touch = 1.0f;
+    if (touch < 0.0f) touch = 0.0f;
+    float sb = base * 0.6f + 0.2f;
+    float st = touch * 0.6f + 0.2f;
+    float mb = sb * sb * sb * 8.0f;
+    float mt = st * st * st * 8.0f;
+    return (mb > 0.0001f) ? (mt / mb) : 1.0f;
+}
+
 static int android_touch_inventory_screen(void) {
     return g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
            g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST;
@@ -101,6 +116,32 @@ static int pex_android_touch_button_pause(int x, int y) {
 
 static int android_touch_inventory_button(int x, int y) {
     return pex_android_touch_in_rect(x, y, g_gui_w - 58, 34, 54, 26);
+}
+
+static void pex_android_touch_chat_button_rect(int *x, int *y, int *w, int *h) {
+    if (x) *x = g_gui_w / 2 - 47;
+    if (y) *y = 4;
+    if (w) *w = 44;
+    if (h) *h = 24;
+}
+
+static void pex_android_touch_f5_button_rect(int *x, int *y, int *w, int *h) {
+    if (x) *x = g_gui_w / 2 + 3;
+    if (y) *y = 4;
+    if (w) *w = 44;
+    if (h) *h = 24;
+}
+
+static int pex_android_touch_button_chat(int x, int y) {
+    int bx, by, bw, bh;
+    pex_android_touch_chat_button_rect(&bx, &by, &bw, &bh);
+    return pex_android_touch_in_rect(x, y, bx, by, bw, bh);
+}
+
+static int pex_android_touch_button_f5(int x, int y) {
+    int bx, by, bw, bh;
+    pex_android_touch_f5_button_rect(&bx, &by, &bw, &bh);
+    return pex_android_touch_in_rect(x, y, bx, by, bw, bh);
 }
 
 static void pex_android_touch_dpad_rect(int *left, int *top, int *size);
@@ -330,8 +371,10 @@ static void pex_android_touch_ingame_down(SDL_FingerID id, int x, int y) {
     pex_android_touch_set_focus();
     int slot = pex_android_touch_hotbar_slot(x, y);
     if (slot >= 0) { g_selected_hotbar_slot = slot; return; }
+    if (pex_android_touch_button_chat(x, y)) { g_chat_input[0] = 0; g_suppress_next_chat_char = 0; set_screen(SCREEN_CHAT); return; }
+    if (pex_android_touch_button_f5(x, y)) { third_person_view_cycle(); return; }
     if (pex_android_touch_button_pause(x, y)) { set_screen(SCREEN_PAUSE); return; }
-    if (android_touch_inventory_button(x, y)) { set_screen(SCREEN_INVENTORY); return; }
+    if (android_touch_inventory_button(x, y)) { set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY); return; }
     if (pex_android_touch_button_jump(x, y)) { g_android_jump_finger = id; g_android_jump_down = 1; return; }
     if (pex_android_touch_button_sneak(x, y)) {
         g_android_sneak_finger = id;
@@ -372,7 +415,10 @@ static void pex_android_touch_ingame_motion(SDL_FingerID id, int x, int y) {
         if (g_android_world_moved) {
             int dx = x - g_android_world_last_x;
             int dy = y - g_android_world_last_y;
-            if (dx || dy) player_turn_from_mouse((int)((float)dx * 1.35f), (int)((float)-dy * 1.35f));
+            if (dx || dy) {
+                float look = 1.35f * pex_android_touch_sensitivity_ratio();
+                player_turn_from_mouse((int)((float)dx * look), (int)((float)-dy * look));
+            }
         }
         g_android_world_last_x = g_android_world_cur_x = x;
         g_android_world_last_y = g_android_world_cur_y = y;
@@ -505,9 +551,19 @@ static void draw_android_touch_controls(void) {
     draw_rect(g_gui_w - 62, g_gui_h - 92, g_gui_w - 8, g_gui_h - 38, (int)(g_android_jump_down ? 0xAAFFFFFFu : 0x55FFFFFFu));
     draw_text("JUMP", g_gui_w - 52, g_gui_h - 65, 0x000000);
     draw_rect(g_gui_w - 58, 34, g_gui_w - 4, 60, (int)0x66000000u);
-    draw_text("INV", g_gui_w - 45, 43, 0xFFFFFF);
+    draw_text(player_is_creative() ? "CR" : "INV", g_gui_w - 45, 43, 0xFFFFFF);
     draw_rect(g_gui_w - 50, 4, g_gui_w - 4, 28, (int)0x66000000u);
     draw_text("PAUSE", g_gui_w - 46, 12, 0xFFFFFF);
+
+    {
+        int bx, by, bw, bh;
+        pex_android_touch_chat_button_rect(&bx, &by, &bw, &bh);
+        draw_rect(bx, by, bx + bw, by + bh, (int)0x66000000u);
+        draw_text("Chat", bx + 7, by + 8, 0xFFFFFF);
+        pex_android_touch_f5_button_rect(&bx, &by, &bw, &bh);
+        draw_rect(bx, by, bx + bw, by + bh, (int)0x66000000u);
+        draw_text("F5", bx + 15, by + 8, 0xFFFFFF);
+    }
 
     if (g_android_world_breaking) {
         int cx, cy;
