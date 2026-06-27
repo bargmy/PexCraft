@@ -25,6 +25,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
@@ -72,6 +74,15 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Windows ${{ matrix.arch }} MinGW
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
+
       - name: Set up MSYS2 MinGW
         uses: msys2/setup-msys2@v2
         with:
@@ -114,8 +125,9 @@ jobs:
               echo "BUILD_OK=0" >> "$GITHUB_ENV"
             fi
 
-            exit 0
+            exit "$status"
           } 2>&1 | tee logs/build-windows-${{ matrix.arch }}.log
+          exit ${PIPESTATUS[0]}
 
       - name: Package Windows zip
         if: env.BUILD_OK == '1'
@@ -169,12 +181,173 @@ jobs:
           if-no-files-found: warn
 
       - name: Mark failed build in summary
-        if: env.BUILD_OK != '1'
+        if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
           echo "### Windows ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Windows ${{ matrix.arch }} MinGW
+          RESULT: ${{ env.BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
+  windows_arm64:
+    name: Windows arm64 MSVC - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
+        )
+      }}
+    runs-on: windows-11-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Windows arm64 MSVC
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Windows arm64 client
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build,logs,dist | Out-Null
+          $status = 1
+          try {
+            $vcpkg = $env:VCPKG_ROOT
+            if (!$vcpkg -and (Test-Path 'C:\vcpkg\vcpkg.exe')) { $vcpkg = 'C:\vcpkg' }
+            if (!$vcpkg -or !(Test-Path (Join-Path $vcpkg 'vcpkg.exe'))) { throw 'vcpkg not found on the runner' }
+
+            & (Join-Path $vcpkg 'vcpkg.exe') install zlib:arm64-windows-static libogg:arm64-windows-static libvorbis:arm64-windows-static 2>&1 | Tee-Object -FilePath logs/build-windows-arm64.log
+            if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed with $LASTEXITCODE" }
+
+            $triplet = Join-Path $vcpkg 'installed\arm64-windows-static'
+            $includeDir = Join-Path $triplet 'include'
+            $libDir = Join-Path $triplet 'lib'
+            if (!(Test-Path $includeDir) -or !(Test-Path $libDir)) { throw "missing vcpkg arm64-windows-static include/lib dirs" }
+
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vsInstall = ''
+            if (Test-Path $vswhere) {
+              $vsInstall = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+              if (!$vsInstall) { $vsInstall = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath }
+            }
+            if (!$vsInstall) { throw 'Visual Studio install with ARM64 C++ tools was not found' }
+            $vcvars = Join-Path $vsInstall 'VC\Auxiliary\Build\vcvarsall.bat'
+            if (!(Test-Path $vcvars)) { throw "missing vcvarsall.bat: $vcvars" }
+
+            $zlib = Get-ChildItem -Path $libDir -File -Filter '*.lib' | Where-Object { $_.Name -in @('zlib.lib', 'zlibstatic.lib') } | Select-Object -First 1
+            $ogg = Get-ChildItem -Path $libDir -File -Filter 'ogg.lib' | Select-Object -First 1
+            $vorbis = Get-ChildItem -Path $libDir -File -Filter 'vorbis.lib' | Select-Object -First 1
+            $vorbisfile = Get-ChildItem -Path $libDir -File -Filter 'vorbisfile.lib' | Select-Object -First 1
+            if (!$zlib -or !$ogg -or !$vorbis -or !$vorbisfile) { throw "missing one or more vcpkg libs in $libDir" }
+
+            $compile = @"
+          call "$vcvars" arm64
+          cl /nologo /TC /std:c11 /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DWIN32_LEAN_AND_MEAN /I "$includeDir" main.c /Fe:build\pexcraft-win-arm64.exe /link /SUBSYSTEM:WINDOWS /LIBPATH:"$libDir" d3d11.lib dxgi.lib d3dcompiler.lib d3d9.lib opengl32.lib glu32.lib gdi32.lib user32.lib shell32.lib ole32.lib windowscodecs.lib comdlg32.lib "$($vorbisfile.FullName)" "$($vorbis.FullName)" "$($ogg.FullName)" winmm.lib mfplat.lib mfreadwrite.lib mfuuid.lib ws2_32.lib "$($zlib.FullName)"
+          exit /b %ERRORLEVEL%
+          "@
+            $compile | Out-File -FilePath build\windows-arm64-build.cmd -Encoding ascii
+            cmd /c build\windows-arm64-build.cmd 2>&1 | Tee-Object -FilePath logs/build-windows-arm64.log -Append
+            $status = $LASTEXITCODE
+          } catch {
+            $_ | Out-File -FilePath logs/build-windows-arm64.log -Append
+            $status = 1
+          }
+
+          $status | Out-File -FilePath build\windows-arm64-build-status.txt -Encoding ascii
+          if ($status -eq 0 -and (Test-Path build\pexcraft-win-arm64.exe)) {
+            "WIN_ARM64_BUILD_OK=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            "WIN_ARM64_BUILD_OK=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            exit $status
+          }
+
+      - name: Package Windows arm64 zip
+        if: env.WIN_ARM64_BUILD_OK == '1'
+        shell: pwsh
+        run: |
+          $commitName = '${{ steps.commit.outputs.name }}'
+          $artifactPrefix = 'pexcraft-windows-arm64'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $packageDir = Join-Path 'dist' $artifactPrefix
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item 'build\pexcraft-win-arm64.exe' $packageDir -Force
+          if (Test-Path 'assets') { Copy-Item 'assets' (Join-Path $packageDir 'assets') -Recurse -Force }
+          if (Test-Path 'logs') { Copy-Item 'logs' (Join-Path $packageDir 'logs') -Recurse -Force }
+          @"
+          Commit name: $commitName
+          Commit SHA:  $env:GITHUB_SHA
+          Builder:     Windows arm64 MSVC
+          "@ | Out-File -FilePath (Join-Path $packageDir 'COMMIT_NAME.txt') -Encoding utf8
+          $zipPath = Join-Path 'dist' "$artifactPrefix.zip"
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
+          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload Windows arm64 artifact
+        if: env.WIN_ARM64_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-windows-arm64
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: warn
+
+      - name: Mark failed build in summary
+        if: always() && env.WIN_ARM64_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Windows arm64 failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Windows arm64 MSVC
+          RESULT: ${{ env.WIN_ARM64_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
 
   linux:
     name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
@@ -186,6 +359,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
@@ -209,6 +384,15 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Linux SDL2/OpenGL
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Install Linux dependencies
         shell: bash
@@ -248,8 +432,9 @@ jobs:
               echo "BUILD_OK=0" >> "$GITHUB_ENV"
             fi
 
-            exit 0
+            exit "$status"
           } 2>&1 | tee logs/build-linux-sdl2.log
+          exit ${PIPESTATUS[0]}
 
       - name: Package Linux zip
         if: env.BUILD_OK == '1'
@@ -285,12 +470,22 @@ jobs:
           if-no-files-found: warn
 
       - name: Mark failed build in summary
-        if: env.BUILD_OK != '1'
+        if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
           echo "### Linux SDL2/OpenGL failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Linux SDL2/OpenGL
+          RESULT: ${{ env.BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
 
 
   lgwebos:
@@ -305,7 +500,9 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)')
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)')
           )
         )
       }}
@@ -335,6 +532,15 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: LG webOS ${{ matrix.arch }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Install LG webOS build dependencies
         shell: bash
@@ -433,8 +639,9 @@ jobs:
             else
               echo "LGWEBOS_BUILD_OK=0" >> "$GITHUB_ENV"
             fi
-            exit 0
+            exit "$status"
           } 2>&1 | tee logs/build-lgwebos-${{ matrix.arch }}.log
+          exit ${PIPESTATUS[0]}
 
       - name: Package LG webOS IPK
         if: env.LGWEBOS_BUILD_OK == '1'
@@ -489,12 +696,22 @@ jobs:
           if-no-files-found: error
 
       - name: Mark failed build in summary
-        if: env.LGWEBOS_BUILD_OK != '1'
+        if: always() && env.LGWEBOS_BUILD_OK != '1'
         shell: bash
         run: |
           echo "### LG webOS ${{ matrix.arch }} failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: LG webOS ${{ matrix.arch }}
+          RESULT: ${{ env.LGWEBOS_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
 
 
   android:
@@ -507,6 +724,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
@@ -530,6 +749,15 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Android arm64 APK
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -662,6 +890,16 @@ jobs:
           echo "Commit name: `${{ steps.commit.outputs.name }}`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Android arm64 APK
+          RESULT: ${{ env.ANDROID_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
   android_tv:
     name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
@@ -672,6 +910,8 @@ jobs:
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
           !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
         )
@@ -695,6 +935,16 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Android TV APK
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -827,21 +1077,24 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Android TV APK
+          RESULT: ${{ env.ANDROID_TV_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
 
 
   wii:
     name: Nintendo Wii DOL - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
-        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') ||
-        (
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
-        )
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') ||
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)')
       }}
     runs-on: ubuntu-latest
 
@@ -862,6 +1115,15 @@ jobs:
           [ -n "$safe" ] || safe="commit"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Nintendo Wii DOL
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
 
       - name: Prepare Wii embedded texture bundle
         shell: bash
@@ -979,27 +1241,157 @@ jobs:
           if-no-files-found: error
 
       - name: Mark failed build in summary
-        if: env.WII_BUILD_OK != '1'
+        if: always() && env.WII_BUILD_OK != '1'
         shell: bash
         run: |
           echo "### Nintendo Wii DOL failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Nintendo Wii DOL
+          RESULT: ${{ env.WII_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
+
+  psp:
+    name: Sony PSP EBOOT - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') ||
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)')
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Sony PSP EBOOT
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
+
+      - name: Prepare PSP embedded texture bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-pil
+          python3 tools/prepare_psp_assets.py \
+            build/psp_generated/assets \
+            src/assets/psp_embedded_classic_pack.c \
+            build/psp_generated/psp_mcrw_assets.pak \
+            build/psp_generated/psp_mcrw_assets.S
+
+      - name: Build PSP EBOOT
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Sony PSP / pspdev"
+            echo
+            docker pull pspdev/pspdev:latest
+            docker run --rm \
+              -v "$PWD:/work" \
+              -w /work \
+              pspdev/pspdev:latest \
+              bash -lc 'make -f Makefile.psp clean || true; make -f Makefile.psp'
+            status=$?
+            echo "$status" > build/psp-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "PSP_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "PSP_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-psp.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package PSP app zip
+        if: env.PSP_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          artifact_prefix="pexcraft-psp"
+          package_dir="dist/$artifact_prefix"
+          app_dir="$package_dir/PSP/GAME/PEXCRAFT"
+          rm -rf "$package_dir"
+          mkdir -p "$app_dir"
+          test -s EBOOT.PBP
+          cp -f EBOOT.PBP "$app_dir/EBOOT.PBP"
+          cp -f PEXCRAFT.elf "$app_dir/PEXCRAFT.elf" || true
+          cp -f PEXCRAFT.map "$app_dir/PEXCRAFT.map" || true
+          cp -R logs "$package_dir/logs" || true
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     Sony PSP / pspdev
+          EOF
+          zip_path="dist/$artifact_prefix.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload PSP artifact
+        if: env.PSP_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pexcraft-psp
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: always() && env.PSP_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Sony PSP EBOOT failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Sony PSP EBOOT
+          RESULT: ${{ env.PSP_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
 
   xbox_uwp:
     name: Xbox One UWP Dev Mode - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
-        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)') ||
-        (
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
-          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)')
-        )
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') ||
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
       }}
     runs-on: windows-latest
 
@@ -1024,6 +1416,15 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
+      - name: Telegram build started
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Xbox One UWP Dev Mode
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py start || python .github/scripts/telegram_build_status.py start
+
       - name: Build Xbox One UWP Dev Mode appx
         shell: pwsh
         run: |
@@ -1035,6 +1436,7 @@ jobs:
           } catch {
             $_ | Out-File -FilePath logs/build-xbox-uwp.log -Append
             "XBOX_UWP_BUILD_OK=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            exit 1
           }
 
       - name: Attach commit/build info
@@ -1057,22 +1459,34 @@ jobs:
           if-no-files-found: error
 
       - name: Mark failed build in summary
-        if: env.XBOX_UWP_BUILD_OK != '1'
+        if: always() && env.XBOX_UWP_BUILD_OK != '1'
         shell: bash
         run: |
           echo "### Xbox One UWP Dev Mode failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No artifact uploaded for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Telegram build finished
+        if: always() && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          TASK_NAME: Xbox One UWP Dev Mode
+          RESULT: ${{ env.XBOX_UWP_BUILD_OK == '1' && 'success' || 'failure' }}
+        shell: bash
+        run: python3 .github/scripts/telegram_build_status.py finish || python .github/scripts/telegram_build_status.py finish
+
   telegram:
     name: Upload successful builds to Telegram
     runs-on: ubuntu-latest
     needs:
       - windows
+      - windows_arm64
       - linux
       - lgwebos
       - android
       - android_tv
+      - psp
       - wii
       - xbox_uwp
     if: always() && github.event_name != 'pull_request'
@@ -1099,6 +1513,7 @@ jobs:
           TOKEN: ${{ secrets.TOKEN }}
           CHAT_ID: ${{ env.CHAT_ID }}
           COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          NEEDS_JSON: ${{ toJson(needs) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1114,17 +1529,37 @@ jobs:
           token = os.environ["TOKEN"]
           chat_id = os.environ["CHAT_ID"]
           commit_name = os.environ.get("COMMIT_NAME", "")
-          repo = os.environ.get("GITHUB_REPOSITORY", "")
           sha = os.environ.get("GITHUB_SHA", "")
 
-          files = sorted(glob.glob("telegram_upload/**/*.zip", recursive=True) + glob.glob("telegram_upload/**/*.ipk", recursive=True) + glob.glob("telegram_upload/**/*.apk", recursive=True) + glob.glob("telegram_upload/**/*.appx", recursive=True) + glob.glob("telegram_upload/**/*.appxbundle", recursive=True) + glob.glob("telegram_upload/**/*.msixbundle", recursive=True))
+          files = sorted(
+              glob.glob("telegram_upload/**/*.zip", recursive=True)
+              + glob.glob("telegram_upload/**/*.ipk", recursive=True)
+              + glob.glob("telegram_upload/**/*.apk", recursive=True)
+              + glob.glob("telegram_upload/**/*.appx", recursive=True)
+              + glob.glob("telegram_upload/**/*.appxbundle", recursive=True)
+              + glob.glob("telegram_upload/**/*.msixbundle", recursive=True)
+          )
+
+          job_labels = {
+              "windows": "Windows MinGW",
+              "windows_arm64": "Windows arm64",
+              "linux": "Linux",
+              "lgwebos": "LG webOS",
+              "android": "Android",
+              "android_tv": "Android TV",
+              "psp": "PSP",
+              "wii": "Wii",
+              "xbox_uwp": "Xbox One UWP",
+          }
+
+          needs = json.loads(os.environ.get("NEEDS_JSON", "{}") or "{}")
+          failed = [job_labels.get(name, name) for name, data in needs.items() if data.get("result") in {"failure", "cancelled", "timed_out"}]
+          failed_text = ", ".join(failed) if failed else "None"
 
           caption = (
-              "PEXCraft successful builds\n"
-              f"Commit name: {commit_name}\n"
-              f"Repo: {repo}\n"
-              f"Commit: {sha[:12]}\n"
-              f"Built artifacts: {len(files)}"
+              "PexCraft built!\n"
+              f"Commit : {commit_name} - {sha[:12]}\n"
+              f"Failed : {failed_text}"
           )
 
           def send_text(text):
@@ -1137,7 +1572,7 @@ jobs:
                   print(r.read().decode("utf-8", "replace"))
 
           if not files:
-              send_text(caption + "\nNo successful build artifacts were produced.")
+              send_text("Build failed o_o")
               raise SystemExit(0)
 
           def send_group(group, group_index):
