@@ -807,6 +807,7 @@ done:
     }
     log_msg("Downloaded Release textures client.jar bytes=%lu", (unsigned long)downloaded);
     return 1;
+#endif
 }
 
 static int pack_install_extract_archive(const char *zip_path, const char *pack_dir) {
