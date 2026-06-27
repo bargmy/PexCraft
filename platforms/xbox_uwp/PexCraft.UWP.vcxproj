@@ -53,6 +53,10 @@
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <!-- UWP dev-mode activation was failing before the process reached the game.
+           Avoid an external Microsoft.VCLibs runtime dependency by linking the
+           release build with the static runtime. -->
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(ZlibLibraryDir);$(VcpkgInstalledDir)$(VcpkgTriplet)\lib;$(VcpkgRoot)\installed\$(VcpkgTriplet)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
