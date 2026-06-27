@@ -1476,6 +1476,9 @@ static void passive_conflict_ensure_textures(void) {
         unsigned char *copy = (unsigned char*)malloc(bytes);
         if (!copy) continue;
         memcpy(copy, src->rgba, bytes);
+        /* This GLB's sampler is REPEAT and several UV islands intentionally use
+           coordinates outside 0..1.  Clamping makes the face/eye islands sample
+           the wrong atlas edges, so keep wrap mode as GL_REPEAT. */
         if (upload_rgba_texture(&g_conflict_model_gl_textures[i], src->w, src->h, copy, 1)) {
             glBindTexture(GL_TEXTURE_2D, g_conflict_model_gl_textures[i].id);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1487,9 +1490,17 @@ static void passive_conflict_ensure_textures(void) {
 }
 
 static void passive_render_conflict_model(float br, int hurt) {
-    if (br < 0.22f) br = 0.22f;
-    if (br > 1.0f) br = 1.0f;
+    /* The Conflict GLB is an opaque/unlit model-viewer style asset.  Render it
+       outside the normal blended Minecraft entity path so the model can depth-test
+       against itself correctly instead of drawing hair/clothes over the face. */
+    (void)br;
+    br = 1.0f;
     passive_conflict_ensure_textures();
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_CULL_FACE);
 
     for (int ri = 0; ri < PEX_CONFLICT_MODEL_RANGE_COUNT; ++ri) {
         const PexConflictModelRange *range = &g_pex_conflict_model_ranges[ri];
@@ -1507,7 +1518,7 @@ static void passive_render_conflict_model(float br, int hurt) {
             const PexConflictModelVertex *cv = &g_pex_conflict_model_vertices[vi];
             float rr, gg, bb, aa;
             if (textured) {
-                rr = br; gg = br; bb = br; aa = 1.0f;
+                rr = 1.0f; gg = 1.0f; bb = 1.0f; aa = 1.0f;
             } else {
                 rr = ((float)cv->r / 255.0f) * br;
                 gg = ((float)cv->g / 255.0f) * br;
@@ -1523,6 +1534,9 @@ static void passive_render_conflict_model(float br, int hurt) {
     }
 
     glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glEnable(GL_ALPHA_TEST);
+    glDepthMask(GL_TRUE);
     glColor4f(1, 1, 1, 1);
 }
 
@@ -1544,6 +1558,7 @@ static void draw_passive_mobs(float partial) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
+    glDepthMask(GL_TRUE);
 
     for (int i = 0; i < entry_count; ++i) {
         PassiveMobRenderEntry *e = &entries[i];
@@ -1571,7 +1586,8 @@ static void draw_passive_mobs(float partial) {
         glTranslatef(e->x, e->y, e->z);
         glRotatef(180.0f - e->yaw, 0.0f, 1.0f, 0.0f);
         if (e->type == PASSIVE_MOB_CONFLICT) {
-            float br = flat_light_brightness((int)floorf(e->x), (int)floorf(e->y + 1.0f), (int)floorf(e->z));
+            float br = 1.0f;
+            glDepthMask(GL_TRUE);
             if (e->move > 0.01f) {
                 glTranslatef(0.0f, fabsf(sinf(e->limb * 0.6662f)) * 0.035f * e->move, 0.0f);
                 glRotatef(sinf(e->limb * 0.6662f) * 3.5f * e->move, 0.0f, 0.0f, 1.0f);
