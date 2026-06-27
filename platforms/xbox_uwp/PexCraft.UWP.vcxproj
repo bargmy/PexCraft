@@ -35,6 +35,7 @@
     <VcpkgTriplet Condition="'$(VcpkgTriplet)'==''">x64-uwp</VcpkgTriplet>
     <VcpkgInstalledDir Condition="'$(VcpkgInstalledDir)'==''">$(VcpkgRoot)\installed\</VcpkgInstalledDir>
     <ZlibLibraryDir Condition="'$(ZlibLibraryDir)'==''">$(VcpkgInstalledDir)$(VcpkgTriplet)\lib</ZlibLibraryDir>
+    <ZlibIncludeDir Condition="'$(ZlibIncludeDir)'==''">$(VcpkgInstalledDir)$(VcpkgTriplet)\include</ZlibIncludeDir>
     <ZlibLibrary Condition="'$(ZlibLibrary)'==''">$(ZlibLibraryDir)\zlib.lib</ZlibLibrary>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -48,7 +49,7 @@
     <ClCompile>
       <PreprocessorDefinitions>PEX_PLATFORM_XBOX_UWP=1;WINAPI_FAMILY=WINAPI_FAMILY_APP;NDEBUG;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\cppwinrt;$(ProjectDir)..\..\src;$(ProjectDir)..\..;$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(VcpkgRoot)\installed\$(VcpkgTriplet)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\cppwinrt;$(ProjectDir)..\..\src;$(ProjectDir)..\..;$(ZlibIncludeDir);$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(VcpkgRoot)\installed\$(VcpkgTriplet)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <ExceptionHandling>Sync</ExceptionHandling>

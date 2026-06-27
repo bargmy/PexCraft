@@ -24,35 +24,91 @@ if (!$msbuild -or !(Test-Path $msbuild)) { throw "MSBuild not found" }
 # C++/WinRT shell does not use /ZW, so no platform.winmd /AI path hack is needed.
 
 # The real engine uses zlib for save files, texturepack zip extraction, and MCPE batch/login payloads.
-# Use the hosted runner vcpkg when available; the project consumes x64-uwp headers/libs via MSBuild.
+# Use the hosted runner vcpkg when available; the project consumes x64-uwp headers/libs via explicit MSBuild properties.
 $vcpkg = $env:VCPKG_ROOT
 if (!$vcpkg -and (Test-Path "C:\vcpkg\vcpkg.exe")) { $vcpkg = "C:\vcpkg" }
+$triplet = "x64-uwp"
 $zlibLibDir = $null
 $zlibLib = $null
 $zlibIncludeDir = $null
 
-if ($vcpkg -and (Test-Path (Join-Path $vcpkg "vcpkg.exe"))) {
-    Write-Host "Installing UWP zlib through vcpkg: $vcpkg"
-    & (Join-Path $vcpkg "vcpkg.exe") install zlib:x64-uwp
-    if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:x64-uwp failed with $LASTEXITCODE" }
-
-    $zlibRoot = Join-Path $vcpkg "installed\x64-uwp"
-    $zlibLibDir = Join-Path $zlibRoot "lib"
-    $zlibLib = Join-Path $zlibLibDir "zlib.lib"
-    $zlibIncludeDir = Join-Path $zlibRoot "include"
-
-    if (!(Test-Path $zlibLib)) {
-        $found = Get-ChildItem -Path (Join-Path $vcpkg "installed") -Recurse -Filter "zlib*.lib" -ErrorAction SilentlyContinue | Select-Object -First 20
-        $list = ($found | ForEach-Object { $_.FullName }) -join "`n"
-        throw "vcpkg installed zlib:x64-uwp, but expected library was not found: $zlibLib`nFound zlib libraries:`n$list"
+function Find-ZlibLibrary([string]$VcpkgRoot, [string]$Triplet) {
+    $candidateFiles = @(
+        (Join-Path $VcpkgRoot "installed\$Triplet\lib\zlib.lib"),
+        (Join-Path $VcpkgRoot "installed\$Triplet\lib\zlibstatic.lib"),
+        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib\zlib.lib"),
+        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib\zlibstatic.lib"),
+        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib\z.lib")
+    )
+    foreach ($candidate in $candidateFiles) {
+        if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
     }
 
+    $candidateDirs = @(
+        (Join-Path $VcpkgRoot "installed\$Triplet\lib"),
+        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib")
+    ) | Where-Object { Test-Path $_ }
+
+    $libs = foreach ($dir in $candidateDirs) {
+        Get-ChildItem -Path $dir -File -Filter "*.lib" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch "\\debug\\" }
+    }
+
+    $preferred = $libs | Where-Object { $_.Name -match "^(zlib|zlibstatic|z)\.lib$" } | Select-Object -First 1
+    if ($preferred) { return $preferred.FullName }
+
+    $any = $libs | Select-Object -First 1
+    if ($any) { return $any.FullName }
+
+    return $null
+}
+
+function Find-ZlibIncludeDir([string]$VcpkgRoot, [string]$Triplet) {
+    $candidateDirs = @(
+        (Join-Path $VcpkgRoot "installed\$Triplet\include"),
+        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\include")
+    )
+    foreach ($dir in $candidateDirs) {
+        if (Test-Path (Join-Path $dir "zlib.h")) { return (Resolve-Path $dir).Path }
+    }
+    return $null
+}
+
+if ($vcpkg -and (Test-Path (Join-Path $vcpkg "vcpkg.exe"))) {
+    Write-Host "Installing UWP zlib through vcpkg: $vcpkg"
+    & (Join-Path $vcpkg "vcpkg.exe") install "zlib:$triplet"
+    if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:$triplet failed with $LASTEXITCODE" }
+
+    $zlibLib = Find-ZlibLibrary -VcpkgRoot $vcpkg -Triplet $triplet
+    $zlibIncludeDir = Find-ZlibIncludeDir -VcpkgRoot $vcpkg -Triplet $triplet
+
+    if (!$zlibLib) {
+        $debugRoots = @(
+            (Join-Path $vcpkg "installed\$triplet"),
+            (Join-Path $vcpkg "packages\zlib_$triplet")
+        ) | Where-Object { Test-Path $_ }
+        $found = foreach ($rootPath in $debugRoots) {
+            Get-ChildItem -Path $rootPath -Recurse -File -Filter "*.lib" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+        }
+        $list = ($found | Select-Object -First 50) -join "`n"
+        throw "vcpkg installed zlib:$triplet, but no release zlib .lib could be found under installed or packages. Found .lib files:`n$list"
+    }
+
+    if (!$zlibIncludeDir) {
+        throw "vcpkg installed zlib:$triplet, but zlib.h was not found under installed or packages."
+    }
+
+    $zlibLibDir = Split-Path -Parent $zlibLib
+
     # Make the dependency visible both to MSBuild properties and to link.exe's LIB search path.
+    # Some GitHub-hosted vcpkg runs leave the usable UWP .lib in packages\zlib_x64-uwp\lib
+    # instead of installed\x64-uwp\lib, so always pass the exact file path discovered above.
     $env:VCPKG_ROOT = $vcpkg
     $env:VcpkgRoot = $vcpkg
     $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\"
     $env:LIB = "$zlibLibDir;$env:LIB"
     $env:INCLUDE = "$zlibIncludeDir;$env:INCLUDE"
+    Write-Host "Using zlib include dir: $zlibIncludeDir"
     Write-Host "Using zlib library: $zlibLib"
 } else {
     Write-Warning "vcpkg not found; build will rely on system zlib headers/libs if present."
@@ -79,6 +135,7 @@ if ($vcpkg) {
     $msbuildArgs += "/p:VcpkgInstalledDir=$((Join-Path $vcpkg 'installed') + '\')"
 }
 if ($zlibLibDir) { $msbuildArgs += "/p:ZlibLibraryDir=$zlibLibDir" }
+if ($zlibIncludeDir) { $msbuildArgs += "/p:ZlibIncludeDir=$zlibIncludeDir" }
 if ($zlibLib) { $msbuildArgs += "/p:ZlibLibrary=$zlibLib" }
 
 & $msbuild @msbuildArgs
