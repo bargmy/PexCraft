@@ -1038,7 +1038,7 @@ jobs:
         if: env.XBOX_UWP_BUILD_OK == '1'
         shell: pwsh
         run: |
-          $pkg = Get-ChildItem -Path dist -File -Include 'pexcraft-xbox-one-uwp-devmode.appx','pexcraft-xbox-one-uwp-devmode.msix','pexcraft-xbox-one-uwp-devmode.appxbundle','pexcraft-xbox-one-uwp-devmode.msixbundle' | Select-Object -First 1
+          $pkg = Get-ChildItem -Path dist -Recurse -File -Include 'pexcraft-xbox-one-uwp-devmode.appx','pexcraft-xbox-one-uwp-devmode.msix','pexcraft-xbox-one-uwp-devmode.appxbundle','pexcraft-xbox-one-uwp-devmode.msixbundle' | Select-Object -First 1
           if (!$pkg) { throw "missing Xbox UWP appx/msix package in dist" }
           "XBOX_UWP_PATH=$($pkg.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -1050,6 +1050,7 @@ jobs:
           path: |
             ${{ env.XBOX_UWP_PATH }}
             dist/pexcraft-xbox-one-uwp-devmode-build-notes.txt
+            dist/pexcraft-xbox-one-uwp-devmode-testcert.cer
           if-no-files-found: error
 
       - name: Mark failed build in summary
