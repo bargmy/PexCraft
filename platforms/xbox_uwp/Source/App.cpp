@@ -15,7 +15,6 @@
 #include <stdint.h>
 #include <string>
 #include <cstdlib>
-#include <cstdio>
 
 namespace winrt_app = winrt::Windows::ApplicationModel;
 namespace activation = winrt::Windows::ApplicationModel::Activation;
@@ -41,39 +40,11 @@ extern "C" {
 static std::wstring g_local_folder;
 
 
-static void pex_activation_log(const wchar_t *message) {
-    if (!message) return;
-    OutputDebugStringW(message);
-    OutputDebugStringW(L"\r\n");
-    try {
-        auto folder = storage::ApplicationData::Current().LocalFolder();
-        std::wstring path(folder.Path().c_str());
-        path.append(L"\\pexcraft-uwp-activation.log");
-        HANDLE h = CreateFile2(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, OPEN_ALWAYS, nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            SYSTEMTIME st;
-            GetLocalTime(&st);
-            wchar_t line[1024];
-            swprintf_s(line, L"[%04u-%02u-%02u %02u:%02u:%02u] %s\r\n",
-                       st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, message);
-            int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, nullptr, 0, nullptr, nullptr);
-            if (bytes > 1) {
-                std::string utf8;
-                utf8.resize((size_t)bytes);
-                WideCharToMultiByte(CP_UTF8, 0, line, -1, &utf8[0], bytes, nullptr, nullptr);
-                DWORD written = 0;
-                WriteFile(h, utf8.data(), (DWORD)(bytes - 1), &written, nullptr);
-            }
-            CloseHandle(h);
-        }
-    } catch (...) {
-    }
-}
-
-static void pex_activation_log_hr(const wchar_t *where, winrt::hresult_error const& e) {
-    wchar_t line[1024];
-    swprintf_s(line, L"%s failed hr=0x%08X message=%s", where ? where : L"UWP activation", (unsigned int)e.code(), e.message().c_str());
-    pex_activation_log(line);
+static void pex_uwp_output(const wchar_t *msg) {
+    if (!msg) return;
+    OutputDebugStringW(L"[PexCraft UWP] ");
+    OutputDebugStringW(msg);
+    OutputDebugStringW(L"\n");
 }
 
 
@@ -210,24 +181,27 @@ static int pex_vk_from_virtual_key(win_system::VirtualKey key) {
     }
 }
 
-namespace PexCraftUwp {
+namespace PexCraftUWP {
 
 struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFrameworkView> {
     coreui::CoreWindow m_window{ nullptr };
     bool m_windowClosed = false;
     bool m_windowVisible = true;
+    bool m_activated = false;
+    bool m_engineStarted = false;
     bool m_engineReady = false;
 
     coreapp::IFrameworkView CreateView() { return *this; }
 
     void Initialize(coreapp::CoreApplicationView const& applicationView) {
+        pex_uwp_output(L"IFrameworkView::Initialize");
         applicationView.Activated({ this, &App::OnActivated });
         coreapp::CoreApplication::Suspending({ this, &App::OnSuspending });
         coreapp::CoreApplication::Resuming({ this, &App::OnResuming });
-        pex_xbox_uwp_get_local_folder_w();
     }
 
     void SetWindow(coreui::CoreWindow const& window) {
+        pex_uwp_output(L"IFrameworkView::SetWindow");
         m_window = window;
         m_window.Closed({ this, &App::OnWindowClosed });
         m_window.VisibilityChanged({ this, &App::OnVisibilityChanged });
@@ -235,18 +209,34 @@ struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFra
         m_window.KeyDown({ this, &App::OnKeyDown });
         m_window.KeyUp({ this, &App::OnKeyUp });
         m_window.CharacterReceived({ this, &App::OnCharacterReceived });
+    }
+
+    void Load(winrt::hstring const&) {
+        pex_uwp_output(L"IFrameworkView::Load");
+    }
+
+    void StartRealEngine() {
+        if (m_engineStarted) return;
+        m_engineStarted = true;
+        pex_uwp_output(L"starting real PexCraft engine");
         auto b = m_window.Bounds();
         int w = (int)(b.Width > 1.0f ? b.Width : 1280.0f);
         int h = (int)(b.Height > 1.0f ? b.Height : 720.0f);
         m_engineReady = pex_xbox_uwp_engine_init(winrt::get_unknown(m_window), w, h) != 0;
+        if (!m_engineReady) {
+            pex_uwp_output(L"real engine init returned failure");
+            m_windowClosed = true;
+        } else {
+            pex_uwp_output(L"real engine init OK");
+        }
     }
 
-    void Load(winrt::hstring const&) {}
-
     void Run() {
+        pex_uwp_output(L"IFrameworkView::Run entered");
         while (!m_windowClosed) {
             if (m_windowVisible) {
                 m_window.Dispatcher().ProcessEvents(coreui::CoreProcessEventsOption::ProcessAllIfPresent);
+                if (m_activated && !m_engineStarted) StartRealEngine();
                 if (m_engineReady) pex_xbox_uwp_engine_frame();
             } else {
                 m_window.Dispatcher().ProcessEvents(coreui::CoreProcessEventsOption::ProcessOneAndAllPending);
@@ -254,9 +244,16 @@ struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFra
         }
     }
 
-    void Uninitialize() { if (m_engineReady) pex_xbox_uwp_engine_shutdown(); }
+    void Uninitialize() {
+        pex_uwp_output(L"IFrameworkView::Uninitialize");
+        if (m_engineReady) pex_xbox_uwp_engine_shutdown();
+    }
 
-    void OnActivated(coreapp::CoreApplicationView const&, activation::IActivatedEventArgs const&) { if (m_window) m_window.Activate(); }
+    void OnActivated(coreapp::CoreApplicationView const&, activation::IActivatedEventArgs const&) {
+        pex_uwp_output(L"OnActivated: Activate CoreWindow");
+        m_activated = true;
+        coreui::CoreWindow::GetForCurrentThread().Activate();
+    }
     void OnSuspending(winrt::Windows::Foundation::IInspectable const&, winrt_app::SuspendingEventArgs const&) {}
     void OnResuming(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&) {}
     void OnWindowClosed(coreui::CoreWindow const&, coreui::CoreWindowEventArgs const&) { m_windowClosed = true; }
@@ -268,33 +265,21 @@ struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFra
     }
     void OnKeyDown(coreui::CoreWindow const&, coreui::KeyEventArgs const& args) {
         int vk = pex_vk_from_virtual_key(args.VirtualKey());
-        if (vk) { pex_xbox_uwp_engine_key_down(vk); args.Handled(true); }
+        if (vk && m_engineReady) { pex_xbox_uwp_engine_key_down(vk); args.Handled(true); }
     }
     void OnKeyUp(coreui::CoreWindow const&, coreui::KeyEventArgs const& args) {
         int vk = pex_vk_from_virtual_key(args.VirtualKey());
-        if (vk) { pex_xbox_uwp_engine_key_up(vk); args.Handled(true); }
+        if (vk && m_engineReady) { pex_xbox_uwp_engine_key_up(vk); args.Handled(true); }
     }
     void OnCharacterReceived(coreui::CoreWindow const&, coreui::CharacterReceivedEventArgs const& args) {
         uint32_t ch = args.KeyCode();
-        if (ch >= 32 && ch < 127) { pex_xbox_uwp_engine_char(ch); args.Handled(true); }
+        if (ch >= 32 && ch < 127 && m_engineReady) { pex_xbox_uwp_engine_char(ch); args.Handled(true); }
     }
 };
-
-} // namespace PexCraftUwp
+} // namespace PexCraftUWP
 
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    try {
-        pex_activation_log(L"wWinMain begin");
-        winrt::init_apartment();
-        pex_activation_log(L"CoreApplication::Run begin");
-        coreapp::CoreApplication::Run(winrt::make<PexCraftUwp::App>());
-        pex_activation_log(L"CoreApplication::Run returned");
-        return 0;
-    } catch (winrt::hresult_error const& e) {
-        pex_activation_log_hr(L"wWinMain/CoreApplication::Run", e);
-        return (int)e.code();
-    } catch (...) {
-        pex_activation_log(L"wWinMain/CoreApplication::Run failed with unknown exception");
-        return -1;
-    }
+    pex_uwp_output(L"wWinMain: CoreApplication::Run");
+    coreapp::CoreApplication::Run(winrt::make<PexCraftUWP::App>());
+    return 0;
 }

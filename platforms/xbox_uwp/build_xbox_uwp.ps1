@@ -24,142 +24,62 @@ if (!$msbuild -or !(Test-Path $msbuild)) { throw "MSBuild not found" }
 # C++/WinRT shell does not use /ZW, so no platform.winmd /AI path hack is needed.
 
 # The real engine uses zlib for save files, texturepack zip extraction, and MCPE batch/login payloads.
-# Use the hosted runner vcpkg when available; the project consumes x64-uwp headers/libs via explicit MSBuild properties.
+# Use the hosted runner vcpkg when available; the project consumes x64-uwp headers/libs via MSBuild.
 $vcpkg = $env:VCPKG_ROOT
 if (!$vcpkg -and (Test-Path "C:\vcpkg\vcpkg.exe")) { $vcpkg = "C:\vcpkg" }
-$triplet = "x64-uwp"
-$zlibLibDir = $null
-$zlibLib = $null
-$zlibIncludeDir = $null
-
-function Find-ZlibLibrary([string]$VcpkgRoot, [string]$Triplet) {
-    $candidateFiles = @(
-        (Join-Path $VcpkgRoot "installed\$Triplet\lib\zlib.lib"),
-        (Join-Path $VcpkgRoot "installed\$Triplet\lib\zlibstatic.lib"),
-        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib\zlib.lib"),
-        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib\zlibstatic.lib"),
-        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib\z.lib")
-    )
-    foreach ($candidate in $candidateFiles) {
-        if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
-    }
-
-    $candidateDirs = @(
-        (Join-Path $VcpkgRoot "installed\$Triplet\lib"),
-        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\lib")
-    ) | Where-Object { Test-Path $_ }
-
-    $libs = foreach ($dir in $candidateDirs) {
-        Get-ChildItem -Path $dir -File -Filter "*.lib" -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch "\\debug\\" }
-    }
-
-    $preferred = $libs | Where-Object { $_.Name -match "^(zlib|zlibstatic|z)\.lib$" } | Select-Object -First 1
-    if ($preferred) { return $preferred.FullName }
-
-    $any = $libs | Select-Object -First 1
-    if ($any) { return $any.FullName }
-
-    return $null
-}
-
-function Find-ZlibIncludeDir([string]$VcpkgRoot, [string]$Triplet) {
-    $candidateDirs = @(
-        (Join-Path $VcpkgRoot "installed\$Triplet\include"),
-        (Join-Path $VcpkgRoot "packages\zlib_$Triplet\include")
-    )
-    foreach ($dir in $candidateDirs) {
-        if (Test-Path (Join-Path $dir "zlib.h")) { return (Resolve-Path $dir).Path }
-    }
-    return $null
-}
-
 if ($vcpkg -and (Test-Path (Join-Path $vcpkg "vcpkg.exe"))) {
     Write-Host "Installing UWP zlib through vcpkg: $vcpkg"
-    & (Join-Path $vcpkg "vcpkg.exe") install "zlib:$triplet"
-    if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:$triplet failed with $LASTEXITCODE" }
-
-    $zlibLib = Find-ZlibLibrary -VcpkgRoot $vcpkg -Triplet $triplet
-    $zlibIncludeDir = Find-ZlibIncludeDir -VcpkgRoot $vcpkg -Triplet $triplet
-
-    if (!$zlibLib) {
-        $debugRoots = @(
-            (Join-Path $vcpkg "installed\$triplet"),
-            (Join-Path $vcpkg "packages\zlib_$triplet")
-        ) | Where-Object { Test-Path $_ }
-        $found = foreach ($rootPath in $debugRoots) {
-            Get-ChildItem -Path $rootPath -Recurse -File -Filter "*.lib" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-        }
-        $list = ($found | Select-Object -First 50) -join "`n"
-        throw "vcpkg installed zlib:$triplet, but no release zlib .lib could be found under installed or packages. Found .lib files:`n$list"
-    }
-
-    if (!$zlibIncludeDir) {
-        throw "vcpkg installed zlib:$triplet, but zlib.h was not found under installed or packages."
-    }
-
-    $zlibLibDir = Split-Path -Parent $zlibLib
-
-    # Make the dependency visible both to MSBuild properties and to link.exe's LIB search path.
-    # Some GitHub-hosted vcpkg runs leave the usable UWP .lib in packages\zlib_x64-uwp\lib
-    # instead of installed\x64-uwp\lib, so always pass the exact file path discovered above.
-    $env:VCPKG_ROOT = $vcpkg
+    & (Join-Path $vcpkg "vcpkg.exe") install zlib:x64-uwp
+    if ($LASTEXITCODE -ne 0) { throw "vcpkg zlib:x64-uwp failed with $LASTEXITCODE" }
+    $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\\"
     $env:VcpkgRoot = $vcpkg
-    $env:VcpkgInstalledDir = (Join-Path $vcpkg "installed") + "\"
-    $env:LIB = "$zlibLibDir;$env:LIB"
-    $env:INCLUDE = "$zlibIncludeDir;$env:INCLUDE"
-    Write-Host "Using zlib include dir: $zlibIncludeDir"
-    Write-Host "Using zlib library: $zlibLib"
 } else {
     Write-Warning "vcpkg not found; build will rely on system zlib headers/libs if present."
 }
 
+$zlibCandidates = @()
+if ($vcpkg) {
+    $zlibCandidates += Join-Path $vcpkg "installed\x64-uwp\lib"
+    $zlibCandidates += Join-Path $vcpkg "packages\zlib_x64-uwp\lib"
+}
+$zlibLib = $null
+foreach ($dir in $zlibCandidates) {
+    if (Test-Path $dir) {
+        $hit = Get-ChildItem -Path $dir -Filter "*.lib" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^(zlib|zlibstatic|z)\.lib$" } | Select-Object -First 1
+        if ($hit) { $zlibLib = $hit.FullName; break }
+    }
+}
+if (!$zlibLib) {
+    $found = @()
+    foreach ($dir in $zlibCandidates) { if (Test-Path $dir) { $found += (Get-ChildItem -Path $dir -Filter "*.lib" -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) } }
+    throw "Could not find UWP zlib .lib after vcpkg install. Searched: $($zlibCandidates -join '; ') Found: $($found -join '; ')"
+}
+$zlibDir = Split-Path -Parent $zlibLib
+Write-Host "Using zlib library: $zlibLib"
 
 Write-Host "Using MSBuild: $msbuild"
-$msbuildArgs = @(
-    $project,
-    "/m",
-    "/restore",
-    "/p:Configuration=$Configuration",
-    "/p:Platform=$Platform",
-    "/p:AppxBundle=Never",
-    "/p:GenerateAppxPackageOnBuild=true",
-    "/p:AppxPackageSigningEnabled=false",
-    "/p:WindowsTargetPlatformMinVersion=10.0.14393.0",
-    "/p:VcpkgTriplet=x64-uwp",
-    "/p:VcpkgEnabled=true"
-)
-
-if ($vcpkg) {
-    $msbuildArgs += "/p:VcpkgRoot=$vcpkg"
-    $msbuildArgs += "/p:VcpkgInstalledDir=$((Join-Path $vcpkg 'installed') + '\')"
-}
-if ($zlibLibDir) { $msbuildArgs += "/p:ZlibLibraryDir=$zlibLibDir" }
-if ($zlibIncludeDir) { $msbuildArgs += "/p:ZlibIncludeDir=$zlibIncludeDir" }
-if ($zlibLib) { $msbuildArgs += "/p:ZlibLibrary=$zlibLib" }
-
-& $msbuild @msbuildArgs
+& $msbuild $project `
+    /m `
+    /restore `
+    /p:Configuration=$Configuration `
+    /p:Platform=$Platform `
+    /p:AppxBundle=Never `
+    /p:GenerateAppxPackageOnBuild=true `
+    /p:AppxPackageSigningEnabled=false `
+    /p:WindowsTargetPlatformMinVersion=10.0.14393.0 `
+    /p:VcpkgTriplet=x64-uwp `
+    /p:VcpkgEnabled=true `
+    /p:ZlibLibrary="$zlibLib" `
+    /p:ZlibLibraryDir="$zlibDir"
 
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
 
-
-# Prefer the Visual Studio/MSBuild-generated package.  It creates the final
-# AppxManifest.xml and package metadata exactly the way UWP activation expects.
-# The controlled MakeAppx layout remains as a fallback only.
-$appx = $null
-$packagingMode = "MSBuild generated appx"
+$appx = Get-ChildItem -Path (Join-Path $root "build") -Recurse -Include *.appx,*.msix,*.appxbundle,*.msixbundle -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$packagingMode = "MSBuild"
 $certOut = $null
 
-$generatedPackages = Get-ChildItem -Path (Join-Path $root "build\xbox_uwp") -Recurse -File -Include "*.appx","*.msix" -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -notmatch "appx_layout" -and $_.Name -notmatch "PexCraft\.UWP\.appx$" } |
-    Sort-Object LastWriteTime -Descending
-
-if ($generatedPackages -and $generatedPackages.Count -gt 0) {
-    $appx = $generatedPackages | Select-Object -First 1
-    Write-Host "Using MSBuild-generated package: $($appx.FullName)"
-} else {
-    Write-Warning "MSBuild package was not found; falling back to controlled MakeAppx layout."
-    $packagingMode = "MakeAppx controlled fallback layout"
+if (!$appx) {
+    Write-Host "MSBuild produced the UWP executable but no appx/msix. Falling back to MakeAppx packaging."
 
     $exe = Get-ChildItem -Path (Join-Path $root "build\xbox_uwp") -Recurse -Filter "PexCraft.UWP.exe" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (!$exe) { throw "UWP build succeeded but PexCraft.UWP.exe was not found; cannot package." }
@@ -182,47 +102,47 @@ if ($generatedPackages -and $generatedPackages.Count -gt 0) {
     $manifestText = Get-Content -Raw $manifestSrc
     $manifestText = $manifestText.Replace('$targetnametoken$', 'PexCraft.UWP')
     $manifestText = $manifestText.Replace('$targetentrypoint$', 'PexCraftUWP.App')
-    if ($manifestText -notmatch 'ProcessorArchitecture=') {
-        $manifestText = $manifestText -replace '<Identity ([^>]+?) />', '<Identity $1 ProcessorArchitecture="x64" />'
-    }
     $manifestText | Out-File -FilePath $manifestDst -Encoding utf8
 
     $manualAppx = Join-Path $root "build\xbox_uwp\PexCraft.UWP.appx"
     if (Test-Path $manualAppx) { Remove-Item $manualAppx -Force }
     & $makeappx.FullName pack /d $layout /p $manualAppx /o
     if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed with $LASTEXITCODE" }
+
+    $signtool = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "signtool.exe" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($signtool) {
+        try {
+            $cert = New-SelfSignedCertificate `
+                -Type Custom `
+                -Subject "CN=PexCraft" `
+                -KeyUsage DigitalSignature `
+                -FriendlyName "PexCraft Xbox UWP Dev Mode Test Certificate" `
+                -CertStoreLocation "Cert:\CurrentUser\My" `
+                -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+            $cerPath = Join-Path $dist "pexcraft-xbox-one-uwp-devmode-testcert.cer"
+            Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
+            & $signtool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint $manualAppx
+            if ($LASTEXITCODE -eq 0) {
+                $certOut = $cerPath
+                Write-Host "Signed fallback appx with temporary CI test certificate: $cerPath"
+            } else {
+                Write-Warning "SignTool failed with $LASTEXITCODE; appx was created but may need signing before install."
+            }
+        } catch {
+            Write-Warning "Could not generate/sign with a test certificate: $_"
+        }
+    } else {
+        Write-Warning "signtool.exe not found; appx was created but may need signing before install."
+    }
+
     $appx = Get-Item $manualAppx
+    $packagingMode = "MakeAppx fallback"
 }
 
-# Sign the final package if signtool and certificate creation are available.
-$signtool = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "signtool.exe" -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
-    Sort-Object FullName -Descending |
-    Select-Object -First 1
-if ($signtool -and $appx) {
-    try {
-        $cert = New-SelfSignedCertificate `
-            -Type Custom `
-            -Subject "CN=PexCraft" `
-            -KeyUsage DigitalSignature `
-            -FriendlyName "PexCraft Xbox UWP Dev Mode Test Certificate" `
-            -CertStoreLocation "Cert:\CurrentUser\My" `
-            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-        $cerPath = Join-Path $dist "pexcraft-xbox-one-uwp-devmode-testcert.cer"
-        Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
-        & $signtool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint $appx.FullName
-        if ($LASTEXITCODE -eq 0) {
-            $certOut = $cerPath
-            Write-Host "Signed appx with temporary CI test certificate: $cerPath"
-        } else {
-            Write-Warning "SignTool failed with $LASTEXITCODE; appx was created but may need signing before install."
-        }
-    } catch {
-        Write-Warning "Could not generate/sign with a test certificate: $_"
-    }
-} else {
-    Write-Warning "signtool.exe not found; appx was created but may need signing before install."
-}
+if (!$appx) { throw "UWP build succeeded but no appx/msix package was produced. Fake source zips are intentionally disabled." }
 
 $out = Join-Path $dist "pexcraft-xbox-one-uwp-devmode$($appx.Extension)"
 Copy-Item $appx.FullName $out -Force

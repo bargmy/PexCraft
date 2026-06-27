@@ -27,19 +27,8 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <!-- Robust vcpkg/zlib defaults for GitHub Actions and local builds.
-         MSBuild does not always inherit vcpkg integration properties in UWP CI,
-         so the build script also passes these as /p: values. -->
-    <VcpkgRoot Condition="'$(VcpkgRoot)'=='' and '$(VCPKG_ROOT)'!=''">$(VCPKG_ROOT)</VcpkgRoot>
-    <VcpkgRoot Condition="'$(VcpkgRoot)'==''">C:\vcpkg</VcpkgRoot>
-    <VcpkgTriplet Condition="'$(VcpkgTriplet)'==''">x64-uwp</VcpkgTriplet>
-    <VcpkgInstalledDir Condition="'$(VcpkgInstalledDir)'==''">$(VcpkgRoot)\installed\</VcpkgInstalledDir>
-    <ZlibLibraryDir Condition="'$(ZlibLibraryDir)'==''">$(VcpkgInstalledDir)$(VcpkgTriplet)\lib</ZlibLibraryDir>
-    <ZlibIncludeDir Condition="'$(ZlibIncludeDir)'==''">$(VcpkgInstalledDir)$(VcpkgTriplet)\include</ZlibIncludeDir>
-    <ZlibLibrary Condition="'$(ZlibLibrary)'==''">$(ZlibLibraryDir)\zlib.lib</ZlibLibrary>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
+    <TargetName>PexCraft.UWP</TargetName>
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
     <AppxBundle>Never</AppxBundle>
     <OutDir>$(SolutionDir)..\..\build\xbox_uwp\$(Platform)\$(Configuration)\</OutDir>
@@ -49,19 +38,18 @@
     <ClCompile>
       <PreprocessorDefinitions>PEX_PLATFORM_XBOX_UWP=1;WINAPI_FAMILY=WINAPI_FAMILY_APP;NDEBUG;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\cppwinrt;$(ProjectDir)..\..\src;$(ProjectDir)..\..;$(ZlibIncludeDir);$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(VcpkgRoot)\installed\$(VcpkgTriplet)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\cppwinrt;$(ProjectDir)..\..\src;$(ProjectDir)..\..;$(VcpkgInstalledDir)$(VcpkgTriplet)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <ExceptionHandling>Sync</ExceptionHandling>
-      <!-- UWP dev-mode activation was failing before the process reached the game.
-           Avoid an external Microsoft.VCLibs runtime dependency by linking the
-           release build with the static runtime. -->
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>$(ZlibLibraryDir);$(VcpkgInstalledDir)$(VcpkgTriplet)\lib;$(VcpkgRoot)\installed\$(VcpkgTriplet)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>windowsapp.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;runtimeobject.lib;windowscodecs.lib;ole32.lib;ws2_32.lib;$(ZlibLibrary);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowsapp.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;runtimeobject.lib;windowscodecs.lib;ole32.lib;ws2_32.lib;$(ZlibLibrary)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ZlibLibraryDir);$(VcpkgInstalledDir)$(VcpkgTriplet)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <IgnoreSpecificDefaultLibraries>user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;shell32.lib;oleaut32.lib;odbc32.lib;odbccp32.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <SubSystem>Windows</SubSystem>
+      <AdditionalOptions>/APPCONTAINER %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

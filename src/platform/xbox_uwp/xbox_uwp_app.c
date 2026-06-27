@@ -2,23 +2,6 @@
 
 static int g_xbox_uwp_save_cs_ready = 0;
 
-/* UWP/CoreWindow owns presentation mode and swap timing.  The shared options
-   menu still calls these hooks, so provide Xbox-safe implementations instead
-   of leaving common.h's static declarations unresolved. */
-static void apply_vsync_setting(void) { }
-
-static void set_fullscreen_enabled(int enabled) {
-    /* Xbox/UWP apps run inside the CoreWindow supplied by the shell.  There is
-       no Win32/SDL fullscreen transition to perform here; keep the option state
-       coherent and let resize events from App.cpp drive render dimensions. */
-    g_opts.fullscreen = enabled ? 1 : 0;
-    save_options();
-}
-
-static void toggle_fullscreen(void) {
-    set_fullscreen_enabled(!g_opts.fullscreen);
-}
-
 static void pex_xbox_uwp_tick_frame(void) {
     profile_begin_frame();
     double prof_start = profile_begin();

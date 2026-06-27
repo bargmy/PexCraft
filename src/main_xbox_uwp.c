@@ -17,6 +17,10 @@ static void pex_gl_suppress_immediate(int on);
 static void pex_join_save_thread_for_exit(void);
 static void save_world_state_for_exit(void);
 
+static void apply_vsync_setting(void) { }
+static void set_fullscreen_enabled(int enabled) { g_opts.fullscreen = enabled ? 1 : 0; }
+static void toggle_fullscreen(void) { set_fullscreen_enabled(1); }
+
 #include "render/renderer_backend.h"
 static PexRendererBackend g_xbox_d3d9_null_backend;
 static PexRendererBackend *renderer_d3d9_get_backend(void) { return &g_xbox_d3d9_null_backend; }
