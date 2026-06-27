@@ -1463,21 +1463,65 @@ static void passive_sheep_fleece_color(int meta, float *r, float *g, float *b) {
 }
 
 
+static Texture g_conflict_model_gl_textures[PEX_CONFLICT_MODEL_TEXTURE_COUNT];
+static int g_conflict_model_textures_ready = 0;
+
+static void passive_conflict_ensure_textures(void) {
+    if (g_conflict_model_textures_ready) return;
+    g_conflict_model_textures_ready = 1;
+    for (int i = 0; i < PEX_CONFLICT_MODEL_TEXTURE_COUNT; ++i) {
+        const PexConflictModelTextureInfo *src = &g_pex_conflict_model_textures[i];
+        if (!src->rgba || src->w <= 0 || src->h <= 0) continue;
+        size_t bytes = (size_t)src->w * (size_t)src->h * 4u;
+        unsigned char *copy = (unsigned char*)malloc(bytes);
+        if (!copy) continue;
+        memcpy(copy, src->rgba, bytes);
+        if (upload_rgba_texture(&g_conflict_model_gl_textures[i], src->w, src->h, copy, 1)) {
+            glBindTexture(GL_TEXTURE_2D, g_conflict_model_gl_textures[i].id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        }
+    }
+}
+
 static void passive_render_conflict_model(float br, int hurt) {
     if (br < 0.22f) br = 0.22f;
     if (br > 1.0f) br = 1.0f;
-    glDisable(GL_TEXTURE_2D);
-    glBegin(GL_TRIANGLES);
-    for (int vi = 0; vi < PEX_CONFLICT_MODEL_VERTEX_COUNT; ++vi) {
-        const PexConflictModelVertex *cv = &g_pex_conflict_model_vertices[vi];
-        float rr = ((float)cv->r / 255.0f) * br;
-        float gg = ((float)cv->g / 255.0f) * br;
-        float bb = ((float)cv->b / 255.0f) * br;
-        if (hurt) { rr = 1.0f; gg *= 0.35f; bb *= 0.35f; }
-        glColor4f(rr, gg, bb, 1.0f);
-        glVertex3f(cv->x, cv->y, cv->z);
+    passive_conflict_ensure_textures();
+
+    for (int ri = 0; ri < PEX_CONFLICT_MODEL_RANGE_COUNT; ++ri) {
+        const PexConflictModelRange *range = &g_pex_conflict_model_ranges[ri];
+        int tex = range->texture;
+        int textured = tex >= 0 && tex < PEX_CONFLICT_MODEL_TEXTURE_COUNT && g_conflict_model_gl_textures[tex].id != 0;
+        if (textured) {
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, g_conflict_model_gl_textures[tex].id);
+        } else {
+            glDisable(GL_TEXTURE_2D);
+        }
+
+        glBegin(GL_TRIANGLES);
+        for (int vi = range->start; vi < range->start + range->count && vi < PEX_CONFLICT_MODEL_VERTEX_COUNT; ++vi) {
+            const PexConflictModelVertex *cv = &g_pex_conflict_model_vertices[vi];
+            float rr, gg, bb, aa;
+            if (textured) {
+                rr = br; gg = br; bb = br; aa = 1.0f;
+            } else {
+                rr = ((float)cv->r / 255.0f) * br;
+                gg = ((float)cv->g / 255.0f) * br;
+                bb = ((float)cv->b / 255.0f) * br;
+                aa = (float)cv->a / 255.0f;
+            }
+            if (hurt) { rr = 1.0f; gg *= 0.35f; bb *= 0.35f; }
+            glColor4f(rr, gg, bb, aa);
+            if (textured) glTexCoord2f(cv->u, cv->v);
+            glVertex3f(cv->x, cv->y, cv->z);
+        }
+        glEnd();
     }
-    glEnd();
+
     glEnable(GL_TEXTURE_2D);
     glColor4f(1, 1, 1, 1);
 }
