@@ -2065,6 +2065,55 @@ static void flat_note_section_mesh_changed(int sy, int cz, int cx) {
     g_flat_section_mesh_building[sy][cz][cx] = 0;
 }
 
+/* Day/night skylightSubtracted can change frequently around sunrise/sunset.
+   Rebuilding every generated section synchronously here was one of the hidden
+   CPU stalls inside Ingame tick: flat_mark_all_sections_dirty() scanned every
+   block in every generated chunk to refresh occupancy, then dirtied all meshes
+   at once.  Instead queue an incremental daylight re-tint pass.  Block edits
+   still use the immediate dirty path; only global light-bucket color changes are
+   amortized. */
+static int g_flat_daylight_dirty_pending = 0;
+static int g_flat_daylight_dirty_cx = 0;
+static int g_flat_daylight_dirty_cz = 0;
+#define PEX_DAYLIGHT_DIRTY_CHUNK_BUDGET 8
+
+static void flat_service_daylight_mesh_dirty_budget(int chunk_budget) {
+    int touched = 0;
+    if (!g_flat_daylight_dirty_pending) {
+        g_prof_daylight_dirty_pending = 0;
+        g_prof_daylight_dirty_chunks_last = 0;
+        return;
+    }
+    if (chunk_budget <= 0) chunk_budget = 1;
+    while (g_flat_daylight_dirty_pending && touched < chunk_budget) {
+        if (g_flat_daylight_dirty_cz >= FLAT_RENDER_CHUNKS) {
+            g_flat_daylight_dirty_pending = 0;
+            g_flat_daylight_dirty_cz = 0;
+            g_flat_daylight_dirty_cx = 0;
+            break;
+        }
+        int cx = g_flat_daylight_dirty_cx;
+        int cz = g_flat_daylight_dirty_cz;
+        g_flat_daylight_dirty_cx++;
+        if (g_flat_daylight_dirty_cx >= FLAT_RENDER_CHUNKS) {
+            g_flat_daylight_dirty_cx = 0;
+            g_flat_daylight_dirty_cz++;
+        }
+        if (!g_flat_world_chunk_generated[cz][cx]) continue;
+        /* Do not call flat_refresh_chunk_occupancy() here; that rescans a full
+           16x16xheight chunk.  The occupancy mask is maintained during chunk
+           install and block edits, and is good enough for daylight recolor work. */
+        unsigned short mask = g_flat_chunk_section_non_empty_mask[cz][cx];
+        if (mask == 0) continue;
+        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
+            if (mask & (unsigned short)(1u << sy)) flat_mark_section_dirty(cx, cz, sy);
+        }
+        touched++;
+    }
+    g_prof_daylight_dirty_pending = g_flat_daylight_dirty_pending ? 1 : 0;
+    g_prof_daylight_dirty_chunks_last = touched;
+}
+
 static void flat_mark_all_chunks_dirty(void) {
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
         for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
@@ -2083,23 +2132,12 @@ static void flat_mark_all_chunks_dirty(void) {
 }
 
 static void flat_mark_all_sections_dirty(void) {
-    /* Java 1.2.5 changes day/night lighting through EntityRenderer.updateLightmap()
-       without throwing away WorldRenderer display lists.  This port still bakes
-       the lightmap into terrain vertex colors, so when skylightSubtracted changes
-       we must rebuild section colors, but old meshes must remain drawable until
-       their replacements are ready. */
-    for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
-        for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
-            if (!g_flat_world_chunk_generated[cz][cx]) continue;
-            flat_refresh_chunk_occupancy(cx, cz);
-            g_flat_world_chunk_dirty[cz][cx] = 1;
-            for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-                if (!flat_section_has_blocks(cx, cz, sy)) continue;
-                flat_mark_section_dirty(cx, cz, sy);
-            }
-        }
-    }
-    g_flat_renderer_sort_dirty = 1;
+    /* Queue, do not synchronously rescan/remesh the whole active world. */
+    g_flat_daylight_dirty_pending = 1;
+    g_flat_daylight_dirty_cx = 0;
+    g_flat_daylight_dirty_cz = 0;
+    g_prof_daylight_dirty_pending = 1;
+    g_prof_daylight_dirty_chunks_last = 0;
 }
 
 static void flat_mark_chunks_dirty_near(int x, int z) {

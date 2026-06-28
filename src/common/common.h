@@ -1955,6 +1955,7 @@ typedef enum PexMainThreadProfileId {
     PROF_NET_SMOOTHING,
     PROF_ASYNC_TICK_PUMP,
     PROF_INGAME_TOTAL,
+    PROF_DAYLIGHT_MESH,
     PROF_INVENTORY,
     PROF_FURNACE,
     PROF_DROPS,
@@ -2010,6 +2011,7 @@ static const char *g_prof_names[PROF_COUNT] = {
     "Net smoothing",
     "Async tick pump",
     "Ingame tick",
+    "Daylight mesh",
     "Inventory",
     "Furnaces",
     "Drops/items",
@@ -2086,6 +2088,11 @@ static double g_prof_mesh_upload_worker_last_ms = 0.0;
 static double g_prof_mesh_upload_worker_avg_ms = 0.0;
 static int g_prof_mesh_upload_worker_samples = 0;
 static int g_prof_skylight_subtracted_last = 0;
+static int g_prof_daylight_dirty_pending = 0;
+static int g_prof_daylight_dirty_chunks_last = 0;
+static int g_prof_village_scan_blocks_last = 0;
+static int g_prof_spawn_y_cache_hits = 0;
+static int g_prof_spawn_y_cache_misses = 0;
 
 static int g_prof_packets_last = 0;
 static int g_prof_chunks_last = 0;

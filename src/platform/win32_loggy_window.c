@@ -2,7 +2,7 @@
    This is intentionally not SDL based: it uses a normal HWND + EDIT control
    so the Windows build gets a real separate diagnostics window. */
 
-#define PEX_WIN32_LOGGY_UPDATE_SECONDS 0.10
+#define PEX_WIN32_LOGGY_UPDATE_SECONDS 0.25
 #define PEX_WIN32_LOGGY_TEXT_CAP 196608
 #define PEX_WIN32_LOGGY_EDIT_CAP 262144
 #define PEX_WIN32_LOGGY_TIMER 9401
@@ -453,6 +453,13 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "  falling active=%d spawned=%d cells=%d particles=%d drops=%d liquids_ms=%.3f world_stream_ms=%.3f\n",
                   g_prof_falling_active_last, g_prof_falling_spawns_last, g_prof_falling_cells_last,
                   active_particles, active_drops, g_prof_display_ms[PROF_LIQUIDS], g_prof_display_ms[PROF_WORLD_STREAM]);
+    loggy_appendf(&out, &left, "  mobs active=%d path_budget_left=%d spawn_scan_skipped_stream=%d mob_tick_ms=%.3f\n",
+                  g_passive_perf_last_active, g_passive_perf_last_path_budget_left,
+                  g_passive_perf_last_spawns_skipped_streaming, g_prof_display_ms[PROF_ENTITY_PASSIVE_MOBS]);
+    loggy_appendf(&out, &left, "  daylight_mesh_ms=%.3f daylight_pending=%d daylight_chunks=%d village_scan_blocks=%d spawn_y_cache=%d/%d\n",
+                  g_prof_display_ms[PROF_DAYLIGHT_MESH], g_prof_daylight_dirty_pending,
+                  g_prof_daylight_dirty_chunks_last, g_prof_village_scan_blocks_last,
+                  g_prof_spawn_y_cache_hits, g_prof_spawn_y_cache_misses);
 
     loggy_appendf(&out, &left, "\nSYSTEM INFO CACHE:\n");
     loggy_appendf(&out, &left, "  platform=%s display=%dx%d@%dHz %s ram=%llu/%lluMB gpu=%.96s vendor=%.64s api=%.64s net=%d\n",
@@ -556,10 +563,19 @@ static void loggy_set_edit_text_preserve_scroll(void) {
     g_loggy.refreshing = 0;
 }
 
+static double loggy_effective_update_interval(void) {
+    /* When SetWindowText on the diagnostic EDIT is already expensive, back off.
+       The user's snapshot showed Loggy itself costing multiple milliseconds. */
+    if (g_loggy_edit_refresh_last_ms > 6.0) return 0.75;
+    if (g_loggy_edit_refresh_last_ms > 3.0) return 0.50;
+    return PEX_WIN32_LOGGY_UPDATE_SECONDS;
+}
+
 static void loggy_refresh_now(void) {
     double start_time;
     if (!g_loggy_enabled || !g_loggy.hwnd || !g_loggy.edit) return;
     start_time = now_seconds();
+    if (g_loggy.last_build_time > 0.0 && start_time - g_loggy.last_build_time < loggy_effective_update_interval()) return;
     loggy_build_text();
     loggy_set_edit_text_preserve_scroll();
     g_loggy.last_build_time = now_seconds();
@@ -592,7 +608,7 @@ static LRESULT CALLBACK loggy_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                 SendMessageA(g_loggy.edit, EM_SETLIMITTEXT, (WPARAM)(PEX_WIN32_LOGGY_EDIT_CAP - 1), 0);
             }
             loggy_layout_controls();
-            SetTimer(hwnd, PEX_WIN32_LOGGY_TIMER, 100, NULL);
+            SetTimer(hwnd, PEX_WIN32_LOGGY_TIMER, 250, NULL);
             loggy_refresh_now();
             return 0;
         }
@@ -679,7 +695,7 @@ static void loggy_draw(void) {
     double now;
     if (!g_loggy_enabled || !g_loggy.hwnd) return;
     now = now_seconds();
-    if (now - g_loggy.last_build_time >= PEX_WIN32_LOGGY_UPDATE_SECONDS) {
+    if (now - g_loggy.last_build_time >= loggy_effective_update_interval()) {
         loggy_refresh_now();
     }
 }

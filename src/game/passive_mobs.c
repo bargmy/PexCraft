@@ -239,6 +239,55 @@ static int passive_biome_weighted_spawn_entry(int cat, int biome, PexSpawnEntry 
     *out = tmp[n-1]; return 1;
 }
 
+typedef struct PexSpawnYCacheEntry {
+    int valid;
+    int type, cat, x, z;
+    int y;
+    int tick;
+} PexSpawnYCacheEntry;
+
+#define PEX_SPAWN_Y_CACHE_SIZE 512
+static PexSpawnYCacheEntry g_passive_spawn_y_cache[PEX_SPAWN_Y_CACHE_SIZE];
+
+static unsigned int passive_spawn_y_cache_hash(int type, int cat, int x, int z) {
+    unsigned int h = (unsigned int)(x * 73428767u) ^ (unsigned int)(z * 91278319u) ^ (unsigned int)(type * 19349663u) ^ (unsigned int)(cat * 83492791u);
+    return h & (PEX_SPAWN_Y_CACHE_SIZE - 1);
+}
+
+static int passive_spawn_y_cache_get(int type, int cat, int x, int z, int *out_y) {
+    unsigned int idx = passive_spawn_y_cache_hash(type, cat, x, z);
+    for (int p = 0; p < 4; ++p) {
+        PexSpawnYCacheEntry *e = &g_passive_spawn_y_cache[(idx + (unsigned)p) & (PEX_SPAWN_Y_CACHE_SIZE - 1)];
+        if (!e->valid) continue;
+        if (e->type == type && e->cat == cat && e->x == x && e->z == z && (g_ingame_ticks - e->tick) < 80) {
+            if (out_y) *out_y = e->y;
+            ++g_prof_spawn_y_cache_hits;
+            return 1;
+        }
+    }
+    ++g_prof_spawn_y_cache_misses;
+    return 0;
+}
+
+static void passive_spawn_y_cache_put(int type, int cat, int x, int z, int y) {
+    unsigned int idx = passive_spawn_y_cache_hash(type, cat, x, z);
+    int slot = (int)idx;
+    int oldest = 0x7fffffff;
+    for (int p = 0; p < 4; ++p) {
+        int si = (int)((idx + (unsigned)p) & (PEX_SPAWN_Y_CACHE_SIZE - 1));
+        PexSpawnYCacheEntry *e = &g_passive_spawn_y_cache[si];
+        if (!e->valid || (e->type == type && e->cat == cat && e->x == x && e->z == z)) { slot = si; break; }
+        if (e->tick < oldest) { oldest = e->tick; slot = si; }
+    }
+    g_passive_spawn_y_cache[slot].valid = 1;
+    g_passive_spawn_y_cache[slot].type = type;
+    g_passive_spawn_y_cache[slot].cat = cat;
+    g_passive_spawn_y_cache[slot].x = x;
+    g_passive_spawn_y_cache[slot].z = z;
+    g_passive_spawn_y_cache[slot].y = y;
+    g_passive_spawn_y_cache[slot].tick = g_ingame_ticks;
+}
+
 static int passive_world_is_daytime(void) {
     int t = (int)(g_world_time % 24000LL);
     if (t < 0) t += 24000;
@@ -246,11 +295,12 @@ static int passive_world_is_daytime(void) {
 }
 
 static int passive_can_see_sky(int x, int y, int z) {
-    for (int yy = y + 1; yy <= FLAT_WORLD_Y_MAX; ++yy) {
-        int id = flat_get_block(x, yy, z);
-        if (id != 0 && flat_block_is_solid(id)) return 0;
-    }
-    return 1;
+    if (!flat_in_bounds(x, y, z)) return 1;
+    /* Use the maintained skylight buffer for the common case.  The old loop
+       scanned from the mob to world top for every burning/door/spawn test. */
+    if (flat_saved_sky_light(x, y + 1, z) >= 15) return 1;
+    if (flat_saved_sky_light(x, y + 1, z) <= 0) return 0;
+    return flat_can_block_see_sky_slow(x, y, z);
 }
 
 static int passive_is_undead_burner(int type) {
@@ -475,6 +525,8 @@ static void passive_mob_drop_on_death(PassiveMob *m) {
 
 static void passive_mobs_reset(void) {
     memset(g_passive_mobs, 0, sizeof(g_passive_mobs));
+    memset(g_passive_spawn_y_cache, 0, sizeof(g_passive_spawn_y_cache));
+    g_prof_spawn_y_cache_hits = g_prof_spawn_y_cache_misses = 0;
     g_player_riding_passive_mob = -1;
 }
 
@@ -742,21 +794,47 @@ static int passive_mob_can_spawn_at(int type, int x, int y, int z) {
 }
 
 static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int z) {
+    int cached_y = -9999;
+    if (passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) return cached_y;
     if (x < g_flat_world_origin_x + 1 || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE - 1 ||
-        z < g_flat_world_origin_z + 1 || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 1) return -9999;
-    if (cat == PEX_CAT_WATER || type == PASSIVE_MOB_SQUID) {
-        for (int y = 62; y >= 46; --y) if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) return y;
+        z < g_flat_world_origin_z + 1 || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 1) {
+        passive_spawn_y_cache_put(type, cat, x, z, -9999);
         return -9999;
     }
-    /* SpawnerAnimals.getRandomSpawningPointInChunk chooses a random y up to top filled
-       segment.  Search downward from a random start to preserve the same material rules
-       without requiring a full Chunk object. */
+    if (!flat_chunk_generated_at_block(x, z)) {
+        passive_spawn_y_cache_put(type, cat, x, z, -9999);
+        return -9999;
+    }
+    if (cat == PEX_CAT_WATER || type == PASSIVE_MOB_SQUID) {
+        for (int y = 62; y >= 46; --y) {
+            if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) {
+                passive_spawn_y_cache_put(type, cat, x, z, y);
+                return y;
+            }
+        }
+        passive_spawn_y_cache_put(type, cat, x, z, -9999);
+        return -9999;
+    }
+    /* Start near the surface first, then fall back to a bounded random sweep.
+       This keeps Java-like material checks while avoiding a full 128-level scan
+       on every failed spawn column during heavy streaming. */
+    for (int y = 80; y >= FLAT_WORLD_Y_MIN + 1; --y) {
+        if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) {
+            passive_spawn_y_cache_put(type, cat, x, z, y);
+            return y;
+        }
+        if (y < 48 && cat == PEX_CAT_CREATURE) break;
+    }
     int start_y = FLAT_WORLD_Y_MIN + 1 + (rand() % (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN - 2));
-    for (int i = 0; i < (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN - 2); ++i) {
+    for (int i = 0; i < 32; ++i) {
         int y = start_y - i;
         if (y < FLAT_WORLD_Y_MIN + 1) y += (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN - 2);
-        if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) return y;
+        if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) {
+            passive_spawn_y_cache_put(type, cat, x, z, y);
+            return y;
+        }
     }
+    passive_spawn_y_cache_put(type, cat, x, z, -9999);
     return -9999;
 }
 
@@ -860,7 +938,10 @@ static void passive_mobs_ensure_population(int wanted, int attempts) {
 
 static void passive_mobs_spawn_initial(void) {
     passive_mobs_reset();
-    passive_mobs_ensure_population(PEX_PASSIVE_INITIAL_TARGET, 1800);
+    /* 1800 synchronous column scans caused a visible stall on world entry.
+       Seed a smaller population immediately; natural spawning fills toward the
+       1.2.5 category caps once streaming has settled. */
+    passive_mobs_ensure_population(PEX_PASSIVE_INITIAL_TARGET, 256);
 }
 
 
@@ -1054,9 +1135,20 @@ static void passive_snowman_tick_snow_trail(PassiveMob *m) {
 }
 
 static int passive_find_surface_for_village_spawn(int x, int z) {
-    for (int y = FLAT_WORLD_Y_MAX - 2; y >= FLAT_WORLD_Y_MIN + 1; --y) {
-        if (passive_mob_air_spawn_base_ok(x, y, z) && passive_mob_has_spawn_clearance(PASSIVE_MOB_VILLAGER, (float)x+0.5f, (float)y, (float)z+0.5f)) return y;
+    int cached_y = -9999;
+    if (passive_spawn_y_cache_get(PASSIVE_MOB_VILLAGER, PEX_CAT_UTILITY, x, z, &cached_y)) return cached_y;
+    if (!flat_chunk_generated_at_block(x, z)) {
+        passive_spawn_y_cache_put(PASSIVE_MOB_VILLAGER, PEX_CAT_UTILITY, x, z, -9999);
+        return -9999;
     }
+    for (int y = 96; y >= FLAT_WORLD_Y_MIN + 1; --y) {
+        if (passive_mob_air_spawn_base_ok(x, y, z) && passive_mob_has_spawn_clearance(PASSIVE_MOB_VILLAGER, (float)x+0.5f, (float)y, (float)z+0.5f)) {
+            passive_spawn_y_cache_put(PASSIVE_MOB_VILLAGER, PEX_CAT_UTILITY, x, z, y);
+            return y;
+        }
+        if (y < 48) break;
+    }
+    passive_spawn_y_cache_put(PASSIVE_MOB_VILLAGER, PEX_CAT_UTILITY, x, z, -9999);
     return -9999;
 }
 
@@ -1777,12 +1869,29 @@ typedef struct PexVillageRuntime {
     int villager_count;
     int golem_count;
     int player_reputation; /* single-player stand-in for Village.playerReputation map */
+    int door_scan_active;
+    int door_scan_x, door_scan_y, door_scan_z;
+    int door_scan_y_min, door_scan_y_max;
+    int synthetic_doors_seeded;
     PexVillageDoorRuntime doors[PEX_MAX_VILLAGE_DOORS];
 } PexVillageRuntime;
 
 static PexVillageRuntime g_passive_villages[PEX_MAX_RUNTIME_VILLAGES];
 static int g_passive_villages_tick = -9999;
 static int g_passive_next_village_id = 1;
+
+/* The Java-style systems below are intentionally exact in their decisions, but
+   the old patch recalculated expensive A* paths every tick for any target more
+   than eight blocks away.  On a flat world with hostile spawns that turns one
+   player chase into dozens of full PathFinder searches per rendered frame.
+   Keep the same movement/path semantics, but budget path builds like Minecraft's
+   PathNavigate cooldowns do and let mobs steer toward their existing path/target
+   while waiting for the next solve. */
+#define PEX_PATHFIND_BUDGET_PER_TICK 3
+static int g_passive_pathfind_budget = 0;
+static int g_passive_perf_last_active = 0;
+static int g_passive_perf_last_path_budget_left = 0;
+static int g_passive_perf_last_spawns_skipped_streaming = 0;
 
 static int passive_path_can_stand_at(int type, int x, int y, int z) {
     if (type == PASSIVE_MOB_GHAST || type == PASSIVE_MOB_BLAZE) return flat_get_block(x, y, z) == 0;
@@ -1810,17 +1919,20 @@ typedef struct Pex125PathPoint {
     float distance_to_next;
     float distance_to_target;
     short previous;
+    short next_hash;
     unsigned char is_first;
     unsigned char used;
 } Pex125PathPoint;
 
 #define PEX125_PATH_POINT_MAX 1536
 #define PEX125_PATH_HEAP_MAX 1536
+#define PEX125_PATH_HASH_SIZE 2048
 
 typedef struct Pex125PathContext {
     Pex125PathPoint points[PEX125_PATH_POINT_MAX];
     int point_count;
     short heap[PEX125_PATH_HEAP_MAX];
+    short hash_head[PEX125_PATH_HASH_SIZE];
     int heap_count;
     int allow_wooden_door;
     int movement_block_allowed;
@@ -1845,15 +1957,18 @@ static float passive_path_point_distance_125(const Pex125PathPoint *a, const Pex
 
 static short passive_path_open_point_125(Pex125PathContext *ctx, int x, int y, int z) {
     int h = passive_path_point_hash_125(x,y,z);
-    for (int i=0;i<ctx->point_count;++i) {
-        Pex125PathPoint *p = &ctx->points[i];
-        if (p->used && p->hash == h && p->x == x && p->y == y && p->z == z) return (short)i;
+    int bucket = ((unsigned int)h) & (PEX125_PATH_HASH_SIZE - 1);
+    for (short idx = ctx->hash_head[bucket]; idx >= 0; idx = ctx->points[idx].next_hash) {
+        Pex125PathPoint *p = &ctx->points[idx];
+        if (p->used && p->hash == h && p->x == x && p->y == y && p->z == z) return idx;
     }
     if (ctx->point_count >= PEX125_PATH_POINT_MAX) return -1;
     int i = ctx->point_count++;
     Pex125PathPoint *p = &ctx->points[i];
     memset(p, 0, sizeof(*p));
     p->x = x; p->y = y; p->z = z; p->hash = h; p->index = -1; p->previous = -1; p->used = 1;
+    p->next_hash = ctx->hash_head[bucket];
+    ctx->hash_head[bucket] = (short)i;
     return (short)i;
 }
 
@@ -2013,6 +2128,11 @@ static int passive_path_create_output_125(PassiveMob *m, Pex125PathContext *ctx,
 static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     if (!m) return 0;
     if (m->type == PASSIVE_MOB_ENDER_DRAGON) return 0; /* intentionally not touched */
+    if (g_passive_pathfind_budget <= 0) {
+        if (m->path_recalc_cooldown <= 0) m->path_recalc_cooldown = 4;
+        return 0;
+    }
+    --g_passive_pathfind_budget;
     if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_BLAZE || m->type == PASSIVE_MOB_SQUID) {
         int gx = (int)floorf(txf), gy = (int)floorf(tyf), gz = (int)floorf(tzf);
         if (!passive_path_can_stand_at(m->type, gx, gy, gz)) return 0;
@@ -2021,6 +2141,7 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     }
     Pex125PathContext ctx;
     memset(&ctx, 0, sizeof(ctx));
+    for (int hi = 0; hi < PEX125_PATH_HASH_SIZE; ++hi) ctx.hash_head[hi] = -1;
     ctx.allow_wooden_door = 1;
     ctx.movement_block_allowed = (m->type == PASSIVE_MOB_ZOMBIE); /* EntityAIBreakDoor mobs may pass closed doors while breaking */
     ctx.pathing_in_water = 0;
@@ -2091,9 +2212,18 @@ static void passive_path_clear(PassiveMob *m) {
 
 static int passive_path_drive(PassiveMob *m) {
     if (!m || !m->has_path_target) return 0;
-    float dx = m->target_x - m->x, dz = m->target_z - m->z;
-    if (m->path_len <= 0 || m->path_index >= m->path_len || m->path_recalc_cooldown <= 0 || m->stuck_ticks > 18 || dx*dx + dz*dz > 64.0f) {
-        passive_path_find(m, m->target_x, m->target_y, m->target_z);
+    /* Do not recalc simply because the target is far away.  The previous patch
+       did that, and every zombie/skeleton/spider chasing a player farther than
+       8 blocks performed a full A* solve every tick.  Java PathNavigate uses
+       cooldowned repaths; existing paths keep being followed between solves. */
+    if (m->path_len <= 0 || m->path_index >= m->path_len || m->path_recalc_cooldown <= 0 || m->stuck_ticks > 18) {
+        int solved = passive_path_find(m, m->target_x, m->target_y, m->target_z);
+        if (!solved && (m->path_len <= 0 || m->path_index >= m->path_len)) {
+            m->path_len = 0;
+            m->path_index = 0;
+            m->path_recalc_cooldown = 12 + (rand() % 20);
+            return 0;
+        }
     }
     if (m->path_len <= 0 || m->path_index >= m->path_len) return 0;
     int px = m->path_x[m->path_index], py = m->path_y[m->path_index], pz = m->path_z[m->path_index];
@@ -2224,34 +2354,65 @@ static void passive_village_remove_dead_and_out_of_range_doors_125(PexVillageRun
     }
 }
 
+static void passive_village_seed_synthetic_doors(PexVillageRuntime *v) {
+    if (!v || v->synthetic_doors_seeded) return;
+    /* Fallback only: enough for gameplay while real door discovery is spread
+       across later ticks.  Real discovered doors are added through the same
+       Java sky-side scoring path. */
+    static const int voffs[][3] = {
+        {8,1,-4},{-15,1,6},{12,1,10},{-24,1,-12},{4,1,4},{-4,1,8},
+        {17,1,-7},{-7,1,-16},{23,1,14},{-19,1,18},{2,1,-24},{-28,1,2}
+    };
+    for (int i = 0; i < (int)(sizeof(voffs)/sizeof(voffs[0])); ++i) {
+        int x = v->cx + voffs[i][0], z = v->cz + voffs[i][2];
+        int y = passive_find_surface_for_village_spawn(x, z);
+        if (y == -9999) continue;
+        int ix = (i & 1) ? 2 : -2, iz = (i & 2) ? 2 : -2;
+        passive_village_add_door_info_125(v, x, y + voffs[i][1], z, ix, iz);
+    }
+    v->synthetic_doors_seeded = 1;
+}
+
 static void passive_village_scan_doors(PexVillageRuntime *v) {
     if (!v) return;
-    memset(v->doors, 0, sizeof(v->doors));
-    v->door_count = 0;
-    v->center_helper_x = v->center_helper_y = v->center_helper_z = 0;
-    for (int y = FLAT_WORLD_Y_MIN + 1; y < FLAT_WORLD_Y_MAX - 1; ++y) {
-        for (int z = v->cz - 48; z <= v->cz + 48; ++z) {
-            for (int x = v->cx - 48; x <= v->cx + 48; ++x) {
-                if (passive_village_is_block_door_125(x, y, z)) passive_village_add_door(v, x, y, z);
+    const int budget = 8192;
+    int scanned = 0;
+    if (!v->door_scan_active) {
+        memset(v->doors, 0, sizeof(v->doors));
+        v->door_count = 0;
+        v->center_helper_x = v->center_helper_y = v->center_helper_z = 0;
+        v->synthetic_doors_seeded = 0;
+        v->door_scan_y_min = v->cy - 20;
+        v->door_scan_y_max = v->cy + 20;
+        if (v->door_scan_y_min < FLAT_WORLD_Y_MIN + 1) v->door_scan_y_min = FLAT_WORLD_Y_MIN + 1;
+        if (v->door_scan_y_max > FLAT_WORLD_Y_MAX - 2) v->door_scan_y_max = FLAT_WORLD_Y_MAX - 2;
+        v->door_scan_y = v->door_scan_y_min;
+        v->door_scan_z = v->cz - 48;
+        v->door_scan_x = v->cx - 48;
+        v->door_scan_active = 1;
+        passive_village_seed_synthetic_doors(v);
+    }
+    while (v->door_scan_active && scanned < budget) {
+        int x = v->door_scan_x;
+        int y = v->door_scan_y;
+        int z = v->door_scan_z;
+        if (flat_chunk_generated_at_block(x, z) && passive_village_is_block_door_125(x, y, z)) passive_village_add_door(v, x, y, z);
+        ++scanned;
+        ++v->door_scan_x;
+        if (v->door_scan_x > v->cx + 48) {
+            v->door_scan_x = v->cx - 48;
+            ++v->door_scan_z;
+            if (v->door_scan_z > v->cz + 48) {
+                v->door_scan_z = v->cz - 48;
+                ++v->door_scan_y;
+                if (v->door_scan_y > v->door_scan_y_max || v->door_count >= PEX_MAX_VILLAGE_DOORS) {
+                    v->door_scan_active = 0;
+                    break;
+                }
             }
         }
     }
-    if (v->door_count <= 0) {
-        /* Generated villages in this flat engine can stream before their door blocks
-           are resident.  Use synthetic Java-classified doors only as a fallback, and
-           still run the exact sky-side scoring when real door blocks arrive. */
-        static const int voffs[][3] = {
-            {8,1,-4},{-15,1,6},{12,1,10},{-24,1,-12},{4,1,4},{-4,1,8},
-            {17,1,-7},{-7,1,-16},{23,1,14},{-19,1,18},{2,1,-24},{-28,1,2}
-        };
-        for (int i = 0; i < (int)(sizeof(voffs)/sizeof(voffs[0])); ++i) {
-            int x = v->cx + voffs[i][0], z = v->cz + voffs[i][2];
-            int y = passive_find_surface_for_village_spawn(x, z);
-            if (y == -9999) continue;
-            int ix = (i & 1) ? 2 : -2, iz = (i & 2) ? 2 : -2;
-            passive_village_add_door_info_125(v, x, y + voffs[i][1], z, ix, iz);
-        }
-    }
+    g_prof_village_scan_blocks_last = scanned;
     passive_village_update_radius_and_center_125(v);
 }
 
@@ -2849,12 +3010,24 @@ static int passive_mob_tick_stride(const PassiveMob *m) {
 static void update_passive_mobs(void) {
     /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
     if (g_mp_connected) return;
+    g_passive_pathfind_budget = PEX_PATHFIND_BUDGET_PER_TICK;
+    g_passive_perf_last_spawns_skipped_streaming = 0;
     passive_mobs_enforce_cap();
-    passive_mobs_try_village_spawns_exact();
-    passive_mobs_try_natural_spawn();
+    /* While the world-stream worker is still installing/generating chunks, avoid
+       the natural-spawn and village scans.  Existing mobs keep ticking, but new
+       spawn searches wait until chunks are actually present instead of probing
+       half-streamed terrain and fighting the streaming thread. */
+    if (!world_stream_service_active()) {
+        passive_mobs_try_village_spawns_exact();
+        passive_mobs_try_natural_spawn();
+    } else {
+        g_passive_perf_last_spawns_skipped_streaming = 1;
+    }
+    int active_count = 0;
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         PassiveMob *m = &g_passive_mobs[i];
         if (!m->active) continue;
+        ++active_count;
         int stride = passive_mob_tick_stride(m);
         if (stride > 1 && ((g_ingame_ticks + i) % stride) != 0) {
             /* Keep interpolation stable while far mobs are simulated at a lower
@@ -2866,6 +3039,8 @@ static void update_passive_mobs(void) {
         }
         passive_mob_tick_living(m);
     }
+    g_passive_perf_last_active = active_count;
+    g_passive_perf_last_path_budget_left = g_passive_pathfind_budget;
 }
 
 static Texture *passive_mob_texture_for_type(int type) {

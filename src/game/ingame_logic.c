@@ -375,7 +375,10 @@ static void ingame_tick(void) {
 
     g_ingame_ticks++;
     g_world_time++;
+    prof_part = profile_begin();
     pex_update_time_light_bucket();
+    flat_service_daylight_mesh_dirty_budget(PEX_DAYLIGHT_DIRTY_CHUNK_BUDGET);
+    profile_add_time(PROF_DAYLIGHT_MESH, prof_part);
     if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
@@ -393,7 +396,9 @@ static void ingame_tick(void) {
     update_projectiles();
     update_xp_orbs();
     profile_add_time(PROF_DROPS, prof_part);
+    prof_part = profile_begin();
     update_passive_mobs();
+    profile_add_time(PROF_ENTITY_PASSIVE_MOBS, prof_part);
     prof_part = profile_begin();
     update_dig_particles();
     profile_add_time(PROF_PARTICLES, prof_part);
