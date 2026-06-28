@@ -10,10 +10,13 @@ static void passive_village_update_reputation_from_attack(PassiveMob *m);
 static const char *passive_mob_name(int type);
 static void passive_mob_set_path_goal(PassiveMob *m, float x, float y, float z);
 static int passive_path_can_stand_at(int type, int x, int y, int z);
+static void passive_path_clear(PassiveMob *m);
 static int item_icon_tile(int id);
 static int block_texture_resolve(int block_id, int meta, int face);
 static void draw_dropped_item_sprite(int tile);
 static void passive_draw_terrain_sprite_tile(int tile);
+static void draw_item3d_from_texture(Texture *atlas, int tile);
+static void draw_block_item_model(int id, float x, float y, float z);
 
 /* Performance knobs: this port renders animal models with immediate-mode
    cube parts.  Keep active/rendered passive mobs close to b1.0 density instead
@@ -2037,7 +2040,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
             return;
         }
         if (m->type == PASSIVE_MOB_SNOWMAN) {
-            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.25f, 0)) {
+            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.60f, 0)) {
                 pex_sound_play_at("random.bow", m->x, m->y, m->z, 1.0f, 1.2f);
                 m->attack_time = 20;
             }
@@ -2059,7 +2062,7 @@ static void passive_mob_attack_other_mob(PassiveMob *m, PassiveMob *target, int 
     if (m->type == PASSIVE_MOB_IRON_GOLEM) dmg = 7 + (rand() % 15);
     if (m->type == PASSIVE_MOB_SNOWMAN && ranged) {
         pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, (int)(m - g_passive_mobs), m->x, m->y + 1.4f, m->z,
-                                        target->x, target->y + target->height * 0.5f, target->z, 1.25f, 0);
+                                        target->x, target->y + target->height * 0.5f, target->z, 1.60f, 0);
         m->attack_time = 20;
         return;
     }
@@ -2461,6 +2464,56 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     }
     if (closest == start) return 0;
     return passive_path_create_output_125(m, &ctx, start, closest);
+}
+
+static int passive_random_position_away_from_player(PassiveMob *m, int h_range, int v_range,
+                                                    float *out_x, float *out_y, float *out_z) {
+    if (!m || !out_x || !out_y || !out_z) return 0;
+    float away_x = m->x - g_player_x;
+    float away_z = m->z - g_player_z;
+    float away_len = sqrtf(away_x * away_x + away_z * away_z);
+    if (away_len < 0.001f) {
+        float a = pex_rand_float01() * (float)M_PI * 2.0f;
+        away_x = cosf(a);
+        away_z = sinf(a);
+        away_len = 1.0f;
+    }
+    away_x /= away_len;
+    away_z /= away_len;
+
+    int base_x = (int)floorf(m->x);
+    int base_y = (int)floorf(m->y);
+    int base_z = (int)floorf(m->z);
+    int best_x = 0, best_y = 0, best_z = 0;
+    float best_score = -999999.0f;
+    for (int i = 0; i < 10; ++i) {
+        int x = base_x + (rand() % (h_range * 2 + 1)) - h_range;
+        int y = base_y + (rand() % (v_range * 2 + 1)) - v_range;
+        int z = base_z + (rand() % (h_range * 2 + 1)) - h_range;
+        if (!passive_path_can_stand_at(m->type, x, y, z)) continue;
+        float wx = (float)x + 0.5f;
+        float wz = (float)z + 0.5f;
+        float dx = wx - m->x;
+        float dz = wz - m->z;
+        float d2 = dx * dx + dz * dz;
+        if (d2 < 1.0f) continue;
+        float dir = (dx * away_x + dz * away_z) / sqrtf(d2);
+        if (dir < 0.2f) continue;
+        float pdx = wx - g_player_x;
+        float pdz = wz - g_player_z;
+        float score = dir * 24.0f + pdx * pdx + pdz * pdz + passive_mob_path_weight_125(m, x, y, z);
+        if (score > best_score) {
+            best_score = score;
+            best_x = x;
+            best_y = y;
+            best_z = z;
+        }
+    }
+    if (best_score <= -99999.0f) return 0;
+    *out_x = (float)best_x + 0.5f;
+    *out_y = (float)best_y;
+    *out_z = (float)best_z + 0.5f;
+    return 1;
 }
 
 static void passive_path_clear(PassiveMob *m) {
@@ -2928,6 +2981,19 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
     PassiveMob *tm = NULL;
     int handled_behavior_target = 0;
 
+    if (m->type == PASSIVE_MOB_OCELOT && !passive_mob_is_owned_by_player(m) && !m->sheared &&
+        player_d2 < 16.0f * 16.0f && !handled_behavior_target) {
+        float ax, ay, az;
+        if ((m->path_len <= 0 || m->path_index >= m->path_len || m->ai_repath_delay <= 0) &&
+            passive_random_position_away_from_player(m, 16, 7, &ax, &ay, &az)) {
+            passive_mob_set_path_goal(m, ax, ay, az);
+            m->path_recalc_cooldown = 0;
+            m->ai_repath_delay = 4 + (rand() % 7);
+        }
+        m->ai_task_mask |= PEX_AI_AVOID_PLAYER;
+        handled_behavior_target = 1;
+    }
+
     if (passive_mob_is_breedable_type(m->type)) {
         if (m->love_time > 0) {
             int mate = passive_mob_find_love_mate(m, 8.0f);
@@ -2972,7 +3038,9 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
         }
     }
 
-    if (m->type == PASSIVE_MOB_ZOMBIE) {
+    if (handled_behavior_target) {
+        target_mob = -1;
+    } else if (m->type == PASSIVE_MOB_ZOMBIE) {
         target_mob = passive_mob_find_nearest_target_mob(m, 1, 0, 16.0f);
     } else if (m->type == PASSIVE_MOB_WOLF && !m->sheared) {
         target_mob = passive_mob_find_nearest_type(m, PASSIVE_MOB_SHEEP, 16.0f);
@@ -3054,6 +3122,7 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
                 if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_ENDER_DRAGON) sp *= 0.35f;
                 if (m->type == PASSIVE_MOB_SNOWMAN) sp = 0.25f;
                 if (m->type == PASSIVE_MOB_IRON_GOLEM && tm) sp = 0.22f;
+                if (m->ai_task_mask & PEX_AI_AVOID_PLAYER) sp = player_d2 < 7.0f * 7.0f ? 0.40f : 0.23f;
                 forward = in_liquid ? 0.04f : sp * 0.10f;
                 if (pex_passive_has_potion(m, PEX_POTION_SPEED)) forward *= 1.0f + 0.20f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_SPEED) + 1);
                 if (pex_passive_has_potion(m, PEX_POTION_SLOWNESS)) {
@@ -3622,6 +3691,7 @@ static float g_passive_fast_tint_r = 1.0f;
 static float g_passive_fast_tint_g = 1.0f;
 static float g_passive_fast_tint_b = 1.0f;
 static float g_passive_fast_tint_a = 1.0f;
+static float g_passive_fast_model_scale_x = 1.0f;
 
 static void passive_fast_set_texture_dims(const Texture *tex) {
     g_passive_fast_uv_w = (tex && tex->w > 0) ? (float)tex->w : 64.0f;
@@ -3682,14 +3752,24 @@ static PassiveFastVec3 passive_fast_part_vertex(float x, float y, float z,
                                                 float rx_deg, float ry_deg, float rz_deg) {
     passive_fast_rotate_xyz(&x, &y, &z, rx_deg, ry_deg, rz_deg);
     PassiveFastVec3 r;
-    r.x = x + pivot_x;
+    r.x = (x + pivot_x) * g_passive_fast_model_scale_x;
     r.y = y + pivot_y;
     r.z = z + pivot_z;
     return r;
 }
 
 static void passive_fast_vertex(const PassiveFastVec3 *p, float u, float v) {
-    glTexCoord2f(u / g_passive_fast_uv_w, v / g_passive_fast_uv_h);
+    float uu = u / g_passive_fast_uv_w;
+    float vv = v / g_passive_fast_uv_h;
+    if (uu < 0.0f || uu > 1.0f) {
+        uu = uu - floorf(uu);
+        if (uu < 0.0f) uu += 1.0f;
+    }
+    if (vv < 0.0f || vv > 1.0f) {
+        vv = vv - floorf(vv);
+        if (vv < 0.0f) vv += 1.0f;
+    }
+    glTexCoord2f(uu, vv);
     glVertex3f(p->x * 0.0625f, p->y * 0.0625f, p->z * 0.0625f);
 }
 
@@ -3913,16 +3993,93 @@ static void passive_render_p125_creeper(float limb, float move, float head_yaw, 
     p125_part_rad(0,16,  2,16,-4,-2,0,-2, 4,6,4, 0,0, leg1,0,0);
 }
 
-static void passive_render_p125_biped(int type, float limb, float move, float age, float head_yaw, float head_pitch) {
-    float hy = passive_rad_from_deg(head_yaw), hp = passive_rad_from_deg(head_pitch);
-    float armR = cosf(limb * 0.6662f + (float)M_PI) * move;
-    float armL = cosf(limb * 0.6662f) * move;
-    float legR = cosf(limb * 0.6662f) * 1.4f * move;
-    float legL = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move;
-    float armRz = cosf(age * 0.09f) * 0.05f + 0.05f;
-    float armLz = -(cosf(age * 0.09f) * 0.05f + 0.05f);
-    armR += sinf(age * 0.067f) * 0.05f;
-    armL -= sinf(age * 0.067f) * 0.05f;
+typedef struct PexBipedPose {
+    float hy, hp;
+    float body_y;
+    float arm_rx[2], arm_ry[2], arm_rz[2];
+    float arm_px[2], arm_py[2], arm_pz[2];
+    float leg_rx[2], leg_ry[2], leg_rz[2];
+    float leg_px[2], leg_py[2], leg_pz[2];
+} PexBipedPose;
+
+static void passive_biped_pose_125(int type, float limb, float move, float age, float head_yaw, float head_pitch,
+                                   int carrying, PexBipedPose *pose) {
+    if (!pose) return;
+    memset(pose, 0, sizeof(*pose));
+    pose->hy = passive_rad_from_deg(head_yaw);
+    pose->hp = passive_rad_from_deg(head_pitch);
+    int skinny = (type == PASSIVE_MOB_SKELETON);
+    int enderman = (type == PASSIVE_MOB_ENDERMAN);
+    float yoff = enderman ? -14.0f : 0.0f;
+    pose->arm_px[0] = enderman ? -3.0f : -5.0f;
+    pose->arm_py[0] = 2.0f + yoff;
+    pose->arm_pz[0] = 0.0f;
+    pose->arm_px[1] = 5.0f;
+    pose->arm_py[1] = 2.0f + yoff;
+    pose->arm_pz[1] = 0.0f;
+    pose->leg_px[0] = -2.0f;
+    pose->leg_py[0] = (enderman ? 9.0f : 12.0f) + yoff;
+    pose->leg_pz[0] = 0.0f;
+    pose->leg_px[1] = 2.0f;
+    pose->leg_py[1] = (enderman ? 9.0f : 12.0f) + yoff;
+    pose->leg_pz[1] = 0.0f;
+
+    pose->arm_rx[0] = cosf(limb * 0.6662f + (float)M_PI) * 2.0f * move * 0.5f;
+    pose->arm_rx[1] = cosf(limb * 0.6662f) * 2.0f * move * 0.5f;
+    pose->leg_rx[0] = cosf(limb * 0.6662f) * 1.4f * move;
+    pose->leg_rx[1] = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move;
+    pose->arm_rz[0] = cosf(age * 0.09f) * 0.05f + 0.05f;
+    pose->arm_rz[1] = -(cosf(age * 0.09f) * 0.05f + 0.05f);
+    pose->arm_rx[0] += sinf(age * 0.067f) * 0.05f;
+    pose->arm_rx[1] -= sinf(age * 0.067f) * 0.05f;
+
+    if (type == PASSIVE_MOB_ZOMBIE || type == PASSIVE_MOB_GIANT || type == PASSIVE_MOB_PIG_ZOMBIE || type == PASSIVE_MOB_SKELETON) {
+        pose->arm_rz[0] = 0.0f;
+        pose->arm_rz[1] = 0.0f;
+        pose->arm_ry[0] = -0.1f;
+        pose->arm_ry[1] = 0.1f;
+        pose->arm_rx[0] = -(float)M_PI * 0.5f;
+        pose->arm_rx[1] = -(float)M_PI * 0.5f;
+        pose->arm_rz[0] += cosf(age * 0.09f) * 0.05f + 0.05f;
+        pose->arm_rz[1] -= cosf(age * 0.09f) * 0.05f + 0.05f;
+        pose->arm_rx[0] += sinf(age * 0.067f) * 0.05f;
+        pose->arm_rx[1] -= sinf(age * 0.067f) * 0.05f;
+        if (type == PASSIVE_MOB_SKELETON) {
+            pose->arm_rz[0] = 0.0f;
+            pose->arm_rz[1] = 0.0f;
+            pose->arm_ry[0] = -0.1f + pose->hy;
+            pose->arm_ry[1] = 0.5f + pose->hy;
+            pose->arm_rx[0] = -(float)M_PI * 0.5f + pose->hp;
+            pose->arm_rx[1] = -(float)M_PI * 0.5f + pose->hp;
+            pose->arm_rz[0] += cosf(age * 0.09f) * 0.05f + 0.05f;
+            pose->arm_rz[1] -= cosf(age * 0.09f) * 0.05f + 0.05f;
+            pose->arm_rx[0] += sinf(age * 0.067f) * 0.05f;
+            pose->arm_rx[1] -= sinf(age * 0.067f) * 0.05f;
+        }
+    }
+    if (enderman) {
+        pose->body_y = 0.0f;
+        pose->arm_rx[0] *= 0.5f;
+        pose->arm_rx[1] *= 0.5f;
+        pose->leg_rx[0] *= 0.5f;
+        pose->leg_rx[1] *= 0.5f;
+        if (pose->arm_rx[0] > 0.4f) pose->arm_rx[0] = 0.4f; if (pose->arm_rx[0] < -0.4f) pose->arm_rx[0] = -0.4f;
+        if (pose->arm_rx[1] > 0.4f) pose->arm_rx[1] = 0.4f; if (pose->arm_rx[1] < -0.4f) pose->arm_rx[1] = -0.4f;
+        if (pose->leg_rx[0] > 0.4f) pose->leg_rx[0] = 0.4f; if (pose->leg_rx[0] < -0.4f) pose->leg_rx[0] = -0.4f;
+        if (pose->leg_rx[1] > 0.4f) pose->leg_rx[1] = 0.4f; if (pose->leg_rx[1] < -0.4f) pose->leg_rx[1] = -0.4f;
+        if (carrying) {
+            pose->arm_rx[0] = -0.5f;
+            pose->arm_rx[1] = -0.5f;
+            pose->arm_rz[0] = 0.05f;
+            pose->arm_rz[1] = -0.05f;
+        }
+    }
+    (void)skinny;
+}
+
+static void passive_render_p125_biped(int type, float limb, float move, float age, float head_yaw, float head_pitch, int carrying) {
+    PexBipedPose pose;
+    passive_biped_pose_125(type, limb, move, age, head_yaw, head_pitch, carrying, &pose);
 
     int skinny = (type == PASSIVE_MOB_SKELETON);
     int enderman = (type == PASSIVE_MOB_ENDERMAN);
@@ -3930,46 +4087,28 @@ static void passive_render_p125_biped(int type, float limb, float move, float ag
     int arm_w = skinny || enderman ? 2 : 4;
     int leg_w = skinny || enderman ? 2 : 4;
     int limb_h = enderman ? 30 : 12;
-    float rarm_px = enderman ? -3.0f : -5.0f;
-    float larm_px = enderman ? 5.0f : 5.0f;
     float arm_box_x_r = skinny || enderman ? -1.0f : -3.0f;
     float arm_box_x_l = skinny || enderman ? -1.0f : -1.0f;
+    float arm_box_z = enderman ? -1.0f : -2.0f;
     float leg_box_x = skinny || enderman ? -1.0f : -2.0f;
+    float leg_box_z = enderman ? -1.0f : (skinny ? -1.0f : -2.0f);
     int headwear_tx = enderman ? 0 : 32;
     int headwear_ty = enderman ? 16 : 0;
     float headwear_inflate = enderman ? -0.5f : 0.5f;
     int body_tx = enderman ? 32 : 16;
-    int body_ty = enderman ? 16 : 16;
-    int limb_tx = enderman ? 56 : (skinny ? 40 : 40);
+    int body_ty = 16;
+    int limb_tx = enderman ? 56 : 40;
+    int limb_ty = enderman ? 0 : 16;
     int leg_tx = enderman ? 56 : 0;
+    int leg_ty = 16;
 
-    if (type == PASSIVE_MOB_ZOMBIE || type == PASSIVE_MOB_GIANT || type == PASSIVE_MOB_PIG_ZOMBIE || type == PASSIVE_MOB_SKELETON) {
-        /* ModelZombie arm pose. Skeleton inherits this and then sets aimedBow;
-           the bow-specific held-item pass is not present in PexCraft. */
-        armR = -(float)M_PI * 0.5f + sinf(age * 0.067f) * 0.05f;
-        armL = -(float)M_PI * 0.5f - sinf(age * 0.067f) * 0.05f;
-        armRz = cosf(age * 0.09f) * 0.05f + 0.05f;
-        armLz = -(cosf(age * 0.09f) * 0.05f + 0.05f);
-        if (type == PASSIVE_MOB_SKELETON) {
-            armR = -(float)M_PI * 0.5f + hp;
-            armL = -(float)M_PI * 0.5f + hp;
-        }
-    }
-    if (enderman) {
-        armR *= 0.5f; armL *= 0.5f; legR *= 0.5f; legL *= 0.5f;
-        if (armR > 0.4f) armR = 0.4f; if (armR < -0.4f) armR = -0.4f;
-        if (armL > 0.4f) armL = 0.4f; if (armL < -0.4f) armL = -0.4f;
-        if (legR > 0.4f) legR = 0.4f; if (legR < -0.4f) legR = -0.4f;
-        if (legL > 0.4f) legL = 0.4f; if (legL < -0.4f) legL = -0.4f;
-    }
-
-    p125_part_rad(0,0, 0, yoff + (enderman ? 1.0f : 0.0f), 0, -4,-8,-4, 8,8,8, 0,0, hp,hy,0);
-    p125_part_rad(headwear_tx,headwear_ty, 0, yoff + (enderman ? 1.0f : 0.0f), 0, -4,-8,-4, 8,8,8, headwear_inflate,0, hp,hy,0);
+    p125_part_rad(0,0, 0, yoff + (enderman ? 1.0f : 0.0f), 0, -4,-8,-4, 8,8,8, 0,0, pose.hp,pose.hy,0);
+    p125_part_rad(headwear_tx,headwear_ty, 0, yoff + (enderman ? 1.0f : 0.0f), 0, -4,-8,-4, 8,8,8, headwear_inflate,0, pose.hp,pose.hy,0);
     p125_part_rad(body_tx,body_ty, 0,yoff,0, -4,0,-2, 8,12,4, 0,0, 0,0,0);
-    p125_part_rad(limb_tx,16, rarm_px,2+yoff,0, arm_box_x_r,-2,-2, arm_w,limb_h,arm_w, 0,0, armR,0,armRz);
-    p125_part_rad(limb_tx,16, larm_px,2+yoff,0, arm_box_x_l,-2,-2, arm_w,limb_h,arm_w, 0,1, armL,0,armLz);
-    p125_part_rad(leg_tx,16, -2,12+yoff,0, leg_box_x,0,-1, leg_w,limb_h,leg_w, 0,0, legR,0,0);
-    p125_part_rad(leg_tx,16,  2,12+yoff,0, leg_box_x,0,-1, leg_w,limb_h,leg_w, 0,1, legL,0,0);
+    p125_part_rad(limb_tx,limb_ty, pose.arm_px[0],pose.arm_py[0],pose.arm_pz[0], arm_box_x_r,-2,arm_box_z, arm_w,limb_h,arm_w, 0,0, pose.arm_rx[0],pose.arm_ry[0],pose.arm_rz[0]);
+    p125_part_rad(limb_tx,limb_ty, pose.arm_px[1],pose.arm_py[1],pose.arm_pz[1], arm_box_x_l,-2,arm_box_z, arm_w,limb_h,arm_w, 0,1, pose.arm_rx[1],pose.arm_ry[1],pose.arm_rz[1]);
+    p125_part_rad(leg_tx,leg_ty, pose.leg_px[0],pose.leg_py[0],pose.leg_pz[0], leg_box_x,0,leg_box_z, leg_w,limb_h,leg_w, 0,0, pose.leg_rx[0],pose.leg_ry[0],pose.leg_rz[0]);
+    p125_part_rad(leg_tx,leg_ty, pose.leg_px[1],pose.leg_py[1],pose.leg_pz[1], leg_box_x,0,leg_box_z, leg_w,limb_h,leg_w, 0,1, pose.leg_rx[1],pose.leg_ry[1],pose.leg_rz[1]);
 }
 
 static void passive_render_p125_spider(float limb, float move, float head_yaw, float head_pitch) {
@@ -4176,6 +4315,45 @@ static void passive_render_p125_silverfish(float age) {
     p125_part_rad(20,18,px1,19,zpos[1], -3,0,-(float)len[4][2]*0.5f,6,5,len[1][2],0,0,0,ry1,0);
 }
 
+static void passive_render_dragon_limb_tree(float root_px, float root_py, float root_pz,
+                                            float root_rx, float tip_rx, float foot_rx,
+                                            int root_tx, int root_ty, float root_bx, float root_by, float root_bz, int root_bw, int root_bh, int root_bd,
+                                            int tip_tx, int tip_ty, float tip_px, float tip_py, float tip_pz, float tip_bx, float tip_by, float tip_bz, int tip_bw, int tip_bh, int tip_bd,
+                                            int foot_tx, int foot_ty, float foot_px, float foot_py, float foot_pz, float foot_bx, float foot_by, float foot_bz, int foot_bw, int foot_bh, int foot_bd) {
+    Pex125ModelRendererNode nodes[3];
+    memset(nodes, 0, sizeof(nodes));
+    nodes[0] = (Pex125ModelRendererNode){root_tx, root_ty, root_px, root_py, root_pz, root_bx, root_by, root_bz, root_bw, root_bh, root_bd, 0, 0, root_rx, 0, 0, 1, 1};
+    nodes[1] = (Pex125ModelRendererNode){tip_tx, tip_ty, tip_px, tip_py, tip_pz, tip_bx, tip_by, tip_bz, tip_bw, tip_bh, tip_bd, 0, 0, tip_rx, 0, 0, 2, 1};
+    nodes[2] = (Pex125ModelRendererNode){foot_tx, foot_ty, foot_px, foot_py, foot_pz, foot_bx, foot_by, foot_bz, foot_bw, foot_bh, foot_bd, 0, 0, foot_rx, 0, 0, 0, 0};
+    p125_modelrenderer_render_tree(nodes, 0, 3, 0,0,0, 0,0,0);
+}
+
+static void passive_render_dragon_wing_tree(float mirror_x, float flap, float lift) {
+    float wing_rx = 0.125f - cosf(flap) * 0.2f;
+    float wing_ry = 0.25f;
+    float wing_rz = (sinf(flap) + 0.125f) * 0.8f;
+    float tip_rz = -((sinf(flap + 2.0f) + 0.5f) * 0.75f);
+    float old_scale_x = g_passive_fast_model_scale_x;
+    g_passive_fast_model_scale_x = old_scale_x * mirror_x;
+    Pex125ModelRendererNode wing_nodes[4];
+    memset(wing_nodes, 0, sizeof(wing_nodes));
+    wing_nodes[0] = (Pex125ModelRendererNode){112, 88, -12.0f, 5.0f, 2.0f, -56.0f, -4.0f, -4.0f, 56, 8, 8, 0, 0, wing_rx, wing_ry, wing_rz, 1, 2};
+    wing_nodes[1] = (Pex125ModelRendererNode){-56, 88, 0.0f, 0.0f, 0.0f, -56.0f, 0.0f, 2.0f, 56, 0, 56, 0, 0, 0, 0, 0, 0, 0};
+    wing_nodes[2] = (Pex125ModelRendererNode){112, 136, -56.0f, 0.0f, 0.0f, -56.0f, -2.0f, -2.0f, 56, 4, 4, 0, 0, 0, 0, tip_rz, 3, 1};
+    wing_nodes[3] = (Pex125ModelRendererNode){-56, 144, 0.0f, 0.0f, 0.0f, -56.0f, 0.0f, 2.0f, 56, 0, 56, 0, 0, 0, 0, 0, 0, 0};
+    p125_modelrenderer_render_tree(wing_nodes, 0, 4, 0,0,0, 0,0,0);
+
+    passive_render_dragon_limb_tree(-12.0f, 20.0f, 2.0f, 1.3f + lift * 0.1f, -0.5f - lift * 0.1f, 0.75f + lift * 0.1f,
+                                    112,104, -4,-4,-4,8,24,8,
+                                    226,138, 0,20,-1, -3,-1,-3,6,24,6,
+                                    144,104, 0,23,0, -4,0,-12,8,4,16);
+    passive_render_dragon_limb_tree(-16.0f, 16.0f, 42.0f, 1.0f + lift * 0.1f, 0.5f + lift * 0.1f, 0.75f + lift * 0.1f,
+                                    0,0, -8,-4,-8,16,32,16,
+                                    196,0, 0,32,-4, -6,-2,0,12,32,12,
+                                    112,0, 0,31,4, -9,0,-20,18,6,24);
+    g_passive_fast_model_scale_x = old_scale_x;
+}
+
 static void passive_render_p125_dragon(float age, float head_yaw, float head_pitch) {
     /* Geometry from ModelDragon.  The original Java model is hierarchical and
        driven by EntityDragon's 64-sample flight ring buffer.  PexCraft does not
@@ -4201,18 +4379,7 @@ static void passive_render_p125_dragon(float age, float head_yaw, float head_pit
     p125_part_rad(220,53,0,4,8, -1,-6,10,2,6,12,0,0,0,0,0);
     p125_part_rad(220,53,0,4,8, -1,-6,30,2,6,12,0,0,0,0,0);
     for (int side=0; side<2; ++side) {
-        float sx = side ? 1.0f : -1.0f;
-        float wingZ = (sinf(flap)+0.125f)*0.8f * sx;
-        p125_part_rad(112,88, sx*12,5,2, sx*-56,-4,-4,56,8,8,0,0,0,0,wingZ);
-        p125_part_rad(-56,88,sx*12,5,2, sx*-56,0,2,56,0,56,0,0,0,0,wingZ);
-        p125_part_rad(112,136,sx*68,5,2, sx*-56,-2,-2,56,4,4,0,0,0,0,wingZ - (sinf(flap+2.0f)+0.5f)*0.75f*sx);
-        p125_part_rad(-56,144,sx*68,5,2, sx*-56,0,2,56,0,56,0,0,0,0,wingZ - (sinf(flap+2.0f)+0.5f)*0.75f*sx);
-        p125_part_rad(112,104,sx*12,20,2, -4,-4,-4,8,24,8,0,0,1.3f,0,0);
-        p125_part_rad(226,138,sx*12,40,1, -3,-1,-3,6,24,6,0,0,-0.5f,0,0);
-        p125_part_rad(144,104,sx*12,63,1, -4,0,-12,8,4,16,0,0,0.75f,0,0);
-        p125_part_rad(0,0,sx*16,16,42, -8,-4,-8,16,32,16,0,0,1.0f,0,0);
-        p125_part_rad(196,0,sx*16,48,38, -6,-2,0,12,32,12,0,0,0.5f,0,0);
-        p125_part_rad(112,0,sx*16,79,42, -9,0,-20,18,6,24,0,0,0.75f,0,0);
+        passive_render_dragon_wing_tree(side ? -1.0f : 1.0f, flap, sinf(flap) + 1.0f);
     }
     for (int i=0;i<12;++i) {
         p125_part_rad(192,104,0,10+sinf(flap+i*0.45f)*1.2f,60+i*9.5f, -5,-5,-5,10,10,10,0,0,sinf(flap+i*0.45f)*0.2f,(float)M_PI+sinf(flap+i*0.25f)*0.2f,0);
@@ -4220,7 +4387,7 @@ static void passive_render_p125_dragon(float age, float head_yaw, float head_pit
     }
 }
 
-static void passive_render_quad_model(int type, int fur_layer, int detail, float limb, float move, float head_yaw, float head_pitch, float age, int sitting, int rideable) {
+static void passive_render_quad_model(int type, int fur_layer, int detail, float limb, float move, float head_yaw, float head_pitch, float age, int sitting, int rideable, int held_block) {
     (void)detail;
     switch (type) {
         case PASSIVE_MOB_PIG:
@@ -4258,40 +4425,51 @@ static void passive_render_quad_model(int type, int fur_layer, int detail, float
         case PASSIVE_MOB_ENDER_DRAGON:
             passive_render_p125_dragon(age, head_yaw, head_pitch); break;
         default:
-            passive_render_p125_biped(type, limb, move, age, head_yaw, head_pitch); break;
+            passive_render_p125_biped(type, limb, move, age, head_yaw, head_pitch, type == PASSIVE_MOB_ENDERMAN && held_block > 0); break;
     }
 }
 
 #undef steve_part
 
-static void passive_render_skeleton_bow_item(float head_pitch) {
-    if (!tex_items.id) return;
+static void passive_apply_biped_right_arm_postrender(float px, float py, float pz, float rx, float ry, float rz) {
+    glTranslatef(px * 0.0625f, py * 0.0625f, pz * 0.0625f);
+    if (rz != 0.0f) glRotatef(passive_deg_from_rad(rz), 0.0f, 0.0f, 1.0f);
+    if (ry != 0.0f) glRotatef(passive_deg_from_rad(ry), 0.0f, 1.0f, 0.0f);
+    if (rx != 0.0f) glRotatef(passive_deg_from_rad(rx), 1.0f, 0.0f, 0.0f);
+}
+
+static void passive_render_biped_held_item_125(int type, int item_id, float limb, float move, float age, float head_yaw, float head_pitch) {
+    if (!tex_items.id || item_id <= 0) return;
+    PexBipedPose pose;
+    passive_biped_pose_125(type, limb, move, age, head_yaw, head_pitch, 0, &pose);
     glPushMatrix();
-    /* RenderBiped equipped-item approximation: attach a bow sprite to the
-       skeleton's raised right arm so the mob visibly carries/aims a bow. */
-    glTranslatef(-0.54f, -0.72f, -0.18f);
-    glRotatef(head_pitch, 1.0f, 0.0f, 0.0f);
-    glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
-    glRotatef(-35.0f, 0.0f, 0.0f, 1.0f);
-    glScalef(0.55f, 0.55f, 0.55f);
-    draw_dropped_item_sprite(item_icon_tile(ITEM_BOW));
+    passive_apply_biped_right_arm_postrender(pose.arm_px[0], pose.arm_py[0], pose.arm_pz[0],
+                                             pose.arm_rx[0], pose.arm_ry[0], pose.arm_rz[0]);
+    glTranslatef(-1.0f / 16.0f, 7.0f / 16.0f, 1.0f / 16.0f);
+    if (item_id == ITEM_BOW) {
+        float s = 10.0f / 16.0f;
+        glTranslatef(0.0f, 2.0f / 16.0f, 5.0f / 16.0f);
+        glRotatef(-20.0f, 0.0f, 1.0f, 0.0f);
+        glScalef(s, -s, s);
+        glRotatef(-100.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+    } else {
+        float s = 10.0f / 16.0f;
+        glTranslatef(0.0f, 3.0f / 16.0f, 0.0f);
+        glScalef(s, -s, s);
+        glRotatef(-100.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+    }
+    draw_item3d_from_texture(&tex_items, item_icon_tile(item_id));
     glPopMatrix();
 }
 
-
-static void passive_render_held_item_sprite(int item_id, float tx, float ty, float tz, float ry, float rz, float scale) {
-    if (!tex_items.id) return;
-    glPushMatrix();
-    glTranslatef(tx, ty, tz);
-    glRotatef(ry, 0.0f, 1.0f, 0.0f);
-    glRotatef(rz, 0.0f, 0.0f, 1.0f);
-    glScalef(scale, scale, scale);
-    draw_dropped_item_sprite(item_icon_tile(item_id));
-    glPopMatrix();
+static void passive_render_skeleton_bow_item(float limb, float move, float age, float head_yaw, float head_pitch) {
+    passive_render_biped_held_item_125(PASSIVE_MOB_SKELETON, ITEM_BOW, limb, move, age, head_yaw, head_pitch);
 }
 
-static void passive_render_pigzombie_sword_item(void) {
-    passive_render_held_item_sprite(ITEM_SWORD_GOLD, -0.54f, -0.72f, -0.20f, 90.0f, -45.0f, 0.55f);
+static void passive_render_pigzombie_sword_item(float limb, float move, float age, float head_yaw, float head_pitch) {
+    passive_render_biped_held_item_125(PASSIVE_MOB_PIG_ZOMBIE, ITEM_SWORD_GOLD, limb, move, age, head_yaw, head_pitch);
 }
 
 static void passive_render_golem_rose_item(float attack_time) {
@@ -4303,6 +4481,20 @@ static void passive_render_golem_rose_item(float attack_time) {
     glRotatef(-20.0f, 0.0f, 0.0f, 1.0f);
     glScalef(0.42f, 0.42f, 0.42f);
     passive_draw_terrain_sprite_tile(tile);
+    glPopMatrix();
+}
+
+static void passive_render_snowman_pumpkin_item(float head_yaw, float head_pitch) {
+    if (!tex_terrain.id) return;
+    glPushMatrix();
+    glTranslatef(0.0f, 4.0f * 0.0625f, 0.0f);
+    if (head_yaw != 0.0f) glRotatef(head_yaw, 0.0f, 1.0f, 0.0f);
+    if (head_pitch != 0.0f) glRotatef(head_pitch, 1.0f, 0.0f, 0.0f);
+    glTranslatef(0.0f, -(11.0f / 32.0f), 0.0f);
+    glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
+    float s = 10.0f / 16.0f;
+    glScalef(s, -s, s);
+    draw_block_item_model(BLOCK_PUMPKIN, -0.5f, -0.5f, -0.5f);
     glPopMatrix();
 }
 
@@ -4451,7 +4643,7 @@ static void draw_passive_mobs(float partial) {
             glEnd();
         } else {
             glBegin(GL_QUADS);
-            passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable);
+            passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
             glEnd();
             if (e->detail && (e->type == PASSIVE_MOB_SPIDER || e->type == PASSIVE_MOB_CAVE_SPIDER) && tex_mob_spider_eyes.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_spider_eyes.id);
@@ -4459,7 +4651,7 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
                 glBlendFunc(GL_ONE, GL_ONE);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable);
+                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
                 glEnd();
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             }
@@ -4469,7 +4661,7 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
                 glBlendFunc(GL_ONE, GL_ONE);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable);
+                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
                 glEnd();
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             }
@@ -4477,7 +4669,7 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_tint_alpha(1.0f, 1.0f, 1.0f, 0.45f);
                 glDepthMask(GL_FALSE);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
                 glEnd();
                 glDepthMask(GL_TRUE);
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
@@ -4486,9 +4678,10 @@ static void draw_passive_mobs(float partial) {
                 passive_render_enderman_held_block(e->held_block);
             }
             if (e->detail && e->type == PASSIVE_MOB_MOOSHROOM) passive_render_mooshroom_mushrooms(e->head_yaw);
-            if (e->detail && e->type == PASSIVE_MOB_SKELETON) passive_render_skeleton_bow_item(e->pitch);
-            if (e->detail && e->type == PASSIVE_MOB_PIG_ZOMBIE) passive_render_pigzombie_sword_item();
+            if (e->detail && e->type == PASSIVE_MOB_SKELETON) passive_render_skeleton_bow_item(e->limb, e->move, e->age, e->head_yaw, e->pitch);
+            if (e->detail && e->type == PASSIVE_MOB_PIG_ZOMBIE) passive_render_pigzombie_sword_item(e->limb, e->move, e->age, e->head_yaw, e->pitch);
             if (e->detail && e->type == PASSIVE_MOB_IRON_GOLEM) passive_render_golem_rose_item(e->attack_time);
+            if (e->detail && e->type == PASSIVE_MOB_SNOWMAN) passive_render_snowman_pumpkin_item(e->head_yaw, e->pitch);
             if (e->detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 float fr, fg, fb;
                 passive_sheep_fleece_color(e->fleece_color, &fr, &fg, &fb);
@@ -4496,7 +4689,7 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_texture_dims(&tex_mob_sheep_fur);
                 passive_fast_set_tint(fr, fg, fb);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
                 glEnd();
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
             }
@@ -4504,7 +4697,7 @@ static void draw_passive_mobs(float partial) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
                 passive_fast_set_texture_dims(&tex_mob_saddle);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
                 glEnd();
             }
         }

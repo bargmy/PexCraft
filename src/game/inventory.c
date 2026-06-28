@@ -6677,8 +6677,8 @@ static int pex_spawn_projectile(int type, int damage) {
     p->mx = lx * speed + g_player_motion_x;
     p->my = ly * speed + g_player_motion_y * 0.25f;
     p->mz = lz * speed + g_player_motion_z;
-    p->yaw = g_player_yaw;
-    p->pitch = g_player_pitch;
+    p->yaw = atan2f(lx, lz) * 57.29578f;
+    p->pitch = atan2f(ly, sqrtf(lx * lx + lz * lz)) * 57.29578f;
     return 1;
 }
 
@@ -6689,9 +6689,24 @@ static int pex_spawn_projectile_from_entity(int type, int owner_mob_type, int ow
     for (int i = 0; i < MAX_PROJECTILE_ENTITIES; ++i) if (!g_projectiles[i].active) { slot = i; break; }
     if (slot < 0) slot = rand() % MAX_PROJECTILE_ENTITIES;
     float lx = tx - sx, ly = ty - sy, lz = tz - sz;
+    float horiz = sqrtf(lx * lx + lz * lz);
+    if ((type == FLAT_PROJECTILE_ARROW && owner_mob_type == PASSIVE_MOB_SKELETON) ||
+        (type == FLAT_PROJECTILE_SNOWBALL && owner_mob_type == PASSIVE_MOB_SNOWMAN)) {
+        ly += horiz * 0.20f;
+    }
     float len = sqrtf(lx * lx + ly * ly + lz * lz);
     if (len < 0.0001f) { lx = 0.0f; ly = 0.0f; lz = 1.0f; len = 1.0f; }
     lx /= len; ly /= len; lz /= len;
+    float inaccuracy = (type == FLAT_PROJECTILE_ARROW || type == FLAT_PROJECTILE_SNOWBALL) ? 12.0f : 1.0f;
+    if (inaccuracy > 0.0f) {
+        float spread = 0.0075f * inaccuracy;
+        lx += (pex_rand_float01() + pex_rand_float01() + pex_rand_float01() - 1.5f) * spread;
+        ly += (pex_rand_float01() + pex_rand_float01() + pex_rand_float01() - 1.5f) * spread;
+        lz += (pex_rand_float01() + pex_rand_float01() + pex_rand_float01() - 1.5f) * spread;
+        len = sqrtf(lx * lx + ly * ly + lz * lz);
+        if (len < 0.0001f) { lx = 0.0f; ly = 0.0f; lz = 1.0f; len = 1.0f; }
+        lx /= len; ly /= len; lz /= len;
+    }
     FlatProjectile *p = &g_projectiles[slot];
     memset(p, 0, sizeof(*p));
     p->active = 1;
@@ -6707,10 +6722,7 @@ static int pex_spawn_projectile_from_entity(int type, int owner_mob_type, int ow
     p->my = ly * speed;
     p->mz = lz * speed;
     p->yaw = atan2f(lx, lz) * 57.29578f;
-    float clamped_ly = ly;
-    if (clamped_ly < -1.0f) clamped_ly = -1.0f;
-    if (clamped_ly > 1.0f) clamped_ly = 1.0f;
-    p->pitch = -asinf(clamped_ly) * 57.29578f;
+    p->pitch = atan2f(ly, sqrtf(lx * lx + lz * lz)) * 57.29578f;
     return 1;
 }
 
@@ -6784,7 +6796,21 @@ static void pex_projectile_impact(FlatProjectile *p) {
     p->active = 0;
 }
 
-static int pex_projectile_passive_hit(float x0, float y0, float z0, float x1, float y1, float z1, float *out_t, float *out_x, float *out_y, float *out_z, int *out_mob_index) {
+static int pex_projectile_snowball_should_damage_type(int type) {
+    switch (type) {
+        case PASSIVE_MOB_CREEPER: case PASSIVE_MOB_SKELETON: case PASSIVE_MOB_SPIDER:
+        case PASSIVE_MOB_ZOMBIE: case PASSIVE_MOB_SLIME: case PASSIVE_MOB_ENDERMAN:
+        case PASSIVE_MOB_CAVE_SPIDER: case PASSIVE_MOB_SILVERFISH: case PASSIVE_MOB_BLAZE:
+        case PASSIVE_MOB_MAGMA_CUBE: case PASSIVE_MOB_GHAST: case PASSIVE_MOB_PIG_ZOMBIE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int pex_projectile_passive_hit_excluding_owner(const FlatProjectile *p, float x0, float y0, float z0,
+                                                      float x1, float y1, float z1, float *out_t,
+                                                      float *out_x, float *out_y, float *out_z, int *out_mob_index) {
     float dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
     float best_t = 2.0f;
     int found = 0;
@@ -6792,6 +6818,7 @@ static int pex_projectile_passive_hit(float x0, float y0, float z0, float x1, fl
     for (int mi = 0; mi < MAX_PASSIVE_MOBS; ++mi) {
         PassiveMob *m = &g_passive_mobs[mi];
         if (!m->active || m->death_time > 0) continue;
+        if (p && p->owner_type == 1 && mi == p->owner_mob_index && m->type == p->owner_mob_type) continue;
         float expand = 0.30f;
         float minx = m->x - m->width * 0.5f - expand;
         float maxx = m->x + m->width * 0.5f + expand;
@@ -6800,16 +6827,16 @@ static int pex_projectile_passive_hit(float x0, float y0, float z0, float x1, fl
         float minz = m->z - m->width * 0.5f - expand;
         float maxz = m->z + m->width * 0.5f + expand;
         float tmin = 0.0f, tmax = 1.0f;
-#define PEX_PROJ_AXIS(o,d,minv,maxv) do { \
+#define PEX_PROJ_AXIS_OWNER(o,d,minv,maxv) do { \
     if (fabsf(d) < 1e-6f) { if ((o) < (minv) || (o) > (maxv)) { tmin = 2.0f; break; } } \
     else { float inv = 1.0f / (d); float ta = ((minv) - (o)) * inv; float tb = ((maxv) - (o)) * inv; \
            if (ta > tb) { float tmp = ta; ta = tb; tb = tmp; } \
            if (ta > tmin) tmin = ta; if (tb < tmax) tmax = tb; if (tmin > tmax) { tmin = 2.0f; break; } } \
 } while (0)
-        PEX_PROJ_AXIS(x0, dx, minx, maxx);
-        if (tmin <= 1.0f) PEX_PROJ_AXIS(y0, dy, miny, maxy);
-        if (tmin <= 1.0f) PEX_PROJ_AXIS(z0, dz, minz, maxz);
-#undef PEX_PROJ_AXIS
+        PEX_PROJ_AXIS_OWNER(x0, dx, minx, maxx);
+        if (tmin <= 1.0f) PEX_PROJ_AXIS_OWNER(y0, dy, miny, maxy);
+        if (tmin <= 1.0f) PEX_PROJ_AXIS_OWNER(z0, dz, minz, maxz);
+#undef PEX_PROJ_AXIS_OWNER
         if (tmin >= 0.0f && tmin <= 1.0f && tmin < best_t) { best_t = tmin; found = 1; best_idx = mi; }
     }
     if (!found) return 0;
@@ -6827,6 +6854,8 @@ static void pex_projectile_damage_passive_mob(int mob_index, const FlatProjectil
     if (!m->active || m->death_time > 0) return;
     int damage = p->damage > 0 ? p->damage : (p->type == FLAT_PROJECTILE_ARROW ? 4 : 0);
     if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && m->type == PASSIVE_MOB_BLAZE) damage = 3;
+    if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && p->owner_type == 1 &&
+        p->owner_mob_type == PASSIVE_MOB_SNOWMAN && pex_projectile_snowball_should_damage_type(m->type)) damage = 1;
     if (damage <= 0) return;
     PexDamageSource source;
     if (p->type == FLAT_PROJECTILE_ARROW) source = pex_damage_source_arrow(p);
@@ -6890,7 +6919,8 @@ static void update_projectiles(void) {
             }
             p->x = nx; p->y = ny; p->z = nz; pex_projectile_impact(p); continue;
         }
-        if ((p->owner_type == 0 || p->owner_type == 1) && p->age > 2 && pex_projectile_passive_hit(p->x, p->y, p->z, nx, ny, nz, &et, &ehx, &ehy, &ehz, &passive_hit_idx)) {
+        if ((p->owner_type == 0 || p->owner_type == 1) && p->age > 2 &&
+            pex_projectile_passive_hit_excluding_owner(p, p->x, p->y, p->z, nx, ny, nz, &et, &ehx, &ehy, &ehz, &passive_hit_idx)) {
             hit = 1; hit_t = et; hx = ehx; hy = ehy; hz = ehz;
         }
         for (int step = 1; step <= 8; ++step) {

@@ -2945,15 +2945,43 @@ static void draw_projectiles(float partial) {
         glPushMatrix();
         glTranslatef(x, y, z);
         if (p->type == FLAT_PROJECTILE_ARROW) {
-            glRotatef(p->yaw, 0.0f, 1.0f, 0.0f);
-            glRotatef(p->pitch, 1.0f, 0.0f, 0.0f);
-            glScalef(0.18f, 0.18f, 0.55f);
+            float au0, av0, au1, av1;
+            item_tile_uv(tile, &au0, &av0, &au1, &av1);
+            glRotatef(p->yaw - 90.0f, 0.0f, 1.0f, 0.0f);
+            glRotatef(p->pitch, 0.0f, 0.0f, 1.0f);
+            glRotatef(45.0f, 1.0f, 0.0f, 0.0f);
+            glScalef(0.05625f, 0.05625f, 0.05625f);
+            glTranslatef(-4.0f, 0.0f, 0.0f);
+            glColor4f(1,1,1,1);
+            glBegin(GL_QUADS);
+            float u0 = au0, u1 = au0 + (au1 - au0) * 0.35f;
+            float v0 = av0 + (av1 - av0) * 0.35f, v1 = av0 + (av1 - av0) * 0.70f;
+            glTexCoord2f(u0, v0); glVertex3f(-7.0f, -2.0f, -2.0f);
+            glTexCoord2f(u1, v0); glVertex3f(-7.0f, -2.0f,  2.0f);
+            glTexCoord2f(u1, v1); glVertex3f(-7.0f,  2.0f,  2.0f);
+            glTexCoord2f(u0, v1); glVertex3f(-7.0f,  2.0f, -2.0f);
+            glTexCoord2f(u0, v0); glVertex3f(-7.0f,  2.0f, -2.0f);
+            glTexCoord2f(u1, v0); glVertex3f(-7.0f,  2.0f,  2.0f);
+            glTexCoord2f(u1, v1); glVertex3f(-7.0f, -2.0f,  2.0f);
+            glTexCoord2f(u0, v1); glVertex3f(-7.0f, -2.0f, -2.0f);
+            for (int f = 0; f < 4; ++f) {
+                float a = (float)f * (float)M_PI * 0.5f;
+                float c = cosf(a), s = sinf(a);
+                float y0 = -2.0f * c, z0 = -2.0f * s;
+                float y1 =  2.0f * c, z1 =  2.0f * s;
+                float fu0 = au0, fu1 = au1, fv0 = av0, fv1 = av0 + (av1 - av0) * 0.35f;
+                glTexCoord2f(fu0, fv0); glVertex3f(-8.0f, y0, z0);
+                glTexCoord2f(fu1, fv0); glVertex3f( 8.0f, y0, z0);
+                glTexCoord2f(fu1, fv1); glVertex3f( 8.0f, y1, z1);
+                glTexCoord2f(fu0, fv1); glVertex3f(-8.0f, y1, z1);
+            }
+            glEnd();
         } else {
             glRotatef((float)p->age * 18.0f + partial * 18.0f, 0.0f, 1.0f, 0.0f);
             glRotatef(20.0f, 1.0f, 0.0f, 0.0f);
             glScalef(0.25f, 0.25f, 0.25f);
+            draw_item3d_from_texture(&tex_items, tile);
         }
-        draw_item3d_from_texture(&tex_items, tile);
         glPopMatrix();
     }
     glColor4f(1,1,1,1);
@@ -4729,7 +4757,7 @@ static void liquid_top_uvs_source(int tile, float angle,
     float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
     float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
     int tx = (tile & 15) * 16;
-    int ty = (tile & 240);
+    int ty = (tile >> 4) * 16;
     float cu = ((float)tx + 8.0f) / tw;
     float cv = ((float)ty + 8.0f) / th;
     if (angle > -999.0f) {

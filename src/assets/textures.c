@@ -139,6 +139,97 @@ static void normalize_sky_sprite_alphas(void) {
     normalize_sky_alpha(&tex_moon_phases);
 }
 
+static int terrain_tile_liquid_like_for_texture(const Texture *t, int tile, int water) {
+    if (!t || !t->rgba || t->w <= 0 || t->h <= 0) return 0;
+    int step_x = t->w / 16;
+    int step_y = t->h / 16;
+    if (step_x <= 0 || step_y <= 0) return 0;
+    int tx = (tile & 15) * step_x;
+    int ty = (tile >> 4) * step_y;
+    if (tx + step_x > t->w || ty + step_y > t->h) return 0;
+    int opaque = 0, match = 0, gray = 0;
+    for (int yy = 0; yy < step_y; yy++) {
+        for (int xx = 0; xx < step_x; xx++) {
+            unsigned char *p = &t->rgba[((ty + yy) * t->w + (tx + xx)) * 4];
+            if (p[3] <= 8) continue;
+            int r = p[0], g = p[1], b = p[2];
+            ++opaque;
+            if (abs(r - g) < 12 && abs(g - b) < 12 && abs(r - b) < 12) ++gray;
+            if (water) {
+                if (b >= 70 && b >= r + 12 && g >= r - 8) ++match;
+            } else {
+                if (r >= 100 && g >= 35 && r >= b + 35 && g >= b + 5) ++match;
+            }
+        }
+    }
+    if (opaque * 8 < step_x * step_y) return 0;
+    if (gray * 3 > opaque) return 0;
+    return match * 3 >= opaque;
+}
+
+static void terrain_write_java_liquid_tile(Texture *t, int tile, int water, int flow) {
+    if (!t || !t->rgba || t->w <= 0 || t->h <= 0) return;
+    int step_x = t->w / 16;
+    int step_y = t->h / 16;
+    if (step_x <= 0 || step_y <= 0) return;
+    int tx = (tile & 15) * step_x;
+    int ty = (tile >> 4) * step_y;
+    if (tx + step_x > t->w || ty + step_y > t->h) return;
+    for (int y = 0; y < step_y; ++y) {
+        for (int x = 0; x < step_x; ++x) {
+            float fx = (float)x / (float)step_x;
+            float fy = (float)y / (float)step_y;
+            float wave = (sinf((fx * 6.2831853f) + (flow ? fy * 12.5663706f : fy * 3.1415927f)) +
+                          cosf((fy * 6.2831853f) - (flow ? fx * 6.2831853f : fx * 3.1415927f))) * 0.5f;
+            float v = wave * 0.5f + 0.5f;
+            if (v < 0.0f) v = 0.0f;
+            if (v > 1.0f) v = 1.0f;
+            unsigned char *p = &t->rgba[((ty + y) * t->w + (tx + x)) * 4];
+            if (water) {
+                float vv = v * v;
+                p[0] = (unsigned char)(32.0f + vv * 32.0f);
+                p[1] = (unsigned char)(50.0f + vv * 64.0f);
+                p[2] = 255;
+                p[3] = (unsigned char)(146.0f + vv * 50.0f);
+            } else {
+                float vv = v * v;
+                p[0] = (unsigned char)(155.0f + v * 100.0f);
+                p[1] = (unsigned char)(vv * 255.0f);
+                p[2] = (unsigned char)(vv * vv * 128.0f);
+                p[3] = 255;
+            }
+        }
+    }
+}
+
+static void normalize_terrain_liquid_tiles(void) {
+    if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w < 128 || tex_terrain.h < 128) return;
+    int changed = 0;
+    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 205, 1)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 205, 1, 0);
+        changed = 1;
+    }
+    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 206, 1)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 206, 1, 1);
+        changed = 1;
+    }
+    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 237, 0)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 237, 0, 0);
+        changed = 1;
+    }
+    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 238, 0)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 238, 0, 1);
+        changed = 1;
+    }
+    if (!changed) return;
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
+}
+
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static const char *pex_basename_asset(const char *path) {
@@ -852,6 +943,7 @@ static int load_release_textures_from_pack(void) {
     ok = try_release_texture(&tex_gui, "gui\\gui.png", 0) && ok;
     ok = try_release_texture(&tex_font, "font\\default.png", 0) && ok;
     ok = try_release_texture(&tex_terrain, "terrain.png", 1) && ok;
+    normalize_terrain_liquid_tiles();
     make_solid_texture(&tex_black, 16, 16, 0, 0, 0, 255, 1);
     try_release_texture(&tex_pack, "pack.png", 0);
     if (!tex_pack.id) make_solid_texture(&tex_pack, 32, 32, 64, 64, 64, 255, 0);
@@ -965,6 +1057,7 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_REQ(&tex_gui, "gui_gui.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_REQ(&tex_font, "font_default.mcrw", 0, 128, 128);
     PEX_PSP_LOAD_REQ(&tex_terrain, "terrain.mcrw", 1, 128, 128);
+    normalize_terrain_liquid_tiles();
     PEX_PSP_LOAD_REQ(&tex_black, "title_black.mcrw", 1, 16, 16);
     PEX_PSP_LOAD_OPT(&tex_pack, "pack.mcrw", 0, 32, 32);
     PEX_PSP_LOAD_OPT(&tex_default_pack_icon, "pack.mcrw", 0, 32, 32);
@@ -1040,6 +1133,7 @@ static int load_default_textures(void) {
     PEX_LOAD_REQ(&tex_gui, "gui_gui.mcrw", 0, 256, 256);
     PEX_LOAD_REQ(&tex_font, "font_default.mcrw", 0, 128, 128);
     PEX_LOAD_REQ(&tex_terrain, "terrain.mcrw", 1, 256, 256);
+    normalize_terrain_liquid_tiles();
     PEX_LOAD_REQ(&tex_black, "title_black.mcrw", 1, 16, 16);
     PEX_LOAD_OPT(&tex_pack, "pack.mcrw", 0, 32, 32);
     PEX_LOAD_OPT(&tex_default_pack_icon, "pack.mcrw", 0, 32, 32);
@@ -1110,6 +1204,7 @@ static void apply_texture_pack_index(int index) {
 #else
         TexturePackEntry *e = &g_texpacks[index];
         try_pack_texture(e, &tex_terrain, "terrain.png", 1);
+        normalize_terrain_liquid_tiles();
         try_pack_texture(e, &tex_gui, "gui\\gui.png", 0);
         try_pack_texture(e, &tex_bg, "gui\\background.png", 1);
         try_pack_texture(e, &tex_font, "font\\default.png", 0);
@@ -1192,4 +1287,3 @@ static void apply_texture_pack_index(int index) {
     init_font_widths();
     log_msg("Applied texture pack: %s", g_current_texpack);
 }
-
