@@ -744,6 +744,11 @@ typedef struct PassiveMob {
     int path_len;
     int path_index;
     int path_recalc_cooldown;
+    int ai_age;
+    int ai_repath_delay;
+    int path_stuck_check_tick;
+    float path_stuck_check_x, path_stuck_check_y, path_stuck_check_z;
+    float path_goal_x, path_goal_y, path_goal_z;
     int path_x[PEX_MOB_PATH_MAX];
     int path_y[PEX_MOB_PATH_MAX];
     int path_z[PEX_MOB_PATH_MAX];

@@ -1406,48 +1406,6 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
-      - name: Send Telegram final summary
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          CHAT_ID: ${{ env.CHAT_ID }}
-          COMMIT_NAME: ${{ steps.commit.outputs.name }}
-          NEEDS_JSON: ${{ toJson(needs) }}
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json, os, urllib.parse, urllib.request
-          token = os.environ.get("TOKEN", "")
-          chat_id = os.environ.get("CHAT_ID", "")
-          if not token or not chat_id:
-              print("Telegram token/chat id missing; skipping final summary.")
-              raise SystemExit(0)
-          job_labels = {
-              "windows": "Windows MinGW",
-              "windows_arm64": "Windows arm64 Clang/MinGW",
-              "linux": "Linux",
-              "lgwebos": "LG webOS",
-              "android": "Android",
-              "android_tv": "Android TV",
-              "psp": "PSP",
-              "wii": "Wii",
-              "xbox_uwp": "Xbox One UWP",
-          }
-          needs = json.loads(os.environ.get("NEEDS_JSON", "{}") or "{}")
-          failed = [job_labels.get(name, name) for name, data in needs.items() if data.get("result") in {"failure", "cancelled", "timed_out"}]
-          skipped = [job_labels.get(name, name) for name, data in needs.items() if data.get("result") == "skipped"]
-          text = (
-              "PexCraft build finished.\n"
-              f"Commit: {os.environ.get('COMMIT_NAME', '')} - {os.environ.get('GITHUB_SHA', '')[:12]}\n"
-              f"Failed: {', '.join(failed) if failed else 'None'}\n"
-              f"Skipped: {', '.join(skipped) if skipped else 'None'}\n"
-              "GitHub artifact upload is disabled; files were sent directly from each build job."
-          )
-          data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-          req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-          with urllib.request.urlopen(req, timeout=120) as r:
-              print(r.read().decode("utf-8", "replace"))
-          PY
-
       - name: Delete Telegram build status message
         if: always()
         env:

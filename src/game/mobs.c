@@ -1,13 +1,15 @@
 /* Minecraft 1.2.5-style local mobs. Included in the unity build after
    inventory.c so it can reuse the existing world/item/collision helpers. */
 
-#define PASSIVE_MOB_SAVE_VERSION 28
+#define PASSIVE_MOB_SAVE_VERSION 29
 
 static PassiveMob *passive_mob_raycast(float max_dist, float *out_t);
 static void passive_mob_assign_owner(PassiveMob *m);
 static int passive_mob_is_owned_by_player(const PassiveMob *m);
 static void passive_village_update_reputation_from_attack(PassiveMob *m);
 static const char *passive_mob_name(int type);
+static void passive_mob_set_path_goal(PassiveMob *m, float x, float y, float z);
+static int passive_path_can_stand_at(int type, int x, int y, int z);
 static int item_icon_tile(int id);
 static int block_texture_resolve(int block_id, int meta, int face);
 static void draw_dropped_item_sprite(int tile);
@@ -334,6 +336,15 @@ static int passive_mob_hostile(const PassiveMob *m) {
 
 static int passive_mob_is_slime_family(int type) {
     return type == PASSIVE_MOB_SLIME || type == PASSIVE_MOB_MAGMA_CUBE;
+}
+
+static int passive_mob_can_despawn_125(const PassiveMob *m) {
+    if (!m) return 0;
+    if (m->type == PASSIVE_MOB_VILLAGER || m->type == PASSIVE_MOB_IRON_GOLEM || m->type == PASSIVE_MOB_SNOWMAN) return 0;
+    if (m->type == PASSIVE_MOB_WOLF) return m->rideable > 0 && !passive_mob_is_owned_by_player(m);
+    if (m->type == PASSIVE_MOB_OCELOT) return !passive_mob_is_owned_by_player(m);
+    if (passive_mob_category(m->type) == PEX_CAT_CREATURE) return 0;
+    return 1;
 }
 
 static float passive_mob_model_scale_for_type(int type) {
@@ -674,6 +685,19 @@ static int passive_mob_ground_target_ok(int x, int y, int z) {
     return 1;
 }
 
+static float passive_mob_path_weight_125(const PassiveMob *m, int x, int y, int z) {
+    if (!m) return 0.0f;
+    float light = flat_light_brightness(x, y, z);
+    if (passive_mob_category(m->type) == PEX_CAT_MONSTER) return 0.5f - light;
+    if (passive_mob_category(m->type) == PEX_CAT_CREATURE) {
+        return flat_get_block(x, y - 1, z) == BLOCK_GRASS ? 10.0f : light - 0.5f;
+    }
+    if (m->type == PASSIVE_MOB_SQUID) {
+        return passive_block_is_water(flat_get_block(x, y, z)) ? 10.0f : -99999.0f;
+    }
+    return 0.0f;
+}
+
 static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z) {
     if (!m) return;
     memset(m, 0, sizeof(*m));
@@ -709,7 +733,7 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->held_block = 0;
     m->love_time = 0;
     m->stuck_ticks = 0;
-    m->wander_cooldown = 20 + (rand() % 80);
+    m->wander_cooldown = 0;
     m->owner_id = PEX_MOB_OWNER_NONE;
     m->tame_state = 0;
     m->collar_color = 14; /* Java wolf collar default: red dye */
@@ -717,6 +741,15 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->door_target_x = m->door_target_y = m->door_target_z = 0;
     m->door_open_time = 0;
     m->ai_task_mask = 0;
+    m->ai_age = rand() % 100;
+    m->ai_repath_delay = 0;
+    m->path_stuck_check_tick = 0;
+    m->path_stuck_check_x = m->x;
+    m->path_stuck_check_y = m->y;
+    m->path_stuck_check_z = m->z;
+    m->path_goal_x = m->x;
+    m->path_goal_y = m->y;
+    m->path_goal_z = m->z;
     m->path_len = m->path_index = m->path_recalc_cooldown = 0;
     if (type == PASSIVE_MOB_CHICKEN) {
         m->chicken_wing_speed = 1.0f;
@@ -984,8 +1017,7 @@ static void passive_mobs_try_natural_spawn(void) {
         if (cat == PEX_CAT_MONSTER && (g_opts.difficulty & 3) == 0) continue;
         if (passive_mob_count_category(cat) > passive_spawn_cap_for_category(cat)) continue;
         int chunk_attempts = (cat == PEX_CAT_MONSTER) ? 1 : 1;
-        if (cat == PEX_CAT_CREATURE && (g_ingame_ticks % 10) != 0) continue;
-        if (cat == PEX_CAT_WATER && (g_ingame_ticks % 20) != 0) continue;
+        if ((cat == PEX_CAT_CREATURE || cat == PEX_CAT_WATER) && (g_world_time % 400LL) != 0) continue;
         for (int batch = 0; batch < chunk_attempts && passive_mob_count() < passive_mob_target_cap(); ++batch) {
             int cx = pcx + (rand() % 17) - 8;
             int cz = pcz + (rand() % 17) - 8;
@@ -1310,44 +1342,30 @@ static void passive_mobs_try_village_spawns(void) {
 
 static void passive_mob_choose_target(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
-    int base_y = (int)floorf(m->y + 0.01f);
+    int base_x = (int)floorf(m->x);
+    int base_y = (int)floorf(m->y);
+    int base_z = (int)floorf(m->z);
     int best_x = 0, best_y = 0, best_z = 0;
     float best_weight = -99999.0f;
-    for (int i = 0; i < 14; ++i) {
-        int x = (int)floorf(m->x + (float)(rand() % 15) - 7.0f);
-        int z = (int)floorf(m->z + (float)(rand() % 15) - 7.0f);
-        /* Passive animals in b1.0 wander; they do not pathfind up cliffs.
-           Prefer same-level ground and allow one block lower. Only use +1 when
-           the mob has been stuck for a while so it can escape a tiny ledge. */
-        int y_candidates[4];
-        int n = 0;
-        y_candidates[n++] = base_y;
-        y_candidates[n++] = base_y - 1;
-        if (m->stuck_ticks > 12) y_candidates[n++] = base_y + 1;
-        y_candidates[n++] = base_y - 2;
-        for (int yi = 0; yi < n; ++yi) {
-            int y = y_candidates[yi];
-            if (!passive_mob_ground_target_ok(x, y, z)) continue;
-            float dx = ((float)x + 0.5f) - m->x;
-            float dz = ((float)z + 0.5f) - m->z;
-            float dist2 = dx * dx + dz * dz;
-            if (dist2 < 1.0f) continue;
-            int below = flat_get_block(x, y - 1, z);
-            float w = below == BLOCK_GRASS ? 10.0f : (float)flat_combined_light(x, y, z) / 15.0f - 0.5f;
-            w -= fabsf((float)y - m->y) * 3.0f;
-            if (dist2 > 64.0f) w -= 3.0f;
-            if (w > best_weight) { best_weight = w; best_x = x; best_y = y; best_z = z; }
-        }
+    for (int i = 0; i < 10; ++i) {
+        int x = base_x + (rand() % 20) - 10;
+        int y = base_y + (rand() % 14) - 7;
+        int z = base_z + (rand() % 20) - 10;
+        if (y <= FLAT_WORLD_Y_MIN || y + 1 > FLAT_WORLD_Y_MAX) continue;
+        if (!passive_path_can_stand_at(m->type, x, y, z)) continue;
+        float dx = ((float)x + 0.5f) - m->x;
+        float dz = ((float)z + 0.5f) - m->z;
+        float dist2 = dx * dx + dz * dz;
+        if (dist2 < 1.0f) continue;
+        float w = passive_mob_path_weight_125(m, x, y, z);
+        if (w > best_weight) { best_weight = w; best_x = x; best_y = y; best_z = z; }
     }
     if (best_weight > -9999.0f) {
-        m->target_x = (float)best_x + 0.5f;
-        m->target_y = (float)best_y;
-        m->target_z = (float)best_z + 0.5f;
-        m->has_path_target = 1;
-        m->wander_cooldown = 60 + (rand() % 120);
+        passive_mob_set_path_goal(m, (float)best_x + 0.5f, (float)best_y, (float)best_z + 0.5f);
+        m->wander_cooldown = 0;
     } else {
         m->has_path_target = 0;
-        m->wander_cooldown = 40 + (rand() % 80);
+        m->wander_cooldown = 0;
     }
 }
 
@@ -1902,6 +1920,7 @@ static void passive_mob_tick_timers(PassiveMob *m) {
     if (m->love_time > 0) --m->love_time;
     if (m->door_open_time > 0) --m->door_open_time;
     if (m->path_recalc_cooldown > 0) --m->path_recalc_cooldown;
+    if (m->ai_repath_delay > 0) --m->ai_repath_delay;
     if (m->baby_age < 0) ++m->baby_age;
     else if (m->baby_age > 0) --m->baby_age;
     ++m->age;
@@ -1959,6 +1978,17 @@ static void passive_mob_face_point(PassiveMob *m, float x, float z, float max_tu
     float turn = pex_wrap_degrees(desired - m->yaw);
     turn = pex_clamp_float(turn, -max_turn, max_turn);
     m->yaw += turn;
+}
+
+static void passive_mob_set_path_goal(PassiveMob *m, float x, float y, float z) {
+    if (!m) return;
+    m->target_x = x;
+    m->target_y = y;
+    m->target_z = z;
+    m->path_goal_x = x;
+    m->path_goal_y = y;
+    m->path_goal_z = z;
+    m->has_path_target = 1;
 }
 
 static int passive_mob_scaled_attack_damage(const PassiveMob *m, int base) {
@@ -2341,7 +2371,11 @@ static int passive_path_create_output_125(PassiveMob *m, Pex125PathContext *ctx,
     }
     m->path_len = outn;
     m->path_index = 0;
-    m->path_recalc_cooldown = 10 + (rand() % 10);
+    m->path_recalc_cooldown = 20 + (rand() % 20);
+    m->path_stuck_check_tick = m->age;
+    m->path_stuck_check_x = m->x;
+    m->path_stuck_check_y = m->y;
+    m->path_stuck_check_z = m->z;
     return outn > 0;
 }
 
@@ -2357,7 +2391,11 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_BLAZE || m->type == PASSIVE_MOB_SQUID) {
         int gx = (int)floorf(txf), gy = (int)floorf(tyf), gz = (int)floorf(tzf);
         if (!passive_path_can_stand_at(m->type, gx, gy, gz)) return 0;
-        m->path_len = 1; m->path_index = 0; m->path_x[0] = gx; m->path_y[0] = gy; m->path_z[0] = gz; m->path_recalc_cooldown = 10;
+        m->path_len = 1; m->path_index = 0; m->path_x[0] = gx; m->path_y[0] = gy; m->path_z[0] = gz; m->path_recalc_cooldown = 20;
+        m->path_stuck_check_tick = m->age;
+        m->path_stuck_check_x = m->x;
+        m->path_stuck_check_y = m->y;
+        m->path_stuck_check_z = m->z;
         return 1;
     }
     Pex125PathContext ctx;
@@ -2427,23 +2465,37 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
 
 static void passive_path_clear(PassiveMob *m) {
     if (!m) return;
+    m->has_path_target = 0;
     m->path_len = 0;
     m->path_index = 0;
     m->path_recalc_cooldown = 0;
+    m->path_stuck_check_tick = m->age;
+    m->path_stuck_check_x = m->x;
+    m->path_stuck_check_y = m->y;
+    m->path_stuck_check_z = m->z;
 }
 
 static int passive_path_drive(PassiveMob *m) {
     if (!m || !m->has_path_target) return 0;
-    /* Do not recalc simply because the target is far away.  The previous patch
-       did that, and every zombie/skeleton/spider chasing a player farther than
-       8 blocks performed a full A* solve every tick.  Java PathNavigate uses
-       cooldowned repaths; existing paths keep being followed between solves. */
-    if (m->path_len <= 0 || m->path_index >= m->path_len || m->path_recalc_cooldown <= 0 || m->stuck_ticks > 18) {
-        int solved = passive_path_find(m, m->target_x, m->target_y, m->target_z);
+    if (m->path_len > 0 && m->path_index < m->path_len && m->age - m->path_stuck_check_tick > 100) {
+        float dx = m->x - m->path_stuck_check_x;
+        float dy = m->y - m->path_stuck_check_y;
+        float dz = m->z - m->path_stuck_check_z;
+        if (dx * dx + dy * dy + dz * dz < 2.25f) {
+            passive_path_clear(m);
+            return 0;
+        }
+        m->path_stuck_check_tick = m->age;
+        m->path_stuck_check_x = m->x;
+        m->path_stuck_check_y = m->y;
+        m->path_stuck_check_z = m->z;
+    }
+    if (m->path_len <= 0 || m->path_index >= m->path_len || m->path_recalc_cooldown <= 0 || m->stuck_ticks > 100) {
+        int solved = passive_path_find(m, m->path_goal_x, m->path_goal_y, m->path_goal_z);
         if (!solved && (m->path_len <= 0 || m->path_index >= m->path_len)) {
             m->path_len = 0;
             m->path_index = 0;
-            m->path_recalc_cooldown = 12 + (rand() % 20);
+            m->path_recalc_cooldown = 20 + (rand() % 20);
             return 0;
         }
     }
@@ -2452,7 +2504,9 @@ static int passive_path_drive(PassiveMob *m) {
     float path_half = (float)((int)(m->width + 1.0f)) * 0.5f;
     float wx = (float)px + path_half, wy = (float)py, wz = (float)pz + path_half;
     float ddx = wx - m->x, ddz = wz - m->z;
-    if (ddx*ddx + ddz*ddz < 0.45f * 0.45f && fabsf(wy - m->y) < 1.25f) {
+    float advance = m->width;
+    if (advance < 0.45f) advance = 0.45f;
+    if (ddx*ddx + ddz*ddz < advance * advance && fabsf(wy - m->y) < 1.25f) {
         m->path_index++;
         if (m->path_index >= m->path_len) return 0;
         px = m->path_x[m->path_index]; py = m->path_y[m->path_index]; pz = m->path_z[m->path_index];
@@ -2736,11 +2790,8 @@ static int passive_villager_pick_door(PassiveMob *m, PexVillageRuntime *v) {
     d->last_activity = g_ingame_ticks;
     m->door_target_x = d->x; m->door_target_y = d->y; m->door_target_z = d->z;
     m->door_open_time = 40;
-    m->target_x = (float)d->x + (float)d->inside_x + 0.5f;
-    m->target_y = (float)d->y;
-    m->target_z = (float)d->z + (float)d->inside_z + 0.5f;
-    m->has_path_target = 1;
-    passive_path_find(m, m->target_x, m->target_y, m->target_z);
+    passive_mob_set_path_goal(m, (float)d->x + (float)d->inside_x + 0.5f, (float)d->y, (float)d->z + (float)d->inside_z + 0.5f);
+    passive_path_find(m, m->path_goal_x, m->path_goal_y, m->path_goal_z);
     return 1;
 }
 
@@ -2846,6 +2897,23 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
     passive_mob_tick_burning(m);
     if (!m->active || m->death_time > 0) return 0.0f;
     if (in_liquid) m->ai_task_mask |= PEX_AI_SWIM;
+    if (player_d2 < 32.0f * 32.0f) {
+        m->ai_age = 0;
+    } else {
+        if (m->ai_age < 0x3fffffff) ++m->ai_age;
+        if (passive_mob_can_despawn_125(m)) {
+            if (player_d2 > 128.0f * 128.0f ||
+                (m->ai_age > 600 && (rand() % 800) == 0 && player_d2 > 32.0f * 32.0f)) {
+                if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS &&
+                    &g_passive_mobs[g_player_riding_passive_mob] == m) {
+                    g_player_riding_passive_mob = -1;
+                }
+                m->active = 0;
+                g_save_dirty = 1;
+                return 0.0f;
+            }
+        }
+    }
 
     if (m->sitting && (m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT)) {
         m->ai_task_mask |= PEX_AI_SIT;
@@ -2867,8 +2935,8 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
                 PassiveMob *pm = &g_passive_mobs[mate];
                 float dx = pm->x - m->x, dz = pm->z - m->z;
                 float d2 = dx * dx + dz * dz;
-                m->target_x = pm->x; m->target_y = pm->y; m->target_z = pm->z;
-                m->has_path_target = 1; m->wander_cooldown = 8;
+                passive_mob_set_path_goal(m, pm->x, pm->y, pm->z);
+                if (m->ai_repath_delay <= 0) { m->path_recalc_cooldown = 0; m->ai_repath_delay = 4 + (rand() % 7); }
                 m->ai_task_mask |= PEX_AI_MATE;
                 handled_behavior_target = 1;
                 if (d2 < 2.25f) passive_mob_spawn_baby_from_parents(m, pm);
@@ -2886,8 +2954,8 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
             }
             if (parent >= 0) {
                 PassiveMob *pm = &g_passive_mobs[parent];
-                m->target_x = pm->x; m->target_y = pm->y; m->target_z = pm->z;
-                m->has_path_target = 1; m->wander_cooldown = 8;
+                passive_mob_set_path_goal(m, pm->x, pm->y, pm->z);
+                if (m->ai_repath_delay <= 0) { m->path_recalc_cooldown = 0; m->ai_repath_delay = 4 + (rand() % 7); }
                 m->ai_task_mask |= PEX_AI_FOLLOW_PARENT;
                 handled_behavior_target = 1;
             }
@@ -2895,8 +2963,8 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
             ItemStack *held = &g_inventory[g_selected_hotbar_slot];
             if (held && !stack_empty(held) && passive_mob_breeding_item_for_type(m->type, held->id) && player_d2 < 8.0f * 8.0f) {
                 if ((m->type != PASSIVE_MOB_WOLF && m->type != PASSIVE_MOB_OCELOT) || m->sheared) {
-                    m->target_x = g_player_x; m->target_y = g_player_y - 1.62f; m->target_z = g_player_z;
-                    m->has_path_target = 1; m->wander_cooldown = 8;
+                    passive_mob_set_path_goal(m, g_player_x, g_player_y - 1.62f, g_player_z);
+                    if (m->ai_repath_delay <= 0) { m->path_recalc_cooldown = 0; m->ai_repath_delay = 4 + (rand() % 7); }
                     m->ai_task_mask |= PEX_AI_TEMPT;
                     handled_behavior_target = 1;
                 }
@@ -2931,20 +2999,21 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
     if (m->type == PASSIVE_MOB_WOLF && m->rideable <= 0) wants_player = 0;
 
     if (tm) {
-        m->target_x = tm->x;
-        m->target_y = tm->y;
-        m->target_z = tm->z;
-        m->has_path_target = 1;
-        m->wander_cooldown = 8;
+        passive_mob_set_path_goal(m, tm->x, tm->y, tm->z);
+        if (m->ai_repath_delay <= 0) {
+            m->path_recalc_cooldown = 0;
+            m->ai_repath_delay = 4 + (rand() % 7);
+        }
         m->ai_task_mask |= PEX_AI_ATTACK;
     } else if (wants_player && player_d2 < (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_ENDER_DRAGON ? 64.0f * 64.0f : 16.0f * 16.0f)) {
-        m->target_x = g_player_x;
-        m->target_y = g_player_y - 1.62f;
-        m->target_z = g_player_z;
-        m->has_path_target = 1;
-        m->wander_cooldown = 12;
+        passive_mob_set_path_goal(m, g_player_x, g_player_y - 1.62f, g_player_z);
+        if (m->ai_repath_delay <= 0) {
+            m->path_recalc_cooldown = 0;
+            m->ai_repath_delay = 4 + (rand() % 7);
+        }
         m->ai_task_mask |= PEX_AI_ATTACK;
-    } else if (!handled_behavior_target && (!m->has_path_target || m->wander_cooldown <= 0 || (in_liquid && (rand() % 25) == 0))) {
+    } else if (!handled_behavior_target && (m->path_len <= 0 || m->path_index >= m->path_len) &&
+               m->ai_age < 100 && (rand() % 120) == 0) {
         passive_mob_choose_target(m);
         m->ai_task_mask |= PEX_AI_WANDER;
     }
@@ -2963,32 +3032,38 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
 
     if (m->has_path_target) {
         int path_driving = passive_path_drive(m);
-        float tx = m->target_x - m->x;
-        float tz = m->target_z - m->z;
-        float dist2 = tx * tx + tz * tz;
-        if (dist2 < 0.55f * 0.55f && !path_driving && !wants_player && !tm) {
-            m->has_path_target = 0;
-            passive_path_clear(m);
+        int no_nav_path = (m->path_len <= 0 || m->path_index >= m->path_len);
+        if (!m->has_path_target) {
+            path_driving = 0;
+        } else if (no_nav_path && !path_driving) {
+            if (!wants_player && !tm && !handled_behavior_target) passive_path_clear(m);
         } else {
-            passive_mob_face_point(m, m->target_x, m->target_z, (wants_player || tm) ? 45.0f : 30.0f);
-            float sp = info ? info->move_speed : 0.23f;
-            if (m->type == PASSIVE_MOB_SPIDER || m->type == PASSIVE_MOB_CAVE_SPIDER) sp = 0.80f;
-            if (m->type == PASSIVE_MOB_ZOMBIE) sp = 0.23f;
-            if (m->type == PASSIVE_MOB_SKELETON) sp = 0.25f;
-            if (wants_player && m->type == PASSIVE_MOB_ENDERMAN && player_d2 < 12.0f * 12.0f) sp = 0.65f;
-            if (passive_mob_is_slime_family(m->type)) sp *= 0.55f;
-            if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_ENDER_DRAGON) sp *= 0.35f;
-            if (m->type == PASSIVE_MOB_SNOWMAN) sp = 0.25f;
-            if (m->type == PASSIVE_MOB_IRON_GOLEM && tm) sp = 0.22f;
-            forward = in_liquid ? sp * 0.04f : sp * 0.105f;
-            if (pex_passive_has_potion(m, PEX_POTION_SPEED)) forward *= 1.0f + 0.20f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_SPEED) + 1);
-            if (pex_passive_has_potion(m, PEX_POTION_SLOWNESS)) {
-                forward *= 1.0f - 0.15f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_SLOWNESS) + 1);
-                if (forward < 0.0f) forward = 0.0f;
-            }
-            if (m->type != PASSIVE_MOB_CHICKEN && m->type != PASSIVE_MOB_GHAST && m->type != PASSIVE_MOB_ENDER_DRAGON &&
-                m->target_y > m->y + 0.35f && m->on_ground && m->stuck_ticks > 8) {
-                passive_mob_request_jump(m, "higher-target");
+            float tx = m->target_x - m->x;
+            float tz = m->target_z - m->z;
+            float dist2 = tx * tx + tz * tz;
+            if (dist2 < 0.55f * 0.55f && !path_driving && !wants_player && !tm) {
+                passive_path_clear(m);
+            } else {
+                passive_mob_face_point(m, m->target_x, m->target_z, 30.0f);
+                float sp = info ? info->move_speed : 0.23f;
+                if (m->type == PASSIVE_MOB_SPIDER || m->type == PASSIVE_MOB_CAVE_SPIDER) sp = 0.80f;
+                if (m->type == PASSIVE_MOB_ZOMBIE) sp = 0.23f;
+                if (m->type == PASSIVE_MOB_SKELETON) sp = 0.25f;
+                if (wants_player && m->type == PASSIVE_MOB_ENDERMAN && player_d2 < 12.0f * 12.0f) sp = 0.65f;
+                if (passive_mob_is_slime_family(m->type)) sp *= 0.55f;
+                if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_ENDER_DRAGON) sp *= 0.35f;
+                if (m->type == PASSIVE_MOB_SNOWMAN) sp = 0.25f;
+                if (m->type == PASSIVE_MOB_IRON_GOLEM && tm) sp = 0.22f;
+                forward = in_liquid ? 0.04f : sp * 0.10f;
+                if (pex_passive_has_potion(m, PEX_POTION_SPEED)) forward *= 1.0f + 0.20f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_SPEED) + 1);
+                if (pex_passive_has_potion(m, PEX_POTION_SLOWNESS)) {
+                    forward *= 1.0f - 0.15f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_SLOWNESS) + 1);
+                    if (forward < 0.0f) forward = 0.0f;
+                }
+                if (m->type != PASSIVE_MOB_CHICKEN && m->type != PASSIVE_MOB_GHAST && m->type != PASSIVE_MOB_ENDER_DRAGON &&
+                    m->target_y > m->y + 0.35f && m->on_ground && m->stuck_ticks > 8) {
+                    passive_mob_request_jump(m, "higher-target");
+                }
             }
         }
     }
@@ -3156,9 +3231,9 @@ static void passive_mob_tick_animation(PassiveMob *m, float forward, int in_liqu
     } else if (m->stuck_ticks > 0) {
         --m->stuck_ticks;
     }
-    if (m->stuck_ticks > 35) {
+    if (m->stuck_ticks > 100) {
         m->has_path_target = 0;
-        m->wander_cooldown = 20 + (rand() % 40);
+        m->wander_cooldown = 0;
         m->stuck_ticks = 0;
         pex_logf_trace("passive mob dropped stuck target type=%s pos=%.2f,%.2f,%.2f",
                        passive_mob_name(m->type), m->x, m->y, m->z);
@@ -4611,6 +4686,15 @@ static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs) {
         fwrite(&m->door_target_x, sizeof(int), 1, f);
         fwrite(&m->door_target_y, sizeof(int), 1, f);
         fwrite(&m->door_target_z, sizeof(int), 1, f);
+        fwrite(&m->ai_age, sizeof(int), 1, f);
+        fwrite(&m->ai_repath_delay, sizeof(int), 1, f);
+        fwrite(&m->path_stuck_check_tick, sizeof(int), 1, f);
+        fwrite(&m->path_stuck_check_x, sizeof(float), 1, f);
+        fwrite(&m->path_stuck_check_y, sizeof(float), 1, f);
+        fwrite(&m->path_stuck_check_z, sizeof(float), 1, f);
+        fwrite(&m->path_goal_x, sizeof(float), 1, f);
+        fwrite(&m->path_goal_y, sizeof(float), 1, f);
+        fwrite(&m->path_goal_z, sizeof(float), 1, f);
         fwrite(m->potion_duration, sizeof(int), 32, f);
         fwrite(m->potion_amplifier, sizeof(int), 32, f);
     }
@@ -4699,6 +4783,30 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         m->door_open_time = 0;
         m->ai_task_mask = 0;
         m->path_len = m->path_index = m->path_recalc_cooldown = 0;
+        if (version >= 29) {
+            if (fread(&m->ai_age, sizeof(int), 1, f) != 1 ||
+                fread(&m->ai_repath_delay, sizeof(int), 1, f) != 1 ||
+                fread(&m->path_stuck_check_tick, sizeof(int), 1, f) != 1 ||
+                fread(&m->path_stuck_check_x, sizeof(float), 1, f) != 1 ||
+                fread(&m->path_stuck_check_y, sizeof(float), 1, f) != 1 ||
+                fread(&m->path_stuck_check_z, sizeof(float), 1, f) != 1 ||
+                fread(&m->path_goal_x, sizeof(float), 1, f) != 1 ||
+                fread(&m->path_goal_y, sizeof(float), 1, f) != 1 ||
+                fread(&m->path_goal_z, sizeof(float), 1, f) != 1) {
+                passive_mobs_reset();
+                return;
+            }
+        } else {
+            m->ai_age = rand() % 100;
+            m->ai_repath_delay = 0;
+            m->path_stuck_check_tick = m->age;
+            m->path_stuck_check_x = m->x;
+            m->path_stuck_check_y = m->y;
+            m->path_stuck_check_z = m->z;
+            m->path_goal_x = m->x;
+            m->path_goal_y = m->y;
+            m->path_goal_z = m->z;
+        }
         if (version >= 23) {
             if (fread(m->potion_duration, sizeof(int), 32, f) != 32 ||
                 fread(m->potion_amplifier, sizeof(int), 32, f) != 32) {
@@ -4747,7 +4855,19 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         if (m->target_mob_index < -1 || m->target_mob_index >= MAX_PASSIVE_MOBS) m->target_mob_index = -1;
         m->jump_cooldown = 0;
         m->stuck_ticks = 0;
-        m->wander_cooldown = 20 + (rand() % 80);
+        if (m->ai_age < 0 || m->ai_age > 6000) m->ai_age = rand() % 100;
+        if (m->ai_repath_delay < 0 || m->ai_repath_delay > 200) m->ai_repath_delay = 0;
+        if (!isfinite(m->path_stuck_check_x) || !isfinite(m->path_stuck_check_y) || !isfinite(m->path_stuck_check_z)) {
+            m->path_stuck_check_x = m->x;
+            m->path_stuck_check_y = m->y;
+            m->path_stuck_check_z = m->z;
+        }
+        if (!isfinite(m->path_goal_x) || !isfinite(m->path_goal_y) || !isfinite(m->path_goal_z)) {
+            m->path_goal_x = m->x;
+            m->path_goal_y = m->y;
+            m->path_goal_z = m->z;
+        }
+        m->wander_cooldown = 0;
         if (m->owner_id != PEX_MOB_OWNER_SINGLEPLAYER) m->owner_id = PEX_MOB_OWNER_NONE;
         if (m->collar_color < 0 || m->collar_color > 15) m->collar_color = 14;
         if (m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) m->sheared = passive_mob_is_owned_by_player(m) ? 1 : m->sheared;

@@ -990,6 +990,50 @@ static int terrain_tile_has_opaque_pixels(int tile) {
     return count > 32;
 }
 
+static int terrain_tile_liquid_like(int tile, int water) {
+    if (!tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
+    int tx = (tile & 15) * 16;
+    int ty = (tile >> 4) * 16;
+    if (tx + 16 > tex_terrain.w || ty + 16 > tex_terrain.h) return 0;
+    int opaque = 0, match = 0, gray = 0;
+    for (int yy = 0; yy < 16; yy++) {
+        for (int xx = 0; xx < 16; xx++) {
+            unsigned char *p = &tex_terrain.rgba[((ty + yy) * tex_terrain.w + (tx + xx)) * 4];
+            if (p[3] <= 8) continue;
+            int r = p[0], g = p[1], b = p[2];
+            ++opaque;
+            if (abs(r - g) < 12 && abs(g - b) < 12 && abs(r - b) < 12) ++gray;
+            if (water) {
+                if (b >= 70 && b >= r + 12 && g >= r - 8) ++match;
+            } else {
+                if (r >= 100 && g >= 35 && r >= b + 35 && g >= b + 5) ++match;
+            }
+        }
+    }
+    if (opaque < 32) return 0;
+    if (gray * 3 > opaque) return 0;
+    return match * 3 >= opaque;
+}
+
+static int terrain_liquid_tile_valid_cached(int tile, int water) {
+    static GLuint cached_tex = 0;
+    static unsigned char *cached_rgba = NULL;
+    static int values[4] = {-1, -1, -1, -1};
+    int idx = -1;
+    if (tile == 205 && water) idx = 0;
+    else if (tile == 206 && water) idx = 1;
+    else if (tile == 237 && !water) idx = 2;
+    else if (tile == 238 && !water) idx = 3;
+    if (idx < 0) return terrain_tile_liquid_like(tile, water);
+    if (cached_tex != tex_terrain.id || cached_rgba != tex_terrain.rgba) {
+        cached_tex = tex_terrain.id;
+        cached_rgba = tex_terrain.rgba;
+        for (int i = 0; i < 4; ++i) values[i] = -1;
+    }
+    if (values[idx] < 0) values[idx] = terrain_tile_liquid_like(tile, water);
+    return values[idx];
+}
+
 static int terrain_uses_classic_chest_tiles(void) {
     if (strcmp(g_current_texpack, CLASSIC_PACK_NAME) == 0) return 1;
     /* Minecraft Classic/Beta terrain.png stores chest faces at 25..27.
@@ -1018,13 +1062,13 @@ static int furnace_front_lit_tile(void) { return terrain_tile_has_opaque_pixels(
 static int furnace_side_tile(void) { return 45; }
 static int furnace_top_tile(void) { return furnace_side_tile(); } /* this pack has no separate furnace-top tile; 46 is purple/wool */
 
-/* Beta/Classic terrain.png stores the animated liquid texture tiles near the
-   bottom of the atlas, not at the old placeholder indices 14/30.  Use those
-   when they exist in the active pack, with a fallback for small/builtin packs. */
-static int water_top_tile(void)  { return terrain_tile_has_opaque_pixels(205) ? 205 : 14; }
-static int water_side_tile(void) { return terrain_tile_has_opaque_pixels(206) ? 206 : water_top_tile(); }
-static int lava_top_tile(void)   { return terrain_tile_has_opaque_pixels(237) ? 237 : 30; }
-static int lava_side_tile(void)  { return terrain_tile_has_opaque_pixels(238) ? 238 : lava_top_tile(); }
+/* Java 1.2.5 BlockFluid uses 205/206 for water and 237/238 for lava.  Some
+   active packs in this port contain fallback checker/generated pixels in those
+   slots, so verify the color family before accepting them. */
+static int water_top_tile(void)  { return terrain_liquid_tile_valid_cached(205, 1) ? 205 : 14; }
+static int water_side_tile(void) { return terrain_liquid_tile_valid_cached(206, 1) ? 206 : water_top_tile(); }
+static int lava_top_tile(void)   { return terrain_liquid_tile_valid_cached(237, 0) ? 237 : 30; }
+static int lava_side_tile(void)  { return terrain_liquid_tile_valid_cached(238, 0) ? 238 : lava_top_tile(); }
 static int liquid_top_tile_for_block(int id) { return (id == BLOCK_WATER || id == BLOCK_STILL_WATER) ? water_top_tile() : lava_top_tile(); }
 static int liquid_side_tile_for_block(int id) { return (id == BLOCK_WATER || id == BLOCK_STILL_WATER) ? water_side_tile() : lava_side_tile(); }
 
