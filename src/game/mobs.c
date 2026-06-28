@@ -1,12 +1,13 @@
-/* Beta 1.0 passive mobs: pig, sheep, cow, chicken. Included in the unity build
-   after inventory.c so it can reuse the existing world/item/collision helpers. */
+/* Minecraft 1.2.5-style local mobs. Included in the unity build after
+   inventory.c so it can reuse the existing world/item/collision helpers. */
 
-#define PASSIVE_MOB_SAVE_VERSION 27
+#define PASSIVE_MOB_SAVE_VERSION 28
 
 static PassiveMob *passive_mob_raycast(float max_dist, float *out_t);
 static void passive_mob_assign_owner(PassiveMob *m);
 static int passive_mob_is_owned_by_player(const PassiveMob *m);
 static void passive_village_update_reputation_from_attack(PassiveMob *m);
+static const char *passive_mob_name(int type);
 static int item_icon_tile(int id);
 static int block_texture_resolve(int block_id, int meta, int face);
 static void draw_dropped_item_sprite(int tile);
@@ -404,6 +405,94 @@ static const char *passive_mob_name(int type) {
     return info ? info->name : "Mob";
 }
 
+static void pex_damage_source_set_direct_mob(PexDamageSource *source, PassiveMob *mob) {
+    if (!source || !mob) return;
+    source->direct_kind = PEX_DAMAGE_ENTITY_MOB;
+    source->direct_mob_index = (int)(mob - g_passive_mobs);
+    source->direct_mob_type = mob->type;
+    source->direct_x = mob->x;
+    source->direct_y = mob->y;
+    source->direct_z = mob->z;
+}
+
+static void pex_damage_source_set_true_mob(PexDamageSource *source, PassiveMob *mob) {
+    if (!source || !mob) return;
+    source->true_kind = PEX_DAMAGE_ENTITY_MOB;
+    source->true_mob_index = (int)(mob - g_passive_mobs);
+    source->true_mob_type = mob->type;
+    source->true_x = mob->x;
+    source->true_y = mob->y;
+    source->true_z = mob->z;
+}
+
+static PexDamageSource pex_damage_source_mob(PassiveMob *mob) {
+    PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_MOB);
+    pex_damage_source_set_direct_mob(&source, mob);
+    pex_damage_source_set_true_mob(&source, mob);
+    return source;
+}
+
+static PassiveMob *pex_projectile_owner_mob(const FlatProjectile *projectile) {
+    if (!projectile || projectile->owner_type != 1) return NULL;
+    if (projectile->owner_mob_index >= 0 && projectile->owner_mob_index < MAX_PASSIVE_MOBS) {
+        PassiveMob *m = &g_passive_mobs[projectile->owner_mob_index];
+        if (m->active && m->type == projectile->owner_mob_type) return m;
+    }
+    return NULL;
+}
+
+static void pex_damage_source_attach_projectile(PexDamageSource *source, const FlatProjectile *projectile) {
+    if (!source || !projectile) return;
+    source->direct_kind = PEX_DAMAGE_ENTITY_PROJECTILE;
+    source->direct_mob_type = projectile->owner_mob_type;
+    source->direct_mob_index = projectile->owner_mob_index;
+    source->direct_x = projectile->x;
+    source->direct_y = projectile->y;
+    source->direct_z = projectile->z;
+    if (projectile->owner_type == 0) {
+        source->true_kind = PEX_DAMAGE_ENTITY_PLAYER;
+        source->true_x = g_player_x;
+        source->true_y = g_player_y;
+        source->true_z = g_player_z;
+    } else {
+        PassiveMob *owner = pex_projectile_owner_mob(projectile);
+        if (owner) {
+            pex_damage_source_set_true_mob(source, owner);
+        } else {
+            source->true_kind = PEX_DAMAGE_ENTITY_MOB;
+            source->true_mob_index = projectile->owner_mob_index;
+            source->true_mob_type = projectile->owner_mob_type;
+            source->true_x = projectile->x;
+            source->true_y = projectile->y;
+            source->true_z = projectile->z;
+        }
+    }
+}
+
+static PexDamageSource pex_damage_source_arrow(const FlatProjectile *projectile) {
+    PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_ARROW);
+    pex_damage_source_attach_projectile(&source, projectile);
+    return source;
+}
+
+static PexDamageSource pex_damage_source_fireball(const FlatProjectile *projectile) {
+    PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_FIREBALL);
+    pex_damage_source_attach_projectile(&source, projectile);
+    return source;
+}
+
+static PexDamageSource pex_damage_source_thrown(const FlatProjectile *projectile) {
+    PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_THROWN);
+    pex_damage_source_attach_projectile(&source, projectile);
+    return source;
+}
+
+static PexDamageSource pex_damage_source_indirect_magic(const FlatProjectile *projectile) {
+    PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_INDIRECT_MAGIC);
+    pex_damage_source_attach_projectile(&source, projectile);
+    return source;
+}
+
 static float passive_mob_width_for_type(int type) {
     const PexMobInfo *info = passive_mob_info(type);
     return info ? info->width : 0.6f;
@@ -598,6 +687,8 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->width = passive_mob_width_for_type(type);
     m->height = passive_mob_height_for_type(type);
     m->health = passive_mob_health_for_type(type);
+    m->prev_health = m->health;
+    m->damage_remainder = 0;
     m->fleece_color = (type == PASSIVE_MOB_SHEEP) ? passive_sheep_random_fleece_color() : 0;
     if (type == PASSIVE_MOB_VILLAGER) m->fleece_color = rand() % 5;
     if (passive_mob_is_slime_family(type)) {
@@ -606,6 +697,7 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
         m->width = 0.6f * (float)sz;
         m->height = 0.6f * (float)sz;
         m->health = sz * sz;
+        m->prev_health = m->health;
     }
     m->living_sound_delay = -120;
     m->jump_cooldown = 0;
@@ -1360,6 +1452,101 @@ static void passive_mob_apply_player_knockback(PassiveMob *m) {
     if (m->my > 0.4f) m->my = 0.4f;
 }
 
+static void passive_mob_apply_knockback(PassiveMob *m, const PexDamageSource *source, int damage) {
+    if (!m || !source) return;
+    if (source->true_kind == PEX_DAMAGE_ENTITY_PLAYER) {
+        passive_mob_apply_player_knockback(m);
+        return;
+    }
+    float src_x = source->true_x;
+    float src_z = source->true_z;
+    if (source->direct_kind == PEX_DAMAGE_ENTITY_PROJECTILE) {
+        src_x = source->direct_x;
+        src_z = source->direct_z;
+    }
+    float dx = src_x - m->x;
+    float dz = src_z - m->z;
+    float len = sqrtf(dx * dx + dz * dz);
+    if (len < 0.001f) {
+        dx = pex_rand_float01() - pex_rand_float01();
+        dz = pex_rand_float01() - pex_rand_float01();
+        len = sqrtf(dx * dx + dz * dz);
+        if (len < 0.001f) len = 0.001f;
+    }
+    (void)damage;
+    m->mx /= 2.0f;
+    m->my /= 2.0f;
+    m->mz /= 2.0f;
+    m->mx -= dx / len * 0.4f;
+    m->mz -= dz / len * 0.4f;
+    m->my += 0.4f;
+    if (m->my > 0.4f) m->my = 0.4f;
+}
+
+static int passive_mob_is_entity_living_source(const PexDamageSource *source) {
+    return source && (source->true_kind == PEX_DAMAGE_ENTITY_PLAYER || source->true_kind == PEX_DAMAGE_ENTITY_MOB);
+}
+
+static int passive_mob_damage_has_player_attacker(const PexDamageSource *source) {
+    return source && source->true_kind == PEX_DAMAGE_ENTITY_PLAYER;
+}
+
+static int passive_mob_apply_armor_calculations(PassiveMob *m, const PexDamageSource *source, int damage) {
+    if (!m || !source || damage <= 0) return 0;
+    if (!source->unblockable) {
+        int armor = 0;
+        int scaled = damage * (25 - armor) + m->damage_remainder;
+        damage = scaled / 25;
+        m->damage_remainder = scaled % 25;
+    }
+    return damage;
+}
+
+static int passive_mob_apply_potion_damage_calculations(PassiveMob *m, int damage) {
+    if (!m || damage <= 0) return 0;
+    if (pex_passive_has_potion(m, PEX_POTION_RESISTANCE)) {
+        int amp = pex_passive_potion_amplifier(m, PEX_POTION_RESISTANCE);
+        int reduce = (amp + 1) * 5;
+        if (reduce > 20) reduce = 20;
+        int scaled = damage * (25 - reduce) + m->damage_remainder;
+        damage = scaled / 25;
+        m->damage_remainder = scaled % 25;
+    }
+    return damage;
+}
+
+static int passive_mob_damage_entity(PassiveMob *m, const PexDamageSource *source, int damage) {
+    damage = passive_mob_apply_armor_calculations(m, source, damage);
+    damage = passive_mob_apply_potion_damage_calculations(m, damage);
+    m->health -= damage;
+    return damage;
+}
+
+static void passive_mob_on_attacked_by_source(PassiveMob *m, const PexDamageSource *source) {
+    if (!m || !source) return;
+    if (passive_mob_is_breedable_type(m->type)) {
+        m->love_time = 0;
+        if (m->type != PASSIVE_MOB_WOLF && m->type != PASSIVE_MOB_OCELOT) {
+            m->wander_cooldown = 0;
+            m->has_path_target = 0;
+        }
+    }
+    if (passive_mob_is_entity_living_source(source)) {
+        if (m->type == PASSIVE_MOB_PIG_ZOMBIE || m->type == PASSIVE_MOB_IRON_GOLEM) m->rideable = 1;
+        if (m->type == PASSIVE_MOB_WOLF) {
+            m->sitting = 0;
+            if (!passive_mob_is_owned_by_player(m) || !passive_mob_damage_has_player_attacker(source)) {
+                m->rideable = 1;
+                if (!passive_mob_is_owned_by_player(m)) m->tame_state = 2;
+            }
+        }
+    }
+    if (passive_mob_damage_has_player_attacker(source) &&
+        (m->type == PASSIVE_MOB_VILLAGER || m->type == PASSIVE_MOB_IRON_GOLEM)) {
+        passive_village_update_reputation_from_attack(m);
+    }
+}
+
 static void passive_mob_start_death(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
     const char *s = passive_mob_death_sound(m->type);
@@ -1393,49 +1580,43 @@ static void passive_mob_start_death(PassiveMob *m) {
     passive_mob_drop_on_death(m);
 }
 
-static void passive_mob_take_damage(PassiveMob *m, int damage) {
-    if (!m || !m->active || m->death_time > 0) return;
-    if (damage <= 0) return;
-    if (m->damage_cooldown > 0) return;
-    if (damage < 1) damage = 1;
-
-    if (m->type == PASSIVE_MOB_PIG_ZOMBIE || m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_IRON_GOLEM) {
-        m->rideable = 1; /* neutral mobs become angry after being attacked. */
-    }
-    m->damage_cooldown = 10;
-    m->health -= damage;
-    player_add_exhaustion(0.3f);
-    m->hurt_time = 10;
-    passive_mob_apply_player_knockback(m);
-
-    if (m->health <= 0) {
-        passive_mob_start_death(m);
+static int pex_mob_attack_entity_from(PassiveMob *m, PexDamageSource source, int damage) {
+    if (!m || !m->active || m->death_time > 0 || damage <= 0) return 0;
+    if (source.fire_damage && pex_passive_has_potion(m, PEX_POTION_FIRE_RESISTANCE)) return 0;
+    m->age = 0;
+    int incoming = damage;
+    int play_hurt = 1;
+    if (m->damage_cooldown > PEX_HEARTS_HALVES_LIFE / 2) {
+        if (incoming <= m->prev_health) return 0;
+        incoming -= m->prev_health;
+        m->prev_health = damage;
+        play_hurt = 0;
     } else {
-        const char *s = passive_mob_hurt_sound(m->type);
-        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
-                                 (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+        m->prev_health = damage;
+        m->damage_cooldown = PEX_HEARTS_HALVES_LIFE;
+        m->hurt_time = 10;
     }
-    g_save_dirty = 1;
-}
-
-static void passive_mob_take_entity_damage(PassiveMob *m, int damage, float src_x, float src_z) {
-    if (!m || !m->active || m->death_time > 0 || damage <= 0) return;
-    if (m->damage_cooldown > 0) return;
-    if (m->type == PASSIVE_MOB_PIG_ZOMBIE || m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_IRON_GOLEM) m->rideable = 1;
-    m->damage_cooldown = 10;
-    m->health -= damage;
-    m->hurt_time = 10;
-    float dx = m->x - src_x, dz = m->z - src_z;
-    float len = sqrtf(dx*dx + dz*dz); if (len < 0.001f) len = 0.001f;
-    m->mx += dx / len * 0.35f;
-    m->mz += dz / len * 0.35f;
-    m->my += 0.28f;
+    int applied = passive_mob_damage_entity(m, &source, incoming);
+    if (applied <= 0 && incoming > 0) {
+        if (play_hurt) m->hurt_time = 10;
+        g_save_dirty = 1;
+        return 1;
+    }
+    passive_mob_on_attacked_by_source(m, &source);
+    if (play_hurt) {
+        passive_mob_apply_knockback(m, &source, applied);
+        if (m->health <= 0) {
+            /* passive_mob_start_death owns the death sound and drop transition. */
+        } else {
+            const char *s = passive_mob_hurt_sound(m->type);
+            if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
+                                     (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+        }
+    }
+    if (passive_mob_damage_has_player_attacker(&source)) player_add_exhaustion(source.hunger_damage);
     if (m->health <= 0) passive_mob_start_death(m);
-    else {
-        const char *snd = passive_mob_hurt_sound(m->type);
-        if (snd) pex_sound_play_at(snd, m->x, m->y, m->z, passive_mob_sound_volume(m->type), 1.0f);
-    }
     g_save_dirty = 1;
+    return 1;
 }
 
 static int passive_explosion_breaks_block(int id) {
@@ -1474,7 +1655,15 @@ static void passive_creeper_explode(PassiveMob *self) {
         float dist = sqrtf(dx * dx + dy * dy + dz * dz);
         if (dist > radius * 2.0f) continue;
         int dmg = (int)((1.0f - dist / (radius * 2.0f)) * 49.0f + 1.0f);
-        passive_mob_take_entity_damage(m, dmg, self->x, self->z);
+        PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_EXPLOSION);
+        pex_damage_source_set_true_mob(&source, self);
+        source.direct_kind = PEX_DAMAGE_ENTITY_MOB;
+        source.direct_mob_index = (int)(self - g_passive_mobs);
+        source.direct_mob_type = self->type;
+        source.direct_x = self->x;
+        source.direct_y = self->y;
+        source.direct_z = self->z;
+        (void)pex_mob_attack_entity_from(m, source, dmg);
     }
     for (int i = 0; i < 32; ++i) add_splash_particle(self->x, self->y + 0.6f, self->z,
                                                      (pex_rand_float01() - 0.5f) * 0.5f,
@@ -1551,9 +1740,8 @@ static int passive_mobs_attack_from_player(void) {
         if (block_dist + 0.20f < mob_t) return 0;
     }
     restart_hand_swing();
-    if (m->type == PASSIVE_MOB_VILLAGER || m->type == PASSIVE_MOB_IRON_GOLEM) passive_village_update_reputation_from_attack(m);
     if (m->type == PASSIVE_MOB_WOLF && !passive_mob_is_owned_by_player(m)) { m->rideable = 1; m->tame_state = 2; }
-    passive_mob_take_damage(m, held_damage_vs_mob());
+    (void)pex_mob_attack_entity_from(m, pex_damage_source_player(), held_damage_vs_mob());
     return 1;
 }
 
@@ -1795,37 +1983,38 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
         float tx = g_player_x;
         float ty = g_player_y - 0.85f;
         float tz = g_player_z;
+        int owner_idx = (int)(m - g_passive_mobs);
         if (m->type == PASSIVE_MOB_SKELETON) {
             /* EntityAIArrowAttack: bow every 60 ticks, moveSpeed 0.25. */
-            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_ARROW, m->type, sx, sy, sz, tx, ty, tz, 1.60f, dmg)) {
+            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_ARROW, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.60f, dmg)) {
                 pex_sound_play_at("random.bow", m->x, m->y, m->z, 1.0f, 1.0f);
                 m->attack_time = 60;
             }
             return;
         }
         if (m->type == PASSIVE_MOB_BLAZE) {
-            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SMALL_FIREBALL, m->type, sx, sy, sz, tx, ty, tz, 0.75f, dmg)) {
+            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SMALL_FIREBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 0.75f, dmg)) {
                 pex_sound_play_at("mob.blaze.hit", m->x, m->y, m->z, 1.0f, 1.0f);
                 m->attack_time = 30;
             }
             return;
         }
         if (m->type == PASSIVE_MOB_GHAST) {
-            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_LARGE_FIREBALL, m->type, sx, sy, sz, tx, ty, tz, 0.45f, dmg)) {
+            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_LARGE_FIREBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 0.45f, dmg)) {
                 pex_sound_play_at("mob.ghast.fireball", m->x, m->y, m->z, 10.0f, 1.0f);
                 m->attack_time = 60;
             }
             return;
         }
         if (m->type == PASSIVE_MOB_SNOWMAN) {
-            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, sx, sy, sz, tx, ty, tz, 1.25f, 0)) {
+            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.25f, 0)) {
                 pex_sound_play_at("random.bow", m->x, m->y, m->z, 1.0f, 1.2f);
                 m->attack_time = 20;
             }
             return;
         }
     }
-    player_take_damage(dmg, passive_mob_name(m->type));
+    (void)player_attack_entity_from(pex_damage_source_mob(m), dmg);
     if (m->type == PASSIVE_MOB_CAVE_SPIDER && (g_opts.difficulty & 3) > 1) {
         player_apply_potion_effect(PEX_POTION_POISON, ((g_opts.difficulty & 3) == 3) ? 15 * 20 : 7 * 20, 0, 1.0f);
     }
@@ -1839,12 +2028,12 @@ static void passive_mob_attack_other_mob(PassiveMob *m, PassiveMob *target, int 
     int dmg = info ? info->attack_damage : 1;
     if (m->type == PASSIVE_MOB_IRON_GOLEM) dmg = 7 + (rand() % 15);
     if (m->type == PASSIVE_MOB_SNOWMAN && ranged) {
-        pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, m->x, m->y + 1.4f, m->z,
+        pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, (int)(m - g_passive_mobs), m->x, m->y + 1.4f, m->z,
                                         target->x, target->y + target->height * 0.5f, target->z, 1.25f, 0);
         m->attack_time = 20;
         return;
     }
-    passive_mob_take_entity_damage(target, dmg, m->x, m->z);
+    (void)pex_mob_attack_entity_from(target, pex_damage_source_mob(m), dmg);
     if (m->type == PASSIVE_MOB_IRON_GOLEM) {
         target->my += 0.40f;
         pex_sound_play_at("mob.irongolem.throw", m->x, m->y, m->z, 1.0f, 1.0f);
@@ -2637,7 +2826,7 @@ static void passive_mob_tick_burning(PassiveMob *m) {
         }
     }
     if (m->burn_time > 0 && (m->burn_time % 20) == 0) {
-        passive_mob_take_entity_damage(m, 1, m->x, m->z);
+        (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_ON_FIRE), 1);
     }
 }
 
@@ -2824,7 +3013,11 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
                 if (m->egg_timer <= 0) pex_sound_play_at("random.fuse", m->x, m->y, m->z, 1.0f, 0.5f);
                 m->egg_timer += 2;
                 if (m->egg_timer >= 30) {
-                    if (player_d2 < 5.0f * 5.0f) player_take_damage(passive_mob_scaled_attack_damage(m, 49), "Creeper");
+                    if (player_d2 < 5.0f * 5.0f) {
+                        PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_EXPLOSION);
+                        pex_damage_source_set_true_mob(&source, m);
+                        (void)player_attack_entity_from(source, passive_mob_scaled_attack_damage(m, 49));
+                    }
                     passive_creeper_explode(m);
                     pex_sound_play_at("random.explode", m->x, m->y, m->z, 4.0f, 1.0f);
                     passive_mob_start_death(m);
@@ -2920,10 +3113,10 @@ static void passive_mob_tick_species_behavior(PassiveMob *m) {
         }
     } else if (m->type == PASSIVE_MOB_ENDERMAN) {
         passive_enderman_tick_carry_block(m);
-        if (m->in_water && (m->age % 20) == 0) passive_mob_take_entity_damage(m, 1, m->x, m->z);
+        if (m->in_water && (m->age % 20) == 0) (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_DROWN), 1);
     } else if (m->type == PASSIVE_MOB_SNOWMAN) {
         passive_snowman_tick_snow_trail(m);
-        if (m->in_water && (m->age % 20) == 0) passive_mob_take_entity_damage(m, 1, m->x, m->z);
+        if (m->in_water && (m->age % 20) == 0) (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_DROWN), 1);
     }
 }
 
@@ -4389,6 +4582,8 @@ static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs) {
         fwrite(&m->yaw, sizeof(float), 1, f);
         fwrite(&m->render_yaw, sizeof(float), 1, f);
         fwrite(&m->health, sizeof(int), 1, f);
+        fwrite(&m->prev_health, sizeof(int), 1, f);
+        fwrite(&m->damage_remainder, sizeof(int), 1, f);
         fwrite(&m->hurt_time, sizeof(int), 1, f);
         fwrite(&m->death_time, sizeof(int), 1, f);
         fwrite(&m->age, sizeof(int), 1, f);
@@ -4442,6 +4637,8 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
             fread(&m->yaw, sizeof(float), 1, f) != 1 ||
             fread(&m->render_yaw, sizeof(float), 1, f) != 1 ||
             fread(&m->health, sizeof(int), 1, f) != 1 ||
+            (version >= 28 && fread(&m->prev_health, sizeof(int), 1, f) != 1) ||
+            (version >= 28 && fread(&m->damage_remainder, sizeof(int), 1, f) != 1) ||
             fread(&m->hurt_time, sizeof(int), 1, f) != 1 ||
             fread(&m->death_time, sizeof(int), 1, f) != 1 ||
             fread(&m->age, sizeof(int), 1, f) != 1 ||
@@ -4525,6 +4722,10 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         }
         int max_health = passive_mob_health_for_type(m->type);
         if (m->health > max_health) m->health = max_health;
+        if (version < 28) {
+            m->prev_health = m->health;
+            m->damage_remainder = 0;
+        }
         m->active = 1;
         m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
         m->prev_yaw = m->yaw;

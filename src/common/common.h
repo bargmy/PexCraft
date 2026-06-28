@@ -639,6 +639,52 @@ typedef enum PassiveMobType {
     PASSIVE_MOB_VILLAGER = 25
 } PassiveMobType;
 
+typedef enum PexDamageType {
+    PEX_DAMAGE_IN_FIRE = 0,
+    PEX_DAMAGE_ON_FIRE,
+    PEX_DAMAGE_LAVA,
+    PEX_DAMAGE_IN_WALL,
+    PEX_DAMAGE_DROWN,
+    PEX_DAMAGE_STARVE,
+    PEX_DAMAGE_CACTUS,
+    PEX_DAMAGE_FALL,
+    PEX_DAMAGE_OUT_OF_WORLD,
+    PEX_DAMAGE_GENERIC,
+    PEX_DAMAGE_EXPLOSION,
+    PEX_DAMAGE_MAGIC,
+    PEX_DAMAGE_MOB,
+    PEX_DAMAGE_PLAYER,
+    PEX_DAMAGE_ARROW,
+    PEX_DAMAGE_FIREBALL,
+    PEX_DAMAGE_THROWN,
+    PEX_DAMAGE_INDIRECT_MAGIC
+} PexDamageType;
+
+typedef enum PexDamageEntityKind {
+    PEX_DAMAGE_ENTITY_NONE = 0,
+    PEX_DAMAGE_ENTITY_PLAYER = 1,
+    PEX_DAMAGE_ENTITY_MOB = 2,
+    PEX_DAMAGE_ENTITY_PROJECTILE = 3
+} PexDamageEntityKind;
+
+typedef struct PexDamageSource {
+    PexDamageType type;
+    const char *damage_type;
+    int unblockable;
+    int fire_damage;
+    int projectile;
+    int creative_allowed;
+    float hunger_damage;
+    PexDamageEntityKind direct_kind;
+    PexDamageEntityKind true_kind;
+    int direct_mob_index;
+    int direct_mob_type;
+    int true_mob_index;
+    int true_mob_type;
+    float direct_x, direct_y, direct_z;
+    float true_x, true_y, true_z;
+} PexDamageSource;
+
 typedef struct PassiveMob {
     int active;
     int type;
@@ -650,8 +696,10 @@ typedef struct PassiveMob {
     float pitch, prev_pitch;
     float width, height;
     int health;
+    int prev_health;
     int hurt_time;
     int damage_cooldown;
+    int damage_remainder;
     int death_time;
     int death_drops_done;
     int on_ground;
@@ -837,6 +885,7 @@ static int g_selected_hotbar_slot = 0;
 static int g_player_health = 20;
 static int g_player_prev_health = 20;
 static int g_player_armor = 0;
+static int g_player_natural_armor_rating = 0;
 static int g_player_damage_remainder = 0;
 static int g_player_food_level = 20;
 static int g_player_prev_food_level = 20;
@@ -864,6 +913,7 @@ static int player_health_clamp(int health) {
 static void player_health_set_silent(int health) {
     g_player_health = player_health_clamp(health);
     g_player_prev_health = g_player_health;
+    g_player_natural_armor_rating = 0;
     g_hearts_life = 0;
 }
 
@@ -1524,6 +1574,7 @@ typedef struct FlatProjectile {
     int item_damage;
     int owner_type;   /* 0=player/local thrower, 1=mob */
     int owner_mob_type;
+    int owner_mob_index;
     int damage;
     float x, y, z;
     float prev_x, prev_y, prev_z;
@@ -2396,7 +2447,6 @@ static int flat_block_intersects_player(int bx, int by, int bz);
 static float pex_rand_float01(void);
 static void trigger_hand_swing(void);
 static void restart_hand_swing(void);
-static void player_take_damage(int amount, const char *reason);
 static void player_potion_update_tick(void);
 static int player_has_potion(int potion_id);
 static int player_potion_amplifier(int potion_id);
@@ -2409,6 +2459,16 @@ static PexMapData *pex_map_find(int id, int create);
 static void update_held_map_item_tick(void);
 static void update_projectiles(void);
 static void update_xp_orbs(void);
+static PexDamageSource pex_damage_source_simple(PexDamageType type);
+static PexDamageSource pex_damage_source_mob(PassiveMob *mob);
+static PexDamageSource pex_damage_source_player(void);
+static PexDamageSource pex_damage_source_arrow(const FlatProjectile *projectile);
+static PexDamageSource pex_damage_source_fireball(const FlatProjectile *projectile);
+static PexDamageSource pex_damage_source_thrown(const FlatProjectile *projectile);
+static PexDamageSource pex_damage_source_indirect_magic(const FlatProjectile *projectile);
+static const char *pex_damage_source_death_reason(const PexDamageSource *source);
+static int player_attack_entity_from(PexDamageSource source, int amount);
+static void player_die_from_source(const PexDamageSource *source);
 static void player_die(const char *reason);
 static void player_respawn(void);
 static int flat_player_suffocation_block(void);
@@ -2426,6 +2486,8 @@ static void update_vehicles(void);
 static void passive_mobs_apply_riding(void);
 static int passive_mobs_attack_from_player(void);
 static int passive_mobs_player_interact(void);
+static int pex_mob_attack_entity_from(PassiveMob *mob, PexDamageSource source, int damage);
+static void pex_passive_apply_potion_effect(PassiveMob *mob, int id, int duration, int amplifier, float splash_scale);
 static void draw_java_entity_shadow(float x, float y, float z, float shadow_size, float shadow_alpha);
 static void draw_passive_mobs(float partial);
 static void draw_vehicles(float partial);

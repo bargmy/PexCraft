@@ -31,6 +31,87 @@ static const char *death_message_from_reason(const char *reason) {
     }
 }
 
+static const char *pex_damage_type_name(PexDamageType type) {
+    switch (type) {
+        case PEX_DAMAGE_IN_FIRE: return "inFire";
+        case PEX_DAMAGE_ON_FIRE: return "onFire";
+        case PEX_DAMAGE_LAVA: return "lava";
+        case PEX_DAMAGE_IN_WALL: return "inWall";
+        case PEX_DAMAGE_DROWN: return "drown";
+        case PEX_DAMAGE_STARVE: return "starve";
+        case PEX_DAMAGE_CACTUS: return "cactus";
+        case PEX_DAMAGE_FALL: return "fall";
+        case PEX_DAMAGE_OUT_OF_WORLD: return "outOfWorld";
+        case PEX_DAMAGE_EXPLOSION: return "explosion";
+        case PEX_DAMAGE_MAGIC: return "magic";
+        case PEX_DAMAGE_MOB: return "mob";
+        case PEX_DAMAGE_PLAYER: return "player";
+        case PEX_DAMAGE_ARROW: return "arrow";
+        case PEX_DAMAGE_FIREBALL: return "fireball";
+        case PEX_DAMAGE_THROWN: return "thrown";
+        case PEX_DAMAGE_INDIRECT_MAGIC: return "indirectMagic";
+        case PEX_DAMAGE_GENERIC:
+        default: return "generic";
+    }
+}
+
+static PexDamageSource pex_damage_source_simple(PexDamageType type) {
+    PexDamageSource s;
+    memset(&s, 0, sizeof(s));
+    s.type = type;
+    s.damage_type = pex_damage_type_name(type);
+    s.hunger_damage = 0.3f;
+    switch (type) {
+        case PEX_DAMAGE_ON_FIRE:
+        case PEX_DAMAGE_IN_WALL:
+        case PEX_DAMAGE_DROWN:
+        case PEX_DAMAGE_STARVE:
+        case PEX_DAMAGE_FALL:
+        case PEX_DAMAGE_OUT_OF_WORLD:
+        case PEX_DAMAGE_GENERIC:
+        case PEX_DAMAGE_MAGIC:
+        case PEX_DAMAGE_INDIRECT_MAGIC:
+            s.unblockable = 1;
+            s.hunger_damage = 0.0f;
+            break;
+        default:
+            break;
+    }
+    if (type == PEX_DAMAGE_IN_FIRE || type == PEX_DAMAGE_ON_FIRE || type == PEX_DAMAGE_LAVA || type == PEX_DAMAGE_FIREBALL) s.fire_damage = 1;
+    if (type == PEX_DAMAGE_OUT_OF_WORLD) s.creative_allowed = 1;
+    if (type == PEX_DAMAGE_ARROW || type == PEX_DAMAGE_FIREBALL || type == PEX_DAMAGE_THROWN) s.projectile = 1;
+    return s;
+}
+
+static PexDamageSource pex_damage_source_player(void) {
+    PexDamageSource s = pex_damage_source_simple(PEX_DAMAGE_PLAYER);
+    s.direct_kind = PEX_DAMAGE_ENTITY_PLAYER;
+    s.true_kind = PEX_DAMAGE_ENTITY_PLAYER;
+    s.direct_x = s.true_x = g_player_x;
+    s.direct_y = s.true_y = g_player_y;
+    s.direct_z = s.true_z = g_player_z;
+    return s;
+}
+
+static const char *pex_damage_source_death_reason(const PexDamageSource *source) {
+    if (!source) return "died";
+    switch (source->type) {
+        case PEX_DAMAGE_LAVA: return "tried to swim in lava";
+        case PEX_DAMAGE_IN_WALL: return "suffocated in a wall";
+        case PEX_DAMAGE_OUT_OF_WORLD: return "fell out of the world";
+        case PEX_DAMAGE_FALL: return "fell from a high place";
+        case PEX_DAMAGE_STARVE: return "starved to death";
+        case PEX_DAMAGE_MAGIC:
+        case PEX_DAMAGE_INDIRECT_MAGIC: return "magic";
+        case PEX_DAMAGE_ARROW: return "was shot by Skeleton";
+        case PEX_DAMAGE_FIREBALL:
+        case PEX_DAMAGE_THROWN: return "was hit by projectile";
+        case PEX_DAMAGE_EXPLOSION: return "Creeper";
+        case PEX_DAMAGE_MOB: return source->true_mob_type ? "mob" : "mob";
+        default: return source->damage_type ? source->damage_type : "died";
+    }
+}
+
 static void player_die(const char *reason) {
     if (g_player_dead) return;
     g_player_dead = 1;
@@ -57,46 +138,63 @@ static void player_die(const char *reason) {
     if (!g_mp_connected) save_current_world_state();
 }
 
-static float player_damage_hunger_exhaustion(const char *reason) {
-    if (!reason) return 0.0f;
-    if (strstr(reason, "lava")) return 0.3f;
-    if (strstr(reason, "mob") || strstr(reason, "slain")) return 0.3f;
-    return 0.0f;
+static void player_die_from_source(const PexDamageSource *source) {
+    player_die(pex_damage_source_death_reason(source));
 }
 
-static void player_take_damage(int amount, const char *reason) {
-    if (player_is_creative()) return;
-    if (amount <= 0 || g_player_dead) return;
-    if (reason && (strstr(reason, "lava") || strstr(reason, "fire")) && player_has_potion(PEX_POTION_FIRE_RESISTANCE)) return;
+static int player_apply_potion_damage_reduction(int amount, int *carryover) {
     if (player_has_potion(PEX_POTION_RESISTANCE)) {
         int amp = player_potion_amplifier(PEX_POTION_RESISTANCE);
-        int reduce_pct = 20 * (amp + 1);
-        if (reduce_pct > 80) reduce_pct = 80;
-        amount = (amount * (100 - reduce_pct) + 99) / 100;
-        if (amount <= 0) amount = 1;
+        int reduce = (amp + 1) * 5;
+        if (reduce > 20) reduce = 20;
+        int scaled = amount * (25 - reduce) + (carryover ? *carryover : 0);
+        amount = scaled / 25;
+        if (carryover) *carryover = scaled % 25;
     }
-    int raw_amount = amount;
-    if (!g_mp_connected) amount = armor_apply_damage_reduction(amount);
-    if (amount <= 0 && raw_amount > 0) {
+    return amount;
+}
+
+static int player_attack_entity_from(PexDamageSource source, int amount) {
+    if (player_is_creative() && !source.creative_allowed) return 0;
+    if (amount <= 0 || g_player_dead) return 0;
+    if (source.fire_damage && player_has_potion(PEX_POTION_FIRE_RESISTANCE)) return 0;
+
+    int incoming = amount;
+    int play_hurt = 1;
+    if (g_hearts_life > PEX_HEARTS_HALVES_LIFE / 2) {
+        if (amount <= g_player_natural_armor_rating) return 0;
+        incoming = amount - g_player_natural_armor_rating;
+        g_player_natural_armor_rating = amount;
+        play_hurt = 0;
+    } else {
+        g_player_natural_armor_rating = amount;
+        g_player_prev_health = player_health_clamp(g_player_health);
+        g_hearts_life = PEX_HEARTS_HALVES_LIFE;
+    }
+
+    int raw_amount = incoming;
+    if (!g_mp_connected && !source.unblockable) incoming = armor_apply_damage_reduction(incoming);
+    incoming = player_apply_potion_damage_reduction(incoming, &g_player_damage_remainder);
+    if (incoming <= 0 && raw_amount > 0) {
         player_health_damage_hearts();
         g_player_hurt_time = g_player_max_hurt_time;
-        pex_sound_play("random.hurt", 1.0f, 1.0f);
+        if (play_hurt) pex_sound_play("random.hurt", 1.0f, 1.0f);
         g_save_dirty = 1;
-        return;
+        return 1;
     }
-    g_player_hurt_time = g_player_max_hurt_time;
+    if (play_hurt) g_player_hurt_time = g_player_max_hurt_time;
     g_player_attacked_at_yaw = 0.0f;
-    player_health_set_hearts(g_player_health - amount);
-    pex_sound_play("random.hurt", 1.0f, 1.0f);
-    player_add_exhaustion(player_damage_hunger_exhaustion(reason));
-    pex_logf("player damage amount=%d reason=%s health=%d", amount, reason ? reason : "", g_player_health);
+    player_health_set_hearts(g_player_health - incoming);
+    if (play_hurt) pex_sound_play("random.hurt", 1.0f, 1.0f);
+    player_add_exhaustion(source.hunger_damage);
+    pex_logf("player damage amount=%d source=%s health=%d", incoming, source.damage_type ? source.damage_type : "", g_player_health);
     if (g_player_health <= 0) {
-        player_die(reason);
+        player_die_from_source(&source);
     } else {
         g_save_dirty = 1;
     }
+    return 1;
 }
-
 
 static int player_should_heal(void) {
     return !g_player_dead && g_player_health > 0 && g_player_health < 20;
@@ -134,7 +232,7 @@ static void player_foodstats_update(void) {
         g_player_food_timer++;
         if (g_player_food_timer >= 80) {
             if (g_player_health > 10 || difficulty >= 3 || (g_player_health > 1 && difficulty >= 2)) {
-                player_take_damage(1, "starved to death");
+                (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_STARVE), 1);
             }
             g_player_food_timer = 0;
             g_save_dirty = 1;
@@ -553,7 +651,7 @@ static void ingame_tick(void) {
     if (in_water || in_lava || in_ladder) {
         g_player_fall_distance = 0.0f;
         if (in_water || in_lava) apply_player_fluid_velocity(in_water ? 1 : 0);
-        if (in_lava && (g_ingame_ticks % 20) == 0) player_take_damage(4, "tried to swim in lava");
+        if (in_lava && (g_ingame_ticks % 20) == 0) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_LAVA), 4);
     }
 
     if (g_sprinting_ticks_left > 0) {
@@ -653,7 +751,7 @@ static void ingame_tick(void) {
         g_suffocation_damage_timer++;
         if (g_suffocation_damage_timer >= 20) {
             g_suffocation_damage_timer = 0;
-            player_take_damage(1, "suffocated in a wall");
+            (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_IN_WALL), 1);
         }
     } else {
         g_suffocation_damage_timer = 0;
@@ -846,7 +944,7 @@ static void ingame_tick(void) {
         }
         if (!was_on_ground && g_player_fall_distance > 3.0f) {
             int dmg = (int)ceilf(g_player_fall_distance - 3.0f);
-            if (dmg > 0) player_take_damage(dmg, "fell from a high place");
+            if (dmg > 0) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_FALL), dmg);
         }
         g_player_fall_distance = 0.0f;
     } else if (previous_motion_y < 0.0f) {

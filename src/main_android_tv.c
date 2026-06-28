@@ -120,7 +120,7 @@ static void steve_set_texture_dims(const Texture *tex);
 static void steve_set_tint(float r, float g, float b);
 
 #include "game/inventory.c"
-#include "game/passive_mobs.c"
+#include "game/mobs.c"
 
 /* MCPE protocol_81 implementation must be included before multiplayer_client.c
    because this project builds as one translation unit per platform. */
