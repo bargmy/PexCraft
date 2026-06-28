@@ -246,8 +246,12 @@ typedef struct PexSpawnYCacheEntry {
     int tick;
 } PexSpawnYCacheEntry;
 
-#define PEX_SPAWN_Y_CACHE_SIZE 512
+#define PEX_SPAWN_Y_CACHE_SIZE 4096
 static PexSpawnYCacheEntry g_passive_spawn_y_cache[PEX_SPAWN_Y_CACHE_SIZE];
+
+/* Budget for expensive spawn-height probes.  Negative means unlimited
+   (used by initial population seeding before the game loop starts). */
+static int g_passive_spawn_probe_budget = -1;
 
 static unsigned int passive_spawn_y_cache_hash(int type, int cat, int x, int z) {
     unsigned int h = (unsigned int)(x * 73428767u) ^ (unsigned int)(z * 91278319u) ^ (unsigned int)(type * 19349663u) ^ (unsigned int)(cat * 83492791u);
@@ -527,6 +531,7 @@ static void passive_mobs_reset(void) {
     memset(g_passive_mobs, 0, sizeof(g_passive_mobs));
     memset(g_passive_spawn_y_cache, 0, sizeof(g_passive_spawn_y_cache));
     g_prof_spawn_y_cache_hits = g_prof_spawn_y_cache_misses = 0;
+    g_passive_spawn_probe_budget = -1;
     g_player_riding_passive_mob = -1;
 }
 
@@ -793,9 +798,24 @@ static int passive_mob_can_spawn_at(int type, int x, int y, int z) {
     return passive_mob_can_spawn_at_category(type, passive_mob_category(type), x, y, z);
 }
 
+static int passive_spawn_probe_step(void) {
+    /* g_passive_spawn_probe_budget < 0 means an intentional unbudgeted caller
+       such as initial population seeding.  Natural spawning sets a positive
+       budget each tick so failed surface scans cannot monopolize the frame. */
+    if (g_passive_spawn_probe_budget == 0) return 0;
+    if (g_passive_spawn_probe_budget > 0) --g_passive_spawn_probe_budget;
+    ++g_prof_mob_spawn_calls_last;
+    return 1;
+}
+
 static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int z) {
     int cached_y = -9999;
-    if (passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) return cached_y;
+    if (passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) {
+        ++g_prof_mob_spawn_probe_hits_last;
+        return cached_y;
+    }
+    ++g_prof_mob_spawn_probe_misses_last;
+    ++g_prof_mob_spawn_columns_last;
     if (x < g_flat_world_origin_x + 1 || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE - 1 ||
         z < g_flat_world_origin_z + 1 || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 1) {
         passive_spawn_y_cache_put(type, cat, x, z, -9999);
@@ -807,6 +827,7 @@ static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int
     }
     if (cat == PEX_CAT_WATER || type == PASSIVE_MOB_SQUID) {
         for (int y = 62; y >= 46; --y) {
+            if (!passive_spawn_probe_step()) return -9998;
             if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) {
                 passive_spawn_y_cache_put(type, cat, x, z, y);
                 return y;
@@ -819,6 +840,7 @@ static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int
        This keeps Java-like material checks while avoiding a full 128-level scan
        on every failed spawn column during heavy streaming. */
     for (int y = 80; y >= FLAT_WORLD_Y_MIN + 1; --y) {
+        if (!passive_spawn_probe_step()) return -9998;
         if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) {
             passive_spawn_y_cache_put(type, cat, x, z, y);
             return y;
@@ -829,6 +851,7 @@ static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int
     for (int i = 0; i < 32; ++i) {
         int y = start_y - i;
         if (y < FLAT_WORLD_Y_MIN + 1) y += (FLAT_WORLD_Y_MAX - FLAT_WORLD_Y_MIN - 2);
+        if (!passive_spawn_probe_step()) return -9998;
         if (passive_mob_can_spawn_at_category(type, cat, x, y, z)) {
             passive_spawn_y_cache_put(type, cat, x, z, y);
             return y;
@@ -861,12 +884,15 @@ static void passive_mobs_try_natural_spawn(void) {
     int pcx = floor_div16((int)floorf(g_player_x));
     int pcz = floor_div16((int)floorf(g_player_z));
     int cats[3] = { PEX_CAT_MONSTER, PEX_CAT_CREATURE, PEX_CAT_WATER };
-    for (int ci = 0; ci < 3; ++ci) {
+    int first_ci = g_ingame_ticks % 3;
+    for (int ci_step = 0; ci_step < 3; ++ci_step) {
+        int ci = (first_ci + ci_step) % 3;
         int cat = cats[ci];
+        if (g_passive_spawn_probe_budget == 0) break;
         if (cat == PEX_CAT_MONSTER && (g_opts.difficulty & 3) == 0) continue;
         if (passive_mob_count_category(cat) > passive_spawn_cap_for_category(cat)) continue;
-        int chunk_attempts = (cat == PEX_CAT_MONSTER) ? 3 : 1;
-        if (cat == PEX_CAT_CREATURE && (g_ingame_ticks % 20) != 0) continue;
+        int chunk_attempts = (cat == PEX_CAT_MONSTER) ? 1 : 1;
+        if (cat == PEX_CAT_CREATURE && (g_ingame_ticks % 10) != 0) continue;
         if (cat == PEX_CAT_WATER && (g_ingame_ticks % 20) != 0) continue;
         for (int batch = 0; batch < chunk_attempts && passive_mob_count() < passive_mob_target_cap(); ++batch) {
             int cx = pcx + (rand() % 17) - 8;
@@ -886,6 +912,7 @@ static void passive_mobs_try_natural_spawn(void) {
                     x += (rand() % 6) - (rand() % 6);
                     z += (rand() % 6) - (rand() % 6);
                     int y = passive_mob_column_spawn_y_for_category(entry.type, cat, x, z);
+                    if (y == -9998) return;
                     if (y == -9999) continue;
                     PassiveMob *m = passive_mob_alloc();
                     if (!m) return;
@@ -925,6 +952,7 @@ static void passive_mobs_ensure_population(int wanted, int attempts) {
         if (!passive_biome_weighted_spawn_entry(PEX_CAT_CREATURE, biome, &entry)) continue;
         int type = entry.type;
         int y = passive_mob_column_spawn_y_for_category(type, PEX_CAT_CREATURE, x, z);
+        if (y == -9998) break;
         if (y == -9999) continue;
         PassiveMob *m = passive_mob_alloc();
         if (!m) break;
@@ -1887,7 +1915,10 @@ static int g_passive_next_village_id = 1;
    Keep the same movement/path semantics, but budget path builds like Minecraft's
    PathNavigate cooldowns do and let mobs steer toward their existing path/target
    while waiting for the next solve. */
-#define PEX_PATHFIND_BUDGET_PER_TICK 3
+#define PEX_PATHFIND_BUDGET_PER_TICK 2
+#define PEX_PATHFIND_NODE_BUDGET_PER_SOLVE 768
+#define PEX_SPAWN_PROBE_BUDGET_PER_TICK 96
+#define PEX_MOB_TICK_WALL_BUDGET_MS 3.0
 static int g_passive_pathfind_budget = 0;
 static int g_passive_perf_last_active = 0;
 static int g_passive_perf_last_path_budget_left = 0;
@@ -2133,6 +2164,7 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
         return 0;
     }
     --g_passive_pathfind_budget;
+    ++g_prof_mob_path_solves_last;
     if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_BLAZE || m->type == PASSIVE_MOB_SQUID) {
         int gx = (int)floorf(txf), gy = (int)floorf(tyf), gz = (int)floorf(tzf);
         if (!passive_path_can_stand_at(m->type, gx, gy, gz)) return 0;
@@ -2177,7 +2209,8 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     passive_path_heap_add_125(&ctx, start);
     short closest = start;
     int guard = 0;
-    while (ctx.heap_count > 0 && guard++ < 4096) {
+    while (ctx.heap_count > 0 && guard++ < PEX_PATHFIND_NODE_BUDGET_PER_SOLVE) {
+        ++g_prof_mob_path_nodes_last;
         short cur = passive_path_heap_dequeue_125(&ctx);
         if (cur < 0) break;
         if (ctx.points[cur].x == ctx.points[goal].x && ctx.points[cur].y == ctx.points[goal].y && ctx.points[cur].z == ctx.points[goal].z) {
@@ -3010,20 +3043,38 @@ static int passive_mob_tick_stride(const PassiveMob *m) {
 static void update_passive_mobs(void) {
     /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
     if (g_mp_connected) return;
+
     g_passive_pathfind_budget = PEX_PATHFIND_BUDGET_PER_TICK;
+    g_passive_spawn_probe_budget = PEX_SPAWN_PROBE_BUDGET_PER_TICK;
     g_passive_perf_last_spawns_skipped_streaming = 0;
+    g_prof_mob_spawn_probe_hits_last = 0;
+    g_prof_mob_spawn_probe_misses_last = 0;
+    g_prof_mob_spawn_calls_last = 0;
+    g_prof_mob_spawn_columns_last = 0;
+    g_prof_mob_spawn_ms_last = 0.0;
+    g_prof_mob_living_ms_last = 0.0;
+    g_prof_mob_living_ticked_last = 0;
+    g_prof_mob_living_deferred_last = 0;
+    g_prof_mob_path_solves_last = 0;
+    g_prof_mob_path_nodes_last = 0;
+
     passive_mobs_enforce_cap();
+
     /* While the world-stream worker is still installing/generating chunks, avoid
        the natural-spawn and village scans.  Existing mobs keep ticking, but new
        spawn searches wait until chunks are actually present instead of probing
        half-streamed terrain and fighting the streaming thread. */
+    double spawn_start = now_seconds();
     if (!world_stream_service_active()) {
         passive_mobs_try_village_spawns_exact();
         passive_mobs_try_natural_spawn();
     } else {
         g_passive_perf_last_spawns_skipped_streaming = 1;
     }
+    g_prof_mob_spawn_ms_last = (now_seconds() - spawn_start) * 1000.0;
+
     int active_count = 0;
+    double living_start = now_seconds();
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         PassiveMob *m = &g_passive_mobs[i];
         if (!m->active) continue;
@@ -3035,12 +3086,31 @@ static void update_passive_mobs(void) {
             m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
             m->prev_yaw = m->yaw; m->prev_render_yaw = m->render_yaw;
             m->prev_limb_swing = m->limb_swing; m->prev_limb_amount = m->limb_amount;
+            ++g_prof_mob_living_deferred_last;
             continue;
         }
+        /* Hard frame-protection: after a spike starts, defer non-critical mobs
+           instead of letting one catch-up tick destroy the whole frame.  Near
+           mobs and ridden mobs continue updating. */
+        double elapsed_ms = (now_seconds() - living_start) * 1000.0;
+        if (elapsed_ms > PEX_MOB_TICK_WALL_BUDGET_MS && i != g_player_riding_passive_mob) {
+            float dx = m->x - g_player_x;
+            float dz = m->z - g_player_z;
+            if (dx*dx + dz*dz > 12.0f * 12.0f) {
+                m->prev_x = m->x; m->prev_y = m->y; m->prev_z = m->z;
+                m->prev_yaw = m->yaw; m->prev_render_yaw = m->render_yaw;
+                m->prev_limb_swing = m->limb_swing; m->prev_limb_amount = m->limb_amount;
+                ++g_prof_mob_living_deferred_last;
+                continue;
+            }
+        }
         passive_mob_tick_living(m);
+        ++g_prof_mob_living_ticked_last;
     }
+    g_prof_mob_living_ms_last = (now_seconds() - living_start) * 1000.0;
     g_passive_perf_last_active = active_count;
     g_passive_perf_last_path_budget_left = g_passive_pathfind_budget;
+    g_prof_mob_spawn_probe_budget_last = g_passive_spawn_probe_budget;
 }
 
 static Texture *passive_mob_texture_for_type(int type) {

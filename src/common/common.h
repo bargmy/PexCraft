@@ -2093,6 +2093,17 @@ static int g_prof_daylight_dirty_chunks_last = 0;
 static int g_prof_village_scan_blocks_last = 0;
 static int g_prof_spawn_y_cache_hits = 0;
 static int g_prof_spawn_y_cache_misses = 0;
+static int g_prof_mob_spawn_probe_budget_last = 0;
+static int g_prof_mob_spawn_probe_hits_last = 0;
+static int g_prof_mob_spawn_probe_misses_last = 0;
+static int g_prof_mob_spawn_calls_last = 0;
+static int g_prof_mob_spawn_columns_last = 0;
+static double g_prof_mob_spawn_ms_last = 0.0;
+static double g_prof_mob_living_ms_last = 0.0;
+static int g_prof_mob_living_ticked_last = 0;
+static int g_prof_mob_living_deferred_last = 0;
+static int g_prof_mob_path_solves_last = 0;
+static int g_prof_mob_path_nodes_last = 0;
 
 static int g_prof_packets_last = 0;
 static int g_prof_chunks_last = 0;

@@ -453,13 +453,18 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "  falling active=%d spawned=%d cells=%d particles=%d drops=%d liquids_ms=%.3f world_stream_ms=%.3f\n",
                   g_prof_falling_active_last, g_prof_falling_spawns_last, g_prof_falling_cells_last,
                   active_particles, active_drops, g_prof_display_ms[PROF_LIQUIDS], g_prof_display_ms[PROF_WORLD_STREAM]);
-    loggy_appendf(&out, &left, "  mobs active=%d path_budget_left=%d spawn_scan_skipped_stream=%d mob_tick_ms=%.3f\n",
-                  g_passive_perf_last_active, g_passive_perf_last_path_budget_left,
+    loggy_appendf(&out, &left, "  mobs active=%d ticked=%d deferred=%d path_budget_left=%d path_solves=%d path_nodes=%d spawn_skip_stream=%d mob_bucket_ms=%.3f\n",
+                  g_passive_perf_last_active, g_prof_mob_living_ticked_last, g_prof_mob_living_deferred_last,
+                  g_passive_perf_last_path_budget_left, g_prof_mob_path_solves_last, g_prof_mob_path_nodes_last,
                   g_passive_perf_last_spawns_skipped_streaming, g_prof_display_ms[PROF_ENTITY_PASSIVE_MOBS]);
-    loggy_appendf(&out, &left, "  daylight_mesh_ms=%.3f daylight_pending=%d daylight_chunks=%d village_scan_blocks=%d spawn_y_cache=%d/%d\n",
-                  g_prof_display_ms[PROF_DAYLIGHT_MESH], g_prof_daylight_dirty_pending,
-                  g_prof_daylight_dirty_chunks_last, g_prof_village_scan_blocks_last,
+    loggy_appendf(&out, &left, "  mob_spawn_ms=%.3f mob_living_ms=%.3f spawn_probe_budget=%d spawn_probes=%d columns=%d cache_frame=%d/%d cache_total=%d/%d\n",
+                  g_prof_mob_spawn_ms_last, g_prof_mob_living_ms_last, g_prof_mob_spawn_probe_budget_last,
+                  g_prof_mob_spawn_calls_last, g_prof_mob_spawn_columns_last,
+                  g_prof_mob_spawn_probe_hits_last, g_prof_mob_spawn_probe_misses_last,
                   g_prof_spawn_y_cache_hits, g_prof_spawn_y_cache_misses);
+    loggy_appendf(&out, &left, "  daylight_mesh_ms=%.3f daylight_pending=%d daylight_chunks=%d village_scan_blocks=%d\n",
+                  g_prof_display_ms[PROF_DAYLIGHT_MESH], g_prof_daylight_dirty_pending,
+                  g_prof_daylight_dirty_chunks_last, g_prof_village_scan_blocks_last);
 
     loggy_appendf(&out, &left, "\nSYSTEM INFO CACHE:\n");
     loggy_appendf(&out, &left, "  platform=%s display=%dx%d@%dHz %s ram=%llu/%lluMB gpu=%.96s vendor=%.64s api=%.64s net=%d\n",
