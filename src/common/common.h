@@ -597,21 +597,46 @@ typedef struct FlatFallingBlock {
 } FlatFallingBlock;
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-#define MAX_PASSIVE_MOBS 8
+#define MAX_PASSIVE_MOBS 32
 #else
-/* Beta 1.0 passive animals cap at about 20 around a single player
-   (EnumCreatureType.creature=20 over the 17x17 eligible chunk set).  The
-   renderer culls by distance/FOV, so keep the simulation cap Beta-like while
-   still limiting how many models are drawn in one frame. */
-#define MAX_PASSIVE_MOBS 24
+/* Java 1.2.5 caps are per EnumCreatureType over the 17x17 eligible chunk set:
+   monster=70, creature=15, waterCreature=5 scaled by eligibleChunks/256.
+   One player therefore allows roughly 79 monsters, 16 animals, and 5 water
+   mobs.  Keep enough slots for all categories plus village utility mobs. */
+#define MAX_PASSIVE_MOBS 128
 #endif
+
+#define PEX_MOB_PATH_MAX 24
+#define PEX_MOB_OWNER_NONE 0
+#define PEX_MOB_OWNER_SINGLEPLAYER 1
 
 typedef enum PassiveMobType {
     PASSIVE_MOB_NONE = 0,
     PASSIVE_MOB_PIG = 1,
     PASSIVE_MOB_SHEEP = 2,
     PASSIVE_MOB_COW = 3,
-    PASSIVE_MOB_CHICKEN = 4
+    PASSIVE_MOB_CHICKEN = 4,
+    PASSIVE_MOB_CREEPER = 5,
+    PASSIVE_MOB_SKELETON = 6,
+    PASSIVE_MOB_SPIDER = 7,
+    PASSIVE_MOB_GIANT = 8,
+    PASSIVE_MOB_ZOMBIE = 9,
+    PASSIVE_MOB_SLIME = 10,
+    PASSIVE_MOB_GHAST = 11,
+    PASSIVE_MOB_PIG_ZOMBIE = 12,
+    PASSIVE_MOB_ENDERMAN = 13,
+    PASSIVE_MOB_CAVE_SPIDER = 14,
+    PASSIVE_MOB_SILVERFISH = 15,
+    PASSIVE_MOB_BLAZE = 16,
+    PASSIVE_MOB_MAGMA_CUBE = 17,
+    PASSIVE_MOB_ENDER_DRAGON = 18,
+    PASSIVE_MOB_SQUID = 19,
+    PASSIVE_MOB_WOLF = 20,
+    PASSIVE_MOB_MOOSHROOM = 21,
+    PASSIVE_MOB_SNOWMAN = 22,
+    PASSIVE_MOB_OCELOT = 23,
+    PASSIVE_MOB_IRON_GOLEM = 24,
+    PASSIVE_MOB_VILLAGER = 25
 } PassiveMobType;
 
 typedef struct PassiveMob {
@@ -651,9 +676,29 @@ typedef struct PassiveMob {
     float chicken_prev_dest_pos;
     float chicken_wing_speed;
     int egg_timer;
+    int attack_time;
+    int burn_time;
+    int target_mob_index;
+    int baby_age;
+    int sitting;
+    int held_block;
+    int love_time;
     int jump_cooldown;
     int stuck_ticks;
     int wander_cooldown;
+    int owner_id;        /* single-player persistent owner id for tamed wolves/cats */
+    int tame_state;      /* wolf/cat/cat variant and anger state mirror */
+    int collar_color;    /* wolf collar dye color; Java default red=14 */
+    int village_id;      /* runtime village membership, rebuilt from nearest 1.2.5 door set */
+    int door_target_x, door_target_y, door_target_z;
+    int door_open_time;
+    int ai_task_mask;    /* currently selected Java-style EntityAI task bits */
+    int path_len;
+    int path_index;
+    int path_recalc_cooldown;
+    int path_x[PEX_MOB_PATH_MAX];
+    int path_y[PEX_MOB_PATH_MAX];
+    int path_z[PEX_MOB_PATH_MAX];
     /* Java 1.2.5 EntityLiving potion state for currently implemented passive mobs.
        Fixed size avoids moving the potion id constants above PassiveMob in this
        unity-style codebase.  Indices use PEX_POTION_* ids. */
@@ -1468,11 +1513,18 @@ typedef struct PexMapData {
 
 #define FLAT_PROJECTILE_POTION 1
 #define FLAT_PROJECTILE_XP_BOTTLE 2
+#define FLAT_PROJECTILE_ARROW 3
+#define FLAT_PROJECTILE_SMALL_FIREBALL 4
+#define FLAT_PROJECTILE_LARGE_FIREBALL 5
+#define FLAT_PROJECTILE_SNOWBALL 6
 
 typedef struct FlatProjectile {
     int active;
     int type;
     int item_damage;
+    int owner_type;   /* 0=player/local thrower, 1=mob */
+    int owner_mob_type;
+    int damage;
     float x, y, z;
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
@@ -2143,6 +2195,12 @@ static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_
 static Texture tex_icons, tex_inventory, tex_allitems, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
+static Texture tex_mob_creeper, tex_mob_skeleton, tex_mob_spider, tex_mob_spider_eyes, tex_mob_zombie, tex_mob_slime;
+static Texture tex_mob_ghast, tex_mob_ghast_fire, tex_mob_pigzombie, tex_mob_enderman, tex_mob_enderman_eyes, tex_mob_cavespider;
+static Texture tex_mob_silverfish, tex_mob_blaze, tex_mob_lava, tex_mob_enderdragon;
+static Texture tex_mob_squid, tex_mob_wolf, tex_mob_wolf_tame, tex_mob_wolf_angry, tex_mob_mooshroom;
+static Texture tex_mob_snowman, tex_mob_ocelot, tex_mob_cat_black, tex_mob_cat_red, tex_mob_cat_siamese;
+static Texture tex_mob_villager_golem, tex_mob_villager, tex_mob_villager_farmer, tex_mob_villager_librarian, tex_mob_villager_priest, tex_mob_villager_smith, tex_mob_villager_butcher;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static Texture tex_sun, tex_moon, tex_moon_phases;
 static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;

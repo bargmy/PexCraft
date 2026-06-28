@@ -619,7 +619,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 23;
+    int version = 27;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -893,7 +893,7 @@ static void save_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 23;
+    int version = 27;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -1101,7 +1101,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23 || version == 27)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||

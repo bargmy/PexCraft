@@ -2892,13 +2892,23 @@ static void draw_projectiles(float partial) {
         float x = p->prev_x + (p->x - p->prev_x) * partial;
         float y = p->prev_y + (p->y - p->prev_y) * partial;
         float z = p->prev_z + (p->z - p->prev_z) * partial;
-        int item = (p->type == FLAT_PROJECTILE_XP_BOTTLE) ? ITEM_EXP_BOTTLE : ITEM_POTION;
+        int item = ITEM_POTION;
+        if (p->type == FLAT_PROJECTILE_XP_BOTTLE) item = ITEM_EXP_BOTTLE;
+        else if (p->type == FLAT_PROJECTILE_ARROW) item = ITEM_ARROW;
+        else if (p->type == FLAT_PROJECTILE_SNOWBALL) item = ITEM_SNOWBALL;
+        else if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) item = ITEM_FIREBALL_CHARGE;
         int tile = item_icon_tile(item);
         glPushMatrix();
         glTranslatef(x, y, z);
-        glRotatef((float)p->age * 18.0f + partial * 18.0f, 0.0f, 1.0f, 0.0f);
-        glRotatef(20.0f, 1.0f, 0.0f, 0.0f);
-        glScalef(0.25f, 0.25f, 0.25f);
+        if (p->type == FLAT_PROJECTILE_ARROW) {
+            glRotatef(p->yaw, 0.0f, 1.0f, 0.0f);
+            glRotatef(p->pitch, 1.0f, 0.0f, 0.0f);
+            glScalef(0.18f, 0.18f, 0.55f);
+        } else {
+            glRotatef((float)p->age * 18.0f + partial * 18.0f, 0.0f, 1.0f, 0.0f);
+            glRotatef(20.0f, 1.0f, 0.0f, 0.0f);
+            glScalef(0.25f, 0.25f, 0.25f);
+        }
         draw_item3d_from_texture(&tex_items, tile);
         glPopMatrix();
     }

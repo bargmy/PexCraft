@@ -647,7 +647,31 @@ static int pack_missing_required_textures(void) {
         "mob/sheep_fur.png",
         "mob/cow.png",
         "mob/chicken.png",
-        "mob/saddle.png"
+        "mob/saddle.png",
+        "mob/creeper.png",
+        "mob/skeleton.png",
+        "mob/spider.png",
+        "mob/zombie.png",
+        "mob/slime.png",
+        "mob/ghast.png",
+        "mob/ghast_fire.png",
+        "mob/pigzombie.png",
+        "mob/enderman.png",
+        "mob/cavespider.png",
+        "mob/silverfish.png",
+        "mob/fire.png",
+        "mob/lava.png",
+        "mob/enderdragon/ender.png",
+        "mob/squid.png",
+        "mob/wolf.png",
+        "mob/wolf_tame.png",
+        "mob/wolf_angry.png",
+        "mob/redcow.png",
+        "mob/snowman.png",
+        "mob/ozelot.png",
+        "mob/cat_red.png",
+        "mob/villager_golem.png",
+        "mob/villager/villager.png"
     };
     if (!pack_is_installed()) return 0;
     pack_asset_path(dir, sizeof(dir));
@@ -873,6 +897,39 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_mob_cow, "mob\\cow.png", 0);
     try_release_texture(&tex_mob_chicken, "mob\\chicken.png", 0);
     try_release_texture(&tex_mob_saddle, "mob\\saddle.png", 0);
+    try_release_texture(&tex_mob_creeper, "mob\\creeper.png", 0);
+    try_release_texture(&tex_mob_skeleton, "mob\\skeleton.png", 0);
+    try_release_texture(&tex_mob_spider, "mob\\spider.png", 0);
+    try_release_texture(&tex_mob_spider_eyes, "mob\\spider_eyes.png", 0);
+    try_release_texture(&tex_mob_zombie, "mob\\zombie.png", 0);
+    try_release_texture(&tex_mob_slime, "mob\\slime.png", 0);
+    try_release_texture(&tex_mob_ghast, "mob\\ghast.png", 0);
+    try_release_texture(&tex_mob_ghast_fire, "mob\\ghast_fire.png", 0);
+    try_release_texture(&tex_mob_pigzombie, "mob\\pigzombie.png", 0);
+    try_release_texture(&tex_mob_enderman, "mob\\enderman.png", 0);
+    try_release_texture(&tex_mob_enderman_eyes, "mob\\enderman_eyes.png", 0);
+    try_release_texture(&tex_mob_cavespider, "mob\\cavespider.png", 0);
+    try_release_texture(&tex_mob_silverfish, "mob\\silverfish.png", 0);
+    try_release_texture(&tex_mob_blaze, "mob\\fire.png", 0);
+    try_release_texture(&tex_mob_lava, "mob\\lava.png", 0);
+    try_release_texture(&tex_mob_enderdragon, "mob\\enderdragon\\ender.png", 0);
+    try_release_texture(&tex_mob_squid, "mob\\squid.png", 0);
+    try_release_texture(&tex_mob_wolf, "mob\\wolf.png", 0);
+    try_release_texture(&tex_mob_wolf_tame, "mob\\wolf_tame.png", 0);
+    try_release_texture(&tex_mob_wolf_angry, "mob\\wolf_angry.png", 0);
+    try_release_texture(&tex_mob_mooshroom, "mob\\redcow.png", 0);
+    try_release_texture(&tex_mob_snowman, "mob\\snowman.png", 0);
+    try_release_texture(&tex_mob_ocelot, "mob\\ozelot.png", 0);
+    try_release_texture(&tex_mob_cat_black, "mob\\cat_black.png", 0);
+    try_release_texture(&tex_mob_cat_red, "mob\\cat_red.png", 0);
+    try_release_texture(&tex_mob_cat_siamese, "mob\\cat_siamese.png", 0);
+    try_release_texture(&tex_mob_villager_golem, "mob\\villager_golem.png", 0);
+    try_release_texture(&tex_mob_villager, "mob\\villager\\villager.png", 0);
+    try_release_texture(&tex_mob_villager_farmer, "mob\\villager\\farmer.png", 0);
+    try_release_texture(&tex_mob_villager_librarian, "mob\\villager\\librarian.png", 0);
+    try_release_texture(&tex_mob_villager_priest, "mob\\villager\\priest.png", 0);
+    try_release_texture(&tex_mob_villager_smith, "mob\\villager\\smith.png", 0);
+    try_release_texture(&tex_mob_villager_butcher, "mob\\villager\\butcher.png", 0);
     try_release_texture(&tex_clouds, "environment\\clouds.png", 1);
     try_release_texture(&tex_sun, "terrain\\sun.png", 0);
     try_release_texture(&tex_moon, "terrain\\moon.png", 0);
@@ -1085,6 +1142,39 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_mob_cow, "mob\\cow.png", 0);
         try_pack_texture(e, &tex_mob_chicken, "mob\\chicken.png", 0);
         try_pack_texture(e, &tex_mob_saddle, "mob\\saddle.png", 0);
+        try_pack_texture(e, &tex_mob_creeper, "mob\\creeper.png", 0);
+        try_pack_texture(e, &tex_mob_skeleton, "mob\\skeleton.png", 0);
+        try_pack_texture(e, &tex_mob_spider, "mob\\spider.png", 0);
+        try_pack_texture(e, &tex_mob_spider_eyes, "mob\\spider_eyes.png", 0);
+        try_pack_texture(e, &tex_mob_zombie, "mob\\zombie.png", 0);
+        try_pack_texture(e, &tex_mob_slime, "mob\\slime.png", 0);
+        try_pack_texture(e, &tex_mob_ghast, "mob\\ghast.png", 0);
+        try_pack_texture(e, &tex_mob_ghast_fire, "mob\\ghast_fire.png", 0);
+        try_pack_texture(e, &tex_mob_pigzombie, "mob\\pigzombie.png", 0);
+        try_pack_texture(e, &tex_mob_enderman, "mob\\enderman.png", 0);
+        try_pack_texture(e, &tex_mob_enderman_eyes, "mob\\enderman_eyes.png", 0);
+        try_pack_texture(e, &tex_mob_cavespider, "mob\\cavespider.png", 0);
+        try_pack_texture(e, &tex_mob_silverfish, "mob\\silverfish.png", 0);
+        try_pack_texture(e, &tex_mob_blaze, "mob\\fire.png", 0);
+        try_pack_texture(e, &tex_mob_lava, "mob\\lava.png", 0);
+        try_pack_texture(e, &tex_mob_enderdragon, "mob\\enderdragon\\ender.png", 0);
+        try_pack_texture(e, &tex_mob_squid, "mob\\squid.png", 0);
+        try_pack_texture(e, &tex_mob_wolf, "mob\\wolf.png", 0);
+        try_pack_texture(e, &tex_mob_wolf_tame, "mob\\wolf_tame.png", 0);
+        try_pack_texture(e, &tex_mob_wolf_angry, "mob\\wolf_angry.png", 0);
+        try_pack_texture(e, &tex_mob_mooshroom, "mob\\redcow.png", 0);
+        try_pack_texture(e, &tex_mob_snowman, "mob\\snowman.png", 0);
+        try_pack_texture(e, &tex_mob_ocelot, "mob\\ozelot.png", 0);
+        try_pack_texture(e, &tex_mob_cat_black, "mob\\cat_black.png", 0);
+        try_pack_texture(e, &tex_mob_cat_red, "mob\\cat_red.png", 0);
+        try_pack_texture(e, &tex_mob_cat_siamese, "mob\\cat_siamese.png", 0);
+        try_pack_texture(e, &tex_mob_villager_golem, "mob\\villager_golem.png", 0);
+        try_pack_texture(e, &tex_mob_villager, "mob\\villager\\villager.png", 0);
+        try_pack_texture(e, &tex_mob_villager_farmer, "mob\\villager\\farmer.png", 0);
+        try_pack_texture(e, &tex_mob_villager_librarian, "mob\\villager\\librarian.png", 0);
+        try_pack_texture(e, &tex_mob_villager_priest, "mob\\villager\\priest.png", 0);
+        try_pack_texture(e, &tex_mob_villager_smith, "mob\\villager\\smith.png", 0);
+        try_pack_texture(e, &tex_mob_villager_butcher, "mob\\villager\\butcher.png", 0);
         try_pack_texture(e, &tex_clouds, "environment\\clouds.png", 1);
         try_pack_texture(e, &tex_sun, "terrain\\sun.png", 0);
         try_pack_texture(e, &tex_moon, "terrain\\moon.png", 0);

@@ -88,8 +88,10 @@ static const int g_creative_items_125[] = {
 };
 
 static const int g_creative_spawn_egg_damage_125[] = {
-    50, 51, 52, 54, 55, 56, 57, 58, 59, 60, 61, 62,
-    90, 91, 92, 93, 94, 95, 96, 98, 120
+    /* Java 1.2.5 official eggs plus hidden IDs for mobs that exist but did not
+       have a creative egg entry in vanilla (Giant, Dragon, Snow/Iron Golem). */
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+    90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 120
 };
 
 #define CREATIVE_COLS 8
@@ -6493,9 +6495,30 @@ static int try_use_map_item(ItemStack *held) {
 static int pex_passive_health_cap_for_type(int type) {
     switch (type) {
         case PASSIVE_MOB_PIG: return 10;
-        case PASSIVE_MOB_COW: return 10;
         case PASSIVE_MOB_SHEEP: return 8;
+        case PASSIVE_MOB_COW: return 10;
         case PASSIVE_MOB_CHICKEN: return 4;
+        case PASSIVE_MOB_CREEPER: return 20;
+        case PASSIVE_MOB_SKELETON: return 20;
+        case PASSIVE_MOB_SPIDER: return 16;
+        case PASSIVE_MOB_GIANT: return 100;
+        case PASSIVE_MOB_ZOMBIE: return 20;
+        case PASSIVE_MOB_SLIME: return 16;
+        case PASSIVE_MOB_GHAST: return 10;
+        case PASSIVE_MOB_PIG_ZOMBIE: return 20;
+        case PASSIVE_MOB_ENDERMAN: return 40;
+        case PASSIVE_MOB_CAVE_SPIDER: return 12;
+        case PASSIVE_MOB_SILVERFISH: return 8;
+        case PASSIVE_MOB_BLAZE: return 20;
+        case PASSIVE_MOB_MAGMA_CUBE: return 16;
+        case PASSIVE_MOB_ENDER_DRAGON: return 200;
+        case PASSIVE_MOB_SQUID: return 10;
+        case PASSIVE_MOB_WOLF: return 8;
+        case PASSIVE_MOB_MOOSHROOM: return 10;
+        case PASSIVE_MOB_SNOWMAN: return 4;
+        case PASSIVE_MOB_OCELOT: return 10;
+        case PASSIVE_MOB_IRON_GOLEM: return 100;
+        case PASSIVE_MOB_VILLAGER: return 20;
         default: return 1;
     }
 }
@@ -6512,10 +6535,29 @@ static int pex_passive_potion_amplifier(const PassiveMob *m, int potion_id) {
 static void pex_passive_start_death_direct(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
     const char *s = NULL;
-    if (m->type == PASSIVE_MOB_PIG) s = "mob.pig.death";
-    else if (m->type == PASSIVE_MOB_COW) s = "mob.cowhurt";
-    else if (m->type == PASSIVE_MOB_SHEEP) s = "mob.sheep";
-    else if (m->type == PASSIVE_MOB_CHICKEN) s = "mob.chickenhurt";
+    switch (m->type) {
+        case PASSIVE_MOB_PIG: s = "mob.pigdeath"; break;
+        case PASSIVE_MOB_COW: s = "mob.cowhurt"; break;
+        case PASSIVE_MOB_SHEEP: s = "mob.sheep"; break;
+        case PASSIVE_MOB_CHICKEN: s = "mob.chickenhurt"; break;
+        case PASSIVE_MOB_CREEPER: s = "mob.creeperdeath"; break;
+        case PASSIVE_MOB_SKELETON: s = "mob.skeletonhurt"; break;
+        case PASSIVE_MOB_ZOMBIE: case PASSIVE_MOB_GIANT: s = "mob.zombiehurt"; break;
+        case PASSIVE_MOB_SPIDER: case PASSIVE_MOB_CAVE_SPIDER: s = "mob.spiderdeath"; break;
+        case PASSIVE_MOB_SLIME: case PASSIVE_MOB_MAGMA_CUBE: s = "mob.slime"; break;
+        case PASSIVE_MOB_GHAST: s = "mob.ghast.death"; break;
+        case PASSIVE_MOB_PIG_ZOMBIE: s = "mob.zombiepig.zpigdeath"; break;
+        case PASSIVE_MOB_ENDERMAN: s = "mob.endermen.death"; break;
+        case PASSIVE_MOB_SILVERFISH: s = "mob.silverfish.kill"; break;
+        case PASSIVE_MOB_BLAZE: s = "mob.blaze.death"; break;
+        case PASSIVE_MOB_SQUID: s = "mob.squid.death"; break;
+        case PASSIVE_MOB_WOLF: s = "mob.wolf.death"; break;
+        case PASSIVE_MOB_SNOWMAN: s = "mob.snowman"; break;
+        case PASSIVE_MOB_OCELOT: s = "mob.cat.hitt"; break;
+        case PASSIVE_MOB_IRON_GOLEM: s = "mob.irongolem.death"; break;
+        case PASSIVE_MOB_VILLAGER: s = "mob.villager.death"; break;
+        default: break;
+    }
     if (s) pex_sound_play_at(s, m->x, m->y, m->z, 1.0f, 1.0f);
     m->health = 0;
     m->death_time = 1;
@@ -6605,15 +6647,49 @@ static int pex_spawn_projectile(int type, int damage) {
     p->active = 1;
     p->type = type;
     p->item_damage = damage;
+    p->owner_type = 0;
+    p->owner_mob_type = 0;
+    p->damage = (type == FLAT_PROJECTILE_ARROW) ? 4 : 0;
     p->x = p->prev_x = g_player_x + lx * 0.35f;
     p->y = p->prev_y = g_player_y - 0.10f + ly * 0.35f;
     p->z = p->prev_z = g_player_z + lz * 0.35f;
-    float speed = (type == FLAT_PROJECTILE_POTION) ? 0.50f : 0.70f;
+    float speed = (type == FLAT_PROJECTILE_POTION) ? 0.50f : (type == FLAT_PROJECTILE_ARROW ? 1.50f : 0.70f);
     p->mx = lx * speed + g_player_motion_x;
     p->my = ly * speed + g_player_motion_y * 0.25f;
     p->mz = lz * speed + g_player_motion_z;
     p->yaw = g_player_yaw;
     p->pitch = g_player_pitch;
+    return 1;
+}
+
+
+static int pex_spawn_projectile_from_entity(int type, int owner_mob_type, float sx, float sy, float sz,
+                                            float tx, float ty, float tz, float speed, int damage) {
+    int slot = -1;
+    for (int i = 0; i < MAX_PROJECTILE_ENTITIES; ++i) if (!g_projectiles[i].active) { slot = i; break; }
+    if (slot < 0) slot = rand() % MAX_PROJECTILE_ENTITIES;
+    float lx = tx - sx, ly = ty - sy, lz = tz - sz;
+    float len = sqrtf(lx * lx + ly * ly + lz * lz);
+    if (len < 0.0001f) { lx = 0.0f; ly = 0.0f; lz = 1.0f; len = 1.0f; }
+    lx /= len; ly /= len; lz /= len;
+    FlatProjectile *p = &g_projectiles[slot];
+    memset(p, 0, sizeof(*p));
+    p->active = 1;
+    p->type = type;
+    p->owner_type = 1;
+    p->owner_mob_type = owner_mob_type;
+    p->damage = damage;
+    p->x = p->prev_x = sx;
+    p->y = p->prev_y = sy;
+    p->z = p->prev_z = sz;
+    p->mx = lx * speed;
+    p->my = ly * speed;
+    p->mz = lz * speed;
+    p->yaw = atan2f(lx, lz) * 57.29578f;
+    float clamped_ly = ly;
+    if (clamped_ly < -1.0f) clamped_ly = -1.0f;
+    if (clamped_ly > 1.0f) clamped_ly = 1.0f;
+    p->pitch = -asinf(clamped_ly) * 57.29578f;
     return 1;
 }
 
@@ -6676,14 +6752,22 @@ static void pex_projectile_impact(FlatProjectile *p) {
             pex_spawn_xp_orb(p->x, p->y, p->z, v);
             total -= v;
         }
+    } else if (p->type == FLAT_PROJECTILE_LARGE_FIREBALL || p->type == FLAT_PROJECTILE_SMALL_FIREBALL) {
+        pex_sound_play_at("random.explode", p->x, p->y, p->z, p->type == FLAT_PROJECTILE_LARGE_FIREBALL ? 4.0f : 1.0f, 1.0f);
+        for (int i = 0; i < 24; ++i) add_splash_particle(p->x, p->y, p->z, (pex_rand_float01()-0.5f)*0.25f, pex_rand_float01()*0.25f, (pex_rand_float01()-0.5f)*0.25f);
+    } else if (p->type == FLAT_PROJECTILE_ARROW) {
+        pex_sound_play_at("random.bowhit", p->x, p->y, p->z, 1.0f, 1.2f);
+    } else if (p->type == FLAT_PROJECTILE_SNOWBALL) {
+        for (int i = 0; i < 8; ++i) add_splash_particle(p->x, p->y, p->z, (pex_rand_float01()-0.5f)*0.15f, pex_rand_float01()*0.15f, (pex_rand_float01()-0.5f)*0.15f);
     }
     p->active = 0;
 }
 
-static int pex_projectile_passive_hit(float x0, float y0, float z0, float x1, float y1, float z1, float *out_t, float *out_x, float *out_y, float *out_z) {
+static int pex_projectile_passive_hit(float x0, float y0, float z0, float x1, float y1, float z1, float *out_t, float *out_x, float *out_y, float *out_z, int *out_mob_index) {
     float dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
     float best_t = 2.0f;
     int found = 0;
+    int best_idx = -1;
     for (int mi = 0; mi < MAX_PASSIVE_MOBS; ++mi) {
         PassiveMob *m = &g_passive_mobs[mi];
         if (!m->active || m->death_time > 0) continue;
@@ -6705,14 +6789,62 @@ static int pex_projectile_passive_hit(float x0, float y0, float z0, float x1, fl
         if (tmin <= 1.0f) PEX_PROJ_AXIS(y0, dy, miny, maxy);
         if (tmin <= 1.0f) PEX_PROJ_AXIS(z0, dz, minz, maxz);
 #undef PEX_PROJ_AXIS
-        if (tmin >= 0.0f && tmin <= 1.0f && tmin < best_t) { best_t = tmin; found = 1; }
+        if (tmin >= 0.0f && tmin <= 1.0f && tmin < best_t) { best_t = tmin; found = 1; best_idx = mi; }
     }
     if (!found) return 0;
     if (out_t) *out_t = best_t;
     if (out_x) *out_x = x0 + dx * best_t;
     if (out_y) *out_y = y0 + dy * best_t;
     if (out_z) *out_z = z0 + dz * best_t;
+    if (out_mob_index) *out_mob_index = best_idx;
     return 1;
+}
+
+static void pex_projectile_damage_passive_mob(int mob_index, const FlatProjectile *p, float src_x, float src_z) {
+    if (!p || mob_index < 0 || mob_index >= MAX_PASSIVE_MOBS) return;
+    PassiveMob *m = &g_passive_mobs[mob_index];
+    if (!m->active || m->death_time > 0) return;
+    int damage = p->damage > 0 ? p->damage : (p->type == FLAT_PROJECTILE_ARROW ? 4 : 0);
+    if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && m->type == PASSIVE_MOB_BLAZE) damage = 3;
+    if (damage <= 0) return;
+    m->health -= damage;
+    m->hurt_time = 10;
+    m->damage_cooldown = 10;
+    float dx = m->x - src_x, dz = m->z - src_z;
+    float len = sqrtf(dx * dx + dz * dz); if (len < 0.001f) len = 0.001f;
+    m->mx += dx / len * 0.35f;
+    m->mz += dz / len * 0.35f;
+    m->my += 0.22f;
+    if (m->health <= 0) pex_passive_start_death_direct(m);
+    g_save_dirty = 1;
+}
+
+static int pex_projectile_player_hit(const FlatProjectile *p, float x0, float y0, float z0, float x1, float y1, float z1) {
+    if (!p || p->owner_type != 1 || p->age < 2 || g_player_dead) return 0;
+    float minx = g_player_x - 0.30f, maxx = g_player_x + 0.30f;
+    float miny = g_player_y - 1.62f, maxy = g_player_y + 0.18f;
+    float minz = g_player_z - 0.30f, maxz = g_player_z + 0.30f;
+    float dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    float tmin = 0.0f, tmax = 1.0f;
+#define PEX_PLAYER_PROJ_AXIS(o,d,minv,maxv) do { \
+    if (fabsf(d) < 1e-6f) { if ((o) < (minv) || (o) > (maxv)) return 0; } \
+    else { float inv = 1.0f / (d); float ta = ((minv) - (o)) * inv; float tb = ((maxv) - (o)) * inv; \
+           if (ta > tb) { float tmp = ta; ta = tb; tb = tmp; } \
+           if (ta > tmin) tmin = ta; if (tb < tmax) tmax = tb; if (tmin > tmax) return 0; } \
+} while (0)
+    PEX_PLAYER_PROJ_AXIS(x0, dx, minx, maxx);
+    PEX_PLAYER_PROJ_AXIS(y0, dy, miny, maxy);
+    PEX_PLAYER_PROJ_AXIS(z0, dz, minz, maxz);
+#undef PEX_PLAYER_PROJ_AXIS
+    return tmin >= 0.0f && tmin <= 1.0f;
+}
+
+static int pex_difficulty_scaled_mob_damage(int base) {
+    int d = g_opts.difficulty & 3;
+    if (d == 0) return 0;
+    if (d == 1) return (base + 1) / 2;
+    if (d == 3) return (base * 3 + 1) / 2;
+    return base;
 }
 
 static void update_projectiles(void) {
@@ -6727,7 +6859,13 @@ static void update_projectiles(void) {
         int hit = 0;
         float hit_t = 2.0f, hx = 0.0f, hy = 0.0f, hz = 0.0f;
         float ehx = 0.0f, ehy = 0.0f, ehz = 0.0f, et = 2.0f;
-        if (p->age > 2 && pex_projectile_passive_hit(p->x, p->y, p->z, nx, ny, nz, &et, &ehx, &ehy, &ehz)) {
+        int passive_hit_idx = -1;
+        if (pex_projectile_player_hit(p, p->x, p->y, p->z, nx, ny, nz)) {
+            int dmg = pex_difficulty_scaled_mob_damage(p->damage > 0 ? p->damage : 2);
+            if (dmg > 0) player_take_damage(dmg, p->type == FLAT_PROJECTILE_ARROW ? "was shot by Skeleton" : "was hit by projectile");
+            p->x = nx; p->y = ny; p->z = nz; pex_projectile_impact(p); continue;
+        }
+        if ((p->owner_type == 0 || p->owner_type == 1) && p->age > 2 && pex_projectile_passive_hit(p->x, p->y, p->z, nx, ny, nz, &et, &ehx, &ehy, &ehz, &passive_hit_idx)) {
             hit = 1; hit_t = et; hx = ehx; hy = ehy; hz = ehz;
         }
         for (int step = 1; step <= 8; ++step) {
@@ -6736,11 +6874,11 @@ static void update_projectiles(void) {
             float sy = p->y + (ny - p->y) * t;
             float sz = p->z + (nz - p->z) * t;
             if (pex_projectile_block_collision(sx, sy, sz)) {
-                if (!hit || t < hit_t) { hit = 1; hit_t = t; hx = sx; hy = sy; hz = sz; }
+                if (!hit || t < hit_t) { hit = 1; hit_t = t; hx = sx; hy = sy; hz = sz; passive_hit_idx = -1; }
                 break;
             }
         }
-        if (hit) { p->x = hx; p->y = hy; p->z = hz; pex_projectile_impact(p); continue; }
+        if (hit) { if (passive_hit_idx >= 0) pex_projectile_damage_passive_mob(passive_hit_idx, p, p->x, p->z); p->x = hx; p->y = hy; p->z = hz; pex_projectile_impact(p); continue; }
         p->x = nx; p->y = ny; p->z = nz;
         int in_water = block_is_water(flat_get_block((int)floorf(p->x), (int)floorf(p->y), (int)floorf(p->z)));
         if (in_water) {
@@ -6749,7 +6887,11 @@ static void update_projectiles(void) {
         } else {
             p->mx *= 0.99f; p->my *= 0.99f; p->mz *= 0.99f;
         }
-        p->my -= (p->type == FLAT_PROJECTILE_XP_BOTTLE) ? 0.07f : 0.05f;
+        if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) {
+            /* fireballs fly mostly straight in 1.2.5 */
+        } else {
+            p->my -= (p->type == FLAT_PROJECTILE_XP_BOTTLE) ? 0.07f : 0.05f;
+        }
         if (p->y < -32.0f || p->age > 1200) p->active = 0;
     }
 }

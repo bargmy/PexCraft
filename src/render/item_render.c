@@ -166,6 +166,7 @@ static int spawn_egg_color(int damage, int layer) {
         case 50: return layer == 0 ? 894731 : 0;
         case 51: return layer == 0 ? 12698049 : 4802889;
         case 52: return layer == 0 ? 3419431 : 11013646;
+        case 53: return layer == 0 ? 0x00AFAF : 0x003030;
         case 54: return layer == 0 ? 0x00AFAF : 7969893;
         case 55: return layer == 0 ? 5349438 : 8306542;
         case 56: return layer == 0 ? 16382457 : 12369084;
@@ -175,6 +176,7 @@ static int spawn_egg_color(int damage, int layer) {
         case 60: return layer == 0 ? 7237230 : 3158064;
         case 61: return layer == 0 ? 16167425 : 16775294;
         case 62: return layer == 0 ? 3407872 : 16579584;
+        case 63: return layer == 0 ? 0x0B0B0B : 0x8B00FF;
         case 90: return layer == 0 ? 15771042 : 14377823;
         case 91: return layer == 0 ? 15198183 : 16758197;
         case 92: return layer == 0 ? 4470310 : 10592673;
@@ -182,7 +184,9 @@ static int spawn_egg_color(int damage, int layer) {
         case 94: return layer == 0 ? 2243405 : 7375001;
         case 95: return layer == 0 ? 14144467 : 13545366;
         case 96: return layer == 0 ? 10489616 : 12040119;
+        case 97: return layer == 0 ? 0xEEEEEE : 0xF37B00;
         case 98: return layer == 0 ? 15720061 : 5653556;
+        case 99: return layer == 0 ? 0xC8C8C8 : 0x776B5E;
         case 120: return layer == 0 ? 5651507 : 12422002;
         default: return 0xFFFFFF;
     }
@@ -1145,6 +1149,7 @@ static const char *spawn_egg_entity_name(int damage) {
         case 50: return tr_key_default("entity.Creeper.name", "Creeper");
         case 51: return tr_key_default("entity.Skeleton.name", "Skeleton");
         case 52: return tr_key_default("entity.Spider.name", "Spider");
+        case 53: return tr_key_default("entity.Giant.name", "Giant");
         case 54: return tr_key_default("entity.Zombie.name", "Zombie");
         case 55: return tr_key_default("entity.Slime.name", "Slime");
         case 56: return tr_key_default("entity.Ghast.name", "Ghast");
@@ -1154,6 +1159,7 @@ static const char *spawn_egg_entity_name(int damage) {
         case 60: return tr_key_default("entity.Silverfish.name", "Silverfish");
         case 61: return tr_key_default("entity.Blaze.name", "Blaze");
         case 62: return tr_key_default("entity.LavaSlime.name", "Magma Cube");
+        case 63: return tr_key_default("entity.EnderDragon.name", "Ender Dragon");
         case 90: return tr_key_default("entity.Pig.name", "Pig");
         case 91: return tr_key_default("entity.Sheep.name", "Sheep");
         case 92: return tr_key_default("entity.Cow.name", "Cow");
@@ -1161,7 +1167,9 @@ static const char *spawn_egg_entity_name(int damage) {
         case 94: return tr_key_default("entity.Squid.name", "Squid");
         case 95: return tr_key_default("entity.Wolf.name", "Wolf");
         case 96: return tr_key_default("entity.MushroomCow.name", "Mooshroom");
+        case 97: return tr_key_default("entity.SnowMan.name", "Snow Golem");
         case 98: return tr_key_default("entity.Ozelot.name", "Ocelot");
+        case 99: return tr_key_default("entity.VillagerGolem.name", "Iron Golem");
         case 120: return tr_key_default("entity.Villager.name", "Villager");
         default: return NULL;
     }
