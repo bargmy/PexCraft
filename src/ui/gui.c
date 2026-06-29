@@ -288,8 +288,8 @@ static void draw_profile_debug_panel(void) {
     {
         int edit_age = g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick;
         if (edit_age < 0 || edit_age > 999) edit_age = 999;
-        snprintf(line, sizeof(line), "Edit mesh boost age %d  night overlay %.2f",
-                 edit_age, world_dark_overlay_alpha());
+        snprintf(line, sizeof(line), "Edit mesh boost age %d  lightmap dark %.2f",
+                 edit_age, world_lightmap_dark_factor());
         draw_text(line, right_x, ry, edit_age <= 12 ? 0xFFFF80 : 14737632); ry += 10;
     }
     snprintf(line, sizeof(line), "Generated preload batch %d %d/%d light settle %d/%d/%d p%d",

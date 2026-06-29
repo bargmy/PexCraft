@@ -1071,14 +1071,18 @@ typedef struct FlatDirectMeshBuilder {
     uint32_t icount, icap;
     int quad_cursor;
     uint32_t color;
+    uint32_t light;
+    int light_resolved;
 } FlatDirectMeshBuilder;
 
 typedef struct FlatGLCpuMesh {
     PexVertex *v;
+    PexVertex *lit_v;
     uint32_t *i;
     uint32_t vcount, icount;
     GLuint list;
     unsigned int version;
+    unsigned int lit_lightmap_version;
     int origin_x, origin_z;
     int valid;
 } FlatGLCpuMesh;
@@ -1141,11 +1145,39 @@ static uint32_t flat_pack_rgba4f(float r, float g, float b, float a) {
     return ((uint32_t)ri) | ((uint32_t)gi << 8) | ((uint32_t)bi << 16) | ((uint32_t)ai << 24);
 }
 
+static uint32_t flat_fullbright_packed_light(void) {
+    return (15u << 20) | (15u << 4);
+}
+
+static uint32_t flat_apply_lightmap_to_color(uint32_t rgba, uint32_t packed_light) {
+    float lr, lg, lb;
+    flat_lightmap_color((int)packed_light, &lr, &lg, &lb);
+    int r = (int)((float)(rgba & 255u) * lr + 0.5f);
+    int g = (int)((float)((rgba >> 8) & 255u) * lg + 0.5f);
+    int b = (int)((float)((rgba >> 16) & 255u) * lb + 0.5f);
+    int a = (int)((rgba >> 24) & 255u);
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    return ((uint32_t)r) | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+}
+
 static void flat_direct_set_color4f(float r, float g, float b, float a) {
     if (g_flat_direct_builder) {
         g_flat_direct_builder->color = flat_pack_rgba4f(r, g, b, a);
     } else {
         glColor4f(r, g, b, a);
+    }
+}
+
+static void flat_direct_set_color_light4f(float r, float g, float b, float a, uint32_t packed_light) {
+    if (g_flat_direct_builder) {
+        g_flat_direct_builder->color = flat_pack_rgba4f(r, g, b, a);
+        g_flat_direct_builder->light = packed_light;
+    } else {
+        float lr, lg, lb;
+        flat_lightmap_color((int)packed_light, &lr, &lg, &lb);
+        flat_direct_set_color4f(r * lr, g * lg, b * lb, a);
     }
 }
 
@@ -1313,6 +1345,7 @@ static int flat_direct_reserve(FlatDirectMeshBuilder *b, uint32_t add_v, uint32_
 static void flat_direct_begin(FlatDirectMeshBuilder *b) {
     memset(b, 0, sizeof(*b));
     b->color = flat_pack_rgba4f(1.0f, 1.0f, 1.0f, 1.0f);
+    b->light = flat_fullbright_packed_light();
     g_flat_direct_builder = b;
     pex_gl_suppress_immediate(1);
 }
@@ -1382,6 +1415,7 @@ static void flat_direct_vertex(float x, float y, float z, float u, float v) {
     b->v[idx].x = x; b->v[idx].y = y; b->v[idx].z = z;
     b->v[idx].u = u; b->v[idx].v = v;
     b->v[idx].color = b->color;
+    b->v[idx].light = b->light;
     b->quad_cursor++;
     if (b->quad_cursor == 4) {
         uint32_t q0 = idx - 3, q1 = idx - 2, q2 = idx - 1, q3 = idx;
@@ -1441,7 +1475,10 @@ static int flat_display_lists_supported(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
     return 0;
 #else
-    return !flat_direct_backend();
+    /* Cached display lists bake glColor calls, so they cannot follow Java's
+       dynamic lightmap without rebuilding.  Keep async OpenGL terrain in CPU
+       vertex arrays and re-resolve packed sky/block light at draw time. */
+    return 0;
 #endif
 }
 
@@ -1459,7 +1496,8 @@ static GLuint gl_compile_flat_mesh_list(const FlatDirectMeshBuilder *b) {
         uint32_t vi = b->i[n];
         if (vi >= b->vcount) continue;
         const PexVertex *v = &b->v[vi];
-        const unsigned char *c = (const unsigned char*)&v->color;
+        uint32_t color = flat_apply_lightmap_to_color(v->color, v->light);
+        const unsigned char *c = (const unsigned char*)&color;
         glColor4ub(c[0], c[1], c[2], c[3]);
         glTexCoord2f(v->u, v->v);
         glVertex3f(v->x, v->y, v->z);
@@ -1476,8 +1514,17 @@ static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
     if (m->list && flat_display_lists_supported()) glDeleteLists(m->list, 1);
 #endif
     free(m->v);
+    free(m->lit_v);
     free(m->i);
     memset(m, 0, sizeof(*m));
+}
+
+static void flat_direct_resolve_builder_lightmap(FlatDirectMeshBuilder *b) {
+    if (!b || !b->v || b->light_resolved) return;
+    for (uint32_t i = 0; i < b->vcount; ++i) {
+        b->v[i].color = flat_apply_lightmap_to_color(b->v[i].color, b->v[i].light);
+    }
+    b->light_resolved = 1;
 }
 
 static void flat_cpu_mesh_free_all(void) {
@@ -1618,6 +1665,20 @@ static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
            g_flat_section_mesh_light_version[sy][cz][cx] == g_flat_chunk_light_version[cz][cx];
 }
 
+static void flat_gl_cpu_mesh_refresh_lightmap(FlatGLCpuMesh *m) {
+    if (!m || !m->valid || !m->v || m->vcount == 0) return;
+    unsigned int version = flat_current_lightmap_version();
+    if (m->lit_v && m->lit_lightmap_version == version) return;
+    PexVertex *nv = (PexVertex*)realloc(m->lit_v, (size_t)m->vcount * sizeof(PexVertex));
+    if (!nv) return;
+    m->lit_v = nv;
+    for (uint32_t i = 0; i < m->vcount; ++i) {
+        m->lit_v[i] = m->v[i];
+        m->lit_v[i].color = flat_apply_lightmap_to_color(m->v[i].color, m->v[i].light);
+    }
+    m->lit_lightmap_version = version;
+}
+
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
 static GLushort *g_flat_android_index16_tmp = NULL;
 static uint32_t g_flat_android_index16_cap = 0;
@@ -1633,7 +1694,7 @@ static int flat_android_ensure_index16_tmp(uint32_t count) {
     return 1;
 }
 
-static void flat_gl_draw_cpu_mesh_android16(const FlatGLCpuMesh *m) {
+static void flat_gl_draw_cpu_mesh_android16(FlatGLCpuMesh *m) {
     /* Android GLES2 cannot draw GL_UNSIGNED_INT indices natively.  The shim has
        a fast path for 16-bit indices, but falls back to allocating/duplicating
        every indexed vertex when a section references more than 65535 vertices.
@@ -1641,6 +1702,7 @@ static void flat_gl_draw_cpu_mesh_android16(const FlatGLCpuMesh *m) {
        the mesh into triangle windows, rebase each window to zero, and feed the
        GLES2 fast path with GL_UNSIGNED_SHORT. */
     const uint32_t max_window_vertices = 65535u;
+    const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
     uint32_t tri = 0;
     while (tri + 2u < m->icount) {
         uint32_t first = tri;
@@ -1674,7 +1736,7 @@ static void flat_gl_draw_cpu_mesh_android16(const FlatGLCpuMesh *m) {
             g_flat_android_index16_tmp[i] = (GLushort)(idx - min_idx);
         }
 
-        const PexVertex *base = &m->v[min_idx];
+        const PexVertex *base = &draw_v[min_idx];
         glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&base[0].x);
         glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&base[0].u);
         glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&base[0].color);
@@ -1683,27 +1745,26 @@ static void flat_gl_draw_cpu_mesh_android16(const FlatGLCpuMesh *m) {
 }
 #endif
 
-static void flat_gl_draw_cpu_mesh(const FlatGLCpuMesh *m) {
+static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
 #if defined(PEX_PLATFORM_PSP)
     (void)m;
     /* PSP uses the direct PexRendererBackend mesh path.  The OpenGL client-array
        fallback is desktop-only and pspsdk does not define GL client-array APIs. */
 #else
     if (!m || !m->valid || m->icount < 3) return;
-    if (m->list && flat_display_lists_supported()) {
-        glCallList(m->list);
-        return;
-    }
+    if (m->list && flat_display_lists_supported()) { glCallList(m->list); return; }
     if (!m->v || !m->i) return;
+    flat_gl_cpu_mesh_refresh_lightmap(m);
+    const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
     flat_gl_draw_cpu_mesh_android16(m);
 #else
-    glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&m->v[0].x);
-    glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&m->v[0].u);
-    glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&m->v[0].color);
+    glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&draw_v[0].x);
+    glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&draw_v[0].u);
+    glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&draw_v[0].color);
     glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)m->i);
 #endif
     glDisableClientState(GL_COLOR_ARRAY);
@@ -1741,6 +1802,7 @@ static void flat_direct_upload_builder(int sy, int cz, int cx, int pass, FlatDir
         if (rb && *slot) { rb->destroy_mesh(*slot); *slot = 0; }
         return;
     }
+    flat_direct_resolve_builder_lightmap(b);
     PexMesh mesh;
     memset(&mesh, 0, sizeof(mesh));
     mesh.vertices = b->v;
@@ -1778,24 +1840,22 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
 
 static void world_set_shade(float shade) {
     if (g_force_fullbright_item_model) {
-        flat_direct_set_color4f(shade, shade, shade, 1.0f);
+        flat_direct_set_color_light4f(shade, shade, shade, 1.0f, flat_fullbright_packed_light());
         return;
     }
-    float lr, lg, lb;
-    flat_light_color(g_world_light_x, g_world_light_y, g_world_light_z, &lr, &lg, &lb);
-    flat_direct_set_color4f(lr * shade, lg * shade, lb * shade, 1.0f);
+    flat_direct_set_color_light4f(shade, shade, shade, 1.0f,
+                                  (uint32_t)flat_pack_sky_block_light(g_world_light_x, g_world_light_y, g_world_light_z, 0));
 }
 
 static void world_set_color_shade(int rgb, float shade) {
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
     float b = (rgb & 255) / 255.0f;
+    uint32_t packed = flat_fullbright_packed_light();
     if (!g_force_fullbright_item_model) {
-        float lr, lg, lb;
-        flat_light_color(g_world_light_x, g_world_light_y, g_world_light_z, &lr, &lg, &lb);
-        r *= lr; g *= lg; b *= lb;
+        packed = (uint32_t)flat_pack_sky_block_light(g_world_light_x, g_world_light_y, g_world_light_z, 0);
     }
-    flat_direct_set_color4f(r * shade, g * shade, b * shade, 1.0f);
+    flat_direct_set_color_light4f(r * shade, g * shade, b * shade, 1.0f, packed);
 }
 
 static void world_tex_vertex(float x, float y, float z, float u, float v) {
@@ -3342,26 +3402,26 @@ static int world_face_tint_rgb(int id, int face) {
     return 0xFFFFFF;
 }
 
-static float world_ao_cell_brightness(int x, int y, int z) {
-    /* Smooth block lighting now follows the Java mixed-light path in
-       flat_light_brightness(): Sky and Block are kept separate until the final
-       CPU-baked brightness lookup. */
-    return flat_light_brightness(x, y, z);
+static uint32_t world_ao_cell_mixed_brightness(int x, int y, int z) {
+    return (uint32_t)flat_pack_sky_block_light(x, y, z, 0);
 }
 
 static int world_ao_cell_is_normal_cube(int x, int y, int z) {
     return block_occludes_render_face(flat_get_block(x, y, z));
 }
 
-static float world_ao_cell_value(int x, int y, int z, float fallback_brightness, int *blocks_grass) {
+static float world_ao_cell_value(int x, int y, int z, int *blocks_grass) {
     int id = flat_get_block(x, y, z);
     int can_block_grass = flat_block_can_block_grass_java(id);
     if (blocks_grass) *blocks_grass = !can_block_grass;
-    /* Java Block.getAmbientOcclusionLightValue(): normal cube = 0.2F,
-       non-normal cube = 1.0F.  Because this renderer does not yet carry both
-       separate AO value and packed light per vertex, multiply that AO factor by
-       the Java-derived brightness sample as the closest CPU-baked equivalent. */
-    return world_ao_cell_brightness(x, y, z) * (world_ao_cell_is_normal_cube(x, y, z) ? 0.2f : 1.0f);
+    return world_ao_cell_is_normal_cube(x, y, z) ? 0.2f : 1.0f;
+}
+
+static uint32_t world_ao_mix_brightness(uint32_t a, uint32_t b, uint32_t c, uint32_t fallback) {
+    if (a == 0) a = fallback;
+    if (b == 0) b = fallback;
+    if (c == 0) c = fallback;
+    return ((a + b + c + fallback) >> 2) & 0x00FF00FFu;
 }
 
 static int smooth_block_lighting_enabled(int id) {
@@ -3417,17 +3477,18 @@ static void world_face_sample_frame(int face,
     }
 }
 
-static void world_smooth_face_lights(int x, int y, int z, int face, float out[4]) {
+static void world_smooth_face_lights(int x, int y, int z, int face, float ao_out[4], uint32_t light_out[4]) {
     int nx, ny, nz, ax, ay, az, bx, by, bz;
     int corner_a[4], corner_b[4];
-    float samples[3][3];
+    float ao_samples[3][3];
+    uint32_t light_samples[3][3];
     int blocks_grass[3][3];
     world_face_sample_frame(face, &nx, &ny, &nz, &ax, &ay, &az, &bx, &by, &bz, corner_a, corner_b);
 
     int base_x = x + nx;
     int base_y = y + ny;
     int base_z = z + nz;
-    float fallback_brightness = world_ao_cell_brightness(base_x, base_y, base_z);
+    uint32_t fallback_light = world_ao_cell_mixed_brightness(base_x, base_y, base_z);
     for (int ia = 0; ia < 3; ++ia) {
         for (int ib = 0; ib < 3; ++ib) {
             int da = ia - 1;
@@ -3435,7 +3496,8 @@ static void world_smooth_face_lights(int x, int y, int z, int face, float out[4]
             int sx = base_x + da * ax + db * bx;
             int sy = base_y + da * ay + db * by;
             int sz = base_z + da * az + db * bz;
-            samples[ia][ib] = world_ao_cell_value(sx, sy, sz, fallback_brightness, &blocks_grass[ia][ib]);
+            ao_samples[ia][ib] = world_ao_cell_value(sx, sy, sz, &blocks_grass[ia][ib]);
+            light_samples[ia][ib] = world_ao_cell_mixed_brightness(sx, sy, sz);
         }
     }
 
@@ -3446,18 +3508,21 @@ static void world_smooth_face_lights(int x, int y, int z, int face, float out[4]
            the two side cells is passable-to-grass.  If both side cells block
            grass, reuse the side sample to avoid diagonal light leaking through
            a solid corner. */
-        float diag = (blocks_grass[ia][1] && blocks_grass[1][ib]) ? samples[ia][1] : samples[ia][ib];
-        out[i] = (samples[1][1] + samples[ia][1] + samples[1][ib] + diag) * 0.25f;
+        int use_side_diag = (blocks_grass[ia][1] && blocks_grass[1][ib]) ? 1 : 0;
+        float diag_ao = use_side_diag ? ao_samples[ia][1] : ao_samples[ia][ib];
+        uint32_t diag_light = use_side_diag ? light_samples[ia][1] : light_samples[ia][ib];
+        ao_out[i] = (ao_samples[1][1] + ao_samples[ia][1] + ao_samples[1][ib] + diag_ao) * 0.25f;
+        light_out[i] = world_ao_mix_brightness(diag_light, light_samples[ia][1], light_samples[1][ib], fallback_light);
     }
 }
 
 static void world_tex_vertex_lit(float x, float y, float z, float u, float v,
-                                 int rgb, float face_shade, float light) {
+                                 int rgb, float face_shade, float ao, uint32_t packed_light) {
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
     float b = (rgb & 255) / 255.0f;
-    float shade = face_shade * light;
-    flat_direct_set_color4f(r * shade, g * shade, b * shade, 1.0f);
+    float shade = face_shade * ao;
+    flat_direct_set_color_light4f(r * shade, g * shade, b * shade, 1.0f, packed_light);
     world_tex_vertex(x, y, z, u, v);
 }
 
@@ -3842,28 +3907,29 @@ static void emit_grass_side_overlay_face(int x, int y, int z, int face) {
     terrain_tile_uv(38, &u0, &v0, &u1, &v1);
 
     if (smooth_block_lighting_enabled(BLOCK_GRASS)) {
-        float light[4];
-        world_smooth_face_lights(x, y, z, face, light);
+        float ao[4];
+        uint32_t light[4];
+        world_smooth_face_lights(x, y, z, face, ao, light);
         if (face == 2) {
-            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 3) {
-            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 4) {
-            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 5) {
-            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, ao[3], light[3]);
         }
         return;
     }
@@ -3898,40 +3964,41 @@ static void emit_world_block_face_at(int id, int x, int y, int z, int face) {
     world_face_style_at(id, x, y, z, face, &tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     if (smooth_block_lighting_enabled(id)) {
-        float light[4];
+        float ao[4];
+        uint32_t light[4];
         int rgb = world_face_tint_rgb(id, face);
         float shade = world_face_base_shade(face);
-        world_smooth_face_lights(x, y, z, face, light);
+        world_smooth_face_lights(x, y, z, face, ao, light);
         if (face == 1) {
-            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x1, y1, z1, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x0, y1, z1, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y1, z1, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y1, z1, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 0) {
-            world_tex_vertex_lit(x0, y0, z1, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x1, y0, z1, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x0, y0, z1, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y0, z1, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 2) {
-            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 3) {
-            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 4) {
-            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
         } else if (face == 5) {
-            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, light[0]);
-            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, light[1]);
-            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, light[2]);
-            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, light[3]);
+            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, ao[3], light[3]);
         }
         return;
     }
@@ -5038,8 +5105,6 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
     int chunk_has_liquid = 0;
     int chunk_has_cutout = 0;
     int chunk_has_special = 0;
-    int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 1;
 
     glNewList(g_flat_world_chunk_lists[cz][cx], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -5143,7 +5208,6 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
     g_flat_world_chunk_dirty[cz][cx] = 0;
     g_flat_world_chunk_valid[cz][cx] = 1;
     g_flat_world_chunk_has_liquid[cz][cx] = chunk_has_liquid && flat_separate_liquid_pass_enabled();
-    g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
 
 
@@ -5291,8 +5355,6 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     FlatDirectMeshBuilder mb0, mb1;
-    int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 1;
 
     flat_direct_begin(&mb0);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -5371,7 +5433,6 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
         if (g_flat_direct_capture_skip0) *g_flat_direct_capture_skip0 = !has0;
         if (g_flat_direct_capture_skip1) *g_flat_direct_capture_skip1 = !(has1 && flat_separate_liquid_pass_enabled());
         g_flat_direct_capture_success = 1;
-        g_flat_bake_stable_mesh_light = old_stable_mesh_light;
         return;
     }
 
@@ -5386,7 +5447,6 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
     g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && flat_separate_liquid_pass_enabled());
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
-    g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
 
 static void rebuild_flat_section_list(int sy, int cx, int cz) {
@@ -5407,8 +5467,6 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
     if (y1 > FLAT_WORLD_Y_MAX) y1 = FLAT_WORLD_Y_MAX;
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
-    int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 1;
 
     glNewList(g_flat_section_lists[sy][cz][cx][0], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -5510,7 +5568,6 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
     g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && flat_separate_liquid_pass_enabled());
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
-    g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
 
 
@@ -5700,6 +5757,8 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
             double upload_worker_start = now_seconds();
             if (pex_using_d3d11()) {
                 int ok0 = 1, ok1 = 1;
+                flat_direct_resolve_builder_lightmap(&r.mb0);
+                flat_direct_resolve_builder_lightmap(&r.mb1);
                 if (!r.skip0 && r.mb0.vcount > 0 && r.mb0.icount > 0) {
                     PexMesh mesh; memset(&mesh, 0, sizeof(mesh));
                     mesh.vertices = r.mb0.v; mesh.indices = r.mb0.i;
@@ -6140,28 +6199,6 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
     return count;
 }
 
-static void flat_repair_visible_chunk_lighting(const FlatRenderSectionRef *refs, int count) {
-    if (!refs || count <= 0) return;
-    unsigned char checked[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    memset(checked, 0, sizeof(checked));
-    int streaming = stream_generation_active() ? 1 : 0;
-    int check_budget = streaming ? 4 : 12;
-    int repair_budget = streaming ? 1 : 2;
-    int checks = 0;
-    int repairs = 0;
-
-    for (int i = 0; i < count && checks < check_budget && repairs < repair_budget; ++i) {
-        int cx = refs[i].cx;
-        int cz = refs[i].cz;
-        if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS) continue;
-        if (checked[cz][cx]) continue;
-        checked[cz][cx] = 1;
-        checks++;
-        if (!g_flat_world_chunk_generated[cz][cx]) continue;
-        if (flat_repair_missing_light(cx, cz)) repairs++;
-    }
-}
-
 static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
     double self_heal_start = profile_begin();
     if (!refs || count <= 0) {
@@ -6286,7 +6323,6 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         g_prof_mesh_results_last = 0;
     }
 
-    flat_repair_visible_chunk_lighting(refs, count);
     flat_self_heal_visible_sections(refs, count);
     int recent_edit = (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) >= 0 &&
                       (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) <= 12;
@@ -6313,9 +6349,10 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         if (!flat_chunk_light_ready(cx, cz)) continue;
         int needs = 0;
+        int light_stale = (g_flat_section_mesh_light_version[sy][cz][cx] != g_flat_chunk_light_version[cz][cx]);
 
         if (async_mesh) {
-            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
+            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx] || light_stale) {
                 needs = 1;
             } else if (direct) {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) needs = 1;
@@ -6325,7 +6362,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                 else if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) needs = 1;
             }
         } else if (direct) {
-            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
+            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx] || light_stale) {
                 needs = 1;
             } else if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) {
                 needs = 1;
@@ -6335,7 +6372,8 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         } else {
             if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
                 g_flat_section_lists[sy][cz][cx][1] == 0 ||
-                g_flat_section_dirty[sy][cz][cx]) {
+                g_flat_section_dirty[sy][cz][cx] ||
+                light_stale) {
                 needs = 1;
             }
         }
@@ -7193,7 +7231,6 @@ static void draw_in_block_overlay(void) {
 
     glColor4f(1, 1, 1, 1);
 }
-
 
 
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD

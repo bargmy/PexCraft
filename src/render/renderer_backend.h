@@ -19,6 +19,10 @@ typedef struct PexVertex {
     /* Packed as memory RGBA for D3D11 DXGI_FORMAT_R8G8B8A8_UNORM:
        value = r | (g << 8) | (b << 16) | (a << 24). */
     uint32_t color;
+    /* Java mixed brightness packed as (sky << 20) | (block << 4).
+       Backends that cannot apply the lightmap dynamically ignore this field and
+       receive a CPU-lit color at upload time. */
+    uint32_t light;
 } PexVertex;
 
 typedef struct PexMesh {

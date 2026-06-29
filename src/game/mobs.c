@@ -960,8 +960,12 @@ static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int
         passive_spawn_y_cache_put(type, cat, x, z, -9999);
         return -9999;
     }
-    if (!flat_repair_missing_light_at_block(x, z) &&
-        passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) {
+    if (flat_sky_light_needs_rebuild_at_block(x, z)) {
+        flat_queue_light_repair_at_block(x, z);
+        passive_spawn_y_cache_put(type, cat, x, z, -9999);
+        return -9999;
+    }
+    if (passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) {
         ++g_prof_mob_spawn_probe_hits_last;
         return cached_y;
     }
