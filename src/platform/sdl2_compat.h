@@ -140,6 +140,7 @@ typedef char WCHAR;
 
 /* Virtual-key constants kept so options.txt and input code remain compatible. */
 #define VK_LBUTTON 0x01
+#define VK_RBUTTON 0x02
 #define VK_BACK 0x08
 #define VK_TAB 0x09
 #define VK_RETURN 0x0D
