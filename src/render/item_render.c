@@ -678,8 +678,7 @@ static int item_terrain_tile_has_pixels(int tile) {
 }
 
 static int item_chest_icon_tile(void) {
-    if (strcmp(g_current_texpack, CLASSIC_PACK_NAME) == 0) return 27;
-    return (item_terrain_tile_has_pixels(25) && item_terrain_tile_has_pixels(27)) ? 27 : 70;
+    return chest_front_tile();
 }
 
 static int item_water_tile(void) { return item_terrain_tile_has_pixels(205) ? 205 : 14; }

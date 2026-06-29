@@ -429,6 +429,14 @@ static int player_can_sprint_125(void) {
     return player_is_creative() || g_player_food_level > 6;
 }
 
+static int player_is_using_bow_125(void) {
+    return g_bow_item_in_use;
+}
+
+static int player_bow_use_duration_125(void) {
+    return g_bow_item_in_use ? g_bow_use_ticks : 0;
+}
+
 static float player_fov_target_multiplier_125(void) {
     /* EntityPlayerSP.getFOVMultiplier(): flying widens by 1.1 and sprinting
        comes from landMovementFactor/speedOnGround = 1.3. */
@@ -436,6 +444,12 @@ static float player_fov_target_multiplier_125(void) {
     if (g_creative_flying) m *= 1.1f;
     float speed_ratio = g_player_sprinting ? 1.3f : 1.0f;
     m *= (speed_ratio + 1.0f) * 0.5f;
+    if (player_is_using_bow_125()) {
+        float draw = (float)player_bow_use_duration_125() / 20.0f;
+        if (draw > 1.0f) draw = 1.0f;
+        else draw *= draw;
+        m *= 1.0f - draw * 0.15f;
+    }
     return m;
 }
 
@@ -448,22 +462,8 @@ static float player_fov_multiplier_125(void) {
 }
 
 static void pex_update_time_light_bucket(void) {
-    static int last_sub = -1;
     int sub = flat_skylight_subtracted();
     g_prof_skylight_subtracted_last = sub;
-    if (last_sub < 0) {
-        last_sub = sub;
-        return;
-    }
-    if (sub != last_sub) {
-        /* Java 1.2.5 updates a dynamic lightmap here.  This renderer still bakes
-           the lightmap into section vertices, so rebuild section colors when the
-           Java skylightSubtracted bucket changes.  Keep old section meshes valid
-           while replacements are prepared; this avoids the visible chunk reload
-           that happened when the old path invalidated every renderer. */
-        flat_mark_all_sections_dirty();
-        last_sub = sub;
-    }
 }
 
 static void ingame_tick(void) {
@@ -475,7 +475,6 @@ static void ingame_tick(void) {
     g_world_time++;
     prof_part = profile_begin();
     pex_update_time_light_bucket();
-    flat_service_daylight_mesh_dirty_budget(PEX_DAYLIGHT_DIRTY_CHUNK_BUDGET);
     profile_add_time(PROF_DAYLIGHT_MESH, prof_part);
     if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
@@ -547,8 +546,10 @@ static void ingame_tick(void) {
     g_break_swing_holding = 0;
     g_prev_hand_swing = g_hand_swing;
     if (input_active) {
+        g_right_use_button_down = key_down_vk(VK_RBUTTON);
         update_breaking();
     } else {
+        g_right_use_button_down = 0;
         reset_breaking_state();
         g_block_hit_delay = 0;
     }
@@ -617,6 +618,7 @@ static void ingame_tick(void) {
 
     player_potion_update_tick();
     update_held_map_item_tick();
+    update_bow_item_use_tick();
 
     g_player_prev_x = g_player_x;
     g_player_prev_y = g_player_y;

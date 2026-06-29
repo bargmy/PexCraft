@@ -154,7 +154,8 @@ static void load_options(void) {
     if (g_opts.render_distance > 32) g_opts.render_distance = 32;
     if (g_opts.max_fps < 0) g_opts.max_fps = 0;
     if (g_opts.max_fps > MAX_FPS_CAP) g_opts.max_fps = MAX_FPS_CAP;
-    if (g_opts.fov < 30.0f) g_opts.fov = 30.0f;
+    if (g_opts.fov <= 1.0f) g_opts.fov = 70.0f + g_opts.fov * 40.0f;
+    if (g_opts.fov < 70.0f) g_opts.fov = 70.0f;
     if (g_opts.fov > 110.0f) g_opts.fov = 110.0f;
     if (g_opts.renderer_backend < 0 || g_opts.renderer_backend >= RENDERER_COUNT) g_opts.renderer_backend = RENDERER_OPENGL;
 #ifdef PEX_PLATFORM_PSP
@@ -195,7 +196,12 @@ static void save_options(void) {
     fprintf(f, "bobView:%s\n", g_opts.view_bobbing ? "true" : "false");
     fprintf(f, "anaglyph3d:%s\n", g_opts.anaglyph ? "true" : "false");
     fprintf(f, "maxFps:%d\n", g_opts.max_fps);
-    fprintf(f, "fov:%g\n", g_opts.fov);
+    {
+        float fov_setting = (g_opts.fov - 70.0f) / 40.0f;
+        if (fov_setting < 0.0f) fov_setting = 0.0f;
+        if (fov_setting > 1.0f) fov_setting = 1.0f;
+        fprintf(f, "fov:%g\n", fov_setting);
+    }
     fprintf(f, "difficulty:%d\n", g_opts.difficulty);
     fprintf(f, "fancyGraphics:%s\n", g_opts.fancy_graphics ? "true" : "false");
     fprintf(f, "fullscreen:%s\n", g_opts.fullscreen ? "true" : "false");
@@ -229,9 +235,9 @@ static float get_option_float(OptionId opt) {
     }
     if (opt == OPT_FOV) {
         float fov = g_opts.fov;
-        if (fov < 30.0f) fov = 30.0f;
+        if (fov < 70.0f) fov = 70.0f;
         if (fov > 110.0f) fov = 110.0f;
-        return (fov - 30.0f) / 80.0f;
+        return (fov - 70.0f) / 40.0f;
     }
     if (opt == OPT_LIMIT_FRAMERATE) {
         if (g_opts.max_fps <= 0) return 1.0f;
@@ -255,7 +261,7 @@ static void set_option_float(OptionId opt, float v) {
     else if (opt == OPT_SOUND) g_opts.sound = v;
     else if (opt == OPT_SENSITIVITY) g_opts.sensitivity = v;
     else if (opt == OPT_RENDER_DISTANCE) g_opts.render_distance = 2 + (int)(v * 30.0f + 0.5f);
-    else if (opt == OPT_FOV) g_opts.fov = 30.0f + v * 80.0f;
+    else if (opt == OPT_FOV) g_opts.fov = 70.0f + v * 40.0f;
     else if (opt == OPT_LIMIT_FRAMERATE) {
         if (v >= FPS_UNLIMITED_SLIDER_VALUE) {
             g_opts.max_fps = 0; /* hard-right slider stop = truly uncapped */
@@ -288,8 +294,7 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
             else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
         } else if (opt == OPT_FOV) {
             int fov = (int)(g_opts.fov + 0.5f);
-            if (fov <= 30) snprintf(out, cap, "%s: Minimum", name);
-            else if (fov == 70) snprintf(out, cap, "%s: Normal", name);
+            if (fov <= 70) snprintf(out, cap, "%s: Minimum", name);
             else if (fov >= 110) snprintf(out, cap, "%s: Quake Pro", name);
             else snprintf(out, cap, "%s: %d", name, fov);
         } else {
@@ -404,4 +409,3 @@ static const char *key_name(int vk, char *buf, size_t cap) {
     snprintf(buf, cap, "%d", vk);
     return buf;
 }
-

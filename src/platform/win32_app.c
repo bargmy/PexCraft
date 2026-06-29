@@ -216,6 +216,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             return 0;
         }
         case WM_RBUTTONUP:
+            mouse_right_up(g_mouse_x, g_mouse_y);
             ReleaseCapture();
             return 0;
         case WM_MOUSEWHEEL:

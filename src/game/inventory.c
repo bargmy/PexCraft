@@ -406,7 +406,6 @@ static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int orig
 static int stream_local_chunk_x(int wcx);
 static int stream_local_chunk_z(int wcz);
 static void flat_mark_chunks_dirty_near(int x, int z);
-static void flat_mark_all_sections_dirty(void);
 static void flat_mark_sections_dirty_near_block(int x, int y, int z);
 static void flat_mark_generated_section(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty(int cx, int cz, int sy);
@@ -2065,55 +2064,6 @@ static void flat_note_section_mesh_changed(int sy, int cz, int cx) {
     g_flat_section_mesh_building[sy][cz][cx] = 0;
 }
 
-/* Day/night skylightSubtracted can change frequently around sunrise/sunset.
-   Rebuilding every generated section synchronously here was one of the hidden
-   CPU stalls inside Ingame tick: flat_mark_all_sections_dirty() scanned every
-   block in every generated chunk to refresh occupancy, then dirtied all meshes
-   at once.  Instead queue an incremental daylight re-tint pass.  Block edits
-   still use the immediate dirty path; only global light-bucket color changes are
-   amortized. */
-static int g_flat_daylight_dirty_pending = 0;
-static int g_flat_daylight_dirty_cx = 0;
-static int g_flat_daylight_dirty_cz = 0;
-#define PEX_DAYLIGHT_DIRTY_CHUNK_BUDGET 8
-
-static void flat_service_daylight_mesh_dirty_budget(int chunk_budget) {
-    int touched = 0;
-    if (!g_flat_daylight_dirty_pending) {
-        g_prof_daylight_dirty_pending = 0;
-        g_prof_daylight_dirty_chunks_last = 0;
-        return;
-    }
-    if (chunk_budget <= 0) chunk_budget = 1;
-    while (g_flat_daylight_dirty_pending && touched < chunk_budget) {
-        if (g_flat_daylight_dirty_cz >= FLAT_RENDER_CHUNKS) {
-            g_flat_daylight_dirty_pending = 0;
-            g_flat_daylight_dirty_cz = 0;
-            g_flat_daylight_dirty_cx = 0;
-            break;
-        }
-        int cx = g_flat_daylight_dirty_cx;
-        int cz = g_flat_daylight_dirty_cz;
-        g_flat_daylight_dirty_cx++;
-        if (g_flat_daylight_dirty_cx >= FLAT_RENDER_CHUNKS) {
-            g_flat_daylight_dirty_cx = 0;
-            g_flat_daylight_dirty_cz++;
-        }
-        if (!g_flat_world_chunk_generated[cz][cx]) continue;
-        /* Do not call flat_refresh_chunk_occupancy() here; that rescans a full
-           16x16xheight chunk.  The occupancy mask is maintained during chunk
-           install and block edits, and is good enough for daylight recolor work. */
-        unsigned short mask = g_flat_chunk_section_non_empty_mask[cz][cx];
-        if (mask == 0) continue;
-        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-            if (mask & (unsigned short)(1u << sy)) flat_mark_section_dirty(cx, cz, sy);
-        }
-        touched++;
-    }
-    g_prof_daylight_dirty_pending = g_flat_daylight_dirty_pending ? 1 : 0;
-    g_prof_daylight_dirty_chunks_last = touched;
-}
-
 static void flat_mark_all_chunks_dirty(void) {
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
         for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
@@ -2129,15 +2079,6 @@ static void flat_mark_all_chunks_dirty(void) {
     g_flat_renderer_sort_dirty = 1;
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
-}
-
-static void flat_mark_all_sections_dirty(void) {
-    /* Queue, do not synchronously rescan/remesh the whole active world. */
-    g_flat_daylight_dirty_pending = 1;
-    g_flat_daylight_dirty_cx = 0;
-    g_flat_daylight_dirty_cz = 0;
-    g_prof_daylight_dirty_pending = 1;
-    g_prof_daylight_dirty_chunks_last = 0;
 }
 
 static void flat_mark_chunks_dirty_near(int x, int z) {
@@ -5935,6 +5876,19 @@ static void consume_held_stack_one(ItemStack *held, int replacement_id) {
     }
 }
 
+static int inventory_consume_one_item_id(int id) {
+    if (player_is_creative()) return 1;
+    for (int i = 0; i < 36; ++i) {
+        ItemStack *st = &g_inventory[i];
+        if (stack_empty(st) || st->id != id) continue;
+        st->count--;
+        if (st->count <= 0) stack_clear(st);
+        g_save_dirty = 1;
+        return 1;
+    }
+    return 0;
+}
+
 static int try_eat_held_food(ItemStack *held) {
     if (!held || stack_empty(held) || g_player_dead || g_player_health <= 0) return 0;
     int food = item_food_heal_amount(held->id);
@@ -6651,7 +6605,7 @@ static void pex_spawn_xp_orb(float x, float y, float z, int value) {
     o->pickup_delay = 10;
 }
 
-static int pex_spawn_projectile(int type, int damage) {
+static int pex_spawn_projectile_with_speed(int type, int damage, float speed, int projectile_damage, int critical) {
     int slot = -1;
     for (int i = 0; i < MAX_PROJECTILE_ENTITIES; ++i) if (!g_projectiles[i].active) { slot = i; break; }
     if (slot < 0) slot = rand() % MAX_PROJECTILE_ENTITIES;
@@ -6669,17 +6623,23 @@ static int pex_spawn_projectile(int type, int damage) {
     p->owner_type = 0;
     p->owner_mob_type = 0;
     p->owner_mob_index = -1;
-    p->damage = (type == FLAT_PROJECTILE_ARROW) ? 4 : 0;
+    p->damage = projectile_damage;
+    p->critical = critical;
     p->x = p->prev_x = g_player_x + lx * 0.35f;
     p->y = p->prev_y = g_player_y - 0.10f + ly * 0.35f;
     p->z = p->prev_z = g_player_z + lz * 0.35f;
-    float speed = (type == FLAT_PROJECTILE_POTION) ? 0.50f : (type == FLAT_PROJECTILE_ARROW ? 1.50f : 0.70f);
     p->mx = lx * speed + g_player_motion_x;
     p->my = ly * speed + g_player_motion_y * 0.25f;
     p->mz = lz * speed + g_player_motion_z;
     p->yaw = atan2f(lx, lz) * 57.29578f;
     p->pitch = atan2f(ly, sqrtf(lx * lx + lz * lz)) * 57.29578f;
     return 1;
+}
+
+static int pex_spawn_projectile(int type, int damage) {
+    float speed = (type == FLAT_PROJECTILE_POTION) ? 0.50f : (type == FLAT_PROJECTILE_ARROW ? 1.50f : 0.70f);
+    int projectile_damage = (type == FLAT_PROJECTILE_ARROW) ? 4 : 0;
+    return pex_spawn_projectile_with_speed(type, damage, speed, projectile_damage, 0);
 }
 
 
@@ -6715,6 +6675,7 @@ static int pex_spawn_projectile_from_entity(int type, int owner_mob_type, int ow
     p->owner_mob_type = owner_mob_type;
     p->owner_mob_index = owner_mob_index;
     p->damage = damage;
+    p->critical = 0;
     p->x = p->prev_x = sx;
     p->y = p->prev_y = sy;
     p->z = p->prev_z = sz;
@@ -6848,11 +6809,25 @@ static int pex_projectile_passive_hit_excluding_owner(const FlatProjectile *p, f
     return 1;
 }
 
+static int pex_projectile_attack_damage_125(const FlatProjectile *p) {
+    if (!p) return 0;
+    int base = p->damage;
+    if (base <= 0 && p->type == FLAT_PROJECTILE_ARROW) base = 2;
+    if (base <= 0) return 0;
+    int damage = base;
+    if (p->type == FLAT_PROJECTILE_ARROW) {
+        float speed = sqrtf(p->mx * p->mx + p->my * p->my + p->mz * p->mz);
+        damage = (int)ceilf(speed * (float)base);
+    }
+    if (p->critical && damage > 0) damage += rand() % (damage / 2 + 2);
+    return damage;
+}
+
 static void pex_projectile_damage_passive_mob(int mob_index, const FlatProjectile *p, float src_x, float src_z) {
     if (!p || mob_index < 0 || mob_index >= MAX_PASSIVE_MOBS) return;
     PassiveMob *m = &g_passive_mobs[mob_index];
     if (!m->active || m->death_time > 0) return;
-    int damage = p->damage > 0 ? p->damage : (p->type == FLAT_PROJECTILE_ARROW ? 4 : 0);
+    int damage = pex_projectile_attack_damage_125(p);
     if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && m->type == PASSIVE_MOB_BLAZE) damage = 3;
     if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && p->owner_type == 1 &&
         p->owner_mob_type == PASSIVE_MOB_SNOWMAN && pex_projectile_snowball_should_damage_type(m->type)) damage = 1;
@@ -6909,7 +6884,7 @@ static void update_projectiles(void) {
         float ehx = 0.0f, ehy = 0.0f, ehz = 0.0f, et = 2.0f;
         int passive_hit_idx = -1;
         if (pex_projectile_player_hit(p, p->x, p->y, p->z, nx, ny, nz)) {
-            int dmg = pex_difficulty_scaled_mob_damage(p->damage > 0 ? p->damage : 2);
+            int dmg = pex_difficulty_scaled_mob_damage(pex_projectile_attack_damage_125(p));
             if (dmg > 0) {
                 PexDamageSource source;
                 if (p->type == FLAT_PROJECTILE_ARROW) source = pex_damage_source_arrow(p);
@@ -6992,6 +6967,74 @@ static void update_xp_orbs(void) {
         }
         if (o->age > 6000 || o->y < -32.0f) o->active = 0;
     }
+}
+
+static int inventory_has_item_id(int id) {
+    if (player_is_creative()) return 1;
+    for (int i = 0; i < 36; ++i) {
+        ItemStack *st = &g_inventory[i];
+        if (!stack_empty(st) && st->id == id) return 1;
+    }
+    return 0;
+}
+
+static void cancel_bow_use(void) {
+    g_bow_item_in_use = 0;
+    g_bow_use_ticks = 0;
+    g_bow_use_slot = -1;
+    g_bow_use_damage = 0;
+}
+
+static int try_start_bow_item_use(ItemStack *held) {
+    if (!held || stack_empty(held) || held->id != ITEM_BOW) return 0;
+    if (!inventory_has_item_id(ITEM_ARROW)) return 0;
+    g_bow_item_in_use = 1;
+    g_bow_use_ticks = 0;
+    g_bow_use_slot = (int)(held - g_inventory);
+    g_bow_use_damage = held->damage;
+    return 1;
+}
+
+static int release_bow_item_use(void) {
+    if (!g_bow_item_in_use) return 0;
+    int slot = g_bow_use_slot;
+    int ticks = g_bow_use_ticks;
+    int start_damage = g_bow_use_damage;
+    cancel_bow_use();
+    if (slot < 0 || slot >= 36) return 0;
+    ItemStack *held = &g_inventory[slot];
+    if (stack_empty(held) || held->id != ITEM_BOW || held->damage != start_damage) return 0;
+    if (!inventory_has_item_id(ITEM_ARROW)) return 0;
+
+    float draw = (float)ticks / 20.0f;
+    draw = (draw * draw + draw * 2.0f) / 3.0f;
+    if (draw < 0.1f) return 0;
+    if (draw > 1.0f) draw = 1.0f;
+    if (!pex_spawn_projectile_with_speed(FLAT_PROJECTILE_ARROW, 0, draw * 3.0f, 2, draw >= 1.0f)) return 0;
+    pex_sound_play("random.bow", 1.0f, 1.0f / (pex_rand_float01() * 0.4f + 1.2f) + draw * 0.5f);
+    if (!player_is_creative()) inventory_consume_one_item_id(ITEM_ARROW);
+    damage_held_item(held, 1);
+    restart_hand_swing();
+    g_save_dirty = 1;
+    return 1;
+}
+
+static void update_bow_item_use_tick(void) {
+    if (!g_bow_item_in_use) return;
+    if (g_screen != SCREEN_INGAME || g_player_dead || !g_right_use_button_down) {
+        (void)release_bow_item_use();
+        return;
+    }
+    if (g_bow_use_slot < 0 || g_bow_use_slot >= 36) {
+        cancel_bow_use();
+        return;
+    }
+    ItemStack *held = &g_inventory[g_bow_use_slot];
+    if (stack_empty(held) || held->id != ITEM_BOW || held->damage != g_bow_use_damage || !inventory_has_item_id(ITEM_ARROW)) {
+        cancel_bow_use();
+        return;
+    }
+    if (g_bow_use_ticks < 72000) g_bow_use_ticks++;
 }
 
 static int try_use_xp_bottle_item(ItemStack *held) {
@@ -7311,6 +7354,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
     hit_adjacent_cell(hit, &px, &py, &pz);
 
     if (item_food_heal_amount(id) > 0) return try_eat_held_food(held);
+    if (id == ITEM_BOW && try_start_bow_item_use(held)) return 1;
     if (id == ITEM_POTION && try_use_potion_item(held)) return 1;
     if (id == ITEM_EXP_BOTTLE && try_use_xp_bottle_item(held)) return 1;
     if (id == ITEM_MAP && try_use_map_item(held)) return 1;
@@ -7403,6 +7447,7 @@ static void ingame_right_click(void) {
     FlatRayHit hit = flat_raycast();
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (!hit.hit) {
+        if (try_start_bow_item_use(held)) return;
         if (try_use_potion_item(held)) return;
         if (try_use_xp_bottle_item(held)) return;
         if (try_use_map_item(held)) return;
@@ -7543,6 +7588,10 @@ static void ingame_right_click(void) {
     if (!g_mp_connected) g_save_dirty = 1;
     pex_sound_play_at(pex_block_step_sound_key(place_id), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
     restart_hand_swing();
+}
+
+static void ingame_right_release(void) {
+    (void)release_bow_item_use();
 }
 
 

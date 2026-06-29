@@ -2007,7 +2007,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
     const PexMobInfo *info = passive_mob_info(m->type);
     if (!info || info->attack_damage <= 0 || g_player_dead || g_player_health <= 0) return;
     if (m->attack_time > 0 || m->egg_timer > 0) return;
-    int dmg = passive_mob_scaled_attack_damage(m, info->attack_damage);
+    int dmg = ranged ? info->attack_damage : passive_mob_scaled_attack_damage(m, info->attack_damage);
     if (dmg <= 0) return;
     if (ranged) {
         float sx = m->x;
@@ -2019,7 +2019,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
         int owner_idx = (int)(m - g_passive_mobs);
         if (m->type == PASSIVE_MOB_SKELETON) {
             /* EntityAIArrowAttack: bow every 60 ticks, moveSpeed 0.25. */
-            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_ARROW, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.60f, dmg)) {
+            if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_ARROW, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.60f, 2)) {
                 pex_sound_play_at("random.bow", m->x, m->y, m->z, 1.0f, 1.0f);
                 m->attack_time = 60;
             }

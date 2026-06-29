@@ -156,6 +156,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);
             if (e->button.button == SDL_BUTTON_LEFT) mouse_up(g_mouse_x, g_mouse_y);
+            else if (e->button.button == SDL_BUTTON_RIGHT) mouse_right_up(g_mouse_x, g_mouse_y);
             break;
         case SDL_MOUSEWHEEL:
             if (g_screen == SCREEN_CREATIVE) {

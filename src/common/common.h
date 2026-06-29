@@ -482,7 +482,7 @@ typedef struct Options {
     int view_bobbing;
     int anaglyph; /* repurposed: V-Sync */
     int max_fps;  /* 1..200, 0 = unlimited */
-    float fov;    /* vertical field of view in degrees */
+    float fov;    /* Java 1.2.5 FOV degrees: 70..110 before runtime modifiers */
     int difficulty;
     int fancy_graphics;
     int fullscreen;
@@ -870,6 +870,11 @@ static int g_creative_scroll_row = 0;
 static float g_creative_scroll = 0.0f;
 static int g_creative_dragging_scroll = 0;
 static int g_right_click_delay_timer = 0;
+static int g_right_use_button_down = 0;
+static int g_bow_item_in_use = 0;
+static int g_bow_use_ticks = 0;
+static int g_bow_use_slot = -1;
+static int g_bow_use_damage = 0;
 static int g_creative_flying = 0;
 static int g_creative_fly_toggle_timer = 0;
 static int g_prev_jump_down = 0;
@@ -1581,6 +1586,7 @@ typedef struct FlatProjectile {
     int owner_mob_type;
     int owner_mob_index;
     int damage;
+    int critical;
     float x, y, z;
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
@@ -1678,9 +1684,8 @@ static unsigned char g_flat_block_light[FLAT_WORLD_HEIGHT][FLAT_WORLD_SIZE][FLAT
    them.  When these pointers are NULL, flat_get_block/meta read normal globals. */
 /* Terrain section meshes are cached for many frames.  Java 1.2.5 stores
    sky/block light coordinates in its chunk display lists and applies the
-   time-of-day lightmap dynamically each frame.  This C renderer still bakes
-   the current Java lightmap into vertex colors, so skylightSubtracted changes
-   dirty section colors without invalidating the old drawable mesh. */
+   time-of-day lightmap dynamically each frame.  The C renderer keeps mesh
+   colors stable and applies any time darkening outside the section mesh path. */
 static PEX_THREAD_LOCAL int g_flat_bake_stable_mesh_light = 0;
 static int g_flat_recent_block_mesh_dirty_tick = -1000000;
 static PEX_THREAD_LOCAL const unsigned char *g_async_mesh_blocks = NULL;
@@ -2144,8 +2149,6 @@ static double g_prof_mesh_upload_worker_last_ms = 0.0;
 static double g_prof_mesh_upload_worker_avg_ms = 0.0;
 static int g_prof_mesh_upload_worker_samples = 0;
 static int g_prof_skylight_subtracted_last = 0;
-static int g_prof_daylight_dirty_pending = 0;
-static int g_prof_daylight_dirty_chunks_last = 0;
 static int g_prof_village_scan_blocks_last = 0;
 static int g_prof_spawn_y_cache_hits = 0;
 static int g_prof_spawn_y_cache_misses = 0;
@@ -2432,6 +2435,7 @@ static int furnace_burn_scaled(int pixels);
 static int furnace_cook_scaled(int pixels);
 static void world_left_mouse_released(void);
 static void ingame_right_click(void);
+static void ingame_right_release(void);
 static void spawn_block_destroy_particles(int bx, int by, int bz, int block_id);
 static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block_id);
 static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz);
@@ -2443,6 +2447,9 @@ static void draw_carried_stack(void);
 static void draw_creative_screen(void);
 static void update_breaking(void);
 static float player_fov_multiplier_125(void);
+static int player_is_using_bow_125(void);
+static int player_bow_use_duration_125(void);
+static void update_bow_item_use_tick(void);
 static void update_dropped_items(void);
 static void update_equipped_item(void);
 static int flat_player_aabb_collides(float px, float py, float pz);

@@ -1034,33 +1034,19 @@ static int terrain_liquid_tile_valid_cached(int tile, int water) {
     return values[idx];
 }
 
-static int terrain_uses_classic_chest_tiles(void) {
-    if (strcmp(g_current_texpack, CLASSIC_PACK_NAME) == 0) return 1;
-    /* Minecraft Classic/Beta terrain.png stores chest faces at 25..27.
-       The bundled Bare-Bones-style terrain stores them at 68..70. */
-    static GLuint cached_tex = 0;
-    static unsigned char *cached_rgba = NULL;
-    static int cached_value = -1;
-    if (cached_value >= 0 && cached_tex == tex_terrain.id && cached_rgba == tex_terrain.rgba) return cached_value;
-    cached_tex = tex_terrain.id;
-    cached_rgba = tex_terrain.rgba;
-    cached_value = terrain_tile_has_opaque_pixels(25) && terrain_tile_has_opaque_pixels(26) && terrain_tile_has_opaque_pixels(27);
-    return cached_value;
-}
-
-static int chest_top_tile(void) { return terrain_uses_classic_chest_tiles() ? 25 : 68; }
-static int chest_side_tile(void) { return terrain_uses_classic_chest_tiles() ? 26 : 69; }
-static int chest_front_tile(void) { return terrain_uses_classic_chest_tiles() ? 27 : 70; }
+static int chest_top_tile(void) { return 25; }
+static int chest_side_tile(void) { return 26; }
+static int chest_front_tile(void) { return 27; }
 /* Old terrain.png stores the double/large chest strip directly below the
    single chest top/side strip.  Do not use cropped cuboid UVs or entity
    item/chest.png here; the terrain atlas supplied by the downloaded client.jar
    is the source of truth for this renderer. */
 static int large_chest_left_tile(void) { return chest_top_tile() + 16; }
 static int large_chest_right_tile(void) { return chest_side_tile() + 16; }
-static int furnace_front_tile(void) { return 44; }      /* idle front */
-static int furnace_front_lit_tile(void) { return terrain_tile_has_opaque_pixels(61) ? 61 : furnace_front_tile(); }  /* burning front */
+static int furnace_front_tile(void) { return 44; }
+static int furnace_front_lit_tile(void) { return 61; }
 static int furnace_side_tile(void) { return 45; }
-static int furnace_top_tile(void) { return furnace_side_tile(); } /* this pack has no separate furnace-top tile; 46 is purple/wool */
+static int furnace_top_tile(void) { return 62; }
 
 /* Java 1.2.5 BlockFluid uses 205/206 for water and 237/238 for lava.  Some
    active packs in this port contain fallback checker/generated pixels in those
@@ -4073,8 +4059,18 @@ static void emit_cuboid_block_faces_lit(int id, float x0, float y0, float z0, fl
                                           float lx0, float ly0, float lz0, float lx1, float ly1, float lz1) {
     for (int face = 0; face < 6; face++) {
         int tile = 2;
+        int meta = 0;
+        int tile_idx = block_texture_resolve(id, meta, face);
         world_style_set_pos((int)floorf(x0), (int)floorf(y0), (int)floorf(z0));
-        world_face_style(id, face, &tile);
+        if (tile_idx >= 0) {
+            float shade = world_face_base_shade(face);
+            tile = tile_idx;
+            if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
+            else if (id == BLOCK_TALL_GRASS || id == BLOCK_VINE || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(g_world_style_x, g_world_style_z), shade);
+            else world_set_shade(shade);
+        } else {
+            world_face_style(id, face, &tile);
+        }
         emit_cuboid_face_tile(x0, y0, z0, x1, y1, z1,
                               lx0, ly0, lz0, lx1, ly1, lz1, face, tile);
     }
@@ -4955,6 +4951,8 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
     int chunk_has_liquid = 0;
     int chunk_has_cutout = 0;
     int chunk_has_special = 0;
+    int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
+    g_flat_bake_stable_mesh_light = 1;
 
     glNewList(g_flat_world_chunk_lists[cz][cx], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -5058,6 +5056,7 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
     g_flat_world_chunk_dirty[cz][cx] = 0;
     g_flat_world_chunk_valid[cz][cx] = 1;
     g_flat_world_chunk_has_liquid[cz][cx] = chunk_has_liquid && flat_separate_liquid_pass_enabled();
+    g_flat_bake_stable_mesh_light = old_stable_mesh_light;
 }
 
 
@@ -5206,7 +5205,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     FlatDirectMeshBuilder mb0, mb1;
     int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 0;
+    g_flat_bake_stable_mesh_light = 1;
 
     flat_direct_begin(&mb0);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -5322,7 +5321,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     int old_stable_mesh_light = g_flat_bake_stable_mesh_light;
-    g_flat_bake_stable_mesh_light = 0;
+    g_flat_bake_stable_mesh_light = 1;
 
     glNewList(g_flat_section_lists[sy][cz][cx][0], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);

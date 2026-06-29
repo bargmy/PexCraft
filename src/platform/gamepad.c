@@ -539,6 +539,7 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->back) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* Select = jump */
     if (p->dpad_down) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;        /* D-pad Down = sneak */
     if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;                /* R = break/attack */
+    if (p->lb) g_gamepad_vk_state[VK_RBUTTON] = 1;                        /* L = place/use */
 #else
     if (p->ly < -PEX_GAMEPAD_DEADZONE || p->dpad_up) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1;
     if (p->ly >  PEX_GAMEPAD_DEADZONE || p->dpad_down) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
@@ -548,6 +549,7 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
+    if (p->lt > 0.35f) g_gamepad_vk_state[VK_RBUTTON] = 1;      /* place/use */
 #endif
 }
 
@@ -699,6 +701,7 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
 #ifdef PEX_PLATFORM_PSP
     if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lb && !p->prev_lb) mouse_right_down(g_gui_w / 2, g_gui_h / 2); /* L = place/use */
+    if (!p->lb && p->prev_lb) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
     if (p->dpad_up && !p->prev_dpad_up) { set_screen(SCREEN_INVENTORY); return; }
 
     /* PSP has no keyboard F3 key.  Use the requested in-game combo:
@@ -720,6 +723,7 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
 #else
     if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lt > 0.35f && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
+    if (p->lt <= 0.35f && p->prev_lt > 0.35f) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
     if (p->y && !p->prev_y) { set_screen(SCREEN_INVENTORY); return; }
     if (p->x && !p->prev_x) inventory_drop_selected_one();
     if (p->back && !p->prev_back) set_screen(SCREEN_PAUSE);

@@ -35,6 +35,7 @@ static int g_android_world_cur_y = 0;
 static double g_android_world_down_time = 0.0;
 static int g_android_world_moved = 0;
 static int g_android_world_breaking = 0;
+static int g_android_world_using_right = 0;
 static double g_android_world_next_attack_time = 0.0;
 
 static int g_android_touch_seen = 0;
@@ -200,16 +201,21 @@ static void pex_android_touch_clear_pick_ray(void) {
     g_android_touch_pick_active = 0;
 }
 
+static int pex_android_touch_holding_chargeable_bow(void) {
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    return !stack_empty(held) && held->id == ITEM_BOW && inventory_has_item_id(ITEM_ARROW);
+}
+
 static void pex_android_touch_center(int *x, int *y) {
     if (x) *x = g_gui_w / 2;
     if (y) *y = g_gui_h / 2;
 }
 
 static void pex_android_touch_set_pick_ray(int x, int y) {
-    float fov = g_opts.fov;
+    float fov = g_opts.fov * player_fov_multiplier_125();
+    if (flat_player_head_in_water()) fov = fov * 60.0f / 70.0f;
     if (fov < 30.0f) fov = 30.0f;
     if (fov > 110.0f) fov = 110.0f;
-    if (flat_player_head_in_water() && fov > 60.0f) fov = 60.0f;
 
     float aspect = (g_gui_h > 0) ? (float)g_gui_w / (float)g_gui_h : 16.0f / 9.0f;
     float tan_half = tanf(fov * (float)M_PI / 360.0f);
@@ -257,6 +263,16 @@ static void pex_android_touch_stop_break(void) {
         g_sdl2_mouse_buttons[SDL_BUTTON_LEFT] = 0;
         mouse_up(cx, cy);
     }
+    pex_android_touch_clear_pick_ray();
+}
+
+static void pex_android_touch_stop_right_use(void) {
+    if (!g_android_world_using_right) return;
+    int cx, cy;
+    pex_android_touch_center(&cx, &cy);
+    g_android_world_using_right = 0;
+    g_sdl2_mouse_buttons[SDL_BUTTON_RIGHT] = 0;
+    mouse_right_up(cx, cy);
     pex_android_touch_clear_pick_ray();
 }
 
@@ -413,7 +429,21 @@ static void pex_android_touch_ingame_down(SDL_FingerID id, int x, int y) {
         g_android_world_down_time = now_seconds();
         g_android_world_moved = 0;
         g_android_world_breaking = 0;
+        g_android_world_using_right = 0;
         pex_android_touch_clear_pick_ray();
+        if (pex_android_touch_holding_chargeable_bow()) {
+            int cx, cy;
+            pex_android_touch_center(&cx, &cy);
+            g_android_world_using_right = 1;
+            g_sdl2_mouse_buttons[SDL_BUTTON_RIGHT] = 1;
+            g_mouse_x = cx;
+            g_mouse_y = cy;
+            mouse_right_down(cx, cy);
+            if (!g_bow_item_in_use) {
+                g_android_world_using_right = 0;
+                g_sdl2_mouse_buttons[SDL_BUTTON_RIGHT] = 0;
+            }
+        }
     }
 }
 
@@ -451,6 +481,12 @@ static void pex_android_touch_ingame_up(SDL_FingerID id, int x, int y) {
     if (id == g_android_world_finger) {
         int was_breaking = g_android_world_breaking;
         double held = now_seconds() - g_android_world_down_time;
+        if (g_android_world_using_right) {
+            pex_android_touch_stop_right_use();
+            g_android_world_finger = PEX_ANDROID_TOUCH_NONE;
+            g_android_world_moved = 0;
+            return;
+        }
         pex_android_touch_stop_break();
         if (!was_breaking && !g_android_world_moved && held < 0.55) {
             int cx, cy;
@@ -468,7 +504,8 @@ static void pex_android_touch_ingame_up(SDL_FingerID id, int x, int y) {
 }
 
 static void pex_android_touch_world_tick(void) {
-    if (g_screen != SCREEN_INGAME) { pex_android_touch_stop_break(); return; }
+    if (g_screen != SCREEN_INGAME) { pex_android_touch_stop_right_use(); pex_android_touch_stop_break(); return; }
+    if (g_android_world_using_right) return;
     if (g_android_world_finger != PEX_ANDROID_TOUCH_NONE && !g_android_world_moved) {
         if (!g_android_world_breaking && now_seconds() - g_android_world_down_time > 0.35) {
             pex_android_touch_begin_break();

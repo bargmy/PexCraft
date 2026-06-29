@@ -1310,8 +1310,14 @@ static void mouse_right_down(int mx, int my) {
 
     if (g_screen == SCREEN_CREATIVE) { creative_mouse_click(mx, my, 1); return; }
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 1); return; }
-    if (g_screen == SCREEN_INGAME) { set_mouse_grabbed(1); if (passive_mobs_player_interact()) return; ingame_right_click(); return; }
+    if (g_screen == SCREEN_INGAME) { g_right_use_button_down = 1; set_mouse_grabbed(1); if (passive_mobs_player_interact()) return; ingame_right_click(); return; }
     (void)mx; (void)my;
+}
+
+static void mouse_right_up(int mx, int my) {
+    (void)mx; (void)my;
+    if (g_screen == SCREEN_INGAME) ingame_right_release();
+    g_right_use_button_down = 0;
 }
 
 static void mouse_down(int mx, int my) {
