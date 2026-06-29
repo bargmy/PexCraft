@@ -1589,6 +1589,7 @@ static void flat_cpu_mesh_remap_shift(int old_origin_x, int old_origin_z,
 }
 
 static void flat_gl_cpu_mesh_check_origin(void) {
+    flat_check_and_execute_remap();
     if (g_flat_gl_cpu_mesh_origin_x == g_flat_world_origin_x &&
         g_flat_gl_cpu_mesh_origin_z == g_flat_world_origin_z) return;
 

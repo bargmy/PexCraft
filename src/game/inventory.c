@@ -428,6 +428,10 @@ static void flat_lighting_worker_wake(void);
 static void flat_lighting_worker_shutdown(void);
 static int flat_lighting_pending_dirty(void);
 static volatile int g_stream_remap_in_progress = 0;
+static volatile int g_stream_remap_requested = 0;
+static int g_stream_remap_new_x = 0;
+static int g_stream_remap_new_z = 0;
+static void flat_check_and_execute_remap(void);
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
@@ -1206,6 +1210,7 @@ static int g_flat_chunk_environment_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CH
 
 static void flat_reset_sky_light(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
+    flat_lock_light_updates();
     flat_publish_light_ready(lcx, lcz, 0, 0);
     int x0 = lcx * FLAT_RENDER_CHUNK;
     int z0 = lcz * FLAT_RENDER_CHUNK;
@@ -1221,6 +1226,7 @@ static void flat_reset_sky_light(int lcx, int lcz) {
             }
         }
     }
+    flat_unlock_light_updates();
 }
 
 static void flat_apply_environment_light(int lcx, int lcz) {
@@ -1229,7 +1235,9 @@ static void flat_apply_environment_light(int lcx, int lcz) {
     int wcx = floor_div16(g_flat_world_origin_x) + lcx;
     int wcz = floor_div16(g_flat_world_origin_z) + lcz;
     pex_logf_trace("lighting immediate environment pass local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
+    flat_lock_light_updates();
     flat_relight_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15, 16, 1);
+    flat_unlock_light_updates();
 }
 
 static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
@@ -1460,6 +1468,15 @@ static void flat_update_light_now(int kind, int x, int y, int z) {
     free(queue);
 }
 
+static void flat_lock_light_updates(void) {
+    flat_light_dirty_lock();
+    EnterCriticalSection(&g_flat_light_dirty_cs);
+}
+
+static void flat_unlock_light_updates(void) {
+    LeaveCriticalSection(&g_flat_light_dirty_cs);
+}
+
 static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_id) {
     if (g_stream_remap_in_progress) return 0;
     if (!flat_persistent_edit_active()) return 0;
@@ -1470,10 +1487,12 @@ static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_i
     int new_opacity = flat_light_opacity_for_id(new_id);
     if (old_light == new_light && old_opacity == new_opacity) return 1;
 
+    flat_lock_light_updates();
     if (old_opacity != new_opacity) {
         flat_update_light_now(FLAT_JAVA_LIGHT_KIND_SKY, x, y, z);
     }
     flat_update_light_now(FLAT_JAVA_LIGHT_KIND_BLOCK, x, y, z);
+    flat_unlock_light_updates();
     return 1;
 }
 
@@ -1574,7 +1593,9 @@ static void flat_flush_pending_lighting(void) {
     int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
     if (!flat_take_pending_light_region(&x0, &z0, &x1, &z1)) return;
     pex_logf_trace("lighting flush pending x=%d..%d z=%d..%d", x0, x1, z0, z1);
+    flat_lock_light_updates();
     flat_recalculate_lighting_region(x0, z0, x1, z1);
+    flat_unlock_light_updates();
 }
 
 static void flat_set_level_raw(int x, int y, int z, int level) {
@@ -9300,6 +9321,25 @@ static void stream_remap_block_storage(int old_origin_x, int old_origin_z,
     }
 }
 
+static void flat_check_and_execute_remap(void) {
+    if (!g_stream_remap_requested) return;
+
+    int old_origin_x = g_flat_world_origin_x;
+    int old_origin_z = g_flat_world_origin_z;
+    int new_origin_x = g_stream_remap_new_x;
+    int new_origin_z = g_stream_remap_new_z;
+
+    g_stream_remap_in_progress = 1;
+    g_flat_world_origin_x = new_origin_x;
+    g_flat_world_origin_z = new_origin_z;
+    stream_remap_render_chunks(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    stream_remap_block_storage(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    g_stream_remap_in_progress = 0;
+    flat_lighting_worker_wake();
+
+    g_stream_remap_requested = 0;
+}
+
 static int stream_local_chunk_x(int wcx) {
     return (wcx * FLAT_RENDER_CHUNK - g_flat_world_origin_x) / FLAT_RENDER_CHUNK;
 }
@@ -9789,6 +9829,7 @@ static void flat_run_initial_light_settle(void) {
            mesh rebuild with correct lighting.  This is safe because the settle
            runs on the stream service thread before gameplay begins (the loading
            screen blocks until flat_initial_light_settle_done() returns true). */
+        flat_lock_light_updates();
         for (int lcz2 = min_lcz; lcz2 <= max_lcz; ++lcz2) {
             for (int lcx2 = min_lcx; lcx2 <= max_lcx; ++lcx2) {
                 if (!g_flat_world_chunk_generated[lcz2][lcx2]) continue;
@@ -9809,6 +9850,7 @@ static void flat_run_initial_light_settle(void) {
         }
         g_stream_initial_light_settle_progress = 15;
         flat_relight_region(rx0, rz0, rx1, rz1, 16, 1);
+        flat_unlock_light_updates();
         g_stream_initial_light_settle_progress = 90;
         for (int lcz = min_lcz; lcz <= max_lcz; ++lcz) {
             for (int lcx = min_lcx; lcx <= max_lcx; ++lcx) {
@@ -10009,19 +10051,17 @@ static void update_infinite_world_streaming(void) {
     int old_origin_x = g_flat_world_origin_x;
     int old_origin_z = g_flat_world_origin_z;
 
-    g_stream_remap_in_progress = 1;
-    g_flat_world_origin_x = new_origin_x;
-    g_flat_world_origin_z = new_origin_z;
-    stream_remap_render_chunks(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    g_stream_remap_new_x = new_origin_x;
+    g_stream_remap_new_z = new_origin_z;
+    g_stream_remap_requested = 1;
 
-    /* Preserve edited/generated blocks in the overlap of the old and new window.
-       This used to copy the entire 3D world into two huge scratch arrays and then
-       copy it back byte-by-byte, which caused the hitch during terrain streaming.
-       The row-copy remap keeps only a small 2D scratch plane and leaves exposed
-       strips as air for the async generator to fill. */
-    stream_remap_block_storage(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
-    g_stream_remap_in_progress = 0;
-    flat_lighting_worker_wake();
+    if (g_stream_async_worker_count > 0 || g_world_stream_service_thread) {
+        while (g_stream_remap_requested) {
+            Sleep(1);
+        }
+    } else {
+        flat_check_and_execute_remap();
+    }
 
     stream_queue_missing_chunks(old_origin_x, old_origin_z);
     process_stream_generation_queue();

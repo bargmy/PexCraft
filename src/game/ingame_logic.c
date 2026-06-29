@@ -467,6 +467,7 @@ static void pex_update_time_light_bucket(void) {
 }
 
 static void ingame_tick(void) {
+    flat_check_and_execute_remap();
     double prof_ingame_start = profile_begin();
     double prof_part = 0.0;
     int input_active = (g_screen == SCREEN_INGAME && !g_player_dead);
