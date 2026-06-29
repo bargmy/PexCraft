@@ -432,6 +432,8 @@ static volatile int g_stream_remap_requested = 0;
 static int g_stream_remap_new_x = 0;
 static int g_stream_remap_new_z = 0;
 static void flat_check_and_execute_remap(void);
+static void flat_lock_light_updates(void);
+static void flat_unlock_light_updates(void);
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
@@ -1468,15 +1470,6 @@ static void flat_update_light_now(int kind, int x, int y, int z) {
     free(queue);
 }
 
-static void flat_lock_light_updates(void) {
-    flat_light_dirty_lock();
-    EnterCriticalSection(&g_flat_light_dirty_cs);
-}
-
-static void flat_unlock_light_updates(void) {
-    LeaveCriticalSection(&g_flat_light_dirty_cs);
-}
-
 static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_id) {
     if (g_stream_remap_in_progress) return 0;
     if (!flat_persistent_edit_active()) return 0;
@@ -1506,6 +1499,15 @@ static void flat_light_dirty_lock(void) {
     if (g_flat_light_dirty_cs_initialized) return;
     InitializeCriticalSection(&g_flat_light_dirty_cs);
     g_flat_light_dirty_cs_initialized = 1;
+}
+
+static void flat_lock_light_updates(void) {
+    flat_light_dirty_lock();
+    EnterCriticalSection(&g_flat_light_dirty_cs);
+}
+
+static void flat_unlock_light_updates(void) {
+    LeaveCriticalSection(&g_flat_light_dirty_cs);
 }
 
 static int flat_lighting_pending_dirty(void) {
