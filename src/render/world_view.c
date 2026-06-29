@@ -5962,7 +5962,10 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     job.origin_x = g_flat_world_origin_x;
     job.origin_z = g_flat_world_origin_z;
     job.version = g_flat_section_mesh_version[sy][cz][cx];
-    job.light_version = g_flat_chunk_light_version[cz][cx];
+    /* Capture the light version BEFORE the snapshot so we can detect a
+       concurrent update by the lighting worker thread (see below). */
+    unsigned int light_ver_before = g_flat_chunk_light_version[cz][cx];
+    job.light_version = light_ver_before;
     job.priority = priority ? 1 : 0;
     int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
     int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
@@ -5988,6 +5991,23 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
         }
     }
     profile_add_time(PROF_MESH_SUBMIT_SNAPSHOT, snapshot_start);
+
+    /* Re-read the light version AFTER the snapshot.  If it changed, the
+       lighting worker wrote updated values to g_flat_sky_light while we were
+       iterating — our snapshot may contain a mix of old and new values and
+       would produce a mesh with random black patches.  Bail out now; the
+       worker's flatmark_section_dirty call will keep the section in the
+       rebuild queue and we will re-snapshot on the next frame with a
+       consistent light state.
+       Note: the symmetric case (worker started mid-snapshot but has not yet
+       bumped the version) is caught at install time — the worker will bump the
+       version and re-dirty the section after finishing, so the stale result
+       will be discarded at async_section_mesh_install_ready(). */
+    unsigned int light_ver_after = g_flat_chunk_light_version[cz][cx];
+    if (light_ver_after != light_ver_before) {
+        /* Light changed during snapshot — leave section dirty and retry. */
+        return 2;
+    }
 
     EnterCriticalSection(&g_async_section_mesh_cs);
     if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx]) {

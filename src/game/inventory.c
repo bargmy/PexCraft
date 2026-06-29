@@ -1856,8 +1856,25 @@ static void flat_copy_chunk_buffer(int cx, int cz, const unsigned char *buf) {
     int lcx = stream_local_chunk_x(cx);
     int lcz = stream_local_chunk_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
-    flat_relight_fast_surface_chunk(cx, cz);
-    if (flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
+    /* During the initial preload (keep_completed == 1) the full settle pass
+       in flat_run_initial_light_settle() will relight the entire area with a
+       proper BFS including cross-chunk propagation.  Running the per-chunk
+       fast surface pass here would pre-fill g_flat_sky_light with column-only
+       values; the settle's changed_chunk detection would then see no diff for
+       many cells, skip bumping chunk_light_ready, and leave sections with
+       stale/missing light until the player edits a block.  Skip the fast pass
+       during preload so the settle always starts from zero and detects every
+       change correctly.  During runtime streaming the fast pass is still needed
+       as a quick visual preview before the async lighting worker catches up. */
+    if (!g_stream_generation_keep_completed) {
+        flat_relight_fast_surface_chunk(cx, cz);
+        if (flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
+    } else if (flat_chunk_buffer_has_light_source(buf)) {
+        /* Block-light sources (torches etc.) still need a relight pass; queue
+           them for the lighting worker which the settle will drain before the
+           player enters the world. */
+        flat_mark_chunk_block_light_dirty(cx, cz);
+    }
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_surface_mark_dirty(cx * 16 + 8, cz * 16 + 8);
 #endif
@@ -1914,7 +1931,12 @@ static void flat_load_chunk_delta(int cx, int cz) {
             }
         }
     }
-    flat_relight_fast_surface_chunk(cx, cz);
+    /* Same rationale as flat_copy_chunk_buffer: skip the fast surface pass
+       during preload so the settle pass starts from all-zero light and its
+       change-detection reliably fires for every chunk. */
+    if (!g_stream_generation_keep_completed) {
+        flat_relight_fast_surface_chunk(cx, cz);
+    }
     free(buf);
     free(meta);
 }
@@ -9755,6 +9777,36 @@ static void flat_run_initial_light_settle(void) {
            The margin lets skylight/block-light cross the first generated chunk
            border and prevents the "one chunk has a different brightness until I
            edit a block" failure. */
+        /* Zero out sky-light and block-light for every generated chunk in the
+           preload area before the region relight.  flat_relight_region() only
+           marks changed_chunks (and therefore chunk_light_ready) when a cell
+           value actually changes versus what is already in g_flat_sky_light.
+           If the fast-surface pass ran during chunk install it would have
+           pre-filled surface columns with correct values, making the settle
+           detect no change there and leaving chunk_light_ready at 0.  By
+           clearing first we guarantee every settled non-zero value is a real
+           diff, so all chunks are marked ready and all sections dirtied for a
+           mesh rebuild with correct lighting.  This is safe because the settle
+           runs on the stream service thread before gameplay begins (the loading
+           screen blocks until flat_initial_light_settle_done() returns true). */
+        for (int lcz2 = min_lcz; lcz2 <= max_lcz; ++lcz2) {
+            for (int lcx2 = min_lcx; lcx2 <= max_lcx; ++lcx2) {
+                if (!g_flat_world_chunk_generated[lcz2][lcx2]) continue;
+                int wx0 = g_flat_world_origin_x + lcx2 * FLAT_RENDER_CHUNK;
+                int wz0 = g_flat_world_origin_z + lcz2 * FLAT_RENDER_CHUNK;
+                for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
+                    int yi = flat_y_index(y);
+                    for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
+                        int fz = flat_z_index(wz0 + lz);
+                        for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
+                            int fx = flat_index(wx0 + lx);
+                            g_flat_sky_light[yi][fz][fx] = 0;
+                            g_flat_block_light[yi][fz][fx] = 0;
+                        }
+                    }
+                }
+            }
+        }
         g_stream_initial_light_settle_progress = 15;
         flat_relight_region(rx0, rz0, rx1, rz1, 16, 1);
         g_stream_initial_light_settle_progress = 90;
