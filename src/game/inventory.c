@@ -416,6 +416,8 @@ static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sect
 static int flat_chunk_light_ready(int lcx, int lcz);
 static void flat_reset_sky_light(int lcx, int lcz);
 static void flat_apply_environment_light(int lcx, int lcz);
+static int flat_repair_missing_light(int lcx, int lcz);
+static int flat_repair_missing_light_at_block(int x, int z);
 static void mark_flat_chunk_modified_at(int x, int z);
 static int g_flat_persistent_edit_depth = 0;
 static void flat_flush_pending_lighting(void);
@@ -1193,6 +1195,7 @@ static void flat_copy_light_buffers_to_world(int cx, int cz, const unsigned char
 }
 
 static int g_flat_chunk_environment_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static int g_flat_chunk_light_repair_checked_tick[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 
 static void flat_reset_sky_light(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
@@ -1228,15 +1231,15 @@ static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
     int x0 = g_flat_world_origin_x + lcx * FLAT_RENDER_CHUNK;
     int z0 = g_flat_world_origin_z + lcz * FLAT_RENDER_CHUNK;
 
-    /* A shifted active window used to move blocks without moving their light
-       arrays.  That left whole generated chunks with zero skylight until the
-       player edited a block.  Sample the chunk against the same cheap column
-       skylight model used by the streamer and rebuild only chunks that are
-       visibly impossible: open-sky cells carrying near-black skylight. */
-    for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz += 3) {
+    /* A shifted/loaded active window can leave block arrays and saved skylight
+       arrays out of sync.  This is gameplay-visible because mob spawning uses
+       the same saved sky light the renderer samples.  Compare a sparse set of
+       generated columns against the same top-down skylight model used by chunk
+       lighting and rebuild when open/transparent cells are materially too dark. */
+    for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz += 2) {
         int wz = z0 + lz;
         int fz = flat_z_index(wz);
-        for (int lx = 0; lx < FLAT_RENDER_CHUNK; lx += 3) {
+        for (int lx = 0; lx < FLAT_RENDER_CHUNK; lx += 2) {
             int wx = x0 + lx;
             int fx = flat_index(wx);
             int expected = 15;
@@ -1244,18 +1247,9 @@ static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
                 int yi = flat_y_index(y);
                 int id = g_flat_blocks[yi][fz][fx];
                 int have = g_flat_sky_light[yi][fz][fx] & 15;
-                if (expected >= 12 && have <= 1 && flat_light_opacity_for_id(id) < 255) return 1;
-                int opacity = flat_light_opacity_for_id(id);
-                if (opacity > 0 && expected > 0) {
-                    if (id == BLOCK_LEAVES) {
-                        if (expected > 8) expected -= 1;
-                    } else if (opacity >= 255) {
-                        expected = 0;
-                    } else {
-                        expected -= opacity;
-                        if (expected < 0) expected = 0;
-                    }
-                }
+                int expected_here = flat_sky_light_after_block(expected, id);
+                if (expected_here >= 12 && have + 2 < expected_here && flat_light_opacity_for_id(id) < 255) return 1;
+                expected = expected_here;
             }
         }
     }
@@ -1263,12 +1257,27 @@ static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
 }
 
 static int flat_repair_missing_light(int lcx, int lcz) {
+    int checked_marker = g_ingame_ticks + 1;
+    if (flat_local_chunk_valid(lcx, lcz) &&
+        g_flat_chunk_light_repair_checked_tick[lcz][lcx] == checked_marker) return 0;
+    if (flat_local_chunk_valid(lcx, lcz)) {
+        g_flat_chunk_light_repair_checked_tick[lcz][lcx] = checked_marker;
+    }
     if (!flat_sky_light_needs_rebuild(lcx, lcz)) return 0;
     int wcx = floor_div16(g_flat_world_origin_x) + lcx;
     int wcz = floor_div16(g_flat_world_origin_z) + lcz;
     pex_logf("lighting repaired missing skylight chunk local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
     flat_relight_fast_surface_chunk(wcx, wcz);
     return 1;
+}
+
+static int flat_repair_missing_light_at_block(int x, int z) {
+    if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE ||
+        z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return 0;
+    int lcx = flat_local_chunk_x(x);
+    int lcz = flat_local_chunk_z(z);
+    if (!flat_local_chunk_valid(lcx, lcz)) return 0;
+    return flat_repair_missing_light(lcx, lcz);
 }
 
 static void flat_relight_chunk(int cx, int cz) {
@@ -2713,6 +2722,7 @@ static void flat_prepare_initial_generation(void) {
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_light_repair_checked_tick, 0, sizeof(g_flat_chunk_light_repair_checked_tick));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -2913,6 +2923,7 @@ static void flat_generate_origin_blocks(void) {
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_light_repair_checked_tick, 0, sizeof(g_flat_chunk_light_repair_checked_tick));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -2972,6 +2983,7 @@ static void flat_generate_traceplace_area(int center_wcx, int center_wcz, int ra
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_light_repair_checked_tick, 0, sizeof(g_flat_chunk_light_repair_checked_tick));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
@@ -9084,6 +9096,7 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_light_repair_checked_tick, 0, sizeof(g_flat_chunk_light_repair_checked_tick));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));

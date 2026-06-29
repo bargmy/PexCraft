@@ -215,7 +215,7 @@ static void pex_android_touch_set_pick_ray(int x, int y) {
     float fov = g_opts.fov * player_fov_multiplier_125();
     if (flat_player_head_in_water()) fov = fov * 60.0f / 70.0f;
     if (fov < 30.0f) fov = 30.0f;
-    if (fov > 110.0f) fov = 110.0f;
+    if (fov > 170.0f) fov = 170.0f;
 
     float aspect = (g_gui_h > 0) ? (float)g_gui_w / (float)g_gui_h : 16.0f / 9.0f;
     float tan_half = tanf(fov * (float)M_PI / 360.0f);

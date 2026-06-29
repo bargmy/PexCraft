@@ -813,7 +813,7 @@ static void setup_world_projection(void) {
         double fov = (double)g_opts.fov * (double)player_fov_multiplier_125();
         if (flat_player_head_in_water()) fov = fov * 60.0 / 70.0;
         if (fov < 30.0) fov = 30.0;
-        if (fov > 110.0) fov = 110.0;
+        if (fov > 170.0) fov = 170.0;
         gluPerspective(fov, (double)aspect, 0.05, (double)far_plane);
     }
     glMatrixMode(GL_MODELVIEW);
@@ -1284,6 +1284,11 @@ static int java_foliage_color_at(int x, int z) {
         biome_temp_humid_at(x, z, &t, &h);
     }
     return c->foliage[idx];
+}
+
+static int java_block_normal_cube_at(int x, int y, int z) {
+    int id = flat_get_block(x, y, z);
+    return id != 0 && flat_light_opacity_for_id(id) >= 255 && flat_block_is_solid(id);
 }
 
 static int flat_direct_reserve(FlatDirectMeshBuilder *b, uint32_t add_v, uint32_t add_i) {
@@ -3759,8 +3764,8 @@ static void world_face_style_at(int id, int x, int y, int z, int face, int *tile
         if (tile_idx >= 0) {
             float shade = world_face_base_shade(face);
             *tile = tile_idx;
-            if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_at(x, z), shade);
-            else if (id == BLOCK_TALL_GRASS || id == BLOCK_VINE || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(x, z), shade);
+            if (id == BLOCK_LEAVES || id == BLOCK_VINE) world_set_color_shade(java_foliage_color_at(x, z), shade);
+            else if (id == BLOCK_TALL_GRASS || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(x, z), shade);
             else world_set_shade(shade);
             return;
         }
@@ -4065,8 +4070,8 @@ static void emit_cuboid_block_faces_lit(int id, float x0, float y0, float z0, fl
         if (tile_idx >= 0) {
             float shade = world_face_base_shade(face);
             tile = tile_idx;
-            if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
-            else if (id == BLOCK_TALL_GRASS || id == BLOCK_VINE || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(g_world_style_x, g_world_style_z), shade);
+            if (id == BLOCK_LEAVES || id == BLOCK_VINE) world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
+            else if (id == BLOCK_TALL_GRASS || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(g_world_style_x, g_world_style_z), shade);
             else world_set_shade(shade);
         } else {
             world_face_style(id, face, &tile);
@@ -4674,7 +4679,88 @@ static int block_uses_special_model(int id) {
            id == BLOCK_CACTUS || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_REDSTONE_WIRE ||
            id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_STONE_BUTTON ||
            id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
-           id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON;
+           id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON ||
+           id == BLOCK_VINE;
+}
+
+static void emit_vine_side_quad(int x, int y, int z, int side, float u0, float v0, float u1, float v1) {
+    const float e = 0.05f;
+    if (side == 2) {
+        float xx = (float)x + e;
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z + 1.0f, u0, v0);
+        world_tex_vertex(xx, (float)y,        (float)z + 1.0f, u0, v1);
+        world_tex_vertex(xx, (float)y,        (float)z,        u1, v1);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z,        u1, v0);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z,        u1, v0);
+        world_tex_vertex(xx, (float)y,        (float)z,        u1, v1);
+        world_tex_vertex(xx, (float)y,        (float)z + 1.0f, u0, v1);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z + 1.0f, u0, v0);
+    } else if (side == 8) {
+        float xx = (float)x + 1.0f - e;
+        world_tex_vertex(xx, (float)y,        (float)z + 1.0f, u1, v1);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z + 1.0f, u1, v0);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z,        u0, v0);
+        world_tex_vertex(xx, (float)y,        (float)z,        u0, v1);
+        world_tex_vertex(xx, (float)y,        (float)z,        u0, v1);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z,        u0, v0);
+        world_tex_vertex(xx, (float)y + 1.0f, (float)z + 1.0f, u1, v0);
+        world_tex_vertex(xx, (float)y,        (float)z + 1.0f, u1, v1);
+    } else if (side == 4) {
+        float zz = (float)z + e;
+        world_tex_vertex((float)x + 1.0f, (float)y,        zz, u1, v1);
+        world_tex_vertex((float)x + 1.0f, (float)y + 1.0f, zz, u1, v0);
+        world_tex_vertex((float)x,        (float)y + 1.0f, zz, u0, v0);
+        world_tex_vertex((float)x,        (float)y,        zz, u0, v1);
+        world_tex_vertex((float)x,        (float)y,        zz, u0, v1);
+        world_tex_vertex((float)x,        (float)y + 1.0f, zz, u0, v0);
+        world_tex_vertex((float)x + 1.0f, (float)y + 1.0f, zz, u1, v0);
+        world_tex_vertex((float)x + 1.0f, (float)y,        zz, u1, v1);
+    } else if (side == 1) {
+        float zz = (float)z + 1.0f - e;
+        world_tex_vertex((float)x + 1.0f, (float)y + 1.0f, zz, u0, v0);
+        world_tex_vertex((float)x + 1.0f, (float)y,        zz, u0, v1);
+        world_tex_vertex((float)x,        (float)y,        zz, u1, v1);
+        world_tex_vertex((float)x,        (float)y + 1.0f, zz, u1, v0);
+        world_tex_vertex((float)x,        (float)y + 1.0f, zz, u1, v0);
+        world_tex_vertex((float)x,        (float)y,        zz, u1, v1);
+        world_tex_vertex((float)x + 1.0f, (float)y,        zz, u0, v1);
+        world_tex_vertex((float)x + 1.0f, (float)y + 1.0f, zz, u0, v0);
+    }
+}
+
+static void emit_vine_top_quad(int x, int y, int z, float u0, float v0, float u1, float v1) {
+    const float e = 0.05f;
+    float yy = (float)y + 1.0f - e;
+    world_tex_vertex((float)x + 1.0f, yy, (float)z,        u0, v0);
+    world_tex_vertex((float)x + 1.0f, yy, (float)z + 1.0f, u0, v1);
+    world_tex_vertex((float)x,        yy, (float)z + 1.0f, u1, v1);
+    world_tex_vertex((float)x,        yy, (float)z,        u1, v0);
+}
+
+static void emit_vine_block_model(int x, int y, int z) {
+    int meta = flat_get_meta(x, y, z) & 15;
+    int sides = meta & 15;
+    float u0, v0, u1, v1;
+    terrain_tile_uv(143, &u0, &v0, &u1, &v1);
+    world_style_set_pos(x, y, z);
+    world_light_set_pos(x, y, z);
+    world_set_color_shade(java_foliage_color_at(x, z), 1.0f);
+
+    if (sides & 2) emit_vine_side_quad(x, y, z, 2, u0, v0, u1, v1);
+    if (sides & 8) emit_vine_side_quad(x, y, z, 8, u0, v0, u1, v1);
+    if (sides & 4) emit_vine_side_quad(x, y, z, 4, u0, v0, u1, v1);
+    if (sides & 1) emit_vine_side_quad(x, y, z, 1, u0, v0, u1, v1);
+    if (java_block_normal_cube_at(x, y + 1, z)) emit_vine_top_quad(x, y, z, u0, v0, u1, v1);
+}
+
+static void draw_vine_block_model(int x, int y, int z) {
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    glBegin(GL_QUADS);
+    emit_vine_block_model(x, y, z);
+    glEnd();
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(1, 1, 1, 1);
 }
 
 static void draw_special_block_model(int id, int x, int y, int z) {
@@ -4683,6 +4769,7 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_SNOW_LAYER) { glBegin(GL_QUADS); emit_snow_layer_block(x, y, z); glEnd(); glColor4f(1,1,1,1); return; }
     if (block_is_door_id(id)) { draw_door_block_model(id, x, y, z); return; }
     if (id == BLOCK_LADDER) { draw_ladder_block_model(x, y, z); return; }
+    if (id == BLOCK_VINE) { draw_vine_block_model(x, y, z); return; }
     if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,0.5f,1); return; }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) { draw_stairs_block_model(id, x, y, z); return; }
     if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); return; }
@@ -6053,6 +6140,28 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
     return count;
 }
 
+static void flat_repair_visible_chunk_lighting(const FlatRenderSectionRef *refs, int count) {
+    if (!refs || count <= 0) return;
+    unsigned char checked[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    memset(checked, 0, sizeof(checked));
+    int streaming = stream_generation_active() ? 1 : 0;
+    int check_budget = streaming ? 4 : 12;
+    int repair_budget = streaming ? 1 : 2;
+    int checks = 0;
+    int repairs = 0;
+
+    for (int i = 0; i < count && checks < check_budget && repairs < repair_budget; ++i) {
+        int cx = refs[i].cx;
+        int cz = refs[i].cz;
+        if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS) continue;
+        if (checked[cz][cx]) continue;
+        checked[cz][cx] = 1;
+        checks++;
+        if (!g_flat_world_chunk_generated[cz][cx]) continue;
+        if (flat_repair_missing_light(cx, cz)) repairs++;
+    }
+}
+
 static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, int count) {
     double self_heal_start = profile_begin();
     if (!refs || count <= 0) {
@@ -6177,6 +6286,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         g_prof_mesh_results_last = 0;
     }
 
+    flat_repair_visible_chunk_lighting(refs, count);
     flat_self_heal_visible_sections(refs, count);
     int recent_edit = (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) >= 0 &&
                       (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) <= 12;

@@ -250,6 +250,7 @@ typedef struct PexSpawnYCacheEntry {
     int type, cat, x, z;
     int y;
     int tick;
+    unsigned int light_version;
 } PexSpawnYCacheEntry;
 
 #define PEX_SPAWN_Y_CACHE_SIZE 4096
@@ -258,6 +259,14 @@ static PexSpawnYCacheEntry g_passive_spawn_y_cache[PEX_SPAWN_Y_CACHE_SIZE];
 /* Budget for expensive spawn-height probes.  Negative means unlimited
    (used by initial population seeding before the game loop starts). */
 static int g_passive_spawn_probe_budget = -1;
+
+static unsigned int passive_spawn_column_light_version(int x, int z) {
+    if (x < g_flat_world_origin_x || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE ||
+        z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return 0;
+    int lcx = flat_local_chunk_x(x);
+    int lcz = flat_local_chunk_z(z);
+    return flat_local_chunk_valid(lcx, lcz) ? g_flat_chunk_light_version[lcz][lcx] : 0;
+}
 
 static unsigned int passive_spawn_y_cache_hash(int type, int cat, int x, int z) {
     unsigned int h = (unsigned int)(x * 73428767u) ^ (unsigned int)(z * 91278319u) ^ (unsigned int)(type * 19349663u) ^ (unsigned int)(cat * 83492791u);
@@ -269,7 +278,9 @@ static int passive_spawn_y_cache_get(int type, int cat, int x, int z, int *out_y
     for (int p = 0; p < 4; ++p) {
         PexSpawnYCacheEntry *e = &g_passive_spawn_y_cache[(idx + (unsigned)p) & (PEX_SPAWN_Y_CACHE_SIZE - 1)];
         if (!e->valid) continue;
-        if (e->type == type && e->cat == cat && e->x == x && e->z == z && (g_ingame_ticks - e->tick) < 80) {
+        unsigned int light_version = passive_spawn_column_light_version(x, z);
+        if (e->type == type && e->cat == cat && e->x == x && e->z == z &&
+            e->light_version == light_version && (g_ingame_ticks - e->tick) < 80) {
             if (out_y) *out_y = e->y;
             ++g_prof_spawn_y_cache_hits;
             return 1;
@@ -296,6 +307,7 @@ static void passive_spawn_y_cache_put(int type, int cat, int x, int z, int y) {
     g_passive_spawn_y_cache[slot].z = z;
     g_passive_spawn_y_cache[slot].y = y;
     g_passive_spawn_y_cache[slot].tick = g_ingame_ticks;
+    g_passive_spawn_y_cache[slot].light_version = passive_spawn_column_light_version(x, z);
 }
 
 static int passive_world_is_daytime(void) {
@@ -938,11 +950,6 @@ static int passive_spawn_probe_step(void) {
 
 static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int z) {
     int cached_y = -9999;
-    if (passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) {
-        ++g_prof_mob_spawn_probe_hits_last;
-        return cached_y;
-    }
-    ++g_prof_mob_spawn_probe_misses_last;
     ++g_prof_mob_spawn_columns_last;
     if (x < g_flat_world_origin_x + 1 || x >= g_flat_world_origin_x + FLAT_WORLD_SIZE - 1 ||
         z < g_flat_world_origin_z + 1 || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE - 1) {
@@ -953,6 +960,12 @@ static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int
         passive_spawn_y_cache_put(type, cat, x, z, -9999);
         return -9999;
     }
+    if (!flat_repair_missing_light_at_block(x, z) &&
+        passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) {
+        ++g_prof_mob_spawn_probe_hits_last;
+        return cached_y;
+    }
+    ++g_prof_mob_spawn_probe_misses_last;
     if (cat == PEX_CAT_WATER || type == PASSIVE_MOB_SQUID) {
         for (int y = 62; y >= 46; --y) {
             if (!passive_spawn_probe_step()) return -9998;
