@@ -866,6 +866,8 @@ static int g_world_type = 1; /* 0 superflat, 1 default terrain */
 static int g_game_mode = 0;  /* 0 survival, 1 creative */
 static int g_world_map_features = 1;
 static long long g_world_seed = 0;
+static int g_current_dimension = 0; /* 0=Overworld, -1=Nether, 1=End (PexDimension) */
+static int g_portal_timer = 0;      /* ticks player has been standing in a Nether portal */
 static int g_creative_scroll_row = 0;
 static float g_creative_scroll = 0.0f;
 static int g_creative_dragging_scroll = 0;
@@ -1840,6 +1842,7 @@ typedef struct PexSaveSnapshot {
     long long world_time;
     int world_type;
     int game_mode;
+    int dimension;
     float player_x, player_y, player_z;
     float player_yaw, player_pitch;
     int player_health;
@@ -2537,5 +2540,14 @@ static void pex_net_send_chest_update(void);
 static void pex_net_send_craft_request(void);
 static void pex_net_send_chat(const char *text);
 static void pex_net_send_skin(void);
+
+/* Dimension and Portal forward declarations */
+static void block_on_placed(int x, int y, int z, int id);
+static int check_end_portal_complete(int fx, int fy, int fz);
+static void dimension_tick_portal_collision(void);
+static void dimension_chunk_dir(int dimension, const char *world_dir, char *out, size_t cap);
+static void save_world_state_sync(void);
+static void flat_mark_all_chunks_dirty(void);
+
 
 #endif /* MC_B1_SPLIT_COMMON_H */

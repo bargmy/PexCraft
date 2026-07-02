@@ -1577,17 +1577,123 @@ static int handle_traceplace_command(int argc, char **argv) {
     return 1;
 }
 
+static int parse_coordinate(const char *str, float relative_to, int *out_val) {
+    if (str[0] == '~') {
+        int offset = 0;
+        if (str[1] != '\0') {
+            offset = atoi(str + 1);
+        }
+        *out_val = (int)floorf(relative_to) + offset;
+        return 1;
+    }
+    char *endptr;
+    long val = strtol(str, &endptr, 10);
+    if (endptr == str) {
+        return 0;
+    }
+    *out_val = (int)val;
+    return 1;
+}
+
+static int parse_block_name_or_id(const char *str) {
+    if (str[0] >= '0' && str[0] <= '9') {
+        return atoi(str);
+    }
+    if (pex_chat_word_equals_ci(str, "air")) return 0;
+    if (pex_chat_word_equals_ci(str, "stone")) return BLOCK_STONE;
+    if (pex_chat_word_equals_ci(str, "grass")) return BLOCK_GRASS;
+    if (pex_chat_word_equals_ci(str, "dirt")) return BLOCK_DIRT;
+    if (pex_chat_word_equals_ci(str, "cobblestone") || pex_chat_word_equals_ci(str, "cobble")) return BLOCK_COBBLESTONE;
+    if (pex_chat_word_equals_ci(str, "planks") || pex_chat_word_equals_ci(str, "wood")) return BLOCK_PLANKS;
+    if (pex_chat_word_equals_ci(str, "bedrock")) return BLOCK_BEDROCK;
+    if (pex_chat_word_equals_ci(str, "water")) return BLOCK_WATER;
+    if (pex_chat_word_equals_ci(str, "lava")) return BLOCK_LAVA;
+    if (pex_chat_word_equals_ci(str, "sand")) return BLOCK_SAND;
+    if (pex_chat_word_equals_ci(str, "gravel")) return BLOCK_GRAVEL;
+    if (pex_chat_word_equals_ci(str, "obsidian")) return BLOCK_OBSIDIAN;
+    if (pex_chat_word_equals_ci(str, "portal") || pex_chat_word_equals_ci(str, "nether_portal")) return BLOCK_PORTAL;
+    if (pex_chat_word_equals_ci(str, "end_portal")) return BLOCK_END_PORTAL;
+    if (pex_chat_word_equals_ci(str, "end_portal_frame")) return BLOCK_END_PORTAL_FRAME;
+    if (pex_chat_word_equals_ci(str, "fire")) return BLOCK_FIRE;
+    return -1;
+}
+
+static int handle_setblock_command(int argc, char *argv[]) {
+    if (argc < 2) {
+        hud_add_chat("Usage: /setblock <block> [x y z]  OR  /setblock <x y z> <block>");
+        return 1;
+    }
+
+    int bx = (int)floorf(g_player_x);
+    int by = (int)floorf(g_player_y);
+    int bz = (int)floorf(g_player_z);
+    int block_id = -1;
+    const char *block_str = NULL;
+
+    if (argc == 2) {
+        block_str = argv[1];
+        block_id = parse_block_name_or_id(block_str);
+    } else if (argc == 5) {
+        int is_coords_first = (argv[1][0] == '~' || (argv[1][0] >= '0' && argv[1][0] <= '9') || argv[1][0] == '-');
+        if (is_coords_first) {
+            if (!parse_coordinate(argv[1], g_player_x, &bx) ||
+                !parse_coordinate(argv[2], g_player_y, &by) ||
+                !parse_coordinate(argv[3], g_player_z, &bz)) {
+                hud_add_chat("Invalid coordinates.");
+                return 1;
+            }
+            block_str = argv[4];
+            block_id = parse_block_name_or_id(block_str);
+        } else {
+            block_str = argv[1];
+            block_id = parse_block_name_or_id(block_str);
+            if (!parse_coordinate(argv[2], g_player_x, &bx) ||
+                !parse_coordinate(argv[3], g_player_y, &by) ||
+                !parse_coordinate(argv[4], g_player_z, &bz)) {
+                hud_add_chat("Invalid coordinates.");
+                return 1;
+            }
+        }
+    } else {
+        hud_add_chat("Usage: /setblock <block> [x y z]  OR  /setblock <x y z> <block>");
+        return 1;
+    }
+
+    if (block_id == -1) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Unknown block: %s", block_str);
+        hud_add_chat(msg);
+        return 1;
+    }
+
+    if (!flat_in_bounds(bx, by, bz)) {
+        hud_add_chat("Coordinates out of bounds.");
+        return 1;
+    }
+
+    flat_begin_persistent_edit();
+    flat_set_block(bx, by, bz, block_id);
+    flat_end_persistent_edit();
+    g_save_dirty = 1;
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Set block at %d, %d, %d to %s (%d).", bx, by, bz, block_str, block_id);
+    hud_add_chat(msg);
+
+    return 1;
+}
+
 static int handle_local_chat_command(const char *text) {
     if (!text || text[0] != '/') return 0;
     /* In multiplayer, slash commands belong to the server. Do not run any
        local cheat/debug command client-side. */
     if (g_mp_connected || pex_net_is_connecting()) return 0;
-    char cmd[128];
+    char cmd[256];
     snprintf(cmd, sizeof(cmd), "%s", text + 1);
-    char *argv[4] = {0,0,0,0};
+    char *argv[8] = {0};
     int argc = 0;
     char *p = cmd;
-    while (*p && argc < 4) {
+    while (*p && argc < 8) {
         while (*p == ' ') ++p;
         if (!*p) break;
         argv[argc++] = p;
@@ -1595,6 +1701,7 @@ static int handle_local_chat_command(const char *text) {
         if (*p) *p++ = 0;
     }
     if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "traceplace")) return handle_traceplace_command(argc, argv);
+    if (argc >= 1 && pex_chat_word_equals_ci(argv[0], "setblock")) return handle_setblock_command(argc, argv);
     if (argc >= 1 && (pex_chat_word_equals_ci(argv[0], "gamemode") || pex_chat_word_equals_ci(argv[0], "gm"))) {
         if (argc < 2) {
             hud_add_chat(g_game_mode ? "Game mode is Creative." : "Game mode is Survival.");

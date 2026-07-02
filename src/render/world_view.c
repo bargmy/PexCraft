@@ -100,6 +100,14 @@ static void world_provider_fog_color(float partial, float *r, float *g, float *b
 }
 
 static void world_fog_color(float partial, float *r, float *g, float *b) {
+    if (g_current_dimension == -1) {
+        *r = 0.20f; *g = 0.02f; *b = 0.02f;
+        return;
+    }
+    if (g_current_dimension == 1) {
+        *r = 0.08f; *g = 0.06f; *b = 0.10f;
+        return;
+    }
     float fr, fg, fb;
     world_provider_fog_color(partial, &fr, &fg, &fb);
 
@@ -331,6 +339,51 @@ static void apply_sky_camera_rotation(float partial) {
 }
 
 static void draw_sky_only(void) {
+    if (g_current_dimension == -1) {
+        setup_world_projection();
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_TEXTURE_2D);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glColor4f(0.10f, 0.01f, 0.01f, 1.0f);
+        draw_sky_plane(16.0f);
+        glColor4f(0.06f, 0.0f, 0.0f, 1.0f);
+        draw_lower_sky_plane(-16.0f);
+        glEnable(GL_TEXTURE_2D);
+        glDepthMask(GL_TRUE);
+        return;
+    }
+    if (g_current_dimension == 1) {
+        setup_world_projection();
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_TEXTURE_2D);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        apply_sky_camera_rotation(g_frame_partial);
+        glColor4f(0.032f, 0.032f, 0.032f, 1.0f);
+        draw_sky_plane(16.0f);
+        glColor4f(0.015f, 0.015f, 0.015f, 1.0f);
+        draw_lower_sky_plane(-16.0f);
+        sky_generate_stars_once();
+        glDisable(GL_FOG);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glColor4f(0.5f, 0.5f, 0.8f, 0.7f);
+        glBegin(GL_QUADS);
+        for (int i = 0; i < g_sky_star_count; ++i) {
+            for (int v = 0; v < 4; ++v) {
+                glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+            }
+        }
+        glEnd();
+        glDisable(GL_BLEND);
+        glEnable(GL_TEXTURE_2D);
+        glDepthMask(GL_TRUE);
+        return;
+    }
+
     setup_world_projection();
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -571,13 +624,21 @@ static void apply_source_like_fog(void) {
         fog_col[0] = 0.60f; fog_col[1] = 0.10f; fog_col[2] = 0.00f;
         fog_mode = GL_EXP;
         fog_density = 2.00f;
+    } else if (g_current_dimension == -1) {
+        fog_col[0] = 0.20f; fog_col[1] = 0.02f; fog_col[2] = 0.02f;
+        fog_mode = GL_EXP;
+        fog_density = 0.035f;
+    } else if (g_current_dimension == 1) {
+        fog_col[0] = 0.08f; fog_col[1] = 0.06f; fog_col[2] = 0.10f;
+        fog_mode = GL_EXP2;
+        fog_density = 0.015f;
     }
 
     glEnable(GL_FOG);
     glFogi(GL_FOG_MODE, fog_mode);
     glFogfv(GL_FOG_COLOR, fog_col);
     glClearColor(fog_col[0], fog_col[1], fog_col[2], 0.0f);
-    if (fog_mode == GL_EXP) glFogf(GL_FOG_DENSITY, fog_density);
+    if (fog_mode == GL_EXP || fog_mode == GL_EXP2) glFogf(GL_FOG_DENSITY, fog_density);
     else { glFogf(GL_FOG_START, start); glFogf(GL_FOG_END, end); }
 }
 
@@ -4841,7 +4902,40 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) { draw_stairs_block_model(id, x, y, z); return; }
     if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); return; }
     if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0,0.5625f,1,1); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0.4375f,1,1,0.5625f); return; }
-    if (id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_resolve(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
+    if (id == BLOCK_LILY_PAD) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_resolve(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
+    if (id == BLOCK_END_PORTAL) {
+        glDisable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_ALPHA_TEST);
+        glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+        glBegin(GL_QUADS);
+        glVertex3f((float)x,   (float)y + 0.01f, (float)z);
+        glVertex3f((float)x+1, (float)y + 0.01f, (float)z);
+        glVertex3f((float)x+1, (float)y + 0.01f, (float)z+1);
+        glVertex3f((float)x,   (float)y + 0.01f, (float)z+1);
+        glEnd();
+        int layers = 8;
+        for (int layer = 1; layer <= layers; ++layer) {
+            float t = (float)layer / (float)(layers + 1);
+            float depth = (float)y + 0.01f - t * 0.25f;
+            float cr = t * 0.01f;
+            float cg = t * 0.05f;
+            float cb = 0.15f + t * 0.20f;
+            float alpha = 0.20f * (1.0f - t * 0.5f);
+            glColor4f(cr, cg, cb, alpha);
+            glBegin(GL_QUADS);
+            glVertex3f((float)x,   depth, (float)z);
+            glVertex3f((float)x+1, depth, (float)z);
+            glVertex3f((float)x+1, depth, (float)z+1);
+            glVertex3f((float)x,   depth, (float)z+1);
+            glEnd();
+        }
+        glEnable(GL_ALPHA_TEST);
+        glDisable(GL_BLEND);
+        glEnable(GL_TEXTURE_2D);
+        return;
+    }
     if (id == BLOCK_END_PORTAL_FRAME) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,13.0f/16.0f,1); return; }
     if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { float h = (flat_get_meta(x,y,z) & 1) ? (1.0f/32.0f) : (1.0f/16.0f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,h,0.9375f); return; }

@@ -234,7 +234,16 @@ static int passive_biome_weighted_spawn_entry(int cat, int biome, PexSpawnEntry 
         }
     } else if (cat == PEX_CAT_MONSTER) {
         if (biome == BIOME_JUNGLE || biome == BIOME_JUNGLE_HILLS) tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_OCELOT,2,1,1};
-        if (passive_biome_allows_monsters(biome)) for (int i=0;i<(int)(sizeof(base_monsters)/sizeof(base_monsters[0]));++i) tmp[n++] = base_monsters[i];
+        if (biome == BIOME_HELL) {
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_GHAST,5,4,4};
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_PIG_ZOMBIE,10,4,4};
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_MAGMA_CUBE,3,4,4};
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_BLAZE,5,4,4};
+        } else if (biome == BIOME_SKY) {
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_ENDERMAN,10,4,4};
+        } else if (passive_biome_allows_monsters(biome)) {
+            for (int i=0;i<(int)(sizeof(base_monsters)/sizeof(base_monsters[0]));++i) tmp[n++] = base_monsters[i];
+        }
     } else if (cat == PEX_CAT_WATER) {
         tmp[n++] = water[0];
     }

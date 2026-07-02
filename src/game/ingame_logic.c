@@ -514,6 +514,7 @@ static void ingame_tick(void) {
         prof_part = profile_begin();
         update_liquids();
         profile_add_time(PROF_LIQUIDS, prof_part);
+        dimension_tick_portal_collision();
     }
     prof_part = profile_begin();
     update_buttons_and_plates();

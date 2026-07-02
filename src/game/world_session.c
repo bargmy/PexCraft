@@ -376,6 +376,7 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     ss->world_time = g_world_time;
     ss->world_type = g_world_type;
     ss->game_mode = g_game_mode;
+    ss->dimension = g_current_dimension;
     ss->player_x = g_player_x;
     ss->player_y = g_player_y;
     ss->player_z = g_player_z;
@@ -455,7 +456,12 @@ static void snapshot_chunk_delta_path(const PexSaveSnapshot *ss, int cx, int cz,
     base36_i32(cx, bx, sizeof(bx));
     base36_i32(cz, bz, sizeof(bz));
     char dir[MAX_PATHBUF];
-    snprintf(dir, sizeof(dir), "%s\\chunks", ss->loaded_world_dir);
+    if (ss->dimension == -1)
+        snprintf(dir, sizeof(dir), "%s\\DIM-1\\chunks", ss->loaded_world_dir);
+    else if (ss->dimension == 1)
+        snprintf(dir, sizeof(dir), "%s\\DIM1\\chunks", ss->loaded_world_dir);
+    else
+        snprintf(dir, sizeof(dir), "%s\\chunks", ss->loaded_world_dir);
     make_dir_recursive(dir);
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
@@ -619,7 +625,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 27;
+    int version = 28;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -653,6 +659,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     fwrite(&ss->player_xp_progress, sizeof(ss->player_xp_progress), 1, f);
     fwrite(&ss->world_time, sizeof(ss->world_time), 1, f);
     fwrite(&ss->game_mode, sizeof(ss->game_mode), 1, f);
+    fwrite(&ss->dimension, sizeof(ss->dimension), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&ss->inventory[i].id, sizeof(int), 1, f);
@@ -893,7 +900,7 @@ static void save_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 27;
+    int version = 28;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -927,6 +934,7 @@ static void save_world_state_sync(void) {
     fwrite(&g_player_xp_progress, sizeof(g_player_xp_progress), 1, f);
     fwrite(&g_world_time, sizeof(g_world_time), 1, f);
     fwrite(&g_game_mode, sizeof(g_game_mode), 1, f);
+    fwrite(&g_current_dimension, sizeof(g_current_dimension), 1, f);
 
     for (int i = 0; i < 36; i++) {
         fwrite(&g_inventory[i].id, sizeof(int), 1, f);
@@ -1101,7 +1109,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23 || version == 27)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23 || version == 27 || version == 28)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -1184,6 +1192,14 @@ static int load_current_world_state(void) {
                 return 0;
             }
             g_game_mode = g_game_mode ? 1 : 0;
+        }
+        if (version >= 28) {
+            if (fread(&g_current_dimension, sizeof(g_current_dimension), 1, f) != 1) {
+                fclose(f);
+                return 0;
+            }
+        } else {
+            g_current_dimension = 0;
         }
     } else {
         player_food_reset();

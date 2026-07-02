@@ -1637,7 +1637,12 @@ static void flat_build_chunk_delta_path(int cx, int cz, char *out, size_t cap, i
     base36_i32(cx, bx, sizeof(bx));
     base36_i32(cz, bz, sizeof(bz));
     char dir[MAX_PATHBUF];
-    snprintf(dir, sizeof(dir), "%s\\chunks", g_loaded_world_dir);
+    if (g_current_dimension == -1)
+        snprintf(dir, sizeof(dir), "%s\\DIM-1\\chunks", g_loaded_world_dir);
+    else if (g_current_dimension == 1)
+        snprintf(dir, sizeof(dir), "%s\\DIM1\\chunks", g_loaded_world_dir);
+    else
+        snprintf(dir, sizeof(dir), "%s\\chunks", g_loaded_world_dir);
     if (create_dir) make_dir_recursive(dir);
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
@@ -1718,6 +1723,42 @@ static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *ou
     if (!out) return;
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
     if (out_meta) memset(out_meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+
+    if (g_current_dimension != 0) {
+        unsigned char *beta_blocks = (unsigned char*)calloc(32768u, 1);
+        unsigned char *beta_data = (unsigned char*)calloc(16384u, 1);
+        unsigned char heightmap[256];
+        unsigned char biome_array[256];
+        memset(heightmap, 0, sizeof(heightmap));
+        memset(biome_array, 0, sizeof(biome_array));
+
+        if (beta_blocks && beta_data) {
+            worldgen_generate_dimension_chunk_arrays(seed, g_current_dimension, cx, cz, beta_blocks, beta_data, heightmap, biome_array);
+            for (int lx = 0; lx < 16; lx++) {
+                for (int lz = 0; lz < 16; lz++) {
+                    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+                        int id = 0;
+                        if (y < 128) {
+                            id = get_block_local(beta_blocks, lx, y, lz);
+                        }
+                        int bi = flat_chunk_buf_index(lx, y, lz);
+                        out[bi] = (unsigned char)id;
+                        if (out_meta && y < 128) {
+                            int idx = chunk_index(lx, y, lz);
+                            unsigned char packed = beta_data[idx >> 1];
+                            out_meta[bi] = (unsigned char)((idx & 1) ? ((packed >> 4) & 15) : (packed & 15));
+                        }
+                    }
+                    if (out[flat_chunk_buf_index(lx, 0, lz)] == 0) {
+                        out[flat_chunk_buf_index(lx, 0, lz)] = BLOCK_BEDROCK;
+                    }
+                }
+            }
+        }
+        free(beta_blocks);
+        free(beta_data);
+        return;
+    }
 
     if (world_type == 1) {
 #if (defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)) || defined(PEX_PLATFORM_WII)
@@ -7371,6 +7412,23 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
     if (minecart_vehicle_type_for_item(id) && try_use_minecart_item(held, hit, target_id)) return 1;
     if (item_is_record_id(id) && try_use_record_item(held, hit, target_id)) return 1;
     if (id == ITEM_MONSTER_PLACER && try_use_spawn_egg(held, hit, target_id)) return 1;
+    if (id == ITEM_EYE_OF_ENDER) {
+        if (target_id == BLOCK_END_PORTAL_FRAME) {
+            int meta = flat_get_meta(hit->bx, hit->by, hit->bz);
+            if (!(meta & 0x4)) {
+                if (!g_mp_connected) flat_begin_persistent_edit();
+                flat_set_meta_raw(hit->bx, hit->by, hit->bz, meta | 0x4);
+                if (!g_mp_connected) flat_end_persistent_edit();
+                g_save_dirty = 1;
+                pex_sound_play_at("mob.endermen.portal", (float)hit->bx + 0.5f, (float)hit->by + 0.5f, (float)hit->bz + 0.5f, 1.0f, 1.0f);
+                consume_held_stack_one(held, 0);
+                if (!g_mp_connected) check_end_portal_complete(hit->bx, hit->by, hit->bz);
+                restart_hand_swing();
+                return 1;
+            }
+        }
+    }
+
     if (id == ITEM_DYE_POWDER && try_use_dye_item(held, hit, target_id)) return 1;
 
     if (held_is_hoe_item(id)) {
@@ -7392,6 +7450,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
         if (flat_in_bounds(px, py, pz) && flat_get_block(px, py, pz) == 0 && !flat_block_intersects_player(px, py, pz)) {
             if (!g_mp_connected) flat_begin_persistent_edit();
             flat_set_block(px, py, pz, BLOCK_FIRE);
+            if (!g_mp_connected) block_on_placed(px, py, pz, BLOCK_FIRE);
             if (!g_mp_connected) flat_end_persistent_edit();
             if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, px, py, pz, hit->face, BLOCK_FIRE);
             else g_save_dirty = 1;
@@ -7401,6 +7460,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
         }
         return 0;
     }
+
 
     if (id == ITEM_BUCKET_EMPTY) {
         int sx, sy, sz;
