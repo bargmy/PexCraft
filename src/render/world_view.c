@@ -3299,7 +3299,7 @@ static int block_occludes_render_face(int id) {
         id == BLOCK_LADDER || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL ||
         id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_STONE_BUTTON ||
         id == BLOCK_LEVER || id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON ||
-        id == BLOCK_WEB || id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME) return 0;
+        id == BLOCK_WEB || id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME || id == BLOCK_PORTAL) return 0;
     if (id == BLOCK_LEAVES) return flat_fancy_cutout_terrain_enabled() ? 0 : 1;
     if (id == BLOCK_GLASS || id == BLOCK_SAPLING ||
         id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
@@ -4803,7 +4803,7 @@ static int block_uses_special_model(int id) {
            id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS ||
            id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
            id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS ||
-           id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL_FRAME || id == BLOCK_END_PORTAL ||
+           id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL_FRAME || id == BLOCK_END_PORTAL || id == BLOCK_PORTAL ||
            id == BLOCK_CACTUS || id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_REDSTONE_WIRE ||
            id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE || id == BLOCK_STONE_BUTTON ||
            id == BLOCK_SIGN_POST || id == BLOCK_WALL_SIGN ||
@@ -4903,17 +4903,53 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); return; }
     if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0,0.5625f,1,1); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0.4375f,1,1,0.5625f); return; }
     if (id == BLOCK_LILY_PAD) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_resolve(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
-    if (id == BLOCK_END_PORTAL) {
-        glDisable(GL_TEXTURE_2D);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDisable(GL_ALPHA_TEST);
-        glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+    if (id == BLOCK_PORTAL) {
+        float u0, v0, u1, v1;
+        terrain_tile_uv(14, &u0, &v0, &u1, &v1);
+        flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 0.5f, flat_fullbright_packed_light());
+        int runs_along_x = 1;
+        if (flat_get_block(x, y, z - 1) == BLOCK_PORTAL || flat_get_block(x, y, z + 1) == BLOCK_PORTAL ||
+            flat_get_block(x, y, z - 1) == BLOCK_OBSIDIAN || flat_get_block(x, y, z + 1) == BLOCK_OBSIDIAN) {
+            runs_along_x = 0;
+        }
         glBegin(GL_QUADS);
-        glVertex3f((float)x,   (float)y + 0.01f, (float)z);
-        glVertex3f((float)x+1, (float)y + 0.01f, (float)z);
-        glVertex3f((float)x+1, (float)y + 0.01f, (float)z+1);
-        glVertex3f((float)x,   (float)y + 0.01f, (float)z+1);
+        if (runs_along_x) {
+            // South face
+            world_tex_vertex((float)x,   (float)y,        (float)z + 0.625f, u0, v1);
+            world_tex_vertex((float)x+1, (float)y,        (float)z + 0.625f, u1, v1);
+            world_tex_vertex((float)x+1, (float)y + 1.0f, (float)z + 0.625f, u1, v0);
+            world_tex_vertex((float)x,   (float)y + 1.0f, (float)z + 0.625f, u0, v0);
+            // North face
+            world_tex_vertex((float)x,   (float)y,        (float)z + 0.375f, u1, v1);
+            world_tex_vertex((float)x,   (float)y + 1.0f, (float)z + 0.375f, u1, v0);
+            world_tex_vertex((float)x+1, (float)y + 1.0f, (float)z + 0.375f, u0, v0);
+            world_tex_vertex((float)x+1, (float)y,        (float)z + 0.375f, u0, v1);
+        } else {
+            // East face
+            world_tex_vertex((float)x + 0.625f, (float)y,        (float)z,   u0, v1);
+            world_tex_vertex((float)x + 0.625f, (float)y,        (float)z+1, u1, v1);
+            world_tex_vertex((float)x + 0.625f, (float)y + 1.0f, (float)z+1, u1, v0);
+            world_tex_vertex((float)x + 0.625f, (float)y + 1.0f, (float)z,   u0, v0);
+            // West face
+            world_tex_vertex((float)x + 0.375f, (float)y,        (float)z,   u1, v1);
+            world_tex_vertex((float)x + 0.375f, (float)y + 1.0f, (float)z,   u1, v0);
+            world_tex_vertex((float)x + 0.375f, (float)y + 1.0f, (float)z+1, u0, v0);
+            world_tex_vertex((float)x + 0.375f, (float)y,        (float)z+1, u0, v1);
+        }
+        glEnd();
+        flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 1.0f, flat_fullbright_packed_light());
+        return;
+    }
+    if (id == BLOCK_END_PORTAL) {
+        float u0, v0, u1, v1;
+        terrain_tile_uv(15, &u0, &v0, &u1, &v1);
+        // Solid black background layer (layer 0)
+        flat_direct_set_color_light4f(0.0f, 0.0f, 0.0f, 1.0f, flat_fullbright_packed_light());
+        glBegin(GL_QUADS);
+        world_tex_vertex((float)x,   (float)y + 0.01f, (float)z,   u0, v0);
+        world_tex_vertex((float)x+1, (float)y + 0.01f, (float)z,   u1, v0);
+        world_tex_vertex((float)x+1, (float)y + 0.01f, (float)z+1, u1, v1);
+        world_tex_vertex((float)x,   (float)y + 0.01f, (float)z+1, u0, v1);
         glEnd();
         int layers = 8;
         for (int layer = 1; layer <= layers; ++layer) {
@@ -4923,17 +4959,15 @@ static void draw_special_block_model(int id, int x, int y, int z) {
             float cg = t * 0.05f;
             float cb = 0.15f + t * 0.20f;
             float alpha = 0.20f * (1.0f - t * 0.5f);
-            glColor4f(cr, cg, cb, alpha);
+            flat_direct_set_color_light4f(cr, cg, cb, alpha, flat_fullbright_packed_light());
             glBegin(GL_QUADS);
-            glVertex3f((float)x,   depth, (float)z);
-            glVertex3f((float)x+1, depth, (float)z);
-            glVertex3f((float)x+1, depth, (float)z+1);
-            glVertex3f((float)x,   depth, (float)z+1);
+            world_tex_vertex((float)x,   depth, (float)z,   u0, v0);
+            world_tex_vertex((float)x+1, depth, (float)z,   u1, v0);
+            world_tex_vertex((float)x+1, depth, (float)z+1, u1, v1);
+            world_tex_vertex((float)x,   depth, (float)z+1, u0, v1);
             glEnd();
         }
-        glEnable(GL_ALPHA_TEST);
-        glDisable(GL_BLEND);
-        glEnable(GL_TEXTURE_2D);
+        flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 1.0f, flat_fullbright_packed_light());
         return;
     }
     if (id == BLOCK_END_PORTAL_FRAME) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,13.0f/16.0f,1); return; }
@@ -5459,6 +5493,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             for (int x = x0; x <= x1; x++) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
+                if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) { has1 = 1; continue; }
                 if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
                 if (block_is_liquid(id)) { if (flat_separate_liquid_pass_enabled()) { has1 = 1; continue; } }
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
@@ -5478,7 +5513,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     if (has_special) {
         for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
             int id = flat_get_block(x, y, z);
-            if (block_uses_special_model(id)) { draw_special_block_model(id, x, y, z); has0 = 1; }
+            if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) { draw_special_block_model(id, x, y, z); has0 = 1; }
         }
     }
     if (has_cutout) {
@@ -5512,10 +5547,14 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
 
     flat_direct_begin(&mb1);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    if (has1 && flat_separate_liquid_pass_enabled()) {
+    if (has1) {
         for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
             int id = flat_get_block(x, y, z);
-            if (block_is_liquid(id)) emit_liquid_block_faces(id, x, y, z);
+            if (block_is_liquid(id)) {
+                if (flat_separate_liquid_pass_enabled()) emit_liquid_block_faces(id, x, y, z);
+            } else if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) {
+                draw_special_block_model(id, x, y, z);
+            }
         }
     }
     glColor4f(1,1,1,1);
@@ -5525,7 +5564,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
         if (g_flat_direct_capture_out0) *g_flat_direct_capture_out0 = mb0;
         if (g_flat_direct_capture_out1) *g_flat_direct_capture_out1 = mb1;
         if (g_flat_direct_capture_skip0) *g_flat_direct_capture_skip0 = !has0;
-        if (g_flat_direct_capture_skip1) *g_flat_direct_capture_skip1 = !(has1 && flat_separate_liquid_pass_enabled());
+        if (g_flat_direct_capture_skip1) *g_flat_direct_capture_skip1 = !has1;
         g_flat_direct_capture_success = 1;
         return;
     }
@@ -5539,7 +5578,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     g_flat_section_dirty[sy][cz][cx] = 0;
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
-    g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && flat_separate_liquid_pass_enabled());
+    g_flat_section_skip_pass[sy][cz][cx][1] = !has1;
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
 }
 
@@ -5573,6 +5612,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
             for (int x = x0; x <= x1; x++) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
+                if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) { has1 = 1; continue; }
                 if (id == BLOCK_SNOW_LAYER) {
                     emit_snow_layer_block(x, y, z);
                     has0 = 1;
@@ -5602,7 +5642,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
             for (int z = z0; z <= z1; z++) {
                 for (int x = x0; x <= x1; x++) {
                     int id = flat_get_block(x, y, z);
-                    if (block_uses_special_model(id)) { draw_special_block_model(id, x, y, z); has0 = 1; }
+                    if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) { draw_special_block_model(id, x, y, z); has0 = 1; }
                 }
             }
         }
@@ -5641,17 +5681,31 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
 
     glNewList(g_flat_section_lists[sy][cz][cx][1], GL_COMPILE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    if (has1 && flat_separate_liquid_pass_enabled()) {
-        glBegin(GL_QUADS);
+    if (has1) {
+        int liquid_active = 0;
         for (int y = y0; y <= y1; y++) {
             for (int z = z0; z <= z1; z++) {
                 for (int x = x0; x <= x1; x++) {
                     int id = flat_get_block(x, y, z);
-                    if (block_is_liquid(id)) emit_liquid_block_faces(id, x, y, z);
+                    if (block_is_liquid(id) && flat_separate_liquid_pass_enabled()) {
+                        if (!liquid_active) {
+                            glBegin(GL_QUADS);
+                            liquid_active = 1;
+                        }
+                        emit_liquid_block_faces(id, x, y, z);
+                    } else if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) {
+                        if (liquid_active) {
+                            glEnd();
+                            liquid_active = 0;
+                        }
+                        draw_special_block_model(id, x, y, z);
+                    }
                 }
             }
         }
-        glEnd();
+        if (liquid_active) {
+            glEnd();
+        }
     }
     glColor4f(1,1,1,1);
     glEndList();
@@ -5660,7 +5714,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
     g_flat_section_dirty[sy][cz][cx] = 0;
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
-    g_flat_section_skip_pass[sy][cz][cx][1] = !(has1 && flat_separate_liquid_pass_enabled());
+    g_flat_section_skip_pass[sy][cz][cx][1] = !has1;
     g_flat_section_mesh_light_version[sy][cz][cx] = g_flat_chunk_light_version[cz][cx];
 }
 
