@@ -1684,6 +1684,7 @@ static int handle_setblock_command(int argc, char *argv[]) {
 }
 
 static int handle_local_chat_command(const char *text) {
+    if (dear_memories_try_trigger(text)) return 1;
     if (!text || text[0] != '/') return 0;
     /* In multiplayer, slash commands belong to the server. Do not run any
        local cheat/debug command client-side. */

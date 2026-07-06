@@ -39,6 +39,7 @@ static void set_default_options(void) {
     snprintf(g_opts.username, sizeof(g_opts.username), "Player");
     g_opts.name_set = 0;
     g_opts.tv_remote_mapped = 0;
+    g_resource_pack_cache_revision = 0;
     for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) g_opts.tv_remote_map[i] = 0;
     snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
     pex_set_language_code(g_opts.language);
@@ -131,6 +132,11 @@ static void load_options(void) {
         else if (!strcmp(k, "username")) snprintf(g_opts.username, sizeof(g_opts.username), "%s", v);
         else if (!strcmp(k, "isnameset") || !strcmp(k, "isNameSet") || !strcmp(k, "nameSet")) g_opts.name_set = (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes"));
         else if (!strcmp(k, "tvRemoteMapped") || !strcmp(k, "tvRemote.mapped")) g_opts.tv_remote_mapped = (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes"));
+        else if (!strcmp(k, "resourcePackCacheRevision")) {
+            g_resource_pack_cache_revision = atoi(v);
+            if (g_resource_pack_cache_revision < 0) g_resource_pack_cache_revision = 0;
+            if (g_resource_pack_cache_revision > 2) g_resource_pack_cache_revision = 2;
+        }
         else if (!strncmp(k, "tvRemote.", 9)) {
             const char *name = k + 9;
             for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) {
@@ -216,6 +222,7 @@ static void save_options(void) {
     fprintf(f, "username:%s\n", g_opts.username);
     fprintf(f, "isnameset:%s\n", g_opts.name_set ? "true" : "false");
     fprintf(f, "tvRemoteMapped:%s\n", g_opts.tv_remote_mapped ? "true" : "false");
+    fprintf(f, "resourcePackCacheRevision:%d\n", g_resource_pack_cache_revision);
     for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) fprintf(f, "tvRemote.%s:%d\n", pex_tv_remote_action_key(i), g_opts.tv_remote_map[i]);
     fprintf(f, "lang:%s\n", g_opts.language[0] ? g_opts.language : pex_current_language_code());
     const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};

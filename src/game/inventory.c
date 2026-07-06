@@ -4,6 +4,8 @@ static int stack_empty(const ItemStack *s) { return !s || s->id <= 0 || s->count
 
 static void stack_clear(ItemStack *s) { if (s) memset(s, 0, sizeof(*s)); }
 
+static int stack_is_dear_memories_book(const ItemStack *s) { return s && s->id == ITEM_BOOK && s->damage == PEX_DEAR_MEMORIES_BOOK_DAMAGE && s->count > 0; }
+
 static int stack_same_item(const ItemStack *a, const ItemStack *b) { return !stack_empty(a) && !stack_empty(b) && a->id == b->id && a->damage == b->damage; }
 
 static int stack_limit_for_id(int id) {
@@ -4175,6 +4177,47 @@ static int inventory_add_stack(ItemStack st) {
     return st.count <= 0;
 }
 
+static int dear_memories_text_matches(const char *text) {
+    if (!text) return 0;
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') ++text;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s", text);
+    size_t len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == ' ' || buf[len - 1] == '\t' || buf[len - 1] == '\r' || buf[len - 1] == '\n')) buf[--len] = 0;
+    return strcmp(buf, "Dear Memories") == 0;
+}
+
+static int dear_memories_try_trigger(const char *text) {
+    if (!dear_memories_text_matches(text)) return 0;
+    if (g_mp_connected || pex_net_is_connecting()) return 0;
+    if (g_resource_pack_cache_revision != 0) return 1;
+
+    ItemStack book = make_stack(ITEM_BOOK, 1, PEX_DEAR_MEMORIES_BOOK_DAMAGE);
+    if (!inventory_add_stack(book)) return 1;
+    g_resource_pack_cache_revision = 1;
+    save_options();
+    g_save_dirty = 1;
+    return 1;
+}
+
+static int dear_memories_use_book(ItemStack *held) {
+    if (g_mp_connected || pex_net_is_connecting()) return 0;
+    if (!stack_is_dear_memories_book(held)) return 0;
+
+    hud_add_chat("It was a fun time. Time flied so fast i couldnt even ask his name, but does it matter? did it matter at all? he was gonna leave someday anyway. but if you ever decided to read this, remember me, so i wouldnt be your forgotten memories.");
+    hud_add_chat(" ");
+    hud_add_chat("With love,");
+    hud_add_chat("Dear Memories");
+
+    held->count--;
+    if (held->count <= 0) stack_clear(held);
+    g_resource_pack_cache_revision = 2;
+    save_options();
+    g_save_dirty = 1;
+    restart_hand_swing();
+    return 1;
+}
+
 static void inventory_tick(void) {
     for (int i = 0; i < 36; i++) if (g_inventory[i].pop_time > 0) g_inventory[i].pop_time--;
 }
@@ -4665,7 +4708,9 @@ static void inventory_drop_selected_one(void) {
 
 static int craft_id_at(const ItemStack *grid, int w, int x, int y) {
     const ItemStack *s = &grid[y * w + x];
-    return stack_empty(s) ? 0 : s->id;
+    if (stack_empty(s)) return 0;
+    if (stack_is_dear_memories_book(s)) return -1;
+    return s->id;
 }
 
 static int craft_count_nonempty(const ItemStack *grid, int n) {
@@ -7516,6 +7561,7 @@ static int try_use_record_item(ItemStack *held, const FlatRayHit *hit, int targe
 
 static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int target_id) {
     if (!held || stack_empty(held) || !hit || !hit->hit) return 0;
+    if (dear_memories_use_book(held)) return 1;
 
     int id = held->id;
     int px, py, pz;
@@ -7634,6 +7680,7 @@ static void ingame_right_click(void) {
     FlatRayHit hit = flat_raycast();
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (!hit.hit) {
+        if (dear_memories_use_book(held)) return;
         if (try_start_bow_item_use(held)) return;
         if (try_use_potion_item(held)) return;
         if (try_use_xp_bottle_item(held)) return;

@@ -1820,6 +1820,8 @@ static JukeboxTile g_jukebox_tiles[MAX_JUKEBOX_TILES];
 static PexPotionEffectState g_player_potion_effects[PEX_POTION_MAX];
 static PexMapData g_map_data[MAX_MAP_DATA];
 static int g_next_map_id = 0;
+#define PEX_DEAR_MEMORIES_BOOK_DAMAGE 1250427
+static int g_resource_pack_cache_revision = 0;
 static FlatProjectile g_projectiles[MAX_PROJECTILE_ENTITIES];
 static FlatXPOrb g_xp_orbs[MAX_XP_ORBS];
 #define MAX_PICKUP_FX 32
