@@ -125,6 +125,10 @@ static const char *pex_sound_alias(const char *key) {
     if (!strcmp(key, "mob.zombie")) return "mob.zombie.say";
     if (!strcmp(key, "mob.zombiehurt")) return "mob.zombie.hurt";
     if (!strcmp(key, "mob.zombiedeath")) return "mob.zombie.death";
+    if (!strcmp(key, "mob.villager.default")) return "mob.villager.idle";
+    if (!strcmp(key, "mob.villager.defaulthurt")) return "mob.villager.hit";
+    if (!strcmp(key, "mob.villager.defaultdeath")) return "mob.villager.death";
+    if (!strcmp(key, "mob.snowman")) return "";
     if (!strcmp(key, "random.hurt")) return "random.classic_hurt";
     if (!strcmp(key, "random.drr")) return "random.bowhit";
     return key;
@@ -133,6 +137,7 @@ static const char *pex_sound_alias(const char *key) {
 static const char *pex_sound_find_file(const char *key) {
     if (!g_pex_sound_scanned || (now_seconds() - g_pex_last_sound_rescan) > 5.0) pex_sound_rescan();
     const char *want = pex_sound_alias(key);
+    if (!want || !*want) return NULL;
     int matches[64];
     int count = 0;
     for (int i = 0; i < g_pex_sound_count; ++i) {
@@ -850,24 +855,38 @@ static int pex_sound_record_dependency_report(char *out, size_t cap) { if (out &
 
 static void pex_menu_music_start_once(void) {
     if (g_opts.music <= 0.001f) return;
-    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], menu2[MAX_PATHBUF];
+    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], picked[MAX_PATHBUF];
+    int start = rand() & 3;
     classic_resources_path(resources, sizeof(resources));
     path_join(music, sizeof(music), resources, "music");
     path_join(menu, sizeof(menu), music, "menu");
-    path_join(menu2, sizeof(menu2), menu, "menu2.ogg");
-    if (!file_exists(menu2)) {
+    picked[0] = 0;
+    for (int i = 0; i < 4; ++i) {
+        char name[32];
+        snprintf(name, sizeof(name), "menu%d.ogg", ((start + i) & 3) + 1);
+        path_join(picked, sizeof(picked), menu, name);
+        if (file_exists(picked)) break;
+        picked[0] = 0;
+    }
+    if (!picked[0]) {
         char sounds[MAX_PATHBUF], music2[MAX_PATHBUF], menu_dir2[MAX_PATHBUF];
         path_join(sounds, sizeof(sounds), resources, "sounds");
         path_join(music2, sizeof(music2), sounds, "music");
         path_join(menu_dir2, sizeof(menu_dir2), music2, "menu");
-        path_join(menu2, sizeof(menu2), menu_dir2, "menu2.ogg");
+        for (int i = 0; i < 4; ++i) {
+            char name[32];
+            snprintf(name, sizeof(name), "menu%d.ogg", ((start + i) & 3) + 1);
+            path_join(picked, sizeof(picked), menu_dir2, name);
+            if (file_exists(picked)) break;
+            picked[0] = 0;
+        }
     }
-    if (!file_exists(menu2)) return;
+    if (!picked[0]) return;
     float volume = g_opts.music;
     if (volume > 1.0f) volume = 1.0f;
     if (volume < 0.0f) volume = 0.0f;
     g_pex_menu_music_request = 1;
-    pex_sound_backend_play_file(menu2, volume, 1.0f);
+    pex_sound_backend_play_file(picked, volume, 1.0f);
     g_pex_menu_music_request = 0;
 }
 
@@ -945,6 +964,7 @@ static void pex_sound_play(const char *key, float volume, float pitch) {
     if (!key || !*key) return;
     if (g_opts.sound <= 0.001f) return;
     if (volume <= 0.001f) return;
+    if (!pex_sound_alias(key)[0]) return;
     float final_volume = volume * g_opts.sound;
     if (final_volume > 1.0f) final_volume = 1.0f;
     if (final_volume < 0.0f) final_volume = 0.0f;

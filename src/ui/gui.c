@@ -1417,14 +1417,14 @@ static void draw_pack_download_prompt(void) {
     draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 45, 16777215);
     draw_text("Textures come from Minecraft 1.2.5 client.jar.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 61, 10526880);
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    draw_text("Only Moog City 2 comes from legacy.json.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
+    draw_text("Sounds come from legacy.json, excluding in-game songs.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
 #else
     draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
 #endif
     format_download_size(size_line, sizeof(size_line));
     draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 89, 10526880);
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    draw_text("Only Release textures and Moog City 2 are downloaded.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);
+    draw_text("Downloads sounds, records, UI, mobs, ambience, and menu music.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);
 #endif
     draw_all_buttons();
 }

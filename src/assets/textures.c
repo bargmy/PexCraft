@@ -779,7 +779,52 @@ static void classic_resources_path(char *out, size_t cap) {
 static void classic_sound_marker_path(char *out, size_t cap) {
     char root[MAX_PATHBUF];
     classic_resources_path(root, sizeof(root));
-    path_join(out, cap, root, ".pexcraft-release-music");
+    path_join(out, cap, root, ".pexcraft-release-sounds");
+}
+
+static void classic_sound_manifest_path(char *out, size_t cap) {
+    char root[MAX_PATHBUF];
+    classic_resources_path(root, sizeof(root));
+    path_join(out, cap, root, ".pexcraft-release-sounds-manifest");
+}
+
+static unsigned long long classic_file_size_bytes(const char *path) {
+    FILE *f = fopen(path, "rb");
+    long n;
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    n = ftell(f);
+    fclose(f);
+    return n > 0 ? (unsigned long long)n : 0ULL;
+}
+
+static int classic_sound_manifest_valid(const char *manifest, const char *root) {
+    FILE *f = fopen(manifest, "r");
+    char line[MAX_PATHBUF + 96];
+    int checked = 0;
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *path = line;
+        char *size_s;
+        char full[MAX_PATHBUF];
+        unsigned long long expect;
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (!strncmp(path, "asset|", 6)) path += 6;
+        else continue;
+        size_s = strchr(path, '|');
+        if (!size_s) { fclose(f); return 0; }
+        *size_s++ = 0;
+        expect = (unsigned long long)strtoull(size_s, NULL, 10);
+        if (!path[0] || strstr(path, "..") || path[0] == '/' || path[0] == '\\' || expect == 0) { fclose(f); return 0; }
+        path_join(full, sizeof(full), root, path);
+        if (classic_file_size_bytes(full) != expect) { fclose(f); return 0; }
+        checked++;
+    }
+    fclose(f);
+    /* The filtered legacy set has hundreds of assets.  A tiny/old marker from
+       the old menu2-only downloader must not count as installed. */
+    return checked >= 400;
 }
 
 static int classic_sounds_installed(void) {
@@ -787,19 +832,22 @@ static int classic_sounds_installed(void) {
     return 1;
 #else
     char marker[MAX_PATHBUF];
+    char manifest[MAX_PATHBUF];
     char root[MAX_PATHBUF];
-    char music_dir[MAX_PATHBUF];
-    char menu_dir[MAX_PATHBUF];
-    char menu2[MAX_PATHBUF];
-
-    classic_sound_marker_path(marker, sizeof(marker));
-    if (!file_exists(marker)) return 0;
+    char text[128];
+    FILE *f;
 
     classic_resources_path(root, sizeof(root));
-    path_join(music_dir, sizeof(music_dir), root, "music");
-    path_join(menu_dir, sizeof(menu_dir), music_dir, "menu");
-    path_join(menu2, sizeof(menu2), menu_dir, "menu2.ogg");
-    return file_exists(menu2);
+    classic_sound_marker_path(marker, sizeof(marker));
+    classic_sound_manifest_path(manifest, sizeof(manifest));
+    if (!file_exists(marker) || !file_exists(manifest)) return 0;
+    f = fopen(marker, "r");
+    if (!f) return 0;
+    text[0] = 0;
+    fgets(text, sizeof(text), f);
+    fclose(f);
+    if (!strstr(text, "legacy-no-game-music-v1")) return 0;
+    return classic_sound_manifest_valid(manifest, root);
 #endif
 }
 
@@ -826,9 +874,9 @@ static int should_show_pack_download_prompt(void) {
 static void classic_resource_missing_summary(char *out, size_t cap) {
     int missing_textures = !pack_is_installed() || pack_missing_required_textures();
     int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
-    if (missing_textures && missing_sounds) snprintf(out, cap, "Release textures and Moog City 2 should be downloaded.");
+    if (missing_textures && missing_sounds) snprintf(out, cap, "Release textures and sounds should be downloaded.");
     else if (missing_textures) snprintf(out, cap, "Release textures should be downloaded.");
-    else if (missing_sounds) snprintf(out, cap, "Moog City 2 should be downloaded.");
+    else if (missing_sounds) snprintf(out, cap, "Release sounds should be downloaded.");
     else snprintf(out, cap, "Release resources are up to date.");
 }
 
@@ -843,8 +891,8 @@ static void add_builtin_classic_texture_pack(int *wanted) {
     int installed = pack_is_installed();
     if (installed) {
         if (pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block/mob textures");
-        else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing Moog City 2");
-        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Release textures + Moog City 2");
+        else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing Release sounds");
+        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Release textures + sounds");
         else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from 1.2.5 client.jar");
     } else {
         snprintf(e->desc2, sizeof(e->desc2), "Click to download Release resources");

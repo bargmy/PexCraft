@@ -1,7 +1,7 @@
 /* Linux/SDL2 release resources installer.
    Uses libcurl for HTTPS downloads and the internal ZIP/JAR extractor in
    pxc_zip_extract.c. Textures come from the official Minecraft 1.2.5 client.jar;
-   music comes from the official legacy.json asset index, limited to Moog City 2. */
+   sounds come from the official legacy.json asset index, filtered to exclude in-game background music. */
 
 #include <curl/curl.h>
 
@@ -20,6 +20,7 @@
 
 static volatile LONG g_classic_install_state = CLASSIC_INSTALL_IDLE;
 static volatile LONG g_classic_install_progress = 0;
+static volatile LONG g_classic_install_cancel_requested = 0;
 static HANDLE g_classic_install_thread = NULL;
 static char g_classic_install_status[MAX_LABEL] = "";
 static char g_classic_install_error[MAX_LABEL] = "";
@@ -30,7 +31,8 @@ static volatile LONG g_classic_sound_download_size_bytes = 0;
 static volatile LONG g_classic_sound_download_count = 0;
 
 typedef struct ClassicSoundAsset {
-    char path[MAX_PATHBUF];
+    char path[MAX_PATHBUF];      /* legacy.json object path */
+    char out_path[MAX_PATHBUF];  /* PexCraft resources-relative output path */
     char hash[48];
     unsigned int size;
 } ClassicSoundAsset;
@@ -87,6 +89,22 @@ static void pack_install_set_state(LONG state, LONG progress, const char *status
     InterlockedExchange(&g_classic_install_state, state);
 }
 
+static void pack_install_reset_cancel(void) {
+    InterlockedExchange(&g_classic_install_cancel_requested, 0);
+}
+
+static void pack_install_request_cancel(void) {
+    InterlockedExchange(&g_classic_install_cancel_requested, 1);
+    g_opts.download_classic_sounds = 0;
+    g_opts.ignore_classic_sounds_warning = 1;
+    save_options();
+    log_msg("Release sound/resource download cancel requested");
+}
+
+static int pack_install_is_cancelled(void) {
+    return InterlockedCompareExchange(&g_classic_install_cancel_requested, 0, 0) != 0;
+}
+
 static void pack_install_fail(const char *msg) {
     lstrcpynA(g_classic_install_error, msg ? msg : "Unknown error", sizeof(g_classic_install_error));
     pack_install_set_state(CLASSIC_INSTALL_ERROR, 0, "Failed");
@@ -104,16 +122,40 @@ static unsigned long long file_size_bytes(const char *path) {
 }
 
 static int legacy_sound_path_is_valid(const char *path) {
-    if (!path) return 0;
-    /* Moog City 2 is the Minecraft 1.2.5 menu track stored in the legacy
-       asset index.  In that index it is named sounds/music/menu/menu2.ogg. */
-    return !strcmp(path, "sounds/music/menu/menu2.ogg") || !strcmp(path, "music/menu/menu2.ogg");
+    if (!path || !*path) return 0;
+    /* User-selected Release sound set: everything useful for effects, UI,
+       records, ambience, mobs, and main-menu music, but not background
+       in-game music.  The legacy index contains duplicate old/new roots
+       (sound/ and sounds/); those are deduped by output path below. */
+    if (!strncmp(path, "sounds/music/game/", 18)) return 0;
+    if (!strncmp(path, "music/", 6) && strncmp(path, "music/menu/", 11)) return 0;
+    if (!strncmp(path, "sounds/music/menu/", 18)) return 1;
+    if (!strncmp(path, "music/menu/", 11)) return 1;
+    if (!strncmp(path, "sounds/records/", 15)) return 1;
+    if (!strncmp(path, "records/", 8)) return 1;
+    if (!strncmp(path, "sound/", 6)) return 1;
+    if (!strncmp(path, "sounds/", 7)) return 1;
+    return 0;
 }
 
-static const char *legacy_sound_output_path(const char *path) {
-    if (!path) return "music/menu/menu2.ogg";
-    if (!strncmp(path, "sounds/", 7)) return path + 7;
-    return path;
+static void legacy_sound_make_output_path(const char *path, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    if (!path || !*path) return;
+    if (!strncmp(path, "sounds/music/menu/", 18)) snprintf(out, cap, "music/menu/%s", path + 18);
+    else if (!strncmp(path, "music/menu/", 11)) snprintf(out, cap, "%s", path);
+    else if (!strncmp(path, "sounds/records/", 15)) snprintf(out, cap, "streaming/%s", path + 15);
+    else if (!strncmp(path, "records/", 8)) snprintf(out, cap, "streaming/%s", path + 8);
+    else if (!strncmp(path, "sounds/", 7)) snprintf(out, cap, "sound/%s", path + 7);
+    else snprintf(out, cap, "%s", path);
+}
+
+static int legacy_sound_asset_already_added(ClassicSoundAsset *assets, int count, const char *out_path) {
+    if (!assets || !out_path || !*out_path) return 0;
+    for (int i = 0; i < count; ++i) {
+        if (!strcmp(assets[i].out_path, out_path)) return 1;
+    }
+    return 0;
 }
 
 static const char *json_find_token(const char *p, const char *end, const char *token) {
@@ -147,6 +189,10 @@ static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAs
         memcpy(key, q + 1, key_len); key[key_len] = 0;
         p = r + 1;
         if (!legacy_sound_path_is_valid(key)) continue;
+        char out_rel[MAX_PATHBUF];
+        legacy_sound_make_output_path(key, out_rel, sizeof(out_rel));
+        if (!out_rel[0]) continue;
+        if (legacy_sound_asset_already_added(assets, count, out_rel)) continue;
         obj_end = strchr(p, '}');
         if (!obj_end || obj_end > end) break;
         hash_tok = json_find_token(p, obj_end, "\"hash\"");
@@ -161,19 +207,19 @@ static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAs
         if (!size_tok || size_tok >= obj_end) { p = obj_end + 1; continue; }
         sz = (unsigned int)parse_u64_decimal(size_tok + 1);
         if (!sz) { p = obj_end + 1; continue; }
+        if (legacy_sound_asset_already_added(assets, count, out_rel)) { p = obj_end + 1; continue; }
         total += sz;
-        if (out_assets) {
-            if (count >= cap) {
-                int nc = cap ? cap * 2 : 256;
-                ClassicSoundAsset *na = (ClassicSoundAsset *)realloc(assets, (size_t)nc * sizeof(ClassicSoundAsset));
-                if (!na) { free(assets); return 0; }
-                assets = na;
-                cap = nc;
-            }
-            snprintf(assets[count].path, sizeof(assets[count].path), "%s", key);
-            snprintf(assets[count].hash, sizeof(assets[count].hash), "%s", hash);
-            assets[count].size = sz;
+        if (count >= cap) {
+            int nc = cap ? cap * 2 : 256;
+            ClassicSoundAsset *na = (ClassicSoundAsset *)realloc(assets, (size_t)nc * sizeof(ClassicSoundAsset));
+            if (!na) { free(assets); return 0; }
+            assets = na;
+            cap = nc;
         }
+        snprintf(assets[count].path, sizeof(assets[count].path), "%s", key);
+        snprintf(assets[count].out_path, sizeof(assets[count].out_path), "%s", out_rel);
+        snprintf(assets[count].hash, sizeof(assets[count].hash), "%s", hash);
+        assets[count].size = sz;
         count++;
         p = obj_end + 1;
     }
@@ -230,6 +276,18 @@ static int classic_curl_progress_cb(void *userdata, curl_off_t dltotal, curl_off
 }
 #endif
 
+#if LIBCURL_VERSION_NUM >= 0x072000
+static int classic_curl_cancel_cb(void *userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    (void)userdata; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    return pack_install_is_cancelled() ? 1 : 0;
+}
+#else
+static int classic_curl_cancel_cb(void *userdata, double dltotal, double dlnow, double ultotal, double ulnow) {
+    (void)userdata; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    return pack_install_is_cancelled() ? 1 : 0;
+}
+#endif
+
 static int http_download_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len) {
     CURL *curl;
     CURLcode rc;
@@ -250,6 +308,14 @@ static int http_download_to_memory(const char *url, char **out_data, size_t *out
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+#if LIBCURL_VERSION_NUM >= 0x072000
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, classic_curl_cancel_cb);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, NULL);
+#else
+    curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, classic_curl_cancel_cb);
+    curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, NULL);
+#endif
     rc = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     if (rc != CURLE_OK || !ctx.data || ctx.len == 0) { free(ctx.data); return 0; }
@@ -279,6 +345,14 @@ static int http_download_to_file(const char *url, const char *path, unsigned int
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+#if LIBCURL_VERSION_NUM >= 0x072000
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, classic_curl_cancel_cb);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, NULL);
+#else
+    curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, classic_curl_cancel_cb);
+    curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, NULL);
+#endif
     rc = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     fclose(out);
@@ -339,11 +413,11 @@ static void format_download_size(char *out, size_t cap) {
         else snprintf(tex_part, sizeof(tex_part), "Textures: unavailable");
 
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-        if (classic_sounds_installed()) snprintf(snd_part, sizeof(snd_part), "Moog City 2: installed");
-        else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Moog City 2: %.2f MB", (double)snd / (1024.0 * 1024.0));
-        else snprintf(snd_part, sizeof(snd_part), "Moog City 2: unavailable");
+        if (classic_sounds_installed()) snprintf(snd_part, sizeof(snd_part), "Release sounds: installed");
+        else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Release sounds: %.2f MB", (double)snd / (1024.0 * 1024.0));
+        else snprintf(snd_part, sizeof(snd_part), "Release sounds: unavailable");
 #else
-        snprintf(snd_part, sizeof(snd_part), "Moog City 2: unsupported");
+        snprintf(snd_part, sizeof(snd_part), "Release sounds: unsupported");
 #endif
         snprintf(out, cap, "%s | %s", tex_part, snd_part);
         return;
@@ -470,20 +544,21 @@ static DWORD WINAPI legacy_sound_download_worker(LPVOID arg) {
         int done;
         int pct;
         if (idx < 0 || idx >= ctx->count) break;
+        if (pack_install_is_cancelled()) { InterlockedExchange(&ctx->failed, 2); break; }
         if (InterlockedCompareExchange(&ctx->failed, 0, 0)) break;
         asset = &ctx->assets[idx];
-        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, legacy_sound_output_path(asset->path));
+        pxc_zip_make_output_path(out_path, sizeof(out_path), ctx->root, asset->out_path);
         if (file_size_bytes(out_path) != asset->size) {
             snprintf(url, sizeof(url), "%s/%.2s/%s", CLASSIC_SOUND_OBJECT_URL_PREFIX, asset->hash, asset->hash);
             if (!http_download_to_file(url, out_path, asset->size)) {
-                InterlockedExchange(&ctx->failed, 1);
+                InterlockedExchange(&ctx->failed, pack_install_is_cancelled() ? 2 : 1);
                 break;
             }
         }
         done = (int)atomic_increment_int(&ctx->completed);
         pct = 5 + (int)(((unsigned long long)done * 90ULL) / (unsigned long long)(ctx->count > 0 ? ctx->count : 1));
         if (pct > 95) pct = 95;
-        snprintf(st, sizeof(st), "Downloading Moog City 2");
+        snprintf(st, sizeof(st), "Downloading Release sounds");
         pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
     }
     return 0;
@@ -507,14 +582,14 @@ static int legacy_sound_download_all(void) {
     memset(threads, 0, sizeof(threads));
     memset(&ctx, 0, sizeof(ctx));
 
-    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Finding Moog City 2...");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Finding Release sounds...");
     if (!http_download_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
-        pack_install_fail("Could not download legacy asset index");
+        pack_install_fail(pack_install_is_cancelled() ? "Canceled" : "Could not download legacy asset index");
         return 0;
     }
     if (!legacy_sound_parse_index(json, len, &assets, &count, &total)) {
         free(json);
-        pack_install_fail("Could not find Moog City 2 in legacy asset index");
+        pack_install_fail("Could not find Release sounds in legacy asset index");
         return 0;
     }
     free(json);
@@ -534,7 +609,7 @@ static int legacy_sound_download_all(void) {
     if (worker_count < 1) worker_count = 1;
     {
         char st[MAX_LABEL];
-        snprintf(st, sizeof(st), "Downloading Moog City 2");
+        snprintf(st, sizeof(st), "Downloading Release sounds");
         pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 5, st);
     }
 
@@ -553,21 +628,37 @@ static int legacy_sound_download_all(void) {
     }
 
     downloaded = (int)InterlockedCompareExchange(&ctx.completed, 0, 0);
-    if (InterlockedCompareExchange(&ctx.failed, 0, 0) || downloaded < count) {
-        free(assets);
-        pack_install_fail("Could not download Moog City 2");
-        return 0;
+    {
+        LONG fail = InterlockedCompareExchange(&ctx.failed, 0, 0);
+        if (fail || downloaded < count) {
+            free(assets);
+            pack_install_fail(fail == 2 ? "Canceled" : "Could not download Release sounds");
+            return 0;
+        }
     }
 
-    classic_sound_marker_path(marker, sizeof(marker));
     {
-        char text[160];
-        snprintf(text, sizeof(text), "PexCraft Release music\nfile:menu2.ogg\nbytes:%llu\n", total);
+        char manifest[MAX_PATHBUF];
+        FILE *mf;
+        classic_sound_manifest_path(manifest, sizeof(manifest));
+        pxc_mkdirs_for_file(manifest);
+        mf = fopen(manifest, "w");
+        if (mf) {
+            fprintf(mf, "# PexCraft legacy-no-game-music-v1\n");
+            for (int i = 0; i < count; ++i) fprintf(mf, "asset|%s|%u|%s\n", assets[i].out_path, assets[i].size, assets[i].hash);
+            fclose(mf);
+        }
+        ok = (mf != NULL);
+    }
+    classic_sound_marker_path(marker, sizeof(marker));
+    if (ok) {
+        char text[192];
+        snprintf(text, sizeof(text), "PexCraft legacy-no-game-music-v1\nfiles:%d\nbytes:%llu\n", count, total);
         ok = pxc_write_file_all(marker, (const unsigned char *)text, strlen(text));
     }
     free(assets);
     if (!ok) { pack_install_fail("Could not write sound install marker"); return 0; }
-    log_msg("Installed Moog City 2 with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
+    log_msg("Installed Release sounds with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
     pex_sound_rescan();
     return 1;
 }
@@ -626,7 +717,9 @@ static int pack_resources_install_blocking(void) {
 }
 
 static void pack_install_start(void) {
-    LONG state = InterlockedCompareExchange(&g_classic_install_state, CLASSIC_INSTALL_DOWNLOADING, CLASSIC_INSTALL_IDLE);
+    LONG state;
+    pack_install_reset_cancel();
+    state = InterlockedCompareExchange(&g_classic_install_state, CLASSIC_INSTALL_DOWNLOADING, CLASSIC_INSTALL_IDLE);
     if (state == CLASSIC_INSTALL_DOWNLOADING || state == CLASSIC_INSTALL_EXTRACTING) { set_screen(SCREEN_TEXPACK_INSTALL); return; }
     if (g_classic_install_thread) { CloseHandle(g_classic_install_thread); g_classic_install_thread = NULL; }
     g_classic_install_error[0] = 0;
@@ -647,6 +740,10 @@ static void pack_install_tick(void) {
     } else if (state == CLASSIC_INSTALL_ERROR) {
         if (g_classic_install_thread) { WaitForSingleObject(g_classic_install_thread, 0); CloseHandle(g_classic_install_thread); g_classic_install_thread = NULL; }
         InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);
-        open_notice("Texture Pack", "Could not install Release resources.", g_classic_install_error);
+        if (!strcmp(g_classic_install_error, "Canceled")) {
+            set_screen(SCREEN_TITLE);
+        } else {
+            open_notice("Texture Pack", "Could not install Release resources.", g_classic_install_error);
+        }
     }
 }

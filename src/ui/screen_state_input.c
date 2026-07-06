@@ -939,6 +939,8 @@ static void rebuild_screen(void) {
         }
     } else if (g_screen == SCREEN_CONNECTING) {
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 120 + 12, tr_key_default("gui.cancel", "Cancel"));
+    } else if (g_screen == SCREEN_TEXPACK_INSTALL) {
+        add_button(1, g_gui_w / 2 - 100, g_gui_h / 2 + 34, tr_key_default("gui.cancel", "Cancel"));
     } else if (g_screen == SCREEN_TEXPACK) {
         scan_texture_packs();
         add_button_full(5, g_gui_w / 2 - 154, g_gui_h - 48, 150, 20, tr_key_default("texturePack.openFolder", "Open texture pack folder"), BUTTON_NORMAL);
@@ -960,7 +962,7 @@ static void rebuild_screen(void) {
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
         char snd_label[MAX_LABEL];
-        snprintf(snd_label, sizeof(snd_label), "Music: Moog City 2");
+        snprintf(snd_label, sizeof(snd_label), "Sounds: %s", g_opts.download_classic_sounds ? "ON" : "OFF");
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h / 4 + 112, 200, 20, snd_label, BUTTON_NORMAL);
         add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 140, 150, 20, "Download", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 140, 150, 20, "Ignore", BUTTON_NORMAL);
@@ -1227,6 +1229,8 @@ static void on_button(Button *b) {
         pex_net_disconnect();
         pex_net_set_status("Canceled.");
         set_screen(SCREEN_MULTIPLAYER);
+    } else if (g_screen == SCREEN_TEXPACK_INSTALL) {
+        if (b->id == 1) pack_install_request_cancel();
     } else if (g_screen == SCREEN_TEXPACK) {
         if (b->id == 5) ShellExecuteA(NULL, "open", g_texpack_dir, NULL, NULL, SW_SHOWNORMAL);
         else if (b->id == 6) set_screen(g_parent_screen);
@@ -1853,7 +1857,7 @@ static void handle_keydown(WPARAM vk) {
     }
 
     if (vk == VK_ESCAPE) {
-        if (g_screen == SCREEN_TITLE || g_screen == SCREEN_GENERATING || g_screen == SCREEN_TEXPACK_INSTALL) return;
+        if (g_screen == SCREEN_TITLE || g_screen == SCREEN_GENERATING || g_screen == SCREEN_TEXPACK_INSTALL) { if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_request_cancel(); return; }
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
