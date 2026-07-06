@@ -7,6 +7,7 @@ static void apply_view_bobbing(float partial);
 static void apply_hurt_camera_effect(float partial);
 static void apply_portal_camera_effect(float partial);
 static void update_portal_texture_animation(void);
+static void update_liquid_texture_animation(void);
 static void draw_portal_overlay(void);
 
 typedef struct PexSkyJavaRandom {
@@ -1121,6 +1122,181 @@ static void update_portal_texture_animation(void) {
     g_portal_uploaded_rgba = tex_terrain.rgba;
     g_portal_uploaded_w = tex_terrain.w;
     g_portal_uploaded_h = tex_terrain.h;
+}
+
+
+typedef struct PexLiquidTextureFX {
+    float a[256];
+    float b[256];
+    float c[256];
+    float d[256];
+    int tick;
+    int ready;
+} PexLiquidTextureFX;
+
+static PexLiquidTextureFX g_water_still_fx;
+static PexLiquidTextureFX g_water_flow_fx;
+static PexLiquidTextureFX g_lava_still_fx;
+static PexLiquidTextureFX g_lava_flow_fx;
+static int g_liquid_uploaded_tick = -1;
+static unsigned char *g_liquid_uploaded_rgba = NULL;
+static int g_liquid_uploaded_w = 0;
+static int g_liquid_uploaded_h = 0;
+
+static int pex_liquid_clamp_u8(int v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return v;
+}
+
+static float pex_liquid_rand01(void) {
+    return (float)rand() / ((float)RAND_MAX + 1.0f);
+}
+
+static void pex_liquid_fx_water_tick(PexLiquidTextureFX *fx, int flowing, unsigned char out[16 * 16 * 4]) {
+    if (!fx) return;
+    fx->ready = 1;
+    fx->tick++;
+    for (int x = 0; x < 16; ++x) {
+        for (int y = 0; y < 16; ++y) {
+            float v = 0.0f;
+            if (flowing) {
+                for (int yy = y - 2; yy <= y; ++yy) v += fx->a[x + ((yy & 15) << 4)];
+                fx->b[x + (y << 4)] = v / 3.2f + fx->c[x + (y << 4)] * 0.8f;
+            } else {
+                for (int xx = x - 1; xx <= x + 1; ++xx) v += fx->a[(xx & 15) + (y << 4)];
+                fx->b[x + (y << 4)] = v / 3.3f + fx->c[x + (y << 4)] * 0.8f;
+            }
+        }
+    }
+    for (int x = 0; x < 16; ++x) {
+        for (int y = 0; y < 16; ++y) {
+            int i = x + (y << 4);
+            fx->c[i] += fx->d[i] * 0.05f;
+            if (fx->c[i] < 0.0f) fx->c[i] = 0.0f;
+            fx->d[i] -= flowing ? 0.3f : 0.1f;
+            if (pex_liquid_rand01() < (flowing ? 0.2f : 0.05f)) fx->d[i] = 0.5f;
+        }
+    }
+    float *tmp = fx->b; /* not swappable as arrays; copy through temp buffer below. */
+    float swap[256];
+    memcpy(swap, fx->b, sizeof(swap));
+    memcpy(fx->b, fx->a, sizeof(swap));
+    memcpy(fx->a, swap, sizeof(swap));
+    (void)tmp;
+    for (int i = 0; i < 256; ++i) {
+        int si = flowing ? ((i - fx->tick * 16) & 255) : i;
+        float v = fx->a[si];
+        if (v > 1.0f) v = 1.0f;
+        if (v < 0.0f) v = 0.0f;
+        float vv = v * v;
+        int r = (int)(32.0f + vv * 32.0f);
+        int g = (int)(50.0f + vv * 64.0f);
+        int b = 255;
+        int a = (int)(146.0f + vv * 50.0f);
+        out[i * 4 + 0] = (unsigned char)pex_liquid_clamp_u8(r);
+        out[i * 4 + 1] = (unsigned char)pex_liquid_clamp_u8(g);
+        out[i * 4 + 2] = (unsigned char)pex_liquid_clamp_u8(b);
+        out[i * 4 + 3] = (unsigned char)pex_liquid_clamp_u8(a);
+    }
+}
+
+static void pex_liquid_fx_lava_tick(PexLiquidTextureFX *fx, int flowing, unsigned char out[16 * 16 * 4]) {
+    if (!fx) return;
+    fx->ready = 1;
+    if (flowing) fx->tick++;
+    for (int x = 0; x < 16; ++x) {
+        for (int y = 0; y < 16; ++y) {
+            float v = 0.0f;
+            int ox = (int)(sinf((float)y * 6.28318530718f / 16.0f) * 1.2f);
+            int oy = (int)(sinf((float)x * 6.28318530718f / 16.0f) * 1.2f);
+            for (int xx = x - 1; xx <= x + 1; ++xx) {
+                for (int yy = y - 1; yy <= y + 1; ++yy) {
+                    int sx = (xx + ox) & 15;
+                    int sy = (yy + oy) & 15;
+                    v += fx->a[sx + (sy << 4)];
+                }
+            }
+            int i = x + (y << 4);
+            fx->b[i] = v / 10.0f + (fx->c[((x + 0) & 15) + (((y + 0) & 15) << 4)] +
+                                      fx->c[((x + 1) & 15) + (((y + 0) & 15) << 4)] +
+                                      fx->c[((x + 1) & 15) + (((y + 1) & 15) << 4)] +
+                                      fx->c[((x + 0) & 15) + (((y + 1) & 15) << 4)]) * 0.2f;
+            fx->c[i] += fx->d[i] * 0.01f;
+            if (fx->c[i] < 0.0f) fx->c[i] = 0.0f;
+            fx->d[i] -= 0.06f;
+            if (pex_liquid_rand01() < 0.005f) fx->d[i] = 1.5f;
+        }
+    }
+    float swap[256];
+    memcpy(swap, fx->b, sizeof(swap));
+    memcpy(fx->b, fx->a, sizeof(swap));
+    memcpy(fx->a, swap, sizeof(swap));
+    for (int i = 0; i < 256; ++i) {
+        int si = flowing ? ((i - (fx->tick / 3) * 16) & 255) : i;
+        float v = fx->a[si] * 2.0f;
+        if (v > 1.0f) v = 1.0f;
+        if (v < 0.0f) v = 0.0f;
+        int r = (int)(v * 100.0f + 155.0f);
+        int g = (int)(v * v * 255.0f);
+        int b = (int)(v * v * v * v * 128.0f);
+        out[i * 4 + 0] = (unsigned char)pex_liquid_clamp_u8(r);
+        out[i * 4 + 1] = (unsigned char)pex_liquid_clamp_u8(g);
+        out[i * 4 + 2] = (unsigned char)pex_liquid_clamp_u8(b);
+        out[i * 4 + 3] = 255;
+    }
+}
+
+static void pex_upload_animated_terrain_tile(int tile, const unsigned char src[16 * 16 * 4]) {
+    if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0 || !src) return;
+    int tw = tex_terrain.w / 16;
+    int th = tex_terrain.h / 16;
+    if (tw <= 0 || th <= 0) return;
+    int tx = (tile & 15) * tw;
+    int ty = (tile >> 4) * th;
+    if (tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return;
+    for (int y = 0; y < th; ++y) {
+        int sy = (y * 16) / th;
+        unsigned char *dst = &tex_terrain.rgba[((ty + y) * tex_terrain.w + tx) * 4];
+        for (int x = 0; x < tw; ++x) {
+            int sx = (x * 16) / tw;
+            memcpy(dst + x * 4, src + (sy * 16 + sx) * 4, 4);
+        }
+    }
+    unsigned char *upload = (unsigned char *)malloc((size_t)tw * (size_t)th * 4u);
+    if (!upload) return;
+    for (int y = 0; y < th; ++y) {
+        memcpy(upload + (size_t)y * (size_t)tw * 4u,
+               &tex_terrain.rgba[((ty + y) * tex_terrain.w + tx) * 4],
+               (size_t)tw * 4u);
+    }
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, tx, ty, tw, th, GL_RGBA, GL_UNSIGNED_BYTE, upload);
+    free(upload);
+    g_portal_anim_terrain_dirty = 1;
+}
+
+static void update_liquid_texture_animation(void) {
+    if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return;
+    if (g_liquid_uploaded_tick == g_ingame_ticks && g_liquid_uploaded_rgba == tex_terrain.rgba &&
+        g_liquid_uploaded_w == tex_terrain.w && g_liquid_uploaded_h == tex_terrain.h) return;
+    unsigned char tilebuf[16 * 16 * 4];
+    pex_liquid_fx_water_tick(&g_water_still_fx, 0, tilebuf);
+    pex_upload_animated_terrain_tile(205, tilebuf);
+    pex_liquid_fx_water_tick(&g_water_flow_fx, 1, tilebuf);
+    pex_upload_animated_terrain_tile(206, tilebuf);
+    pex_liquid_fx_lava_tick(&g_lava_still_fx, 0, tilebuf);
+    pex_upload_animated_terrain_tile(237, tilebuf);
+    pex_liquid_fx_lava_tick(&g_lava_flow_fx, 1, tilebuf);
+    pex_upload_animated_terrain_tile(238, tilebuf);
+    g_liquid_uploaded_tick = g_ingame_ticks;
+    g_liquid_uploaded_rgba = tex_terrain.rgba;
+    g_liquid_uploaded_w = tex_terrain.w;
+    g_liquid_uploaded_h = tex_terrain.h;
 }
 
 static float portal_interpolated_amount(float partial) {
@@ -5287,6 +5463,20 @@ static void liquid_top_uvs_source(int tile, float angle,
     *u10 = cu + cz - sx; *v10 = cv - cz - sx;
 }
 
+
+static void liquid_side_uvs_source(int tile, float h_a, float h_b,
+                                   float *u0, float *u1, float *v_a, float *v_b, float *v_bottom) {
+    float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
+    float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+    int tx = (tile & 15) * 16;
+    int ty = (tile >> 4) * 16;
+    *u0 = ((float)tx + 0.01f) / tw;
+    *u1 = ((float)tx + 15.99f) / tw;
+    *v_a = ((float)ty + (1.0f - h_a) * 16.0f) / th;
+    *v_b = ((float)ty + (1.0f - h_b) * 16.0f) / th;
+    *v_bottom = ((float)ty + 15.99f) / th;
+}
+
 static void emit_liquid_block_faces(int id, int x, int y, int z) {
     int is_water = (id == BLOCK_WATER || id == BLOCK_STILL_WATER);
     int top_tile = liquid_top_tile_for_block(id);
@@ -5324,38 +5514,45 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         world_tex_vertex(x0, y0, z0, u0, v1);
     }
 
-    terrain_tile_uv(side_tile, &u0, &v0, &u1, &v1);
     if (liquid_face_exposed(x, y, z, 2)) {
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h10, h00, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 2);
         world_set_shade(0.8f);
-        world_tex_vertex(x1, (float)y + h10, z0, u0, v0);
-        world_tex_vertex(x0, (float)y + h00, z0, u1, v0);
-        world_tex_vertex(x0, y0, z0, u1, v1);
-        world_tex_vertex(x1, y0, z0, u0, v1);
+        world_tex_vertex(x1, (float)y + h10, z0, vu0, va);
+        world_tex_vertex(x0, (float)y + h00, z0, vu1, vb);
+        world_tex_vertex(x0, y0, z0, vu1, vbot);
+        world_tex_vertex(x1, y0, z0, vu0, vbot);
     }
     if (liquid_face_exposed(x, y, z, 3)) {
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h01, h11, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 3);
         world_set_shade(0.8f);
-        world_tex_vertex(x0, (float)y + h01, z1, u0, v0);
-        world_tex_vertex(x1, (float)y + h11, z1, u1, v0);
-        world_tex_vertex(x1, y0, z1, u1, v1);
-        world_tex_vertex(x0, y0, z1, u0, v1);
+        world_tex_vertex(x0, (float)y + h01, z1, vu0, va);
+        world_tex_vertex(x1, (float)y + h11, z1, vu1, vb);
+        world_tex_vertex(x1, y0, z1, vu1, vbot);
+        world_tex_vertex(x0, y0, z1, vu0, vbot);
     }
     if (liquid_face_exposed(x, y, z, 4)) {
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h00, h01, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 4);
         world_set_shade(0.6f);
-        world_tex_vertex(x0, (float)y + h00, z0, u0, v0);
-        world_tex_vertex(x0, (float)y + h01, z1, u1, v0);
-        world_tex_vertex(x0, y0, z1, u1, v1);
-        world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, (float)y + h00, z0, vu0, va);
+        world_tex_vertex(x0, (float)y + h01, z1, vu1, vb);
+        world_tex_vertex(x0, y0, z1, vu1, vbot);
+        world_tex_vertex(x0, y0, z0, vu0, vbot);
     }
     if (liquid_face_exposed(x, y, z, 5)) {
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h11, h10, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 5);
         world_set_shade(0.6f);
-        world_tex_vertex(x1, (float)y + h11, z1, u0, v0);
-        world_tex_vertex(x1, (float)y + h10, z0, u1, v0);
-        world_tex_vertex(x1, y0, z0, u1, v1);
-        world_tex_vertex(x1, y0, z1, u0, v1);
+        world_tex_vertex(x1, (float)y + h11, z1, vu0, va);
+        world_tex_vertex(x1, (float)y + h10, z0, vu1, vb);
+        world_tex_vertex(x1, y0, z0, vu1, vbot);
+        world_tex_vertex(x1, y0, z1, vu0, vbot);
     }
 }
 
@@ -5399,22 +5596,29 @@ static void draw_liquid_block(int id, float x, float y, float z) {
         glEnd();
     }
 
-    terrain_tile_uv(side_tile, &u0, &v0, &u1, &v1);
     glBegin(GL_QUADS);
     world_set_shade(0.8f);
     if (liquid_face_exposed(ix, iy, iz, 2)) {
-        world_tex_vertex(x1,y+h10,z0,u0,v0); world_tex_vertex(x0,y+h00,z0,u1,v0); world_tex_vertex(x0,y0,z0,u1,v1); world_tex_vertex(x1,y0,z0,u0,v1);
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h10, h00, &vu0, &vu1, &va, &vb, &vbot);
+        world_tex_vertex(x1,y+h10,z0,vu0,va); world_tex_vertex(x0,y+h00,z0,vu1,vb); world_tex_vertex(x0,y0,z0,vu1,vbot); world_tex_vertex(x1,y0,z0,vu0,vbot);
     }
     if (liquid_face_exposed(ix, iy, iz, 3)) {
-        world_tex_vertex(x0,y+h01,z1,u0,v0); world_tex_vertex(x1,y+h11,z1,u1,v0); world_tex_vertex(x1,y0,z1,u1,v1); world_tex_vertex(x0,y0,z1,u0,v1);
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h01, h11, &vu0, &vu1, &va, &vb, &vbot);
+        world_tex_vertex(x0,y+h01,z1,vu0,va); world_tex_vertex(x1,y+h11,z1,vu1,vb); world_tex_vertex(x1,y0,z1,vu1,vbot); world_tex_vertex(x0,y0,z1,vu0,vbot);
     }
     if (liquid_face_exposed(ix, iy, iz, 4)) {
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h00, h01, &vu0, &vu1, &va, &vb, &vbot);
         world_set_shade(0.6f);
-        world_tex_vertex(x0,y+h00,z0,u0,v0); world_tex_vertex(x0,y+h01,z1,u1,v0); world_tex_vertex(x0,y0,z1,u1,v1); world_tex_vertex(x0,y0,z0,u0,v1);
+        world_tex_vertex(x0,y+h00,z0,vu0,va); world_tex_vertex(x0,y+h01,z1,vu1,vb); world_tex_vertex(x0,y0,z1,vu1,vbot); world_tex_vertex(x0,y0,z0,vu0,vbot);
     }
     if (liquid_face_exposed(ix, iy, iz, 5)) {
+        float vu0, vu1, va, vb, vbot;
+        liquid_side_uvs_source(side_tile, h11, h10, &vu0, &vu1, &va, &vb, &vbot);
         world_set_shade(0.6f);
-        world_tex_vertex(x1,y+h11,z1,u0,v0); world_tex_vertex(x1,y+h10,z0,u1,v0); world_tex_vertex(x1,y0,z0,u1,v1); world_tex_vertex(x1,y0,z1,u0,v1);
+        world_tex_vertex(x1,y+h11,z1,vu0,va); world_tex_vertex(x1,y+h10,z0,vu1,vb); world_tex_vertex(x1,y0,z0,vu1,vbot); world_tex_vertex(x1,y0,z1,vu0,vbot);
     }
     glEnd();
 
@@ -8120,6 +8324,7 @@ static void psp_fast_draw_world(void) {
 static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
     update_portal_texture_animation();
+    update_liquid_texture_animation();
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_draw_world();
     glEnable(GL_DEPTH_TEST);

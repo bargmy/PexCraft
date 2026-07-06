@@ -330,6 +330,15 @@ int main(int argc, char **argv) {
         SDL_Quit();
         return 1;
     }
+    char sound_dep_notice[MAX_LABEL * 3];
+    if (!pex_sound_record_dependency_report(sound_dep_notice, sizeof(sound_dep_notice))) {
+        char msg[MAX_LABEL * 4];
+        snprintf(msg, sizeof(msg),
+                 "%s\n\nRecords use Java-style positional streaming. Install:\n"
+                 "sudo apt install libsdl2-mixer-2.0-0 libmpg123-0",
+                 sound_dep_notice[0] ? sound_dep_notice : "Missing record audio dependencies.");
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, APP_TITLE " - Audio dependencies", msg, NULL);
+    }
     pex_sound_rescan();
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;

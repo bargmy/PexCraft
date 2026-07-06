@@ -795,6 +795,59 @@ static void pex_sound_shutdown(void) { }
 #endif
 
 
+#if defined(PEX_PLATFORM_SDL2)
+static int pex_sdl_can_load_one_of(const char **libs) {
+    void *lib = NULL;
+    if (!libs) return 0;
+    for (int i = 0; libs[i] && !lib; ++i) lib = SDL_LoadObject(libs[i]);
+    if (lib) {
+        SDL_UnloadObject(lib);
+        return 1;
+    }
+    return 0;
+}
+
+static int pex_sound_record_dependency_report(char *out, size_t cap) {
+    int missing = 0;
+    char line[MAX_LABEL * 2];
+    if (out && cap > 0) out[0] = 0;
+    const char *mix_libs[] = {
+#if defined(_WIN32)
+        "SDL2_mixer.dll", "libSDL2_mixer-2.0-0.dll", "SDL2_mixer",
+#elif defined(__APPLE__)
+        "libSDL2_mixer-2.0.0.dylib", "libSDL2_mixer.dylib",
+#else
+        "libSDL2_mixer-2.0.so.0", "libSDL2_mixer.so",
+#endif
+        NULL
+    };
+    const char *mpg_libs[] = {
+#if defined(_WIN32)
+        "libmpg123-0.dll", "mpg123.dll",
+#elif defined(__APPLE__)
+        "libmpg123.0.dylib", "libmpg123.dylib",
+#else
+        "libmpg123.so.0", "libmpg123.so",
+#endif
+        NULL
+    };
+    if (!pex_sdl_can_load_one_of(mix_libs)) {
+        snprintf(line, sizeof(line), "Missing SDL2_mixer (install libsdl2-mixer-2.0-0). ");
+        if (out && cap > 0) strncat(out, line, cap - strlen(out) - 1);
+        missing = 1;
+    }
+    if (!pex_sdl_can_load_one_of(mpg_libs)) {
+        snprintf(line, sizeof(line), "Missing libmpg123 for MP3 records. ");
+        if (out && cap > 0) strncat(out, line, cap - strlen(out) - 1);
+        missing = 1;
+    }
+    return missing ? 0 : 1;
+}
+#else
+static int pex_sound_record_dependency_report(char *out, size_t cap) { if (out && cap > 0) out[0] = 0; return 1; }
+#endif
+
+
 static void pex_menu_music_start_once(void) {
     if (g_opts.music <= 0.001f) return;
     char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], menu2[MAX_PATHBUF];
@@ -841,6 +894,10 @@ static void pex_sound_tick_record_stream(void) {
 
 static int pex_sound_play_record_file_at(const char *path, float x, float y, float z, float volume) {
     if (!path || !*path) return 0;
+    /* Java stops the background music before starting the named streaming record.
+       Do this before backend failure paths too, so a failed/missing record never
+       leaves title music playing over an inserted jukebox disc. */
+    pex_menu_music_stop();
     if (g_opts.sound <= 0.001f) { pex_sound_stop_record(); return 0; }
     if (!pex_sound_backend_play_record_file_at(path, x, y, z, volume)) {
         pex_sound_missing_notice_once();
