@@ -7408,20 +7408,17 @@ static const char *record_tooltip_line_for_id(int id) {
 }
 
 static const char *record_sound_key(int id) {
-    switch (id) {
-        case ITEM_RECORD13: return "records.13";
-        case ITEM_RECORD_CAT: return "records.cat";
-        case ITEM_RECORD_BLOCKS: return "records.blocks";
-        case ITEM_RECORD_CHIRP: return "records.chirp";
-        case ITEM_RECORD_FAR: return "records.far";
-        case ITEM_RECORD_MALL: return "records.mall";
-        case ITEM_RECORD_MELLOHI: return "records.mellohi";
-        case ITEM_RECORD_STAL: return "records.stal";
-        case ITEM_RECORD_STRAD: return "records.strad";
-        case ITEM_RECORD_WARD: return "records.ward";
-        case ITEM_RECORD_11: return "records.11";
-        default: return NULL;
-    }
+    /* Java 1.2.5 ItemRecord.recordName is passed directly to SoundManager.playStreaming;
+       resources are looked up as resources/streaming/<recordName>.ogg. */
+    return record_name_for_id(id);
+}
+
+static void record_set_playing_message_for_id(int id) {
+    const char *line = record_tooltip_line_for_id(id);
+    if (!line || !line[0]) return;
+    snprintf(g_record_playing_text, sizeof(g_record_playing_text), "Now playing: %s", line);
+    g_record_playing_up_for = 60;
+    g_record_is_playing = 1;
 }
 
 static int spawn_flat_vehicle(int type, float x, float y, float z, float yaw) {
@@ -7506,11 +7503,12 @@ static int jukebox_insert_record(int x, int y, int z, int record_item) {
     jt->record_item = record_item;
     flat_set_meta_raw(x, y, z, 1); /* Java BlockJukeBox stores 1 in block metadata; record id is in its tile entity. */
     const float sx = (float)x + 0.5f, sy = (float)y + 0.5f, sz = (float)z + 0.5f;
+    record_set_playing_message_for_id(record_item);
     if (record_item == ITEM_RECORD_TWOFACE) {
-        pex_sound_play_twoface_record_at(sx, sy, sz, 4.0f);
+        pex_sound_play_twoface_record_at(sx, sy, sz, 1.0f);
     } else {
         const char *snd = record_sound_key(record_item);
-        if (snd) pex_sound_play_record_key_at(snd, sx, sy, sz, 4.0f);
+        if (snd) pex_sound_play_record_key_at(snd, sx, sy, sz, 1.0f);
     }
     g_save_dirty = 1;
     return 1;

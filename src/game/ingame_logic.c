@@ -478,6 +478,7 @@ static void ingame_tick(void) {
     profile_add_time(PROF_DAYLIGHT_MESH, prof_part);
     if (g_hearts_life > 0) g_hearts_life--;
     if (g_save_message_ticks > 0) g_save_message_ticks--;
+    if (g_record_playing_up_for > 0) g_record_playing_up_for--;
     for (int i = 0; i < g_chat_count; i++) g_chat_lines[i].age++;
     prof_part = profile_begin();
     inventory_tick();

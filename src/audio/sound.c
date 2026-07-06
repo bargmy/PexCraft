@@ -1,7 +1,6 @@
-/* Beta 1.0 sound mapper/playback.  The downloader mirrors Mojang legacy
-   assets to .pexcraft/resources/sound/...; this file turns Java-style logical
-   keys such as "random.click" or "step.grass" into one of the matching .ogg
-   files and asks a platform backend to play it. */
+/* Beta/1.2.5 sound mapper/playback.  Normal effects are indexed from
+   .pexcraft/resources/sound/..., while records are handled separately through
+   the Java 1.2.5 streaming pool (.pexcraft/resources/streaming/<name>.ogg). */
 
 typedef struct PexSoundEntry {
     char key[96];
@@ -180,6 +179,8 @@ typedef int (*PFN_Mix_PlayChannel)(int, Mix_Chunk *, int);
 typedef int (*PFN_Mix_HaltChannel)(int);
 typedef int (*PFN_Mix_VolumeChunk)(Mix_Chunk *, int);
 typedef int (*PFN_Mix_Volume)(int, int);
+typedef int (*PFN_Mix_SetPosition)(int, Sint16, Uint8);
+typedef int (*PFN_Mix_Playing)(int);
 typedef void (*PFN_Mix_FreeChunk)(Mix_Chunk *);
 static void *g_mix_lib = NULL;
 static PFN_Mix_OpenAudio pMix_OpenAudio = NULL;
@@ -197,90 +198,17 @@ static PFN_Mix_PlayChannel pMix_PlayChannel = NULL;
 static PFN_Mix_HaltChannel pMix_HaltChannel = NULL;
 static PFN_Mix_VolumeChunk pMix_VolumeChunk = NULL;
 static PFN_Mix_Volume pMix_Volume = NULL;
+static PFN_Mix_SetPosition pMix_SetPosition = NULL;
+static PFN_Mix_Playing pMix_Playing = NULL;
 static PFN_Mix_FreeChunk pMix_FreeChunk = NULL;
 static int g_mix_ready = 0;
 static int g_pex_menu_music_channel = -1;
-static Mix_Music *g_pex_record_music = NULL;
-static pid_t g_pex_record_external_pid = -1;
-
-static void pex_sdl_stop_external_record(void) {
-    if (g_pex_record_external_pid > 0) {
-        int status = 0;
-        kill(g_pex_record_external_pid, SIGTERM);
-        for (int i = 0; i < 20; ++i) {
-            pid_t r = waitpid(g_pex_record_external_pid, &status, WNOHANG);
-            if (r == g_pex_record_external_pid || r < 0) { g_pex_record_external_pid = -1; return; }
-            SDL_Delay(5);
-        }
-        kill(g_pex_record_external_pid, SIGKILL);
-        waitpid(g_pex_record_external_pid, &status, 0);
-        g_pex_record_external_pid = -1;
-    }
-}
-
-static int pex_sdl_command_exists(const char *cmd) {
-    const char *path_env;
-    char path_copy[2048];
-    char *save = NULL;
-    char *dir;
-    if (!cmd || !*cmd) return 0;
-    if (strchr(cmd, '/')) return access(cmd, X_OK) == 0;
-    path_env = getenv("PATH");
-    if (!path_env || !*path_env) return 0;
-    snprintf(path_copy, sizeof(path_copy), "%s", path_env);
-    for (dir = strtok_r(path_copy, ":", &save); dir; dir = strtok_r(NULL, ":", &save)) {
-        char full[MAX_PATHBUF];
-        if (!*dir) dir = ".";
-        snprintf(full, sizeof(full), "%s/%s", dir, cmd);
-        if (access(full, X_OK) == 0) return 1;
-    }
-    return 0;
-}
-
-static void pex_sdl_child_silence_stdio(void) {
-    int fd = open("/dev/null", O_RDWR);
-    if (fd >= 0) {
-        dup2(fd, STDIN_FILENO);
-        dup2(fd, STDOUT_FILENO);
-        dup2(fd, STDERR_FILENO);
-        if (fd > STDERR_FILENO) close(fd);
-    }
-}
-
-static int pex_sdl_spawn_external_record(const char *path, float volume) {
-    char vol[32];
-    char scale[32];
-    pid_t pid;
-    int pct;
-    if (!path || !*path || volume <= 0.001f) return 0;
-    pct = (int)(volume * 100.0f + 0.5f);
-    if (pct < 1) pct = 1;
-    if (pct > 100) pct = 100;
-    snprintf(vol, sizeof(vol), "%d", pct);
-    snprintf(scale, sizeof(scale), "%d", (int)(32768.0f * volume + 0.5f));
-
-    const char *player = NULL;
-    if (pex_sdl_command_exists("ffplay")) player = "ffplay";
-    else if (pex_sdl_command_exists("mpv")) player = "mpv";
-    else if (pex_sdl_command_exists("mpg123")) player = "mpg123";
-    else if (pex_sdl_command_exists("cvlc")) player = "cvlc";
-    if (!player) { log_msg("Record backend: no SDL2_mixer MP3 support and no ffplay/mpv/mpg123/cvlc fallback found"); return 0; }
-
-    pex_sdl_stop_external_record();
-    pid = fork();
-    if (pid < 0) return 0;
-    if (pid == 0) {
-        pex_sdl_child_silence_stdio();
-        if (!strcmp(player, "ffplay")) execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", vol, path, (char *)NULL);
-        else if (!strcmp(player, "mpv")) { char arg[64]; snprintf(arg, sizeof(arg), "--volume=%d", pct); execlp("mpv", "mpv", "--no-video", "--really-quiet", arg, path, (char *)NULL); }
-        else if (!strcmp(player, "mpg123")) execlp("mpg123", "mpg123", "-q", "-f", scale, path, (char *)NULL);
-        else if (!strcmp(player, "cvlc")) execlp("cvlc", "cvlc", "--play-and-exit", "--intf", "dummy", path, (char *)NULL);
-        _exit(127);
-    }
-    g_pex_record_external_pid = pid;
-    log_msg("Record backend: playing %s through %s", path, player);
-    return 1;
-}
+static Mix_Music *g_pex_record_music = NULL; /* legacy cleanup for old builds that used Mix_Music. */
+static int g_pex_record_channel = -1;
+static float g_pex_record_x = 0.0f, g_pex_record_y = 0.0f, g_pex_record_z = 0.0f;
+static float g_pex_record_volume_arg = 1.0f;
+static int g_pex_record_active = 0;
+static void sound_backend_stop_menu_music(void);
 
 typedef struct PexSoundChunkCache { char path[MAX_PATHBUF]; Mix_Chunk *chunk; } PexSoundChunkCache;
 #define PEX_SOUND_CHUNK_CACHE_MAX 128
@@ -336,6 +264,8 @@ static int pex_sound_backend_init(void) {
         pMix_HaltChannel = (PFN_Mix_HaltChannel)pex_sdl_load_mixer_symbol("Mix_HaltChannel");
         pMix_VolumeChunk = (PFN_Mix_VolumeChunk)pex_sdl_load_mixer_symbol("Mix_VolumeChunk");
         pMix_Volume = (PFN_Mix_Volume)pex_sdl_load_mixer_symbol("Mix_Volume");
+        pMix_SetPosition = (PFN_Mix_SetPosition)pex_sdl_load_mixer_symbol("Mix_SetPosition");
+        pMix_Playing = (PFN_Mix_Playing)pex_sdl_load_mixer_symbol("Mix_Playing");
         pMix_FreeChunk = (PFN_Mix_FreeChunk)pex_sdl_load_mixer_symbol("Mix_FreeChunk");
         if (!pMix_OpenAudio || !pMix_LoadWAV_RW || !pMix_PlayChannel) { log_msg("Sound backend: SDL2_mixer missing required symbols"); return 0; }
     }
@@ -347,6 +277,111 @@ static int pex_sound_backend_init(void) {
     return 1;
 }
 
+
+static int pex_path_has_ext_ci(const char *path, const char *ext) {
+    if (!path || !ext) return 0;
+    size_t np = strlen(path), ne = strlen(ext);
+    if (np < ne) return 0;
+    const char *p = path + np - ne;
+    for (size_t i = 0; i < ne; ++i) {
+        char a = p[i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+static Mix_Chunk *pex_sound_decode_mp3_chunk_mpg123(const char *path) {
+#if defined(PEX_PLATFORM_SDL2)
+    typedef struct mpg123_handle mpg123_handle;
+    typedef int (*PFN_mpg123_init)(void);
+    typedef void (*PFN_mpg123_exit)(void);
+    typedef mpg123_handle *(*PFN_mpg123_new)(const char *, int *);
+    typedef void (*PFN_mpg123_delete)(mpg123_handle *);
+    typedef int (*PFN_mpg123_open)(mpg123_handle *, const char *);
+    typedef int (*PFN_mpg123_getformat)(mpg123_handle *, long *, int *, int *);
+    typedef int (*PFN_mpg123_format_none)(mpg123_handle *);
+    typedef int (*PFN_mpg123_format)(mpg123_handle *, long, int, int);
+    typedef int (*PFN_mpg123_read)(mpg123_handle *, unsigned char *, size_t, size_t *);
+    typedef int (*PFN_mpg123_close)(mpg123_handle *);
+    typedef const char *(*PFN_mpg123_plain_strerror)(int);
+    enum { PEX_MPG123_OK = 0, PEX_MPG123_NEW_FORMAT = -11, PEX_MPG123_DONE = -12, PEX_MPG123_STEREO = 2, PEX_MPG123_ENC_SIGNED_16 = 0x040 };
+    void *lib = NULL;
+    const char *libs[] = { "libmpg123.so.0", "libmpg123.so", NULL };
+    for (int i = 0; libs[i] && !lib; ++i) lib = SDL_LoadObject(libs[i]);
+    if (!lib) return NULL;
+    PFN_mpg123_init f_init = (PFN_mpg123_init)SDL_LoadFunction(lib, "mpg123_init");
+    PFN_mpg123_exit f_exit = (PFN_mpg123_exit)SDL_LoadFunction(lib, "mpg123_exit");
+    PFN_mpg123_new f_new = (PFN_mpg123_new)SDL_LoadFunction(lib, "mpg123_new");
+    PFN_mpg123_delete f_delete = (PFN_mpg123_delete)SDL_LoadFunction(lib, "mpg123_delete");
+    PFN_mpg123_open f_open = (PFN_mpg123_open)SDL_LoadFunction(lib, "mpg123_open");
+    PFN_mpg123_getformat f_getformat = (PFN_mpg123_getformat)SDL_LoadFunction(lib, "mpg123_getformat");
+    PFN_mpg123_format_none f_format_none = (PFN_mpg123_format_none)SDL_LoadFunction(lib, "mpg123_format_none");
+    PFN_mpg123_format f_format = (PFN_mpg123_format)SDL_LoadFunction(lib, "mpg123_format");
+    PFN_mpg123_read f_read = (PFN_mpg123_read)SDL_LoadFunction(lib, "mpg123_read");
+    PFN_mpg123_close f_close = (PFN_mpg123_close)SDL_LoadFunction(lib, "mpg123_close");
+    PFN_mpg123_plain_strerror f_err = (PFN_mpg123_plain_strerror)SDL_LoadFunction(lib, "mpg123_plain_strerror");
+    if (!f_init || !f_exit || !f_new || !f_delete || !f_open || !f_getformat || !f_format_none || !f_format || !f_read || !f_close) {
+        SDL_UnloadObject(lib);
+        return NULL;
+    }
+    if (f_init() != PEX_MPG123_OK) { SDL_UnloadObject(lib); return NULL; }
+    int err = 0;
+    mpg123_handle *mh = f_new(NULL, &err);
+    if (!mh) { f_exit(); SDL_UnloadObject(lib); return NULL; }
+    f_format_none(mh);
+    f_format(mh, 44100, PEX_MPG123_STEREO, PEX_MPG123_ENC_SIGNED_16);
+    if (f_open(mh, path) != PEX_MPG123_OK) {
+        log_msg("Record backend: mpg123_open failed for %s", path);
+        f_delete(mh); f_exit(); SDL_UnloadObject(lib); return NULL;
+    }
+    long rate = 0; int channels = 0, enc = 0;
+    f_getformat(mh, &rate, &channels, &enc);
+    if (rate != 44100 || channels != PEX_MPG123_STEREO || enc != PEX_MPG123_ENC_SIGNED_16) {
+        /* SDL_mixer channels use the mixer format opened above: 44100Hz signed 16-bit stereo. */
+        log_msg("Record backend: mpg123 decoded unsupported format rate=%ld channels=%d enc=%d for %s", rate, channels, enc, path);
+        f_close(mh); f_delete(mh); f_exit(); SDL_UnloadObject(lib); return NULL;
+    }
+    size_t cap = 262144, len = 0;
+    unsigned char *pcm = (unsigned char *)malloc(cap);
+    if (!pcm) { f_close(mh); f_delete(mh); f_exit(); SDL_UnloadObject(lib); return NULL; }
+    unsigned char buf[32768];
+    for (;;) {
+        size_t got = 0;
+        int r = f_read(mh, buf, sizeof(buf), &got);
+        if (got > 0) {
+            if (len + got > cap) {
+                size_t ncap = cap * 2;
+                while (ncap < len + got) ncap *= 2;
+                unsigned char *np = (unsigned char *)realloc(pcm, ncap);
+                if (!np) { free(pcm); f_close(mh); f_delete(mh); f_exit(); SDL_UnloadObject(lib); return NULL; }
+                pcm = np; cap = ncap;
+            }
+            memcpy(pcm + len, buf, got);
+            len += got;
+        }
+        if (r == PEX_MPG123_DONE) break;
+        if (r == PEX_MPG123_NEW_FORMAT || r == PEX_MPG123_OK) continue;
+        log_msg("Record backend: mpg123_read failed for %s%s%s", path, f_err ? ": " : "", f_err ? f_err(r) : "");
+        free(pcm); f_close(mh); f_delete(mh); f_exit(); SDL_UnloadObject(lib); return NULL;
+    }
+    f_close(mh); f_delete(mh); f_exit(); SDL_UnloadObject(lib);
+    if (len == 0) { free(pcm); return NULL; }
+    Mix_Chunk *chunk = (Mix_Chunk *)malloc(sizeof(Mix_Chunk));
+    if (!chunk) { free(pcm); return NULL; }
+    chunk->allocated = 1;
+    chunk->abuf = pcm;
+    chunk->alen = (unsigned int)len;
+    chunk->volume = 128;
+    log_msg("Record backend: decoded MP3 through libmpg123: %s", path);
+    return chunk;
+#else
+    (void)path;
+    return NULL;
+#endif
+}
+
 static Mix_Chunk *pex_sound_load_chunk_cached(const char *path) {
     if (!path || !*path) return NULL;
     for (int i = 0; i < g_sound_chunk_cache_count; ++i) if (!strcmp(g_sound_chunk_cache[i].path, path)) return g_sound_chunk_cache[i].chunk;
@@ -354,6 +389,7 @@ static Mix_Chunk *pex_sound_load_chunk_cached(const char *path) {
     SDL_RWops *rw = SDL_RWFromFile(path, "rb");
     if (!rw) return NULL;
     Mix_Chunk *c = pMix_LoadWAV_RW(rw, 1);
+    if (!c && pex_path_has_ext_ci(path, ".mp3")) c = pex_sound_decode_mp3_chunk_mpg123(path);
     if (!c) return NULL;
     int slot = g_sound_chunk_cache_count;
     if (slot >= PEX_SOUND_CHUNK_CACHE_MAX) {
@@ -424,41 +460,72 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return ch >= 0;
 }
 
+static void pex_sdl_record_update_position(void) {
+    if (!g_pex_record_active || g_pex_record_channel < 0 || !pMix_SetPosition) return;
+    if (pMix_Playing && !pMix_Playing(g_pex_record_channel)) {
+        g_pex_record_active = 0;
+        g_pex_record_channel = -1;
+        return;
+    }
+    float dx = g_pex_record_x - g_player_x;
+    float dz = g_pex_record_z - g_player_z;
+    float dy = g_pex_record_y - g_player_y;
+    float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+    float yaw = g_player_yaw * (float)M_PI / 180.0f;
+    float fwd_x = -sinf(yaw), fwd_z = cosf(yaw);
+    float right_x = cosf(yaw), right_z = sinf(yaw);
+    float rel_fwd = dx * fwd_x + dz * fwd_z;
+    float rel_right = dx * right_x + dz * right_z;
+    float angle_f = atan2f(rel_right, rel_fwd) * 180.0f / (float)M_PI;
+    if (angle_f < 0.0f) angle_f += 360.0f;
+    int angle_i = (int)(angle_f + 0.5f);
+    if (angle_i >= 360) angle_i -= 360;
+    int distance_i = (int)(dist * 255.0f / 64.0f + 0.5f);
+    if (distance_i < 0) distance_i = 0;
+    if (distance_i > 255) distance_i = 255;
+    int vol = (int)(0.5f * g_opts.sound * 128.0f + 0.5f);
+    (void)g_pex_record_volume_arg; /* 1.2.5 passes 1.0F; SoundManager fixes records to 0.5 * soundVolume. */
+    if (vol < 0) vol = 0;
+    if (vol > 128) vol = 128;
+    if (pMix_Volume) pMix_Volume(g_pex_record_channel, vol);
+    pMix_SetPosition(g_pex_record_channel, (Sint16)angle_i, (Uint8)distance_i);
+}
+
 static void pex_sound_backend_stop_record(void) {
-    pex_sdl_stop_external_record();
-    if (pMix_HaltMusic) pMix_HaltMusic();
+    if (g_pex_record_channel >= 0 && pMix_HaltChannel) pMix_HaltChannel(g_pex_record_channel);
+    g_pex_record_channel = -1;
+    g_pex_record_active = 0;
+    if (pMix_HaltMusic) pMix_HaltMusic(); /* cleanup for older PexCraft builds that used Mix_Music for records. */
     if (g_pex_record_music && pMix_FreeMusic) pMix_FreeMusic(g_pex_record_music);
     g_pex_record_music = NULL;
 }
 
-static int pex_sound_backend_play_record_file(const char *path, float volume) {
-    Mix_Music *m;
-    int v;
+static int pex_sound_backend_play_record_file_at(const char *path, float x, float y, float z, float volume) {
     if (!path || !*path) return 0;
-    if (volume <= 0.001f) return 0;
-    if (!pex_sound_backend_init()) return pex_sdl_spawn_external_record(path, volume);
+    if (g_opts.sound <= 0.001f) { pex_sound_backend_stop_record(); return 0; }
+    if (!pex_sound_backend_init()) return 0;
+    if (!pMix_SetPosition) {
+        log_msg("Record backend: Mix_SetPosition missing; refusing non-positional record playback");
+        return 0;
+    }
+    Mix_Chunk *c = pex_sound_load_chunk_cached(path);
+    if (!c) { log_msg("Record backend: Mix_LoadWAV_RW failed for %s", path); return 0; }
     pex_sound_backend_stop_record();
-    if (!pMix_LoadMUS || !pMix_PlayMusic) {
-        if (pex_sound_backend_play_file(path, volume, 1.0f)) return 1;
-        return pex_sdl_spawn_external_record(path, volume);
-    }
-    m = pMix_LoadMUS(path);
-    if (!m) {
-        log_msg("Record backend: Mix_LoadMUS failed for %s", path);
-        if (pex_sound_backend_play_file(path, volume, 1.0f)) return 1;
-        return pex_sdl_spawn_external_record(path, volume);
-    }
-    v = (int)(volume * 128.0f);
-    if (v < 0) v = 0;
-    if (v > 128) v = 128;
-    if (pMix_VolumeMusic) pMix_VolumeMusic(v);
-    if (pMix_PlayMusic(m, 0) != 0) {
-        if (pMix_FreeMusic) pMix_FreeMusic(m);
-        log_msg("Record backend: Mix_PlayMusic failed for %s", path);
-        return pex_sdl_spawn_external_record(path, volume);
-    }
-    g_pex_record_music = m;
+    sound_backend_stop_menu_music();
+    int ch = pMix_PlayChannel(-1, c, 0);
+    if (ch < 0) { log_msg("Record backend: Mix_PlayChannel failed for %s", path); return 0; }
+    g_pex_record_channel = ch;
+    g_pex_record_x = x;
+    g_pex_record_y = y;
+    g_pex_record_z = z;
+    g_pex_record_volume_arg = volume;
+    g_pex_record_active = 1;
+    pex_sdl_record_update_position();
     return 1;
+}
+
+static void pex_sound_backend_tick_record(void) {
+    pex_sdl_record_update_position();
 }
 
 static void sound_backend_stop_menu_music(void) {
@@ -696,10 +763,11 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
 }
 
 static void pex_sound_backend_stop_record(void) { }
-
-static int pex_sound_backend_play_record_file(const char *path, float volume) {
-    return pex_sound_backend_play_file(path, volume, 1.0f);
+static int pex_sound_backend_play_record_file_at(const char *path, float x, float y, float z, float volume) {
+    (void)path; (void)x; (void)y; (void)z; (void)volume;
+    return 0;
 }
+static void pex_sound_backend_tick_record(void) { }
 
 static void sound_backend_stop_menu_music(void) {
     InterlockedIncrement((volatile LONG *)&g_pex_menu_music_stop_generation);
@@ -720,7 +788,8 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return 0;
 }
 static void pex_sound_backend_stop_record(void) { }
-static int pex_sound_backend_play_record_file(const char *path, float volume) { (void)path; (void)volume; return 0; }
+static int pex_sound_backend_play_record_file_at(const char *path, float x, float y, float z, float volume) { (void)path; (void)x; (void)y; (void)z; (void)volume; return 0; }
+static void pex_sound_backend_tick_record(void) { }
 static void sound_backend_stop_menu_music(void) { }
 static void pex_sound_shutdown(void) { }
 #endif
@@ -759,44 +828,49 @@ static void pex_sound_missing_notice_once(void) {
     double t = now_seconds();
     if (t - g_pex_last_missing_sound_notice < 8.0) return;
     g_pex_last_missing_sound_notice = t;
-    log_msg("Sound requested but Moog City 2 is not installed or no OGG backend is available");
-}
-
-static float pex_record_volume_at(float x, float y, float z, float volume) {
-    float dx = x - g_player_x, dy = y - g_player_y, dz = z - g_player_z;
-    float dist = sqrtf(dx*dx + dy*dy + dz*dz);
-    const float max_dist = 64.0f; /* SoundManager.newStreamingSource uses 16 * 4. */
-    float atten = 1.0f - dist / max_dist;
-    (void)volume; /* 1.2.5 passes 1.0F but records are fixed at 0.5 * soundVolume. */
-    if (atten <= 0.0f) return 0.0f;
-    if (atten > 1.0f) atten = 1.0f;
-    float final_volume = 0.5f * atten * g_opts.sound;
-    if (final_volume > 1.0f) final_volume = 1.0f;
-    if (final_volume < 0.0f) final_volume = 0.0f;
-    return final_volume;
+    log_msg("Sound requested but the required legacy sound/streaming resource is missing or the SDL2_mixer backend cannot decode it");
 }
 
 static void pex_sound_stop_record(void) {
     pex_sound_backend_stop_record();
 }
 
+static void pex_sound_tick_record_stream(void) {
+    pex_sound_backend_tick_record();
+}
+
 static int pex_sound_play_record_file_at(const char *path, float x, float y, float z, float volume) {
     if (!path || !*path) return 0;
     if (g_opts.sound <= 0.001f) { pex_sound_stop_record(); return 0; }
-    float final_volume = pex_record_volume_at(x, y, z, volume);
-    if (final_volume <= 0.001f) return 0;
-    sound_backend_stop_menu_music();
-    if (!pex_sound_backend_play_record_file(path, final_volume)) {
+    if (!pex_sound_backend_play_record_file_at(path, x, y, z, volume)) {
         pex_sound_missing_notice_once();
         return 0;
     }
     return 1;
 }
 
+static int pex_sound_find_streaming_file(const char *key, char *out, size_t cap) {
+    if (!key || !*key || !out || cap == 0) return 0;
+    char resources[MAX_PATHBUF], streaming[MAX_PATHBUF], file[MAX_PATHBUF];
+    classic_resources_path(resources, sizeof(resources));
+    path_join(streaming, sizeof(streaming), resources, "streaming");
+    snprintf(file, sizeof(file), "%s.ogg", key);
+    path_join(out, cap, streaming, file);
+    if (file_exists(out)) return 1;
+    snprintf(file, sizeof(file), "%s.mp3", key);
+    path_join(out, cap, streaming, file);
+    if (file_exists(out)) return 1;
+    return 0;
+}
+
 static int pex_sound_play_record_key_at(const char *key, float x, float y, float z, float volume) {
+    char path[MAX_PATHBUF];
     if (!key || !*key) return 0;
-    const char *path = pex_sound_find_file(key);
-    if (!path) { pex_sound_missing_notice_once(); return 0; }
+    if (!pex_sound_find_streaming_file(key, path, sizeof(path))) {
+        log_msg("Record backend: missing streaming resource for %s in resources/streaming", key);
+        pex_sound_missing_notice_once();
+        return 0;
+    }
     return pex_sound_play_record_file_at(path, x, y, z, volume);
 }
 

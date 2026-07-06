@@ -323,6 +323,52 @@ static int pex_map_gui_color(unsigned char v) {
     return (r << 16) | (g << 8) | b;
 }
 
+
+static int pex_hsb_to_rgb(float h, float sat, float bri) {
+    while (h < 0.0f) h += 1.0f;
+    while (h >= 1.0f) h -= 1.0f;
+    if (sat < 0.0f) sat = 0.0f; if (sat > 1.0f) sat = 1.0f;
+    if (bri < 0.0f) bri = 0.0f; if (bri > 1.0f) bri = 1.0f;
+    float r = bri, g = bri, b = bri;
+    if (sat > 0.0f) {
+        float hf = h * 6.0f;
+        int i = (int)floorf(hf);
+        float f = hf - (float)i;
+        float p = bri * (1.0f - sat);
+        float q = bri * (1.0f - sat * f);
+        float t = bri * (1.0f - sat * (1.0f - f));
+        switch (i % 6) {
+            case 0: r = bri; g = t; b = p; break;
+            case 1: r = q; g = bri; b = p; break;
+            case 2: r = p; g = bri; b = t; break;
+            case 3: r = p; g = q; b = bri; break;
+            case 4: r = t; g = p; b = bri; break;
+            default: r = bri; g = p; b = q; break;
+        }
+    }
+    int ri = (int)(r * 255.0f + 0.5f), gi = (int)(g * 255.0f + 0.5f), bi = (int)(b * 255.0f + 0.5f);
+    if (ri < 0) ri = 0; if (ri > 255) ri = 255;
+    if (gi < 0) gi = 0; if (gi > 255) gi = 255;
+    if (bi < 0) bi = 0; if (bi > 255) bi = 255;
+    return (ri << 16) | (gi << 8) | bi;
+}
+
+static void draw_record_playing_overlay(void) {
+    if (g_record_playing_up_for <= 0 || !g_record_playing_text[0]) return;
+    float up = (float)g_record_playing_up_for - g_frame_partial;
+    int alpha = (int)(up * 256.0f / 20.0f);
+    if (alpha > 255) alpha = 255;
+    if (alpha <= 0) return;
+    int rgb = 0xFFFFFF;
+    if (g_record_is_playing) rgb = pex_hsb_to_rgb(up / 50.0f, 0.7f, 0.6f);
+    int color = (alpha << 24) | rgb;
+    int x = (g_gui_w - text_width(g_record_playing_text)) / 2;
+    int y = g_gui_h - 48 - 4;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    draw_text_no_shadow(g_record_playing_text, x, y, color);
+}
+
 static void draw_held_map_overlay(void) {
     if (g_third_person_view) return;
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
@@ -357,6 +403,7 @@ static void draw_held_map_overlay(void) {
 }
 
 static void draw_hud(void) {
+    pex_sound_tick_record_stream();
     int w = g_gui_w;
     int h = g_gui_h;
     int hotbar_x = w / 2 - 91;
@@ -488,6 +535,7 @@ static void draw_hud(void) {
     }
 
     draw_held_map_overlay();
+    draw_record_playing_overlay();
 
     for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
 

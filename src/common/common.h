@@ -2267,6 +2267,11 @@ static int g_suppress_next_chat_char = 0;
 typedef struct ChatLine { char text[256]; int age; } ChatLine;
 static ChatLine g_chat_lines[MAX_CHAT_LINES];
 static int g_chat_count = 0;
+/* Java 1.2.5 GuiIngame recordPlaying state.  Set by record playback, drawn
+   above the hotbar for 60 ticks; not a chat line. */
+static char g_record_playing_text[128] = "";
+static int g_record_playing_up_for = 0;
+static int g_record_is_playing = 0;
 static unsigned int g_crc_table[256];
 static int g_crc_table_ready = 0;
 static char g_splash[MAX_LABEL] = "Finally beta!";
@@ -2363,6 +2368,7 @@ static int classic_sounds_installed(void);
 static void pex_sound_rescan(void);
 static void pex_sound_play(const char *key, float volume, float pitch);
 static void pex_sound_play_at(const char *key, float x, float y, float z, float volume, float pitch);
+static void pex_sound_tick_record_stream(void);
 static void pex_sound_shutdown(void);
 static const char *pex_block_step_sound_key(int id);
 static const char *pex_block_dig_sound_key(int id);
