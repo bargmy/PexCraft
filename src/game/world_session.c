@@ -12,6 +12,34 @@ static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int wor
 #define FLAT_CHUNK_BLOCK_COUNT (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK * FLAT_WORLD_HEIGHT)
 #endif
 
+static void pex_write_item_stack_125(FILE *f, const ItemStack *s) {
+    ItemStack empty;
+    if (!s) { memset(&empty, 0, sizeof(empty)); s = &empty; }
+    fwrite(&s->id, sizeof(int), 1, f);
+    fwrite(&s->count, sizeof(int), 1, f);
+    fwrite(&s->damage, sizeof(int), 1, f);
+    for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) fwrite(&s->enchant_id[i], sizeof(int), 1, f);
+    for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) fwrite(&s->enchant_level[i], sizeof(int), 1, f);
+}
+
+static int pex_read_item_stack_125(FILE *f, ItemStack *s, int save_version) {
+    if (!f || !s) return 0;
+    memset(s, 0, sizeof(*s));
+    if (fread(&s->id, sizeof(int), 1, f) != 1 ||
+        fread(&s->count, sizeof(int), 1, f) != 1 ||
+        fread(&s->damage, sizeof(int), 1, f) != 1) return 0;
+    if (save_version >= 29) {
+        for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) if (fread(&s->enchant_id[i], sizeof(int), 1, f) != 1) return 0;
+        for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) if (fread(&s->enchant_level[i], sizeof(int), 1, f) != 1) return 0;
+        for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) {
+            if (s->enchant_id[i] <= 0 || s->enchant_level[i] <= 0) { s->enchant_id[i] = 0; s->enchant_level[i] = 0; }
+            if (s->enchant_level[i] > 10) s->enchant_level[i] = 10;
+        }
+    }
+    s->pop_time = 0;
+    return 1;
+}
+
 
 static void level_path_for_dir(const char *dir, char *out, size_t cap) {
     snprintf(out, cap, "%s\\level.dat", dir);
@@ -625,7 +653,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 28;
+    int version = 29;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -662,22 +690,16 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     fwrite(&ss->dimension, sizeof(ss->dimension), 1, f);
 
     for (int i = 0; i < 36; i++) {
-        fwrite(&ss->inventory[i].id, sizeof(int), 1, f);
-        fwrite(&ss->inventory[i].count, sizeof(int), 1, f);
-        fwrite(&ss->inventory[i].damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &ss->inventory[i]);
     }
     for (int i = 0; i < 4; i++) {
-        fwrite(&ss->armor_inventory[i].id, sizeof(int), 1, f);
-        fwrite(&ss->armor_inventory[i].count, sizeof(int), 1, f);
-        fwrite(&ss->armor_inventory[i].damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &ss->armor_inventory[i]);
     }
 
     ItemStack empty_legacy_chest[27];
     memset(empty_legacy_chest, 0, sizeof(empty_legacy_chest));
     for (int i = 0; i < 27; i++) {
-        fwrite(&empty_legacy_chest[i].id, sizeof(int), 1, f);
-        fwrite(&empty_legacy_chest[i].count, sizeof(int), 1, f);
-        fwrite(&empty_legacy_chest[i].damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &empty_legacy_chest[i]);
     }
 
     int chest_count = 0;
@@ -692,9 +714,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
         fwrite(&ct->y, sizeof(int), 1, f);
         fwrite(&ct->z, sizeof(int), 1, f);
         for (int i = 0; i < 27; i++) {
-            fwrite(&ct->slots[i].id, sizeof(int), 1, f);
-            fwrite(&ct->slots[i].count, sizeof(int), 1, f);
-            fwrite(&ct->slots[i].damage, sizeof(int), 1, f);
+            pex_write_item_stack_125(f, &ct->slots[i]);
         }
     }
 
@@ -713,9 +733,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
         fwrite(&ft->current_item_burn_time, sizeof(int), 1, f);
         fwrite(&ft->cook_time, sizeof(int), 1, f);
         for (int i = 0; i < 3; i++) {
-            fwrite(&ft->slots[i].id, sizeof(int), 1, f);
-            fwrite(&ft->slots[i].count, sizeof(int), 1, f);
-            fwrite(&ft->slots[i].damage, sizeof(int), 1, f);
+            pex_write_item_stack_125(f, &ft->slots[i]);
         }
     }
 
@@ -727,9 +745,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &ss->drops[i];
         if (!e->active || e->stack.id <= 0 || e->stack.count <= 0) continue;
-        fwrite(&e->stack.id, sizeof(int), 1, f);
-        fwrite(&e->stack.count, sizeof(int), 1, f);
-        fwrite(&e->stack.damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &e->stack);
         fwrite(&e->x, sizeof(float), 1, f);
         fwrite(&e->y, sizeof(float), 1, f);
         fwrite(&e->z, sizeof(float), 1, f);
@@ -900,7 +916,7 @@ static void save_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 28;
+    int version = 29;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -937,23 +953,17 @@ static void save_world_state_sync(void) {
     fwrite(&g_current_dimension, sizeof(g_current_dimension), 1, f);
 
     for (int i = 0; i < 36; i++) {
-        fwrite(&g_inventory[i].id, sizeof(int), 1, f);
-        fwrite(&g_inventory[i].count, sizeof(int), 1, f);
-        fwrite(&g_inventory[i].damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &g_inventory[i]);
     }
     for (int i = 0; i < 4; i++) {
-        fwrite(&g_armor_inventory[i].id, sizeof(int), 1, f);
-        fwrite(&g_armor_inventory[i].count, sizeof(int), 1, f);
-        fwrite(&g_armor_inventory[i].damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &g_armor_inventory[i]);
     }
     /* Legacy shared chest payload retained as zeroed padding for v9-v13 save
        migration. v14+ uses coordinate-bound ChestTile records below. */
     ItemStack empty_legacy_chest[27];
     memset(empty_legacy_chest, 0, sizeof(empty_legacy_chest));
     for (int i = 0; i < 27; i++) {
-        fwrite(&empty_legacy_chest[i].id, sizeof(int), 1, f);
-        fwrite(&empty_legacy_chest[i].count, sizeof(int), 1, f);
-        fwrite(&empty_legacy_chest[i].damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &empty_legacy_chest[i]);
     }
 
     int chest_count = 0;
@@ -968,9 +978,7 @@ static void save_world_state_sync(void) {
         fwrite(&ct->y, sizeof(int), 1, f);
         fwrite(&ct->z, sizeof(int), 1, f);
         for (int i = 0; i < 27; i++) {
-            fwrite(&ct->slots[i].id, sizeof(int), 1, f);
-            fwrite(&ct->slots[i].count, sizeof(int), 1, f);
-            fwrite(&ct->slots[i].damage, sizeof(int), 1, f);
+            pex_write_item_stack_125(f, &ct->slots[i]);
         }
     }
 
@@ -989,9 +997,7 @@ static void save_world_state_sync(void) {
         fwrite(&ft->current_item_burn_time, sizeof(int), 1, f);
         fwrite(&ft->cook_time, sizeof(int), 1, f);
         for (int i = 0; i < 3; i++) {
-            fwrite(&ft->slots[i].id, sizeof(int), 1, f);
-            fwrite(&ft->slots[i].count, sizeof(int), 1, f);
-            fwrite(&ft->slots[i].damage, sizeof(int), 1, f);
+            pex_write_item_stack_125(f, &ft->slots[i]);
         }
     }
 
@@ -1003,9 +1009,7 @@ static void save_world_state_sync(void) {
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &g_drops[i];
         if (!e->active || e->stack.id <= 0 || e->stack.count <= 0) continue;
-        fwrite(&e->stack.id, sizeof(int), 1, f);
-        fwrite(&e->stack.count, sizeof(int), 1, f);
-        fwrite(&e->stack.damage, sizeof(int), 1, f);
+        pex_write_item_stack_125(f, &e->stack);
         fwrite(&e->x, sizeof(float), 1, f);
         fwrite(&e->y, sizeof(float), 1, f);
         fwrite(&e->z, sizeof(float), 1, f);
@@ -1109,7 +1113,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23 || version == 27 || version == 28)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23 || version == 27 || version == 28 || version == 29)) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -1210,9 +1214,7 @@ static int load_current_world_state(void) {
     player_xp_sanitize();
 
     for (int i = 0; i < 36; i++) {
-        if (fread(&g_inventory[i].id, sizeof(int), 1, f) != 1 ||
-            fread(&g_inventory[i].count, sizeof(int), 1, f) != 1 ||
-            fread(&g_inventory[i].damage, sizeof(int), 1, f) != 1) {
+        if (!pex_read_item_stack_125(f, &g_inventory[i], version)) {
             fclose(f);
             return 0;
         }
@@ -1222,9 +1224,7 @@ static int load_current_world_state(void) {
     memset(g_armor_inventory, 0, sizeof(g_armor_inventory));
     if (version >= 17) {
         for (int i = 0; i < 4; i++) {
-            if (fread(&g_armor_inventory[i].id, sizeof(int), 1, f) != 1 ||
-                fread(&g_armor_inventory[i].count, sizeof(int), 1, f) != 1 ||
-                fread(&g_armor_inventory[i].damage, sizeof(int), 1, f) != 1) {
+            if (!pex_read_item_stack_125(f, &g_armor_inventory[i], version)) {
                 fclose(f);
                 return 0;
             }
@@ -1238,9 +1238,7 @@ static int load_current_world_state(void) {
     memset(g_chest_slots, 0, sizeof(g_chest_slots));
     if (version >= 9) {
         for (int i = 0; i < 27; i++) {
-            if (fread(&g_chest_slots[i].id, sizeof(int), 1, f) != 1 ||
-                fread(&g_chest_slots[i].count, sizeof(int), 1, f) != 1 ||
-                fread(&g_chest_slots[i].damage, sizeof(int), 1, f) != 1) {
+            if (!pex_read_item_stack_125(f, &g_chest_slots[i], version)) {
                 fclose(f);
                 return 0;
             }
@@ -1271,9 +1269,7 @@ static int load_current_world_state(void) {
                 return 0;
             }
             for (int i = 0; i < 27; i++) {
-                if (fread(&ct->slots[i].id, sizeof(int), 1, f) != 1 ||
-                    fread(&ct->slots[i].count, sizeof(int), 1, f) != 1 ||
-                    fread(&ct->slots[i].damage, sizeof(int), 1, f) != 1) {
+                if (!pex_read_item_stack_125(f, &ct->slots[i], version)) {
                     fclose(f);
                     return 0;
                 }
@@ -1305,9 +1301,7 @@ static int load_current_world_state(void) {
                 return 0;
             }
             for (int i = 0; i < 3; i++) {
-                if (fread(&ft->slots[i].id, sizeof(int), 1, f) != 1 ||
-                    fread(&ft->slots[i].count, sizeof(int), 1, f) != 1 ||
-                    fread(&ft->slots[i].damage, sizeof(int), 1, f) != 1) {
+                if (!pex_read_item_stack_125(f, &ft->slots[i], version)) {
                     fclose(f);
                     return 0;
                 }
@@ -1348,9 +1342,7 @@ static int load_current_world_state(void) {
             for (int i = 0; i < drop_count; i++) {
                 FlatDroppedItem *e = &g_drops[i];
                 memset(e, 0, sizeof(*e));
-                if (fread(&e->stack.id, sizeof(int), 1, f) != 1 ||
-                    fread(&e->stack.count, sizeof(int), 1, f) != 1 ||
-                    fread(&e->stack.damage, sizeof(int), 1, f) != 1 ||
+                if (!pex_read_item_stack_125(f, &e->stack, version) ||
                     fread(&e->x, sizeof(float), 1, f) != 1 ||
                     fread(&e->y, sizeof(float), 1, f) != 1 ||
                     fread(&e->z, sizeof(float), 1, f) != 1 ||
@@ -1471,7 +1463,7 @@ static int load_current_world_state(void) {
     g_flat_section_geometry_dirty = 0;
     reset_player_damage_visuals();
     pex_logf("world state loaded dir=%s version=%d health=%d dead=%d origin=%d,%d", g_loaded_world_dir, version, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
-    g_save_dirty = (version < 18) ? 1 : 0;
+    g_save_dirty = (version < 29) ? 1 : 0;
     return 1;
 }
 

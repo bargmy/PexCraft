@@ -4,6 +4,36 @@ static int stack_empty(const ItemStack *s) { return !s || s->id <= 0 || s->count
 
 static void stack_clear(ItemStack *s) { if (s) memset(s, 0, sizeof(*s)); }
 
+static int item_stack_enchant_level_125(const ItemStack *s, int enchant_id) {
+    if (!s || s->id <= 0 || enchant_id <= 0) return 0;
+    int best = 0;
+    for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) {
+        if (s->enchant_id[i] == enchant_id && s->enchant_level[i] > best) best = s->enchant_level[i];
+    }
+    return best;
+}
+
+static int item_stack_set_enchant_125(ItemStack *s, int enchant_id, int level) {
+    if (!s || s->id <= 0 || enchant_id <= 0 || level <= 0) return 0;
+    int free_i = -1;
+    for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) {
+        if (s->enchant_id[i] == enchant_id) { s->enchant_level[i] = level; return 1; }
+        if (s->enchant_id[i] == 0 && free_i < 0) free_i = i;
+    }
+    if (free_i < 0) return 0;
+    s->enchant_id[free_i] = enchant_id;
+    s->enchant_level[free_i] = level;
+    return 1;
+}
+
+static int item_stack_has_enchants_125(const ItemStack *s) {
+    if (!s || s->id <= 0) return 0;
+    for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) {
+        if (s->enchant_id[i] > 0 && s->enchant_level[i] > 0) return 1;
+    }
+    return 0;
+}
+
 static int stack_is_dear_memories_book(const ItemStack *s) { return s && s->id == ITEM_BOOK && s->damage == PEX_DEAR_MEMORIES_BOOK_DAMAGE && s->count > 0; }
 
 static int stack_same_item(const ItemStack *a, const ItemStack *b) { return !stack_empty(a) && !stack_empty(b) && a->id == b->id && a->damage == b->damage; }
@@ -34,13 +64,14 @@ static int stack_limit_for_id(int id) {
     return ITEM_MAX_STACK;
 }
 
-static ItemStack make_stack(int id, int count, int damage) { ItemStack s; s.id = id; s.count = count; s.damage = damage; s.pop_time = 0; return s; }
+static ItemStack make_stack(int id, int count, int damage) { ItemStack s; memset(&s, 0, sizeof(s)); s.id = id; s.count = count; s.damage = damage; return s; }
 static void spawn_item_stack(float x, float y, float z, ItemStack st, int random_spread);
 static void unsupported_block_neighbor_cleanup(int x, int y, int z);
 static void damage_held_item(ItemStack *held, int amount);
 static int jukebox_eject_record(int x, int y, int z);
 static int passive_mobs_spawn_from_egg_damage(int egg_damage, float x, float y, float z);
 static int passive_mobs_apply_dye_to_target(int dye_damage);
+static void passive_mobs_on_block_broken_125(int block_id, int meta, int x, int y, int z);
 static int spawn_flat_vehicle(int type, float x, float y, float z, float yaw);
 
 typedef struct CreativeItemDef { int id; int damage; } CreativeItemDef;
@@ -3548,6 +3579,7 @@ static int block_drop_id(int block_id) {
     if (block_id == BLOCK_SIGN_POST || block_id == BLOCK_WALL_SIGN) return ITEM_SIGN;
     if (block_id == BLOCK_FURNACE_LIT) return BLOCK_FURNACE;
     if (block_id == BLOCK_BEDROCK) return 0;
+    if (block_id == BLOCK_SILVERFISH) return 0; /* BlockSilverfish.quantityDropped(Random) == 0. */
     return block_id;
 }
 
@@ -5904,6 +5936,7 @@ static void break_target_block(void) {
     } else {
         flat_set_block(g_break_x, g_break_y, g_break_z, 0);
     }
+    passive_mobs_on_block_broken_125(id, break_meta, g_break_x, g_break_y, g_break_z);
     unsupported_block_neighbor_cleanup(g_break_x, g_break_y, g_break_z);
     flat_end_persistent_edit();
     redstone_update_near(g_break_x, g_break_y, g_break_z);
@@ -6930,6 +6963,80 @@ static void pex_projectile_break_effect(float x, float y, float z, int potion_da
     }
 }
 
+static int pex_projectile_explosion_breaks_block_125(int id) {
+    if (id <= 0 || id == BLOCK_BEDROCK || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME) return 0;
+    if (block_is_liquid(id)) return 0;
+    return 1;
+}
+
+static void pex_projectile_small_fireball_set_fire_125(const FlatProjectile *p) {
+    if (!p) return;
+    int bx = (int)floorf(p->x);
+    int by = (int)floorf(p->y);
+    int bz = (int)floorf(p->z);
+    /* EntitySmallFireball sets fire on the adjacent block it hit.  The C
+       projectile collision code stores only the impact position, so try the
+       impact cell and then the block above it as a stable single-player port. */
+    if (flat_get_block(bx, by, bz) == 0) {
+        flat_set_block(bx, by, bz, BLOCK_FIRE);
+        block_on_placed(bx, by, bz, BLOCK_FIRE);
+    } else if (flat_get_block(bx, by + 1, bz) == 0) {
+        flat_set_block(bx, by + 1, bz, BLOCK_FIRE);
+        block_on_placed(bx, by + 1, bz, BLOCK_FIRE);
+    }
+}
+
+static void pex_projectile_large_fireball_explode_125(const FlatProjectile *p) {
+    if (!p) return;
+    /* EntityLargeFireball calls World.newExplosion with explosionStrength 1 in
+       1.2.5.  Keep the Java entity-damage formula and a compact block pass. */
+    const float explosion_size = 1.0f;
+    const float radius = explosion_size * 2.0f;
+    int cx = (int)floorf(p->x), cy = (int)floorf(p->y), cz = (int)floorf(p->z);
+    for (int y = cy - 2; y <= cy + 2; ++y) {
+        for (int z = cz - 2; z <= cz + 2; ++z) {
+            for (int x = cx - 2; x <= cx + 2; ++x) {
+                float dx = ((float)x + 0.5f) - p->x;
+                float dy = ((float)y + 0.5f) - p->y;
+                float dz = ((float)z + 0.5f) - p->z;
+                float d = sqrtf(dx * dx + dy * dy + dz * dz);
+                if (d > radius) continue;
+                int id = flat_get_block(x, y, z);
+                if (!pex_projectile_explosion_breaks_block_125(id)) continue;
+                if (pex_rand_float01() > 0.35f + d / (radius + 0.001f) * 0.45f) {
+                    spawn_block_destroy_particles(x, y, z, id);
+                    flat_set_block(x, y, z, 0);
+                }
+            }
+        }
+    }
+
+    PexDamageSource source = pex_damage_source_fireball(p);
+    float pdx = g_player_x - p->x;
+    float pdy = (g_player_y - 0.9f) - p->y;
+    float pdz = g_player_z - p->z;
+    float pd = sqrtf(pdx * pdx + pdy * pdy + pdz * pdz);
+    if (!g_player_dead && pd <= radius) {
+        float impact = 1.0f - pd / radius;
+        int dmg = (int)((impact * impact + impact) * 0.5f * 8.0f * explosion_size + 1.0f);
+        if (dmg > 0) (void)player_attack_entity_from(source, dmg);
+    }
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (!m->active || m->death_time > 0) continue;
+        if (p->owner_type == 1 && i == p->owner_mob_index && m->type == p->owner_mob_type) continue;
+        float dx = m->x - p->x;
+        float dy = (m->y + m->height * 0.5f) - p->y;
+        float dz = m->z - p->z;
+        float d = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (d > radius) continue;
+        float impact = 1.0f - d / radius;
+        int dmg = (int)((impact * impact + impact) * 0.5f * 8.0f * explosion_size + 1.0f);
+        if (dmg > 0) (void)pex_mob_attack_entity_from(m, source, dmg);
+    }
+    g_save_dirty = 1;
+}
+
 static int pex_xp_orb_split_value(int value) {
     if (value >= 2477) return 2477;
     if (value >= 1237) return 1237;
@@ -6966,6 +7073,8 @@ static void pex_projectile_impact(FlatProjectile *p) {
         }
     } else if (p->type == FLAT_PROJECTILE_LARGE_FIREBALL || p->type == FLAT_PROJECTILE_SMALL_FIREBALL) {
         pex_sound_play_at("random.explode", p->x, p->y, p->z, p->type == FLAT_PROJECTILE_LARGE_FIREBALL ? 4.0f : 1.0f, 1.0f);
+        if (p->type == FLAT_PROJECTILE_LARGE_FIREBALL) pex_projectile_large_fireball_explode_125(p);
+        else pex_projectile_small_fireball_set_fire_125(p);
         for (int i = 0; i < 24; ++i) add_splash_particle(p->x, p->y, p->z, (pex_rand_float01()-0.5f)*0.25f, pex_rand_float01()*0.25f, (pex_rand_float01()-0.5f)*0.25f);
     } else if (p->type == FLAT_PROJECTILE_ARROW) {
         pex_sound_play_at("random.bowhit", p->x, p->y, p->z, 1.0f, 1.2f);
@@ -7045,6 +7154,7 @@ static void pex_projectile_damage_passive_mob(int mob_index, const FlatProjectil
     if (!p || mob_index < 0 || mob_index >= MAX_PASSIVE_MOBS) return;
     PassiveMob *m = &g_passive_mobs[mob_index];
     if (!m->active || m->death_time > 0) return;
+    if (p->type == FLAT_PROJECTILE_LARGE_FIREBALL) return;
     int damage = pex_projectile_attack_damage_125(p);
     if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && m->type == PASSIVE_MOB_BLAZE) damage = 3;
     if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && p->owner_type == 1 &&
@@ -7102,7 +7212,7 @@ static void update_projectiles(void) {
         float ehx = 0.0f, ehy = 0.0f, ehz = 0.0f, et = 2.0f;
         int passive_hit_idx = -1;
         if (pex_projectile_player_hit(p, p->x, p->y, p->z, nx, ny, nz)) {
-            int dmg = pex_difficulty_scaled_mob_damage(pex_projectile_attack_damage_125(p));
+            int dmg = (p->type == FLAT_PROJECTILE_LARGE_FIREBALL) ? 0 : pex_difficulty_scaled_mob_damage(pex_projectile_attack_damage_125(p));
             if (dmg > 0) {
                 PexDamageSource source;
                 if (p->type == FLAT_PROJECTILE_ARROW) source = pex_damage_source_arrow(p);
@@ -7125,6 +7235,9 @@ static void update_projectiles(void) {
                 if (!hit || t < hit_t) { hit = 1; hit_t = t; hx = sx; hy = sy; hz = sz; passive_hit_idx = -1; }
                 break;
             }
+        }
+        if (p->age > 2 && pex_dragon_crystal_projectile_hit_125(p, p->x, p->y, p->z, nx, ny, nz, hit ? hit_t : 1.0f, &et, &ehx, &ehy, &ehz)) {
+            if (!hit || et < hit_t) { hit = 1; hit_t = et; hx = ehx; hy = ehy; hz = ehz; passive_hit_idx = -1; }
         }
         if (hit) { if (passive_hit_idx >= 0) pex_projectile_damage_passive_mob(passive_hit_idx, p, p->x, p->z); p->x = hx; p->y = hy; p->z = hz; pex_projectile_impact(p); continue; }
         p->x = nx; p->y = ny; p->z = nz;

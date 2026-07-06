@@ -346,7 +346,9 @@ static int java125_inventory_model_meta(int id, int damage) {
 }
 
 static int java125_wool_texture_meta(int meta) {
-    if ((meta & 15) == 0) return 0;
+    /* ItemCloth.getIconFromDamage calls BlockCloth.getBlockFromDye(damage).
+       Damage 0 is still White Wool, but the item icon is resolved through
+       cloth metadata 15 before BlockCloth inverts it for the terrain tile. */
     return (~meta) & 15;
 }
 

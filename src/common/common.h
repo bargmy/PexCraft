@@ -700,6 +700,8 @@ typedef struct PassiveMob {
     int hurt_time;
     int damage_cooldown;
     int damage_remainder;
+    int recently_hit;     /* Java EntityLiving.recentlyHit: 60 ticks after player damage */
+    int last_looting_level;/* last player Looting level; currently 0 until enchant data exists */
     int death_time;
     int death_drops_done;
     int on_ground;
@@ -730,6 +732,8 @@ typedef struct PassiveMob {
     int baby_age;
     int sitting;
     int held_block;
+    int held_item;      /* Java EntityLiving equipment slot 0 / getHeldItem port state */
+    int equipment[4];   /* armor slots for normal mob equipment parity; 0 until spawn/enchant data exists */
     int love_time;
     int jump_cooldown;
     int stuck_ticks;
@@ -1471,11 +1475,20 @@ typedef enum PexDimension {
 #define ITEM_FIRE_CHARGE ITEM_FIREBALL_CHARGE
 
 
+#define PEX_ITEMSTACK_ENCHANT_MAX 4
+#define PEX_ENCHANT_LOOTING 21
+
 typedef struct ItemStack {
     int id;
     int count;
     int damage;
     int pop_time;
+    /* Minimal Java 1.2.5 ItemStack enchantment-NBT port: enchantment
+       compounds store short id/lvl pairs under the "ench" list.  Keep a
+       compact fixed array in C so Looting and rare-drop enchant branches can
+       be represented without cloning Minecraft's full NBT heap model. */
+    int enchant_id[PEX_ITEMSTACK_ENCHANT_MAX];
+    int enchant_level[PEX_ITEMSTACK_ENCHANT_MAX];
 } ItemStack;
 
 static void armor_sync_player_armor(void);
@@ -2514,6 +2527,7 @@ static void passive_mobs_apply_riding(void);
 static int passive_mobs_attack_from_player(void);
 static int passive_mobs_player_interact(void);
 static int pex_mob_attack_entity_from(PassiveMob *mob, PexDamageSource source, int damage);
+static int pex_dragon_crystal_projectile_hit_125(const FlatProjectile *p, float x0, float y0, float z0, float x1, float y1, float z1, float max_t, float *out_t, float *out_x, float *out_y, float *out_z);
 static void pex_passive_apply_potion_effect(PassiveMob *mob, int id, int duration, int amplifier, float splash_scale);
 static void draw_java_entity_shadow(float x, float y, float z, float shadow_size, float shadow_alpha);
 static void draw_passive_mobs(float partial);

@@ -1,15 +1,31 @@
 /* Minecraft 1.2.5-style local mobs. Included in the unity build after
    inventory.c so it can reuse the existing world/item/collision helpers. */
 
-#define PASSIVE_MOB_SAVE_VERSION 29
+#define PASSIVE_MOB_SAVE_VERSION 34
 
 static PassiveMob *passive_mob_raycast(float max_dist, float *out_t);
 static void passive_mob_assign_owner(PassiveMob *m);
 static int passive_mob_is_owned_by_player(const PassiveMob *m);
+static void passive_owned_wolves_target_mob_125(PassiveMob *target);
+static void passive_owned_wolves_defend_player_125(PassiveMob *attacker);
 static void passive_village_update_reputation_from_attack(PassiveMob *m);
 static const char *passive_mob_name(int type);
 static void passive_mob_set_path_goal(PassiveMob *m, float x, float y, float z);
+static void passive_mob_apply_default_equipment_125(PassiveMob *m);
+static int passive_player_looking_at_mob_125(const PassiveMob *m);
+static int passive_mob_teleport_random_125(PassiveMob *m, float range);
 static int passive_path_can_stand_at(int type, int x, int y, int z);
+static void passive_mobs_tick_spawners_125(void);
+static void passive_mob_spawner_remove_tile_125(int x, int y, int z);
+static void passive_mobs_ensure_ender_dragon_125(void);
+static void passive_dragon_tick_living_125(PassiveMob *m);
+static int passive_dragon_tick_death_125(PassiveMob *m);
+static void passive_dragon_crystals_tick_125(PassiveMob *dragon);
+static void passive_dragon_crystals_draw_125(float partial);
+static int passive_dragon_crystal_player_attack_125(float max_dist, float mob_t);
+static int passive_dragon_player_part_damage_125(const PassiveMob *dragon, int base_damage);
+static void passive_dragon_crystal_state_write_binary_125(FILE *f);
+static void passive_dragon_crystal_state_read_binary_125(FILE *f, int save_version);
 static void passive_path_clear(PassiveMob *m);
 static int item_icon_tile(int id);
 static int block_texture_resolve(int block_id, int meta, int face);
@@ -48,6 +64,19 @@ static float pex_clamp_float(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+static int g_passive_dragon_killed_125 = 0;
+
+#define PEX_DRAGON_CRYSTAL_MAX_125 16
+typedef struct PexDragonCrystalRuntime125 {
+    int active;
+    int x, y, z;
+    float px, py, pz;
+    int health;
+    int inner_rotation;
+    int beam_dragon_index;
+} PexDragonCrystalRuntime125;
+static PexDragonCrystalRuntime125 g_dragon_crystals_125[PEX_DRAGON_CRYSTAL_MAX_125];
+static int g_dragon_crystals_seeded_125 = 0;
 
 typedef enum PexMobModelKind {
     PEX_MOB_MODEL_QUADRUPED = 0,
@@ -95,7 +124,7 @@ static const PexMobInfo g_pex_mob_info[] = {
     {PASSIVE_MOB_SKELETON,     51,  "Skeleton",      0.6f, 1.8f,  20, 0.25f, 4, 1, 0, PEX_MOB_MODEL_BIPED,      &tex_mob_skeleton,         "mob.skeleton",     "mob.skeletonhurt",    "mob.skeletonhurt",      1.0f, ITEM_ARROW, ITEM_BONE},
     {PASSIVE_MOB_SPIDER,       52,  "Spider",        1.4f, 0.9f,  16, 0.80f, 2, 1, 0, PEX_MOB_MODEL_SPIDER,     &tex_mob_spider,           "mob.spider",       "mob.spider",          "mob.spiderdeath",       1.0f, ITEM_STRING, ITEM_SPIDER_EYE},
     {PASSIVE_MOB_GIANT,        53,  "Giant",         3.6f,10.8f, 100, 0.50f,50, 1, 0, PEX_MOB_MODEL_BIPED,      &tex_mob_zombie,           "mob.zombie",       "mob.zombiehurt",      "mob.zombiehurt",        1.0f, ITEM_ROTTEN_FLESH, 0},
-    {PASSIVE_MOB_ZOMBIE,       54,  "Zombie",        0.6f, 1.8f,  20, 0.23f, 4, 1, 0, PEX_MOB_MODEL_BIPED,      &tex_mob_zombie,           "mob.zombie",       "mob.zombiehurt",      "mob.zombiehurt",        1.0f, ITEM_ROTTEN_FLESH, 0},
+    {PASSIVE_MOB_ZOMBIE,       54,  "Zombie",        0.6f, 1.8f,  20, 0.23f, 4, 1, 0, PEX_MOB_MODEL_BIPED,      &tex_mob_zombie,           "mob.zombie",       "mob.zombiehurt",      "mob.zombiedeath",       1.0f, ITEM_ROTTEN_FLESH, 0},
     {PASSIVE_MOB_SLIME,        55,  "Slime",         1.2f, 1.2f,  16, 0.30f, 4, 1, 0, PEX_MOB_MODEL_SLIME,      &tex_mob_slime,            NULL,               "mob.slime",           "mob.slime",             1.0f, ITEM_SLIME_BALL, 0},
     {PASSIVE_MOB_GHAST,        56,  "Ghast",         4.0f, 4.0f,  10, 0.18f, 6, 1, 0, PEX_MOB_MODEL_GHAST,      &tex_mob_ghast,            "mob.ghast.moan",   "mob.ghast.scream",    "mob.ghast.death",       10.0f, ITEM_GHAST_TEAR, ITEM_GUNPOWDER},
     {PASSIVE_MOB_PIG_ZOMBIE,   57,  "Zombie Pigman", 0.6f, 1.8f,  20, 0.50f, 5, 1, 0, PEX_MOB_MODEL_BIPED,      &tex_mob_pigzombie,        "mob.zombiepig.zpig","mob.zombiepig.zpighurt","mob.zombiepig.zpigdeath",1.0f, ITEM_ROTTEN_FLESH, ITEM_GOLD_NUGGET},
@@ -106,10 +135,10 @@ static const PexMobInfo g_pex_mob_info[] = {
     {PASSIVE_MOB_MAGMA_CUBE,   62,  "Magma Cube",    1.2f, 1.2f,  16, 0.30f, 4, 1, 0, PEX_MOB_MODEL_SLIME,      &tex_mob_lava,             NULL,               "mob.slime",           "mob.slime",             1.0f, ITEM_MAGMA_CREAM, 0},
     {PASSIVE_MOB_ENDER_DRAGON, 63,  "Ender Dragon", 16.0f, 8.0f, 200, 0.60f,10, 1, 0, PEX_MOB_MODEL_DRAGON,     &tex_mob_enderdragon,      "mob.enderdragon.growl","mob.enderdragon.hit", "mob.enderdragon.end",   5.0f, 0, 0},
     {PASSIVE_MOB_SQUID,        94,  "Squid",         0.95f,0.95f, 10, 0.18f, 0, 0, 1, PEX_MOB_MODEL_SQUID,      &tex_mob_squid,            NULL,               "mob.squid.hurt",      "mob.squid.death",       1.0f, ITEM_DYE_POWDER, 0},
-    {PASSIVE_MOB_WOLF,         95,  "Wolf",          0.6f, 0.8f,   8, 0.30f, 4, 0, 0, PEX_MOB_MODEL_QUADRUPED,  &tex_mob_wolf,             "mob.wolf.bark",    "mob.wolf.hurt",       "mob.wolf.death",        1.0f, 0, 0},
+    {PASSIVE_MOB_WOLF,         95,  "Wolf",          0.6f, 0.8f,   8, 0.30f, 4, 0, 0, PEX_MOB_MODEL_QUADRUPED,  &tex_mob_wolf,             "mob.wolf.bark",    "mob.wolf.hurt",       "mob.wolf.death",        0.4f, 0, 0},
     {PASSIVE_MOB_MOOSHROOM,    96,  "Mooshroom",     0.9f, 1.3f,  10, 0.23f, 0, 0, 0, PEX_MOB_MODEL_QUADRUPED,  &tex_mob_mooshroom,        "mob.cow",          "mob.cowhurt",         "mob.cowhurt",           0.4f, ITEM_LEATHER, ITEM_BEEF_RAW},
     {PASSIVE_MOB_SNOWMAN,      97,  "Snow Golem",    0.4f, 1.8f,   4, 0.25f, 0, 0, 0, PEX_MOB_MODEL_SNOWMAN,    &tex_mob_snowman,          NULL,               "mob.snowman",         "mob.snowman",           1.0f, ITEM_SNOWBALL, 0},
-    {PASSIVE_MOB_OCELOT,       98,  "Ocelot",        0.6f, 0.8f,  10, 0.30f, 3, 0, 0, PEX_MOB_MODEL_QUADRUPED,  &tex_mob_ocelot,           "mob.cat.meow",     "mob.cat.hitt",        "mob.cat.hitt",          1.0f, 0, 0},
+    {PASSIVE_MOB_OCELOT,       98,  "Ocelot",        0.6f, 0.8f,  10, 0.30f, 3, 0, 0, PEX_MOB_MODEL_QUADRUPED,  &tex_mob_ocelot,           "mob.cat.meow",     "mob.cat.hitt",        "mob.cat.hitt",          0.4f, 0, 0},
     {PASSIVE_MOB_IRON_GOLEM,   99,  "Iron Golem",    1.4f, 2.9f, 100, 0.25f,15, 0, 0, PEX_MOB_MODEL_IRON_GOLEM, &tex_mob_villager_golem,   "mob.irongolem.walk","mob.irongolem.hit",    "mob.irongolem.death",   1.0f, ITEM_INGOT_IRON, BLOCK_RED_ROSE},
     {PASSIVE_MOB_VILLAGER,    120,  "Villager",      0.6f, 1.8f,  20, 0.50f, 0, 0, 0, PEX_MOB_MODEL_VILLAGER,   &tex_mob_villager,         "mob.villager.default","mob.villager.defaulthurt","mob.villager.death",  1.0f, 0, 0}
 };
@@ -235,10 +264,11 @@ static int passive_biome_weighted_spawn_entry(int cat, int biome, PexSpawnEntry 
     } else if (cat == PEX_CAT_MONSTER) {
         if (biome == BIOME_JUNGLE || biome == BIOME_JUNGLE_HILLS) tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_OCELOT,2,1,1};
         if (biome == BIOME_HELL) {
-            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_GHAST,5,4,4};
-            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_PIG_ZOMBIE,10,4,4};
-            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_MAGMA_CUBE,3,4,4};
-            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_BLAZE,5,4,4};
+            /* BiomeGenHell 1.2.5: ghast 50, pig zombie 100, magma cube 1.
+               Blazes are fortress-spawner mobs, not natural Nether biome spawns. */
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_GHAST,50,4,4};
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_PIG_ZOMBIE,100,4,4};
+            tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_MAGMA_CUBE,1,4,4};
         } else if (biome == BIOME_SKY) {
             tmp[n++] = (PexSpawnEntry){PASSIVE_MOB_ENDERMAN,10,4,4};
         } else if (passive_biome_allows_monsters(biome)) {
@@ -353,6 +383,7 @@ static int passive_mob_hostile(const PassiveMob *m) {
     const PexMobInfo *info = m ? passive_mob_info(m->type) : NULL;
     if (!info) return 0;
     if (m->type == PASSIVE_MOB_PIG_ZOMBIE && m->rideable <= 0) return 0; /* neutral until hit */
+    if (m->type == PASSIVE_MOB_ENDERMAN && m->rideable <= 0) return 0;   /* neutral until stared at / hit */
     if (m->type == PASSIVE_MOB_WOLF && m->rideable <= 0) return 0;       /* neutral/tame flag */
     if (m->type == PASSIVE_MOB_IRON_GOLEM) return 0;
     return info->hostile;
@@ -380,8 +411,45 @@ static float passive_mob_model_scale_for_type(int type) {
     }
 }
 
+static float passive_mob_shadow_size_125(int type) {
+    /* Exact RenderManager.java registrations from Minecraft 1.2.5. */
+    switch (type) {
+        case PASSIVE_MOB_CHICKEN: return 0.3f;       /* RenderChicken */
+        case PASSIVE_MOB_OCELOT: return 0.4f;        /* RenderOcelot */
+        case PASSIVE_MOB_SILVERFISH: return 0.3f;    /* RenderSilverfish */
+        case PASSIVE_MOB_SPIDER:
+        case PASSIVE_MOB_CAVE_SPIDER: return 1.0f;   /* RenderSpider */
+        case PASSIVE_MOB_GIANT: return 3.0f;         /* RenderGiantZombie: 0.5 * 6.0 */
+        case PASSIVE_MOB_SLIME:
+        case PASSIVE_MOB_MAGMA_CUBE: return 0.25f;   /* RenderSlime/RenderMagmaCube */
+        case PASSIVE_MOB_PIG:
+        case PASSIVE_MOB_SHEEP:
+        case PASSIVE_MOB_COW:
+        case PASSIVE_MOB_MOOSHROOM:
+        case PASSIVE_MOB_SQUID: return 0.7f;
+        default: return 0.5f;                        /* RenderBiped/most RenderLiving mobs */
+    }
+}
+
 static float passive_lerp_angle(float a, float b, float partial) {
     return a + pex_wrap_degrees(b - a) * partial;
+}
+
+static float passive_sheep_eat_amount_125(float sheep_timer, float partial) {
+    /* EntitySheep.func_44003_c: drives ModelSheep head rotationPointY while grazing. */
+    if (sheep_timer <= 0.0f) return 0.0f;
+    if (sheep_timer >= 4.0f && sheep_timer <= 36.0f) return 1.0f;
+    if (sheep_timer < 4.0f) return (sheep_timer - partial) / 4.0f;
+    return -((sheep_timer - 40.0f) - partial) / 4.0f;
+}
+
+static float passive_sheep_head_pitch_125(float sheep_timer, float partial, float normal_pitch_rad) {
+    /* EntitySheep.func_44002_d: eating head bob. */
+    if (sheep_timer > 4.0f && sheep_timer <= 36.0f) {
+        float t = ((sheep_timer - 4.0f) - partial) / 32.0f;
+        return (float)M_PI * 0.2f + (float)M_PI * 0.07f * sinf(t * 28.7f);
+    }
+    return sheep_timer > 0.0f ? (float)M_PI * 0.2f : normal_pitch_rad;
 }
 
 static int passive_block_is_liquid(int id) {
@@ -555,6 +623,21 @@ static int passive_mob_health_for_type(int type) {
     const PexMobInfo *info = passive_mob_info(type);
     return info ? info->health : 1;
 }
+
+static int passive_mob_max_health_current_125(const PassiveMob *m) {
+    if (!m) return 1;
+    /* EntityWolf.getMaxHealth(): 20 when tamed, 8 while wild/angry. */
+    if (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m)) return 20;
+    return passive_mob_health_for_type(m->type);
+}
+
+static void passive_mob_clamp_health_current_125(PassiveMob *m) {
+    if (!m) return;
+    int cap = passive_mob_max_health_current_125(m);
+    if (m->health > cap) m->health = cap;
+    if (m->prev_health > cap) m->prev_health = cap;
+}
+
 static float passive_mob_sound_volume(int type) {
     const PexMobInfo *info = passive_mob_info(type);
     return info ? info->sound_volume : 1.0f;
@@ -563,6 +646,25 @@ static const char *passive_mob_living_sound(int type) {
     const PexMobInfo *info = passive_mob_info(type);
     return info ? info->living_sound : NULL;
 }
+
+static const char *passive_mob_living_sound_current_125(const PassiveMob *m) {
+    if (!m) return NULL;
+    if (m->type == PASSIVE_MOB_WOLF) {
+        if (m->rideable > 0 && !passive_mob_is_owned_by_player(m)) return "mob.wolf.growl";
+        if (passive_mob_is_owned_by_player(m) && m->health < 10) return "mob.wolf.whine";
+        return (rand() % 3) == 0 ? "mob.wolf.panting" : "mob.wolf.bark";
+    }
+    if (m->type == PASSIVE_MOB_OCELOT) {
+        if (!passive_mob_is_owned_by_player(m)) return NULL;
+        if (m->love_time > 0) return "mob.cat.purr";
+        return (rand() % 4) == 0 ? "mob.cat.purreow" : "mob.cat.meow";
+    }
+    if (m->type == PASSIVE_MOB_PIG_ZOMBIE && m->rideable > 0) {
+        return "mob.zombiepig.zpigangry";
+    }
+    return passive_mob_living_sound(m->type);
+}
+
 static const char *passive_mob_hurt_sound(int type) {
     const PexMobInfo *info = passive_mob_info(type);
     return info ? info->hurt_sound : NULL;
@@ -578,69 +680,189 @@ static void passive_mob_drop_stack(PassiveMob *m, int item_id, int count) {
     }
 }
 
-static void passive_mob_drop_on_death(PassiveMob *m) {
+static void passive_mob_drop_itemstack_125(PassiveMob *m, ItemStack st) {
+    if (!m || st.id <= 0 || st.count <= 0) return;
+    spawn_item_stack(m->x, m->y + 0.5f, m->z, st, 1);
+}
+
+static ItemStack passive_make_random_enchanted_equipment_125(int item_id) {
+    ItemStack st = make_stack(item_id, 1, 0);
+    /* Port hook for EntityLiving.dropRareDrop(enchanted=1). Java calls
+       EnchantmentHelper.func_48441_a(rand, stack, 5). Full enchant tables are
+       outside normal-mob stability, but this stores real ItemStack enchant
+       pairs so rare drops can carry enchant NBT-shaped data. */
+    if (item_id == ITEM_SWORD_GOLD || item_id == ITEM_BOW || item_id == ITEM_SWORD_IRON || item_id == ITEM_SHOVEL_IRON) {
+        int lvl = 1 + (rand() % 2);
+        item_stack_set_enchant_125(&st, (item_id == ITEM_BOW) ? 48 : 16, lvl); /* Power or Sharpness */
+    }
+    return st;
+}
+
+static void passive_mob_apply_default_equipment_125(PassiveMob *m) {
+    if (!m) return;
+    if (m->held_item <= 0) {
+        if (m->type == PASSIVE_MOB_SKELETON) {
+            /* EntitySkeleton.getHeldItem returns a bow.  Keep this as saved
+               mob state instead of a renderer-only hardcode so ranged AI,
+               render layers, and future equipment drops all see the same data. */
+            m->held_item = ITEM_BOW;
+        } else if (m->type == PASSIVE_MOB_PIG_ZOMBIE) {
+            /* EntityPigZombie.getHeldItem returns a golden sword. */
+            m->held_item = ITEM_SWORD_GOLD;
+        }
+    }
+}
+
+static int passive_mob_recently_hit_by_player_125(const PassiveMob *m, const PexDamageSource *source) {
+    return (source && source->true_kind == PEX_DAMAGE_ENTITY_PLAYER) || (m && m->recently_hit > 0);
+}
+
+static int passive_mob_looting_level_125(const PassiveMob *m, const PexDamageSource *source) {
+    /* Java EntityLiving.onDeath asks EnchantmentHelper.getLootingModifier when
+       the true killer is the player.  The C port caches the player's held
+       ItemStack Looting level into last_looting_level at hit time, matching
+       the recentlyHit death-window behavior. */
+    if (!passive_mob_recently_hit_by_player_125(m, source)) return 0;
+    int lvl = m ? m->last_looting_level : 0;
+    if (lvl < 0) lvl = 0;
+    if (lvl > 3) lvl = 3;
+    return lvl;
+}
+
+static int passive_drop_rand_125(int exclusive) {
+    return exclusive <= 1 ? 0 : (rand() % exclusive);
+}
+
+static int passive_drop_count_0_to_base_minus_1_125(int base_exclusive, int looting) {
+    int n = passive_drop_rand_125(base_exclusive);
+    if (looting > 0) n += rand() % (looting + 1);
+    return n;
+}
+
+static int passive_drop_count_1_plus_base_125(int base_exclusive, int looting) {
+    return 1 + passive_drop_count_0_to_base_minus_1_125(base_exclusive, looting);
+}
+
+
+static int passive_creeper_self_explosion_death_125(const PassiveMob *m, const PexDamageSource *source) {
+    return m && source && m->type == PASSIVE_MOB_CREEPER && source->type == PEX_DAMAGE_EXPLOSION &&
+           source->true_kind == PEX_DAMAGE_ENTITY_MOB && source->true_mob_type == PASSIVE_MOB_CREEPER;
+}
+
+static int passive_mob_drops_cooked_125(const PassiveMob *m, const PexDamageSource *source) {
+    if (!m) return 0;
+    return m->burn_time > 0 || (source && source->fire_damage);
+}
+
+static void passive_mob_drop_rare_drop_125(PassiveMob *m, const PexDamageSource *source) {
+    if (!m || !passive_mob_recently_hit_by_player_125(m, source)) return;
+    int looting = passive_mob_looting_level_125(m, source);
+    /* EntityLiving.onDeath: rand.nextInt(200) - looting < 5. */
+    int rare_roll = (rand() % 200) - looting;
+    if (rare_roll >= 5) return;
+    int enchanted_branch = rare_roll <= 0;
+    switch (m->type) {
+        case PASSIVE_MOB_ZOMBIE:
+            switch (rand() & 3) {
+                case 0: passive_mob_drop_stack(m, ITEM_SWORD_IRON, 1); break;
+                case 1: passive_mob_drop_stack(m, ITEM_HELMET_IRON, 1); break;
+                case 2: passive_mob_drop_stack(m, ITEM_INGOT_IRON, 1); break;
+                default: passive_mob_drop_stack(m, ITEM_SHOVEL_IRON, 1); break;
+            }
+            break;
+        case PASSIVE_MOB_SKELETON:
+            if (enchanted_branch) passive_mob_drop_itemstack_125(m, passive_make_random_enchanted_equipment_125(ITEM_BOW));
+            else passive_mob_drop_stack(m, ITEM_BOW, 1);
+            break;
+        case PASSIVE_MOB_PIG_ZOMBIE:
+            if (enchanted_branch) {
+                passive_mob_drop_itemstack_125(m, passive_make_random_enchanted_equipment_125(ITEM_SWORD_GOLD));
+            } else {
+                switch (rand() % 3) {
+                    case 0: passive_mob_drop_stack(m, ITEM_INGOT_GOLD, 1); break;
+                    case 1: passive_mob_drop_stack(m, ITEM_SWORD_GOLD, 1); break;
+                    default: passive_mob_drop_stack(m, ITEM_HELMET_GOLD, 1); break;
+                }
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+static void passive_mob_drop_on_death(PassiveMob *m, const PexDamageSource *source) {
     if (!m || m->death_drops_done) return;
     m->death_drops_done = 1;
+    if (m->baby_age < 0) return; /* Java EntityLiving does not drop items from child mobs. */
+    if (passive_creeper_self_explosion_death_125(m, source)) return;
+    int cooked = passive_mob_drops_cooked_125(m, source);
+    int looting = passive_mob_looting_level_125(m, source);
     switch (m->type) {
         case PASSIVE_MOB_PIG:
-            passive_mob_drop_stack(m, ITEM_PORK_RAW, rand() % 3);
+            passive_mob_drop_stack(m, cooked ? ITEM_PORK_COOKED : ITEM_PORK_RAW, passive_drop_count_0_to_base_minus_1_125(3, looting));
             break;
         case PASSIVE_MOB_COW:
-            passive_mob_drop_stack(m, ITEM_LEATHER, rand() % 3);
-            passive_mob_drop_stack(m, ITEM_BEEF_RAW, 1 + (rand() % 3));
+            passive_mob_drop_stack(m, ITEM_LEATHER, passive_drop_count_0_to_base_minus_1_125(3, looting));
+            passive_mob_drop_stack(m, cooked ? ITEM_BEEF_COOKED : ITEM_BEEF_RAW, passive_drop_count_1_plus_base_125(3, looting));
             break;
         case PASSIVE_MOB_CHICKEN:
-            passive_mob_drop_stack(m, ITEM_FEATHER, rand() % 3);
-            passive_mob_drop_stack(m, ITEM_CHICKEN_RAW, 1);
+            passive_mob_drop_stack(m, ITEM_FEATHER, passive_drop_count_0_to_base_minus_1_125(3, looting));
+            passive_mob_drop_stack(m, cooked ? ITEM_CHICKEN_COOKED : ITEM_CHICKEN_RAW, 1);
             break;
         case PASSIVE_MOB_SHEEP:
             if (!m->sheared) spawn_item_stack(m->x, m->y + 0.5f, m->z, make_stack(BLOCK_WOOL, 1, m->fleece_color & 15), 1);
             break;
         case PASSIVE_MOB_CREEPER:
-            passive_mob_drop_stack(m, ITEM_GUNPOWDER, rand() % 3);
+            passive_mob_drop_stack(m, ITEM_GUNPOWDER, passive_drop_count_0_to_base_minus_1_125(3, looting));
             break;
         case PASSIVE_MOB_SKELETON:
-            passive_mob_drop_stack(m, ITEM_ARROW, rand() % 3);
-            passive_mob_drop_stack(m, ITEM_BONE, rand() % 3);
+            passive_mob_drop_stack(m, ITEM_ARROW, passive_drop_count_0_to_base_minus_1_125(3, looting));
+            passive_mob_drop_stack(m, ITEM_BONE, passive_drop_count_0_to_base_minus_1_125(3, looting));
             break;
         case PASSIVE_MOB_SPIDER:
         case PASSIVE_MOB_CAVE_SPIDER:
-            passive_mob_drop_stack(m, ITEM_STRING, rand() % 3);
-            if ((rand() % 3) == 0) passive_mob_drop_stack(m, ITEM_SPIDER_EYE, 1);
+            passive_mob_drop_stack(m, ITEM_STRING, passive_drop_count_0_to_base_minus_1_125(3, looting));
+            if (passive_mob_recently_hit_by_player_125(m, source) && ((rand() % 3) == 0 || (looting > 0 && (rand() % (looting + 1)) > 0))) passive_mob_drop_stack(m, ITEM_SPIDER_EYE, 1);
             break;
         case PASSIVE_MOB_ZOMBIE:
         case PASSIVE_MOB_GIANT:
-            passive_mob_drop_stack(m, ITEM_ROTTEN_FLESH, rand() % 3);
+            passive_mob_drop_stack(m, ITEM_ROTTEN_FLESH, passive_drop_count_0_to_base_minus_1_125(3, looting));
             break;
         case PASSIVE_MOB_SLIME:
-            if ((m->fleece_color & 3) <= 1) passive_mob_drop_stack(m, ITEM_SLIME_BALL, rand() % 3);
+            /* EntitySlime only drops slimeballs from the smallest size. */
+            if (m->fleece_color <= 1) passive_mob_drop_stack(m, ITEM_SLIME_BALL, passive_drop_count_0_to_base_minus_1_125(3, looting));
             break;
         case PASSIVE_MOB_GHAST:
-            passive_mob_drop_stack(m, ITEM_GHAST_TEAR, rand() % 2);
-            passive_mob_drop_stack(m, ITEM_GUNPOWDER, rand() % 3);
+            passive_mob_drop_stack(m, ITEM_GHAST_TEAR, passive_drop_count_0_to_base_minus_1_125(2, looting));
+            passive_mob_drop_stack(m, ITEM_GUNPOWDER, passive_drop_count_0_to_base_minus_1_125(3, looting));
             break;
         case PASSIVE_MOB_PIG_ZOMBIE:
-            passive_mob_drop_stack(m, ITEM_ROTTEN_FLESH, rand() % 2);
-            passive_mob_drop_stack(m, ITEM_GOLD_NUGGET, rand() % 2);
+            passive_mob_drop_stack(m, ITEM_ROTTEN_FLESH, passive_drop_count_0_to_base_minus_1_125(2, looting));
+            passive_mob_drop_stack(m, ITEM_GOLD_NUGGET, passive_drop_count_0_to_base_minus_1_125(2, looting));
             break;
         case PASSIVE_MOB_ENDERMAN:
-            passive_mob_drop_stack(m, ITEM_ENDER_PEARL, rand() % 2);
+            passive_mob_drop_stack(m, ITEM_ENDER_PEARL, passive_drop_count_0_to_base_minus_1_125(2, looting));
             break;
         case PASSIVE_MOB_BLAZE:
-            passive_mob_drop_stack(m, ITEM_BLAZE_ROD, rand() % 2);
+            if (passive_mob_recently_hit_by_player_125(m, source)) passive_mob_drop_stack(m, ITEM_BLAZE_ROD, passive_drop_count_0_to_base_minus_1_125(2, looting));
             break;
         case PASSIVE_MOB_MAGMA_CUBE:
-            if ((rand() % 4) == 0) passive_mob_drop_stack(m, ITEM_MAGMA_CREAM, 1);
+            /* EntityMagmaCube: only non-small cubes can drop cream. */
+            if (m->fleece_color > 1) {
+                int magma_count = (rand() % 4) - 2;
+                if (looting > 0) magma_count += rand() % (looting + 1);
+                if (magma_count > 0) passive_mob_drop_stack(m, ITEM_MAGMA_CREAM, magma_count);
+            }
             break;
         case PASSIVE_MOB_SQUID:
-            passive_mob_drop_stack(m, ITEM_DYE_POWDER, 1 + (rand() % 3));
+            passive_mob_drop_stack(m, ITEM_DYE_POWDER, passive_drop_count_1_plus_base_125(3, looting));
             break;
         case PASSIVE_MOB_MOOSHROOM:
-            passive_mob_drop_stack(m, ITEM_LEATHER, rand() % 3);
-            passive_mob_drop_stack(m, ITEM_BEEF_RAW, 1 + (rand() % 3));
+            passive_mob_drop_stack(m, ITEM_LEATHER, passive_drop_count_0_to_base_minus_1_125(3, looting));
+            passive_mob_drop_stack(m, cooked ? ITEM_BEEF_COOKED : ITEM_BEEF_RAW, passive_drop_count_1_plus_base_125(3, looting));
             break;
         case PASSIVE_MOB_SNOWMAN:
-            passive_mob_drop_stack(m, ITEM_SNOWBALL, rand() % 15);
+            passive_mob_drop_stack(m, ITEM_SNOWBALL, rand() % 16);
             break;
         case PASSIVE_MOB_IRON_GOLEM:
             passive_mob_drop_stack(m, ITEM_INGOT_IRON, 3 + (rand() % 3));
@@ -649,11 +871,20 @@ static void passive_mob_drop_on_death(PassiveMob *m) {
         default:
             break;
     }
+    /* EntityCreeper.onDeath: skeleton-killed creepers drop one music disc. */
+    if (m->type == PASSIVE_MOB_CREEPER && source && source->true_kind == PEX_DAMAGE_ENTITY_MOB &&
+        source->true_mob_type == PASSIVE_MOB_SKELETON) {
+        passive_mob_drop_stack(m, ITEM_RECORD13 + (rand() % 10), 1);
+    }
+    passive_mob_drop_rare_drop_125(m, source);
 }
 
 static void passive_mobs_reset(void) {
     memset(g_passive_mobs, 0, sizeof(g_passive_mobs));
     memset(g_passive_spawn_y_cache, 0, sizeof(g_passive_spawn_y_cache));
+    g_passive_dragon_killed_125 = 0;
+    memset(g_dragon_crystals_125, 0, sizeof(g_dragon_crystals_125));
+    g_dragon_crystals_seeded_125 = 0;
     g_prof_spawn_y_cache_hits = g_prof_spawn_y_cache_misses = 0;
     g_passive_spawn_probe_budget = -1;
     g_player_riding_passive_mob = -1;
@@ -740,7 +971,8 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->fleece_color = (type == PASSIVE_MOB_SHEEP) ? passive_sheep_random_fleece_color() : 0;
     if (type == PASSIVE_MOB_VILLAGER) m->fleece_color = rand() % 5;
     if (passive_mob_is_slime_family(type)) {
-        int sz = (rand() % 3) + 1;
+        /* EntitySlime.setSlimeSize(1 << rand.nextInt(3)): legal sizes are 1, 2, 4. */
+        int sz = 1 << (rand() % 3);
         m->fleece_color = sz;
         m->width = 0.6f * (float)sz;
         m->height = 0.6f * (float)sz;
@@ -755,6 +987,9 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->baby_age = 0;
     m->sitting = 0;
     m->held_block = 0;
+    m->held_item = 0;
+    memset(m->equipment, 0, sizeof(m->equipment));
+    passive_mob_apply_default_equipment_125(m);
     m->love_time = 0;
     m->stuck_ticks = 0;
     m->wander_cooldown = 0;
@@ -783,6 +1018,35 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     }
     pex_logf("passive mob spawn type=%s pos=%.2f,%.2f,%.2f", passive_mob_name(type), x, y, z);
 }
+
+
+static void passive_silverfish_spawn_from_block_125(int x, int y, int z) {
+    PassiveMob *m = passive_mob_alloc();
+    if (!m) return;
+    passive_mob_init(m, PASSIVE_MOB_SILVERFISH, (float)x + 0.5f, (float)y, (float)z + 0.5f);
+    m->yaw = m->prev_yaw = pex_rand_float01() * 360.0f;
+    m->render_yaw = m->prev_render_yaw = m->yaw;
+    spawn_block_destroy_particles(x, y, z, BLOCK_SILVERFISH);
+    g_save_dirty = 1;
+}
+
+static void passive_mobs_on_block_broken_125(int block_id, int meta, int x, int y, int z) {
+    (void)meta;
+    if (g_mp_connected) return;
+    /* BlockSilverfish.onBlockDestroyedByPlayer: breaking the disguise block
+       spawns one silverfish and drops nothing.  Metadata affects only the
+       disguise texture/creative stack, not the spawned entity. */
+    if (block_id == BLOCK_SILVERFISH) passive_silverfish_spawn_from_block_125(x, y, z);
+    if (block_id == BLOCK_MOB_SPAWNER) passive_mob_spawner_remove_tile_125(x, y, z);
+}
+
+static int passive_silverfish_block_meta_for_id_125(int id) {
+    if (id == BLOCK_STONE) return 0;
+    if (id == BLOCK_COBBLESTONE) return 1;
+    if (id == BLOCK_STONE_BRICK) return 2;
+    return -1;
+}
+
 
 static void passive_mob_aabb(const PassiveMob *m, FlatAABB *box) {
     float hw = m->width * 0.5f;
@@ -884,7 +1148,6 @@ static int passive_mob_type_specific_can_spawn(int type, int x, int y, int z, in
     int biome = passive_current_biome_id_at(x, z);
     if (cat == PEX_CAT_MONSTER && type != PASSIVE_MOB_OCELOT && (g_opts.difficulty & 3) == 0) return 0;
     if (type == PASSIVE_MOB_GIANT || type == PASSIVE_MOB_ENDER_DRAGON || type == PASSIVE_MOB_BLAZE ||
-        type == PASSIVE_MOB_GHAST || type == PASSIVE_MOB_PIG_ZOMBIE || type == PASSIVE_MOB_MAGMA_CUBE ||
         type == PASSIVE_MOB_CAVE_SPIDER || type == PASSIVE_MOB_SILVERFISH) return 0;
 
     if (cat == PEX_CAT_WATER || type == PASSIVE_MOB_SQUID) {
@@ -901,6 +1164,16 @@ static int passive_mob_type_specific_can_spawn(int type, int x, int y, int z, in
         int below = flat_get_block(x, y - 1, z);
         if (below != BLOCK_GRASS && below != BLOCK_LEAVES) return 0;
         return passive_mob_air_spawn_base_ok(x, y, z) && passive_mob_has_spawn_clearance(type, (float)x+0.5f, (float)y, (float)z+0.5f);
+    }
+
+    if (biome == BIOME_HELL && cat == PEX_CAT_MONSTER) {
+        if (type == PASSIVE_MOB_GHAST) {
+            if ((rand() % 20) != 0) return 0; /* EntityGhast.getCanSpawnHere */
+            return passive_mob_has_spawn_clearance(type, (float)x+0.5f, (float)y, (float)z+0.5f);
+        }
+        if (type == PASSIVE_MOB_PIG_ZOMBIE || type == PASSIVE_MOB_MAGMA_CUBE) {
+            return passive_mob_has_spawn_clearance(type, (float)x+0.5f, (float)y, (float)z+0.5f);
+        }
     }
 
     if (!passive_mob_air_spawn_base_ok(x, y, z)) return 0;
@@ -1199,7 +1472,14 @@ static void passive_mob_spawn_baby_from_parents(PassiveMob *a, PassiveMob *b) {
         baby->fleece_color = (rand() & 1) ? (a->fleece_color & 15) : (b->fleece_color & 15);
     } else if (child_type == PASSIVE_MOB_WOLF || child_type == PASSIVE_MOB_OCELOT) {
         baby->sheared = 1; /* tamed child, matching EntityTameable child inheritance. */
+        baby->owner_id = (a->owner_id == PEX_MOB_OWNER_SINGLEPLAYER || b->owner_id == PEX_MOB_OWNER_SINGLEPLAYER) ? PEX_MOB_OWNER_SINGLEPLAYER : 0;
+        baby->tame_state = (child_type == PASSIVE_MOB_OCELOT) ? (a->fleece_color ? a->fleece_color : b->fleece_color) : 1;
         baby->fleece_color = a->fleece_color ? a->fleece_color : b->fleece_color;
+        baby->sitting = 0;
+        if (child_type == PASSIVE_MOB_WOLF) {
+            baby->health = baby->prev_health = passive_mob_max_health_current_125(baby);
+            baby->collar_color = (a->collar_color >= 0) ? a->collar_color : b->collar_color;
+        }
     }
     a->baby_age = 6000;
     b->baby_age = 6000;
@@ -1424,7 +1704,7 @@ static int held_damage_vs_mob(void) {
 
 static int passive_mob_can_shear_sheep(const PassiveMob *m) {
     if (!m || !m->active || m->death_time > 0) return 0;
-    if (m->type != PASSIVE_MOB_SHEEP || m->sheared) return 0;
+    if (m->type != PASSIVE_MOB_SHEEP || m->sheared || m->baby_age < 0) return 0;
 #ifdef ITEM_SHEARS
     const ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     return held && !stack_empty(held) && held->id == ITEM_SHEARS;
@@ -1456,11 +1736,13 @@ static int passive_mobs_spawn_from_egg_damage(int egg_damage, float x, float y, 
     passive_mob_init(m, type, x, y, z);
     if (type == PASSIVE_MOB_SHEEP) m->fleece_color = passive_sheep_random_fleece_color();
     if (passive_mob_is_slime_family(type)) {
-        int sz = (rand() % 3) + 1;
+        /* EntitySlime spawn eggs also call setSlimeSize(1 << rand.nextInt(3)). */
+        int sz = 1 << (rand() % 3);
         m->fleece_color = sz;
         m->width = 0.6f * (float)sz;
         m->height = 0.6f * (float)sz;
         m->health = sz * sz;
+        m->prev_health = m->health;
     }
     if (type == PASSIVE_MOB_WOLF || type == PASSIVE_MOB_PIG_ZOMBIE) m->rideable = 0;
     m->yaw = m->prev_yaw = pex_rand_float01() * 360.0f;
@@ -1569,6 +1851,28 @@ static int passive_mob_damage_entity(PassiveMob *m, const PexDamageSource *sourc
     return damage;
 }
 
+static void passive_pig_zombie_become_angry_125(PassiveMob *m, int play_sound) {
+    if (!m || m->type != PASSIVE_MOB_PIG_ZOMBIE || m->death_time > 0) return;
+    m->rideable = 1;
+    m->egg_timer = 400 + (rand() % 400); /* EntityPigZombie.angerLevel */
+    if (play_sound) {
+        pex_sound_play_at("mob.zombiepig.zpigangry", m->x, m->y, m->z,
+                          passive_mob_sound_volume(m->type) * 2.0f,
+                          ((pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f) * 1.8f);
+    }
+}
+
+static void passive_pig_zombie_alert_nearby_125(PassiveMob *self) {
+    if (!self || self->type != PASSIVE_MOB_PIG_ZOMBIE) return;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (!m->active || m->type != PASSIVE_MOB_PIG_ZOMBIE || m->death_time > 0) continue;
+        float dx = m->x - self->x, dy = m->y - self->y, dz = m->z - self->z;
+        if (dx * dx + dy * dy + dz * dz > 32.0f * 32.0f) continue;
+        passive_pig_zombie_become_angry_125(m, m == self);
+    }
+}
+
 static void passive_mob_on_attacked_by_source(PassiveMob *m, const PexDamageSource *source) {
     if (!m || !source) return;
     if (passive_mob_is_breedable_type(m->type)) {
@@ -1578,8 +1882,16 @@ static void passive_mob_on_attacked_by_source(PassiveMob *m, const PexDamageSour
             m->has_path_target = 0;
         }
     }
-    if (passive_mob_is_entity_living_source(source)) {
-        if (m->type == PASSIVE_MOB_PIG_ZOMBIE || m->type == PASSIVE_MOB_IRON_GOLEM) m->rideable = 1;
+    if (passive_mob_is_entity_living_source(source) || source->direct_kind == PEX_DAMAGE_ENTITY_PROJECTILE) {
+        if (m->type == PASSIVE_MOB_SILVERFISH && m->tame_state <= 0) {
+            /* EntitySilverfish.attackEntityFrom: entity damage arms the 20 tick ally summon cooldown. */
+            m->tame_state = 20;
+        }
+        if (m->type == PASSIVE_MOB_PIG_ZOMBIE) {
+            if (passive_mob_damage_has_player_attacker(source)) passive_pig_zombie_alert_nearby_125(m);
+            else passive_pig_zombie_become_angry_125(m, 0);
+        }
+        if (m->type == PASSIVE_MOB_IRON_GOLEM || m->type == PASSIVE_MOB_ENDERMAN) m->rideable = 1;
         if (m->type == PASSIVE_MOB_WOLF) {
             m->sitting = 0;
             if (!passive_mob_is_owned_by_player(m) || !passive_mob_damage_has_player_attacker(source)) {
@@ -1594,7 +1906,7 @@ static void passive_mob_on_attacked_by_source(PassiveMob *m, const PexDamageSour
     }
 }
 
-static void passive_mob_start_death(PassiveMob *m) {
+static void passive_mob_start_death(PassiveMob *m, const PexDamageSource *source) {
     if (!m || m->death_time > 0) return;
     const char *s = passive_mob_death_sound(m->type);
     if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
@@ -1607,8 +1919,8 @@ static void passive_mob_start_death(PassiveMob *m) {
         &g_passive_mobs[g_player_riding_passive_mob] == m) {
         g_player_riding_passive_mob = -1;
     }
-    if (passive_mob_is_slime_family(m->type) && (m->fleece_color & 3) > 1) {
-        int old_size = m->fleece_color & 3;
+    if (passive_mob_is_slime_family(m->type) && m->fleece_color > 1) {
+        int old_size = m->fleece_color;
         int new_size = old_size / 2;
         int count = 2 + (rand() % 3);
         for (int i = 0; i < count; ++i) {
@@ -1623,12 +1935,17 @@ static void passive_mob_start_death(PassiveMob *m) {
             child->health = new_size * new_size;
         }
     }
-    player_add_experience(1 + (rand() % 3));
-    passive_mob_drop_on_death(m);
+    if (m->type != PASSIVE_MOB_ENDER_DRAGON && passive_mob_recently_hit_by_player_125(m, source)) player_add_experience(1 + (rand() % 3));
+    passive_mob_drop_on_death(m, source);
 }
 
 static int pex_mob_attack_entity_from(PassiveMob *m, PexDamageSource source, int damage) {
     if (!m || !m->active || m->death_time > 0 || damage <= 0) return 0;
+    if (m->type == PASSIVE_MOB_ENDERMAN && source.projectile) {
+        /* EntityEnderman.attackEntityFrom: arrows/projectiles do not damage it; it tries to teleport instead. */
+        (void)passive_mob_teleport_random_125(m, 64.0f);
+        return 0;
+    }
     if (source.fire_damage && pex_passive_has_potion(m, PEX_POTION_FIRE_RESISTANCE)) return 0;
     m->age = 0;
     int incoming = damage;
@@ -1642,6 +1959,15 @@ static int pex_mob_attack_entity_from(PassiveMob *m, PexDamageSource source, int
         m->prev_health = damage;
         m->damage_cooldown = PEX_HEARTS_HALVES_LIFE;
         m->hurt_time = 10;
+    }
+    if (passive_mob_damage_has_player_attacker(&source)) {
+        m->recently_hit = 60;
+        m->last_looting_level = 0;
+        if (g_selected_hotbar_slot >= 0 && g_selected_hotbar_slot < 36) {
+            m->last_looting_level = item_stack_enchant_level_125(&g_inventory[g_selected_hotbar_slot], PEX_ENCHANT_LOOTING);
+            if (m->last_looting_level < 0) m->last_looting_level = 0;
+            if (m->last_looting_level > 3) m->last_looting_level = 3;
+        }
     }
     int applied = passive_mob_damage_entity(m, &source, incoming);
     if (applied <= 0 && incoming > 0) {
@@ -1661,7 +1987,7 @@ static int pex_mob_attack_entity_from(PassiveMob *m, PexDamageSource source, int
         }
     }
     if (passive_mob_damage_has_player_attacker(&source)) player_add_exhaustion(source.hunger_damage);
-    if (m->health <= 0) passive_mob_start_death(m);
+    if (m->health <= 0) passive_mob_start_death(m, &source);
     g_save_dirty = 1;
     return 1;
 }
@@ -1773,10 +2099,44 @@ static PassiveMob *passive_mob_raycast(float max_dist, float *out_t) {
     return best;
 }
 
+
+static int passive_owned_wolf_can_target_125(const PassiveMob *wolf, const PassiveMob *target) {
+    if (!wolf || !target || wolf == target) return 0;
+    if (!wolf->active || !target->active || wolf->death_time > 0 || target->death_time > 0) return 0;
+    if (wolf->type != PASSIVE_MOB_WOLF || !passive_mob_is_owned_by_player(wolf) || wolf->sitting) return 0;
+    if (target->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(target)) return 0;
+    if (target->type == PASSIVE_MOB_OCELOT && passive_mob_is_owned_by_player(target)) return 0;
+    return 1;
+}
+
+static void passive_owned_wolves_target_mob_125(PassiveMob *target) {
+    if (!target || !target->active || target->death_time > 0) return;
+    int target_index = (int)(target - g_passive_mobs);
+    if (target_index < 0 || target_index >= MAX_PASSIVE_MOBS) return;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *wolf = &g_passive_mobs[i];
+        if (!passive_owned_wolf_can_target_125(wolf, target)) continue;
+        float dx = wolf->x - g_player_x;
+        float dy = wolf->y - (g_player_y - 1.62f);
+        float dz = wolf->z - g_player_z;
+        if (dx*dx + dy*dy + dz*dz > 32.0f * 32.0f) continue;
+        wolf->target_mob_index = target_index;
+        wolf->rideable = 1;
+        wolf->ai_repath_delay = 0;
+        passive_mob_set_path_goal(wolf, target->x, target->y, target->z);
+        wolf->path_recalc_cooldown = 0;
+    }
+}
+
+static void passive_owned_wolves_defend_player_125(PassiveMob *attacker) {
+    passive_owned_wolves_target_mob_125(attacker);
+}
+
 static int passive_mobs_attack_from_player(void) {
     if (g_mp_connected || g_player_dead) return 0;
     float mob_t = 0.0f;
     PassiveMob *m = passive_mob_raycast(5.0f, &mob_t);
+    if (passive_dragon_crystal_player_attack_125(5.0f, m ? mob_t : 5.0f)) return 1;
     if (!m) return 0;
     FlatRayHit block = flat_raycast();
     if (block.hit) {
@@ -1788,7 +2148,8 @@ static int passive_mobs_attack_from_player(void) {
     }
     restart_hand_swing();
     if (m->type == PASSIVE_MOB_WOLF && !passive_mob_is_owned_by_player(m)) { m->rideable = 1; m->tame_state = 2; }
-    (void)pex_mob_attack_entity_from(m, pex_damage_source_player(), held_damage_vs_mob());
+    (void)pex_mob_attack_entity_from(m, pex_damage_source_player(), m->type == PASSIVE_MOB_ENDER_DRAGON ? passive_dragon_player_part_damage_125(m, held_damage_vs_mob()) : held_damage_vs_mob());
+    if (m->active && m->death_time <= 0) passive_owned_wolves_target_mob_125(m);
     return 1;
 }
 
@@ -1830,7 +2191,7 @@ static int passive_mobs_player_interact(void) {
         m->type = PASSIVE_MOB_COW;
         m->width = passive_mob_width_for_type(m->type);
         m->height = passive_mob_height_for_type(m->type);
-        if (m->health > passive_mob_health_for_type(m->type)) m->health = passive_mob_health_for_type(m->type);
+        passive_mob_clamp_health_current_125(m);
         for (int i = 0; i < 5; ++i) spawn_item_stack(m->x, m->y + 1.0f, m->z, make_stack(BLOCK_RED_MUSHROOM, 1, 0), 1);
         damage_held_item(held, 1);
         restart_hand_swing();
@@ -1838,21 +2199,22 @@ static int passive_mobs_player_interact(void) {
         return 1;
     }
     if (m->type == PASSIVE_MOB_WOLF && held && !stack_empty(held) && held->id == ITEM_BONE && !passive_mob_is_owned_by_player(m)) {
-        if ((rand() % 3) == 0) { m->sheared = 1; m->rideable = 0; m->sitting = 1; passive_mob_assign_owner(m); hud_add_chat("Wolf tamed."); }
+        if ((rand() % 3) == 0) { m->sheared = 1; m->rideable = 0; m->sitting = 1; passive_mob_assign_owner(m); m->health = m->prev_health = 20; hud_add_chat("Wolf tamed."); }
         consume_held_stack_one(held, 0);
         restart_hand_swing();
         g_save_dirty = 1;
         return 1;
     }
-    if (m->type == PASSIVE_MOB_OCELOT && held && !stack_empty(held) && held->id == ITEM_FISH_RAW && !passive_mob_is_owned_by_player(m)) {
-        if ((rand() % 3) == 0) { m->sheared = 1; m->fleece_color = 1 + (rand() % 3); passive_mob_assign_owner(m); m->tame_state = m->fleece_color; hud_add_chat("Ocelot tamed."); }
+    if (m->type == PASSIVE_MOB_OCELOT && held && !stack_empty(held) && held->id == ITEM_FISH_RAW &&
+        !passive_mob_is_owned_by_player(m) && mob_t < 3.0f) {
+        if ((rand() % 3) == 0) { m->sheared = 1; m->fleece_color = 1 + (rand() % 3); passive_mob_assign_owner(m); m->tame_state = m->fleece_color; m->sitting = 1; hud_add_chat("Ocelot tamed."); }
         consume_held_stack_one(held, 0);
         restart_hand_swing();
         g_save_dirty = 1;
         return 1;
     }
     if (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m) && held && !stack_empty(held) && passive_mob_breeding_item_for_type(m->type, held->id)) {
-        int cap = passive_mob_health_for_type(m->type);
+        int cap = passive_mob_max_health_current_125(m);
         if (m->health < cap) {
             m->health += 3;
             if (m->health > cap) m->health = cap;
@@ -1866,9 +2228,13 @@ static int passive_mobs_player_interact(void) {
     if (m->type == PASSIVE_MOB_OCELOT && passive_mob_is_owned_by_player(m) && held && !stack_empty(held) && passive_mob_breeding_item_for_type(m->type, held->id)) {
         return passive_mob_feed_for_love(m, held);
     }
-    if ((m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) && passive_mob_is_owned_by_player(m) && (!held || stack_empty(held))) {
+    if ((m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) && passive_mob_is_owned_by_player(m)) {
+        /* EntityWolf/EntityOcelot.interact toggles sitting for the owner after
+           item-specific healing/breeding handling has had first chance. */
         m->sitting = !m->sitting;
         m->has_path_target = 0;
+        m->target_mob_index = -1;
+        passive_path_clear(m);
         restart_hand_swing();
         g_save_dirty = 1;
         return 1;
@@ -1910,7 +2276,7 @@ static void passive_mob_tick_potions(PassiveMob *m) {
             int interval = 25 >> amp;
             if (interval < 1) interval = 1;
             if ((m->potion_duration[i] % interval) == 0) {
-                int cap = passive_mob_health_for_type(m->type);
+                int cap = passive_mob_max_health_current_125(m);
                 if (m->health < cap) { m->health++; g_save_dirty = 1; }
             }
         } else if (i == PEX_POTION_POISON) {
@@ -1941,6 +2307,7 @@ static void passive_mob_tick_timers(PassiveMob *m) {
     m->prev_limb_amount = m->limb_amount;
     if (m->hurt_time > 0) --m->hurt_time;
     if (m->damage_cooldown > 0) --m->damage_cooldown;
+    if (m->recently_hit > 0) --m->recently_hit;
     if (m->jump_cooldown > 0) --m->jump_cooldown;
     if (m->wander_cooldown > 0) --m->wander_cooldown;
     if (m->type != PASSIVE_MOB_CHICKEN && m->egg_timer > 0) --m->egg_timer;
@@ -1956,6 +2323,7 @@ static void passive_mob_tick_timers(PassiveMob *m) {
 }
 
 static int passive_mob_tick_death(PassiveMob *m) {
+    if (m->type == PASSIVE_MOB_ENDER_DRAGON && m->death_time > 0) return passive_dragon_tick_death_125(m);
     if (m->death_time <= 0) return 0;
     ++m->death_time;
     m->has_path_target = 0;
@@ -1975,9 +2343,13 @@ static void passive_mob_tick_sounds(PassiveMob *m) {
     if (m->death_time > 0) return;
     if (rand() % 1000 < ++m->living_sound_delay) {
         m->living_sound_delay = -120;
-        const char *s = passive_mob_living_sound(m->type);
-        if (s) pex_sound_play_at(s, m->x, m->y, m->z, passive_mob_sound_volume(m->type),
-                                 (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
+        const char *s = passive_mob_living_sound_current_125(m);
+        if (s) {
+            float pitch = (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f;
+            float vol = passive_mob_sound_volume(m->type);
+            if (m->type == PASSIVE_MOB_PIG_ZOMBIE && m->rideable > 0) { vol *= 2.0f; pitch *= 1.8f; }
+            pex_sound_play_at(s, m->x, m->y, m->z, vol, pitch);
+        }
     }
 }
 
@@ -2000,6 +2372,40 @@ static float passive_mob_player_distance2(const PassiveMob *m) {
     return dx * dx + dy * dy + dz * dz;
 }
 
+static int passive_ray_clear_blocks_125(float x0, float y0, float z0, float x1, float y1, float z1) {
+    float dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    float len = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (len < 0.001f) return 1;
+    int steps = (int)(len * 8.0f);
+    if (steps < 1) steps = 1;
+    if (steps > 512) steps = 512;
+    for (int i = 1; i < steps; ++i) {
+        float t = (float)i / (float)steps;
+        int x = (int)floorf(x0 + dx * t);
+        int y = (int)floorf(y0 + dy * t);
+        int z = (int)floorf(z0 + dz * t);
+        int id = flat_get_block(x, y, z);
+        if (id > 0 && flat_block_is_solid(id) && !block_is_liquid(id)) return 0;
+    }
+    return 1;
+}
+
+static int passive_player_looking_at_mob_125(const PassiveMob *m) {
+    if (!m || m->type != PASSIVE_MOB_ENDERMAN || g_player_dead || player_is_creative()) return 0;
+    float lx, ly, lz;
+    pex_touch_aware_look_vector(&lx, &ly, &lz);
+    float tx = m->x - g_player_x;
+    float ty = (m->y + m->height * 0.72f) - g_player_y;
+    float tz = m->z - g_player_z;
+    float dist = sqrtf(tx * tx + ty * ty + tz * tz);
+    if (dist < 0.001f || dist > 64.0f) return 0;
+    tx /= dist; ty /= dist; tz /= dist;
+    float dot = lx * tx + ly * ty + lz * tz;
+    /* EntityEnderman.shouldAttackPlayer: dot > 1 - 0.025 / distance, with line of sight. */
+    if (dot <= 1.0f - 0.025f / dist) return 0;
+    return passive_ray_clear_blocks_125(g_player_x, g_player_y, g_player_z, m->x, m->y + m->height * 0.72f, m->z);
+}
+
 static void passive_mob_face_point(PassiveMob *m, float x, float z, float max_turn) {
     float dx = x - m->x;
     float dz = z - m->z;
@@ -2020,9 +2426,43 @@ static void passive_mob_set_path_goal(PassiveMob *m, float x, float y, float z) 
     m->has_path_target = 1;
 }
 
+static int passive_mob_teleport_random_125(PassiveMob *m, float range) {
+    if (!m || !m->active || m->death_time > 0) return 0;
+    float ox = m->x, oy = m->y, oz = m->z;
+    int hr = (int)range;
+    if (hr < 8) hr = 8;
+    for (int tries = 0; tries < 64; ++tries) {
+        int x = (int)floorf(ox) + (rand() % (hr * 2 + 1)) - hr;
+        int y = (int)floorf(oy) + (rand() % 65) - 32;
+        int z = (int)floorf(oz) + (rand() % (hr * 2 + 1)) - hr;
+        if (!flat_chunk_generated_at_block(x, z)) continue;
+        if (y < FLAT_WORLD_Y_MIN + 1) y = FLAT_WORLD_Y_MIN + 1;
+        if (y > FLAT_WORLD_Y_MAX - 2) y = FLAT_WORLD_Y_MAX - 2;
+        while (y > FLAT_WORLD_Y_MIN + 1 && flat_get_block(x, y - 1, z) == 0) --y;
+        if (!passive_path_can_stand_at(m->type, x, y, z)) continue;
+        if (!passive_ray_clear_blocks_125(ox, oy + m->height * 0.5f, oz, (float)x + 0.5f, (float)y + m->height * 0.5f, (float)z + 0.5f)) continue;
+        m->prev_x = m->x = (float)x + 0.5f;
+        m->prev_y = m->y = (float)y;
+        m->prev_z = m->z = (float)z + 0.5f;
+        m->mx = m->my = m->mz = 0.0f;
+        passive_path_clear(m);
+        pex_sound_play_at("mob.endermen.portal", ox, oy, oz, 1.0f, 1.0f);
+        pex_sound_play_at("mob.endermen.portal", m->x, m->y, m->z, 1.0f, 1.0f);
+        g_save_dirty = 1;
+        return 1;
+    }
+    return 0;
+}
+
 static int passive_mob_scaled_attack_damage(const PassiveMob *m, int base) {
     int d = g_opts.difficulty & 3;
     if (d == 0) return 0;
+    if (m && m->type == PASSIVE_MOB_WOLF) {
+        /* EntityWolf.attackEntityAsMob: 4 tamed, 2 wild/angry. */
+        base = passive_mob_is_owned_by_player(m) ? 4 : 2;
+    } else if (passive_mob_is_slime_family(m ? m->type : PASSIVE_MOB_NONE)) {
+        base = m && m->fleece_color > 0 ? m->fleece_color : 1;
+    }
     if (d == 1) return (base + 1) / 2;
     if (d == 3) return (base * 3 + 1) / 2;
     (void)m;
@@ -2032,7 +2472,7 @@ static int passive_mob_scaled_attack_damage(const PassiveMob *m, int base) {
 static void passive_mob_attack_player(PassiveMob *m, int ranged) {
     const PexMobInfo *info = passive_mob_info(m->type);
     if (!info || info->attack_damage <= 0 || g_player_dead || g_player_health <= 0) return;
-    if (m->attack_time > 0 || m->egg_timer > 0) return;
+    if (m->attack_time > 0) return;
     int dmg = ranged ? info->attack_damage : passive_mob_scaled_attack_damage(m, info->attack_damage);
     if (dmg <= 0) return;
     if (ranged) {
@@ -2047,6 +2487,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
             /* EntityAIArrowAttack: bow every 60 ticks, moveSpeed 0.25. */
             if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_ARROW, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 1.60f, 2)) {
                 pex_sound_play_at("random.bow", m->x, m->y, m->z, 1.0f, 1.0f);
+                passive_owned_wolves_defend_player_125(m);
                 m->attack_time = 60;
             }
             return;
@@ -2054,6 +2495,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
         if (m->type == PASSIVE_MOB_BLAZE) {
             if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SMALL_FIREBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 0.75f, dmg)) {
                 pex_sound_play_at("mob.blaze.hit", m->x, m->y, m->z, 1.0f, 1.0f);
+                passive_owned_wolves_defend_player_125(m);
                 m->attack_time = 30;
             }
             return;
@@ -2061,6 +2503,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
         if (m->type == PASSIVE_MOB_GHAST) {
             if (pex_spawn_projectile_from_entity(FLAT_PROJECTILE_LARGE_FIREBALL, m->type, owner_idx, sx, sy, sz, tx, ty, tz, 0.45f, dmg)) {
                 pex_sound_play_at("mob.ghast.fireball", m->x, m->y, m->z, 10.0f, 1.0f);
+                passive_owned_wolves_defend_player_125(m);
                 m->attack_time = 60;
             }
             return;
@@ -2074,6 +2517,7 @@ static void passive_mob_attack_player(PassiveMob *m, int ranged) {
         }
     }
     (void)player_attack_entity_from(pex_damage_source_mob(m), dmg);
+    passive_owned_wolves_defend_player_125(m);
     if (m->type == PASSIVE_MOB_CAVE_SPIDER && (g_opts.difficulty & 3) > 1) {
         player_apply_potion_effect(PEX_POTION_POISON, ((g_opts.difficulty & 3) == 3) ? 15 * 20 : 7 * 20, 0, 1.0f);
     }
@@ -2085,6 +2529,7 @@ static void passive_mob_attack_other_mob(PassiveMob *m, PassiveMob *target, int 
     if (!m || !target || !target->active || target->death_time > 0 || m->attack_time > 0) return;
     const PexMobInfo *info = passive_mob_info(m->type);
     int dmg = info ? info->attack_damage : 1;
+    if (m->type == PASSIVE_MOB_WOLF) dmg = passive_mob_is_owned_by_player(m) ? 4 : 2;
     if (m->type == PASSIVE_MOB_IRON_GOLEM) dmg = 7 + (rand() % 15);
     if (m->type == PASSIVE_MOB_SNOWMAN && ranged) {
         pex_spawn_projectile_from_entity(FLAT_PROJECTILE_SNOWBALL, m->type, (int)(m - g_passive_mobs), m->x, m->y + 1.4f, m->z,
@@ -2120,6 +2565,8 @@ static void passive_mob_attack_other_mob(PassiveMob *m, PassiveMob *target, int 
 #define PEX_AI_WANDER           0x0100
 #define PEX_AI_SIT              0x0200
 #define PEX_AI_AVOID_PLAYER     0x0400
+#define PEX_AI_FOLLOW_OWNER     0x0800
+#define PEX_AI_BREAK_DOOR       0x1000
 
 #define PEX_MAX_RUNTIME_VILLAGES 16
 #define PEX_MAX_VILLAGE_DOORS 64
@@ -2946,6 +3393,950 @@ static int passive_mob_is_owned_by_player(const PassiveMob *m) {
     return m && m->owner_id == PEX_MOB_OWNER_SINGLEPLAYER;
 }
 
+static int passive_mob_teleport_near_player_125(PassiveMob *m) {
+    if (!m || !passive_mob_is_owned_by_player(m)) return 0;
+    int base_x = (int)floorf(g_player_x) - 2;
+    int base_y = (int)floorf(g_player_y - 1.62f);
+    int base_z = (int)floorf(g_player_z) - 2;
+    for (int ox = 0; ox <= 4; ++ox) {
+        for (int oz = 0; oz <= 4; ++oz) {
+            if (!(ox < 1 || oz < 1 || ox > 3 || oz > 3)) continue;
+            int x = base_x + ox;
+            int z = base_z + oz;
+            int y = base_y;
+            if (!passive_path_can_stand_at(m->type, x, y, z)) continue;
+            m->prev_x = m->x = (float)x + 0.5f;
+            m->prev_y = m->y = (float)y;
+            m->prev_z = m->z = (float)z + 0.5f;
+            m->mx = m->my = m->mz = 0.0f;
+            passive_path_clear(m);
+            g_save_dirty = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int passive_tameable_follow_owner_125(PassiveMob *m) {
+    if (!m || !passive_mob_is_owned_by_player(m) || m->sitting) return 0;
+    if (m->type != PASSIVE_MOB_WOLF && m->type != PASSIVE_MOB_OCELOT) return 0;
+    float dx = g_player_x - m->x;
+    float dy = (g_player_y - 1.62f) - m->y;
+    float dz = g_player_z - m->z;
+    float d2 = dx * dx + dy * dy + dz * dz;
+    float min_start = 10.0f;
+    float max_continue = (m->type == PASSIVE_MOB_OCELOT) ? 5.0f : 2.0f;
+    int already_following = m->has_path_target &&
+        fabsf(m->path_goal_x - g_player_x) < 4.0f &&
+        fabsf(m->path_goal_z - g_player_z) < 4.0f;
+    if (d2 >= 144.0f) {
+        if (passive_mob_teleport_near_player_125(m)) return 1;
+    }
+    if (d2 < max_continue * max_continue) {
+        if (already_following) passive_path_clear(m);
+        return 0;
+    }
+    if (d2 < min_start * min_start && !already_following) return 0;
+    passive_mob_set_path_goal(m, g_player_x, g_player_y - 1.62f, g_player_z);
+    if (m->ai_repath_delay <= 0) {
+        m->path_recalc_cooldown = 0;
+        m->ai_repath_delay = 10;
+    }
+    m->ai_task_mask |= PEX_AI_FOLLOW_OWNER;
+    return 1;
+}
+
+static int passive_zombie_find_closed_wood_door_near_125(PassiveMob *m, int *out_x, int *out_y, int *out_z) {
+    if (!m || m->type != PASSIVE_MOB_ZOMBIE) return 0;
+    int mx = (int)floorf(m->x);
+    int my = (int)floorf(m->y);
+    int mz = (int)floorf(m->z);
+    for (int y = my; y <= my + 1; ++y) {
+        for (int z = mz - 1; z <= mz + 1; ++z) {
+            for (int x = mx - 1; x <= mx + 1; ++x) {
+                if (flat_get_block(x, y, z) != BLOCK_WOOD_DOOR) continue;
+                int ly = door_lower_y_at(x, y, z);
+                if (door_is_open_at(x, ly, z)) continue;
+                float dx = ((float)x + 0.5f) - m->x;
+                float dy = ((float)ly + 0.5f) - (m->y + 0.5f);
+                float dz = ((float)z + 0.5f) - m->z;
+                if (dx * dx + dy * dy + dz * dz >= 4.0f) continue;
+                if (out_x) *out_x = x;
+                if (out_y) *out_y = ly;
+                if (out_z) *out_z = z;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int passive_zombie_tick_break_door_125(PassiveMob *m) {
+    if (!m || m->type != PASSIVE_MOB_ZOMBIE || m->death_time > 0) return 0;
+    int x = 0, y = 0, z = 0;
+    if (!passive_zombie_find_closed_wood_door_near_125(m, &x, &y, &z)) {
+        m->door_open_time = 0;
+        return 0;
+    }
+    if (m->door_open_time <= 0 || m->door_target_x != x || m->door_target_y != y || m->door_target_z != z) {
+        m->door_target_x = x; m->door_target_y = y; m->door_target_z = z;
+        m->door_open_time = 240;
+    }
+    m->ai_task_mask |= PEX_AI_BREAK_DOOR;
+    if ((rand() % 20) == 0) {
+        pex_sound_play_at("random.wood_click", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 1.0f, 1.0f);
+    }
+    if (m->door_open_time <= 1) {
+        if ((g_opts.difficulty & 3) == 3) {
+            door_break_at(x, y, z, 0);
+            pex_sound_play_at("random.break", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 1.0f, 1.0f);
+            g_save_dirty = 1;
+        }
+        m->door_open_time = 0;
+    }
+    return 1;
+}
+
+
+
+
+static void passive_dragon_part_box_125(const PassiveMob *d, int part, FlatAABB *b) {
+    float yaw = d ? d->yaw * 0.0174532925f : 0.0f;
+    float sn = sinf(yaw), cs = cosf(yaw);
+    float x = d->x, y = d->y, z = d->z;
+    float w = 4.0f, h = 4.0f;
+    switch (part) {
+        case 0: /* head */ x += sn * 5.5f; z -= cs * 5.5f; y += 1.8f; w = h = 3.0f; break;
+        case 1: /* body */ x += sn * 0.5f; z -= cs * 0.5f; y += 0.5f; w = 5.0f; h = 3.0f; break;
+        case 2: /* left wing */ x += cs * 4.5f; z += sn * 4.5f; y += 2.0f; w = 4.0f; h = 2.0f; break;
+        case 3: /* right wing */ x -= cs * 4.5f; z -= sn * 4.5f; y += 2.0f; w = 4.0f; h = 3.0f; break;
+        case 4: x -= sn * 6.0f; z += cs * 6.0f; y += 0.5f; w = h = 2.0f; break;
+        case 5: x -= sn * 10.0f; z += cs * 10.0f; y += 0.2f; w = h = 2.0f; break;
+        default: x -= sn * 14.0f; z += cs * 14.0f; y += 0.0f; w = h = 2.0f; break;
+    }
+    b->minx = x - w * 0.5f; b->maxx = x + w * 0.5f;
+    b->miny = y;            b->maxy = y + h;
+    b->minz = z - w * 0.5f; b->maxz = z + w * 0.5f;
+}
+
+static int passive_dragon_player_part_damage_125(const PassiveMob *dragon, int base_damage) {
+    if (!dragon || base_damage <= 0) return base_damage;
+    float lx, ly, lz;
+    pex_touch_aware_look_vector(&lx, &ly, &lz);
+    float best_t = 5.0f;
+    int best_part = 1;
+    for (int part = 0; part < 7; ++part) {
+        FlatAABB b;
+        passive_dragon_part_box_125(dragon, part, &b);
+        float t = 0.0f;
+        if (!passive_ray_intersect_aabb(&b, g_player_x, g_player_y, g_player_z, lx, ly, lz, 5.0f, &t)) continue;
+        if (t >= 0.0f && t < best_t) { best_t = t; best_part = part; }
+    }
+    /* EntityDragon.attackEntityFromPart: non-head parts do var3 / 4 + 1. */
+    if (best_part != 0) return base_damage / 4 + 1;
+    return base_damage;
+}
+
+/* EntityEnderCrystal / EntityDragonPart gameplay port layer.
+   These are kept as C runtime objects instead of PassiveMob entries so they can
+   behave like Java entities without consuming normal mob slots. */
+static int passive_dragon_find_index_125(const PassiveMob *dragon) {
+    if (!dragon) return -1;
+    long idx = (long)(dragon - g_passive_mobs);
+    return (idx >= 0 && idx < MAX_PASSIVE_MOBS) ? (int)idx : -1;
+}
+
+static int passive_dragon_crystal_top_y_125(int x, int z) {
+    int best = 76;
+    for (int y = FLAT_WORLD_Y_MAX - 2; y >= FLAT_WORLD_Y_MIN + 1; --y) {
+        if (flat_get_block(x, y, z) == BLOCK_OBSIDIAN) { best = y + 1; break; }
+    }
+    if (best < FLAT_WORLD_Y_MIN + 2) best = FLAT_WORLD_Y_MIN + 2;
+    if (best > FLAT_WORLD_Y_MAX - 2) best = FLAT_WORLD_Y_MAX - 2;
+    return best;
+}
+
+static void passive_dragon_crystals_seed_125(void) {
+    if (g_dragon_crystals_seeded_125 || g_current_dimension != PEX_DIM_END || g_passive_dragon_killed_125) return;
+    static const int pos[10][2] = {
+        { 43,  0}, { 30,  30}, {  0,  43}, {-30,  30}, {-43,   0},
+        {-30, -30}, {  0, -43}, { 30, -30}, { 18,  54}, {-54, -18}
+    };
+    memset(g_dragon_crystals_125, 0, sizeof(g_dragon_crystals_125));
+    for (int i = 0; i < 10 && i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) {
+        PexDragonCrystalRuntime125 *c = &g_dragon_crystals_125[i];
+        c->active = 1;
+        c->x = pos[i][0];
+        c->z = pos[i][1];
+        c->y = passive_dragon_crystal_top_y_125(c->x, c->z);
+        c->px = (float)c->x + 0.5f;
+        c->py = (float)c->y;
+        c->pz = (float)c->z + 0.5f;
+        c->health = 5;
+        c->inner_rotation = rand() % 100000;
+        c->beam_dragon_index = -1;
+        if (flat_get_block(c->x, c->y, c->z) == 0) flat_set_block(c->x, c->y, c->z, BLOCK_FIRE);
+    }
+    g_dragon_crystals_seeded_125 = 1;
+    g_save_dirty = 1;
+}
+
+static int passive_dragon_crystal_count_active_125(void) {
+    int n = 0;
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) if (g_dragon_crystals_125[i].active) ++n;
+    return n;
+}
+
+static PexDragonCrystalRuntime125 *passive_dragon_nearest_crystal_125(PassiveMob *dragon, float range) {
+    if (!dragon) return NULL;
+    PexDragonCrystalRuntime125 *best = NULL;
+    float best_d2 = range * range;
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) {
+        PexDragonCrystalRuntime125 *c = &g_dragon_crystals_125[i];
+        if (!c->active || c->health <= 0) continue;
+        float dx = c->px - dragon->x;
+        float dy = c->py - (dragon->y + dragon->height * 0.5f);
+        float dz = c->pz - dragon->z;
+        float d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 < best_d2) { best_d2 = d2; best = c; }
+    }
+    return best;
+}
+
+static void passive_dragon_crystal_explosion_damage_125(float x, float y, float z, PassiveMob *linked_dragon) {
+    const float radius = 6.0f;
+    int cx = (int)floorf(x), cy = (int)floorf(y), cz = (int)floorf(z);
+    for (int by = cy - 6; by <= cy + 6; ++by) {
+        for (int bz = cz - 6; bz <= cz + 6; ++bz) {
+            for (int bx = cx - 6; bx <= cx + 6; ++bx) {
+                float dx = ((float)bx + 0.5f) - x;
+                float dy = ((float)by + 0.5f) - y;
+                float dz = ((float)bz + 0.5f) - z;
+                float d = sqrtf(dx*dx + dy*dy + dz*dz);
+                if (d > radius) continue;
+                int id = flat_get_block(bx, by, bz);
+                if (!passive_explosion_breaks_block(id)) continue;
+                if (pex_rand_float01() < (1.0f - d / (radius + 0.001f))) {
+                    spawn_block_destroy_particles(bx, by, bz, id);
+                    flat_set_block(bx, by, bz, 0);
+                }
+            }
+        }
+    }
+    if (!g_player_dead && g_player_health > 0) {
+        float dx = g_player_x - x;
+        float dy = (g_player_y - 1.62f) - y;
+        float dz = g_player_z - z;
+        float d = sqrtf(dx*dx + dy*dy + dz*dz);
+        if (d <= radius * 2.0f) {
+            int dmg = (int)((1.0f - d / (radius * 2.0f)) * 85.0f + 1.0f);
+            if (dmg > 0) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_EXPLOSION), dmg);
+        }
+    }
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (!m->active || m->death_time > 0) continue;
+        float dx = m->x - x;
+        float dy = (m->y + m->height * 0.5f) - y;
+        float dz = m->z - z;
+        float d = sqrtf(dx*dx + dy*dy + dz*dz);
+        if (d > radius * 2.0f) continue;
+        int dmg = (int)((1.0f - d / (radius * 2.0f)) * 85.0f + 1.0f);
+        if (dmg <= 0) continue;
+        PexDamageSource src = pex_damage_source_simple(PEX_DAMAGE_EXPLOSION);
+        (void)pex_mob_attack_entity_from(m, src, dmg);
+    }
+    if (linked_dragon && linked_dragon->active && linked_dragon->death_time <= 0) {
+        PexDamageSource src = pex_damage_source_simple(PEX_DAMAGE_EXPLOSION);
+        (void)pex_mob_attack_entity_from(linked_dragon, src, 10);
+    }
+}
+
+static void passive_dragon_crystal_destroy_125(PexDragonCrystalRuntime125 *c, PassiveMob *linked_dragon) {
+    if (!c || !c->active) return;
+    c->health = 0;
+    c->active = 0;
+    if (flat_get_block(c->x, c->y, c->z) == BLOCK_FIRE) flat_set_block(c->x, c->y, c->z, 0);
+    pex_sound_play_at("random.explode", c->px, c->py, c->pz, 6.0f, 1.0f);
+    for (int i = 0; i < 32; ++i) add_splash_particle(c->px, c->py + 0.8f, c->pz,
+                                                     (pex_rand_float01() - 0.5f) * 0.9f,
+                                                     (pex_rand_float01() - 0.2f) * 0.9f,
+                                                     (pex_rand_float01() - 0.5f) * 0.9f);
+    passive_dragon_crystal_explosion_damage_125(c->px, c->py, c->pz, linked_dragon);
+    g_save_dirty = 1;
+}
+
+static void passive_dragon_crystals_tick_125(PassiveMob *dragon) {
+    passive_dragon_crystals_seed_125();
+    if (!dragon || dragon->death_time > 0) return;
+    int dragon_index = passive_dragon_find_index_125(dragon);
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) {
+        PexDragonCrystalRuntime125 *c = &g_dragon_crystals_125[i];
+        if (!c->active) continue;
+        ++c->inner_rotation;
+        c->beam_dragon_index = -1;
+        if (flat_get_block(c->x, c->y, c->z) != BLOCK_FIRE && flat_get_block(c->x, c->y, c->z) == 0) flat_set_block(c->x, c->y, c->z, BLOCK_FIRE);
+        if ((g_ingame_ticks & 7) == 0) add_splash_particle(c->px, c->py + 0.6f, c->pz, 0.0f, 0.04f, 0.0f);
+        (void)dragon_index;
+    }
+    PexDragonCrystalRuntime125 *heal = passive_dragon_nearest_crystal_125(dragon, 32.0f);
+    if (heal) {
+        heal->beam_dragon_index = dragon_index;
+        if ((dragon->age % 10) == 0 && dragon->health < passive_mob_max_health_current_125(dragon)) {
+            dragon->health += 1;
+            if (dragon->health > passive_mob_max_health_current_125(dragon)) dragon->health = passive_mob_max_health_current_125(dragon);
+        }
+    }
+}
+
+static int passive_dragon_crystal_segment_hit_125(float x0, float y0, float z0,
+                                                  float x1, float y1, float z1,
+                                                  float max_t, float *out_t,
+                                                  PexDragonCrystalRuntime125 **out_crystal) {
+    float dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    float best = max_t;
+    PexDragonCrystalRuntime125 *best_c = NULL;
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) {
+        PexDragonCrystalRuntime125 *c = &g_dragon_crystals_125[i];
+        if (!c->active || c->health <= 0) continue;
+        FlatAABB b;
+        b.minx = c->px - 1.0f; b.maxx = c->px + 1.0f;
+        b.miny = c->py;        b.maxy = c->py + 2.0f;
+        b.minz = c->pz - 1.0f; b.maxz = c->pz + 1.0f;
+        float t = 0.0f;
+        if (!passive_ray_intersect_aabb(&b, x0, y0, z0, dx, dy, dz, max_t, &t)) continue;
+        if (t >= 0.0f && t < best) { best = t; best_c = c; }
+    }
+    if (!best_c) return 0;
+    if (out_t) *out_t = best;
+    if (out_crystal) *out_crystal = best_c;
+    return 1;
+}
+
+static int passive_dragon_crystal_player_attack_125(float max_dist, float mob_t) {
+    if (g_current_dimension != PEX_DIM_END || passive_dragon_crystal_count_active_125() <= 0) return 0;
+    float dx, dy, dz;
+    pex_touch_aware_look_vector(&dx, &dy, &dz);
+    PexDragonCrystalRuntime125 *c = NULL;
+    float t = 1.0f;
+    if (!passive_dragon_crystal_segment_hit_125(g_player_x, g_player_y, g_player_z,
+                                                g_player_x + dx * max_dist, g_player_y + dy * max_dist, g_player_z + dz * max_dist,
+                                                1.0f, &t, &c)) return 0;
+    float crystal_dist = t * max_dist;
+    if (crystal_dist > mob_t + 0.05f) return 0;
+    FlatRayHit block = flat_raycast();
+    if (block.hit) {
+        float bx = block.hx - g_player_x;
+        float by = block.hy - g_player_y;
+        float bz = block.hz - g_player_z;
+        float block_dist = sqrtf(bx*bx + by*by + bz*bz);
+        if (block_dist + 0.20f < crystal_dist) return 0;
+    }
+    PassiveMob *dragon = NULL;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (m->active && m->type == PASSIVE_MOB_ENDER_DRAGON && m->death_time <= 0) { dragon = m; break; }
+    }
+    restart_hand_swing();
+    passive_dragon_crystal_destroy_125(c, dragon);
+    return 1;
+}
+
+static void passive_dragon_crystals_draw_125(float partial) {
+    (void)partial;
+    if (g_current_dimension != PEX_DIM_END || !tex_terrain.id) return;
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) {
+        PexDragonCrystalRuntime125 *c = &g_dragon_crystals_125[i];
+        if (!c->active) continue;
+        float dx = c->px - g_player_x, dy = c->py - g_player_y, dz = c->pz - g_player_z;
+        if (dx*dx + dy*dy + dz*dz > PEX_PASSIVE_RENDER_DIST * PEX_PASSIVE_RENDER_DIST) continue;
+        glPushMatrix();
+        glTranslatef(c->px, c->py + 1.0f, c->pz);
+        glRotatef((float)(c->inner_rotation & 1023) * (360.0f / 1024.0f), 0.0f, 1.0f, 0.0f);
+        glScalef(0.75f, 0.75f, 0.75f);
+        draw_block_item_model(BLOCK_GLASS, 0.0f, 0.0f, 0.0f);
+        glScalef(0.65f, 0.65f, 0.65f);
+        glRotatef(60.0f, 1.0f, 0.0f, 0.0f);
+        draw_block_item_model(BLOCK_GLASS, 0.0f, 0.0f, 0.0f);
+        glPopMatrix();
+        if (c->beam_dragon_index >= 0 && c->beam_dragon_index < MAX_PASSIVE_MOBS) {
+            PassiveMob *d = &g_passive_mobs[c->beam_dragon_index];
+            if (d->active && d->type == PASSIVE_MOB_ENDER_DRAGON) {
+                for (int k = 0; k < 3; ++k) {
+                    float t = (float)(k + 1) / 4.0f;
+                    add_splash_particle(c->px + (d->x - c->px) * t,
+                                        c->py + 1.0f + ((d->y + d->height * 0.5f) - (c->py + 1.0f)) * t,
+                                        c->pz + (d->z - c->pz) * t,
+                                        0.0f, 0.02f, 0.0f);
+                }
+            }
+        }
+    }
+}
+
+static void passive_dragon_crystal_state_write_binary_125(FILE *f) {
+    char magic[4] = {'P','D','C','R'};
+    int version = 1;
+    fwrite(magic, 1, 4, f);
+    fwrite(&version, sizeof(version), 1, f);
+    fwrite(&g_dragon_crystals_seeded_125, sizeof(g_dragon_crystals_seeded_125), 1, f);
+    int count = 0;
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) if (g_dragon_crystals_125[i].active) ++count;
+    fwrite(&count, sizeof(count), 1, f);
+    for (int i = 0; i < PEX_DRAGON_CRYSTAL_MAX_125; ++i) {
+        PexDragonCrystalRuntime125 *c = &g_dragon_crystals_125[i];
+        if (!c->active) continue;
+        fwrite(&c->x, sizeof(int), 1, f);
+        fwrite(&c->y, sizeof(int), 1, f);
+        fwrite(&c->z, sizeof(int), 1, f);
+        fwrite(&c->px, sizeof(float), 1, f);
+        fwrite(&c->py, sizeof(float), 1, f);
+        fwrite(&c->pz, sizeof(float), 1, f);
+        fwrite(&c->health, sizeof(int), 1, f);
+        fwrite(&c->inner_rotation, sizeof(int), 1, f);
+    }
+}
+
+static void passive_dragon_crystal_state_read_binary_125(FILE *f, int save_version) {
+    memset(g_dragon_crystals_125, 0, sizeof(g_dragon_crystals_125));
+    g_dragon_crystals_seeded_125 = 0;
+    if (save_version < 32) return;
+    char magic[4];
+    int version = 0, seeded = 0, count = 0;
+    if (fread(magic, 1, 4, f) != 4) return;
+    if (memcmp(magic, "PDCR", 4) != 0) return;
+    if (fread(&version, sizeof(version), 1, f) != 1 ||
+        fread(&seeded, sizeof(seeded), 1, f) != 1 ||
+        fread(&count, sizeof(count), 1, f) != 1) return;
+    if (count < 0) count = 0;
+    if (count > PEX_DRAGON_CRYSTAL_MAX_125) count = PEX_DRAGON_CRYSTAL_MAX_125;
+    g_dragon_crystals_seeded_125 = seeded ? 1 : 0;
+    for (int i = 0; i < count; ++i) {
+        PexDragonCrystalRuntime125 tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        if (fread(&tmp.x, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.y, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.z, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.px, sizeof(float), 1, f) != 1 ||
+            fread(&tmp.py, sizeof(float), 1, f) != 1 ||
+            fread(&tmp.pz, sizeof(float), 1, f) != 1 ||
+            fread(&tmp.health, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.inner_rotation, sizeof(int), 1, f) != 1) {
+            memset(g_dragon_crystals_125, 0, sizeof(g_dragon_crystals_125));
+            g_dragon_crystals_seeded_125 = 0;
+            return;
+        }
+        if (!isfinite(tmp.px) || !isfinite(tmp.py) || !isfinite(tmp.pz) || tmp.health <= 0) continue;
+        tmp.active = 1;
+        tmp.beam_dragon_index = -1;
+        g_dragon_crystals_125[i] = tmp;
+    }
+    (void)version;
+}
+
+static int pex_dragon_crystal_projectile_hit_125(const FlatProjectile *p, float x0, float y0, float z0,
+                                                  float x1, float y1, float z1, float max_t, float *out_t,
+                                                  float *out_x, float *out_y, float *out_z) {
+    (void)p;
+    if (g_current_dimension != PEX_DIM_END || passive_dragon_crystal_count_active_125() <= 0) return 0;
+    PexDragonCrystalRuntime125 *c = NULL;
+    float t = 1.0f;
+    if (!passive_dragon_crystal_segment_hit_125(x0, y0, z0, x1, y1, z1, max_t, &t, &c)) return 0;
+    PassiveMob *dragon = NULL;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (m->active && m->type == PASSIVE_MOB_ENDER_DRAGON && m->death_time <= 0) { dragon = m; break; }
+    }
+    if (out_t) *out_t = t;
+    if (out_x) *out_x = x0 + (x1 - x0) * t;
+    if (out_y) *out_y = y0 + (y1 - y0) * t;
+    if (out_z) *out_z = z0 + (z1 - z0) * t;
+    passive_dragon_crystal_destroy_125(c, dragon);
+    return 1;
+}
+
+/* EntityDragon / WorldProviderEnd port layer.
+   This is intentionally C-native: the Java dragon uses a multipart entity,
+   ring buffer path history, and end-crystal entities. PexCraft does not yet
+   have those engine objects, so this ports the gameplay lifecycle and flight
+   target behavior into the existing PassiveMob runtime while keeping the
+   missing crystal/multipart hooks isolated. */
+#define PEX_DRAGON_DEATH_TICKS_125 200
+
+static int passive_dragon_exists_125(void) {
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (m->active && m->type == PASSIVE_MOB_ENDER_DRAGON && m->death_time <= 0) return 1;
+    }
+    return 0;
+}
+
+static void passive_dragon_pick_new_target_125(PassiveMob *m) {
+    if (!m) return;
+    float center_x = 0.0f;
+    float center_z = 0.0f;
+    if (fabsf(g_player_x) < 192.0f && fabsf(g_player_z) < 192.0f) {
+        center_x = g_player_x * 0.35f;
+        center_z = g_player_z * 0.35f;
+    }
+    float angle = pex_rand_float01() * 6.2831853f;
+    float radius = 24.0f + pex_rand_float01() * 48.0f;
+    m->target_x = center_x + cosf(angle) * radius;
+    m->target_y = 68.0f + pex_rand_float01() * 32.0f;
+    m->target_z = center_z + sinf(angle) * radius;
+    m->has_path_target = 1;
+}
+
+static void passive_dragon_spawn_xp_125(PassiveMob *m, int total) {
+    if (!m || total <= 0) return;
+    while (total > 0) {
+        int v = pex_xp_orb_split_value(total);
+        total -= v;
+        pex_spawn_xp_orb(m->x, m->y, m->z, v);
+    }
+}
+
+static void passive_dragon_create_exit_portal_125(PassiveMob *m) {
+    if (!m) return;
+    /* EntityDragon.createEnderPortal(floor(posX), floor(posZ)).  The Java
+       method uses a fixed y=64 bedrock/end-portal disk with a central bedrock
+       pillar, four torches, and the dragon egg. */
+    int cx = (int)floorf(m->x);
+    int cz = (int)floorf(m->z);
+    const int cy = 64;
+    const int r = 4;
+    for (int y = cy - 1; y <= cy + 32; ++y) {
+        for (int z = cz - r; z <= cz + r; ++z) {
+            for (int x = cx - r; x <= cx + r; ++x) {
+                double dx = (double)(x - cx);
+                double dz = (double)(z - cz);
+                double dist = sqrt(dx * dx + dz * dz);
+                if (dist > (double)r - 0.5) continue;
+                if (y < cy) {
+                    if (dist <= (double)(r - 1) - 0.5) flat_set_block(x, y, z, BLOCK_BEDROCK);
+                } else if (y > cy) {
+                    flat_set_block(x, y, z, 0);
+                } else if (dist > (double)(r - 1) - 0.5) {
+                    flat_set_block(x, y, z, BLOCK_BEDROCK);
+                } else {
+                    flat_set_block(x, y, z, BLOCK_END_PORTAL);
+                }
+            }
+        }
+    }
+    flat_set_block(cx, cy + 0, cz, BLOCK_BEDROCK);
+    flat_set_block(cx, cy + 1, cz, BLOCK_BEDROCK);
+    flat_set_block(cx, cy + 2, cz, BLOCK_BEDROCK);
+    flat_set_block(cx - 1, cy + 2, cz, BLOCK_TORCH);
+    flat_set_block(cx + 1, cy + 2, cz, BLOCK_TORCH);
+    flat_set_block(cx, cy + 2, cz - 1, BLOCK_TORCH);
+    flat_set_block(cx, cy + 2, cz + 1, BLOCK_TORCH);
+    flat_set_block(cx, cy + 3, cz, BLOCK_BEDROCK);
+    flat_set_block(cx, cy + 4, cz, BLOCK_DRAGON_EGG);
+    spawn_block_destroy_particles(cx, cy, cz, BLOCK_END_PORTAL);
+    g_save_dirty = 1;
+}
+
+static int passive_dragon_player_close_125(const PassiveMob *m, float range) {
+    if (!m || g_player_dead || g_player_health <= 0) return 0;
+    float dx = g_player_x - m->x;
+    float dy = (g_player_y - 1.62f) - (m->y + m->height * 0.45f);
+    float dz = g_player_z - m->z;
+    return dx*dx + dy*dy + dz*dz <= range * range;
+}
+
+static void passive_dragon_tick_living_125(PassiveMob *m) {
+    if (!m || !m->active || m->type != PASSIVE_MOB_ENDER_DRAGON) return;
+    passive_dragon_crystals_tick_125(m);
+    if (!m->has_path_target || (m->age % 80) == 0) passive_dragon_pick_new_target_125(m);
+    float dx = m->target_x - m->x;
+    float dy = m->target_y - m->y;
+    float dz = m->target_z - m->z;
+    float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+    if (dist < 6.0f || dist > 160.0f) {
+        passive_dragon_pick_new_target_125(m);
+        dx = m->target_x - m->x;
+        dy = m->target_y - m->y;
+        dz = m->target_z - m->z;
+        dist = sqrtf(dx*dx + dy*dy + dz*dz);
+    }
+    if (dist > 0.001f) {
+        float speed = 0.10f + pex_clamp_float(dist / 120.0f, 0.0f, 0.25f);
+        m->mx += (dx / dist) * speed * 0.18f;
+        m->my += (dy / dist) * speed * 0.12f;
+        m->mz += (dz / dist) * speed * 0.18f;
+    }
+    float hspeed = sqrtf(m->mx*m->mx + m->mz*m->mz);
+    if (hspeed > 0.001f) {
+        float yaw = atan2f(m->mz, m->mx) * 57.29578f - 90.0f;
+        m->yaw += pex_wrap_degrees(yaw - m->yaw) * 0.18f;
+        m->render_yaw = m->yaw;
+    }
+    m->mx *= 0.91f;
+    m->my *= 0.91f;
+    m->mz *= 0.91f;
+    if (m->mx > 1.2f) m->mx = 1.2f; if (m->mx < -1.2f) m->mx = -1.2f;
+    if (m->my > 0.8f) m->my = 0.8f; if (m->my < -0.8f) m->my = -0.8f;
+    if (m->mz > 1.2f) m->mz = 1.2f; if (m->mz < -1.2f) m->mz = -1.2f;
+    m->x += m->mx;
+    m->y += m->my;
+    m->z += m->mz;
+    if (m->y < 48.0f) { m->y = 48.0f; m->my = fabsf(m->my) * 0.5f; }
+    if (m->y > 120.0f) { m->y = 120.0f; m->my = -fabsf(m->my) * 0.5f; }
+
+    /* Functional port of the multipart body collision damage: the current engine
+       has one broad dragon AABB, so the attack window is intentionally the Java
+       body/head contact distance rather than a zombie-style reach. */
+    if (passive_dragon_player_close_125(m, 8.0f) && m->attack_time <= 0) {
+        (void)player_attack_entity_from(pex_damage_source_mob(m), passive_mob_scaled_attack_damage(m, 10));
+        m->attack_time = 10;
+    }
+    if ((m->age % 20) == 0 && passive_dragon_player_close_125(m, 64.0f)) {
+        pex_sound_play_at("mob.enderdragon.growl", m->x, m->y, m->z, 5.0f, 1.0f);
+    }
+    m->limb_swing += 0.28f;
+    m->limb_amount = 1.0f;
+    m->prev_render_yaw = m->render_yaw;
+}
+
+static int passive_dragon_tick_death_125(PassiveMob *m) {
+    if (!m || m->type != PASSIVE_MOB_ENDER_DRAGON || m->death_time <= 0) return 0;
+    ++m->death_time;
+    m->mx *= 0.80f;
+    m->my = 0.05f;
+    m->mz *= 0.80f;
+    m->y += m->my;
+    m->limb_swing += 0.35f;
+    if ((m->death_time % 10) == 0) {
+        for (int i = 0; i < 12; ++i) add_splash_particle(m->x, m->y + m->height * 0.5f, m->z,
+                                                         (pex_rand_float01() - 0.5f) * 0.8f,
+                                                         (pex_rand_float01() - 0.2f) * 0.7f,
+                                                         (pex_rand_float01() - 0.5f) * 0.8f);
+        pex_sound_play_at("random.explode", m->x, m->y, m->z, 5.0f, 0.8f + pex_rand_float01() * 0.4f);
+    }
+    if (m->death_time > 150 && (m->death_time % 5) == 0 && m->death_time < PEX_DRAGON_DEATH_TICKS_125) {
+        passive_dragon_spawn_xp_125(m, 1000);
+    }
+    if (m->death_time == PEX_DRAGON_DEATH_TICKS_125) {
+        passive_dragon_spawn_xp_125(m, 10000);
+        passive_dragon_create_exit_portal_125(m);
+    }
+    if (m->death_time > PEX_DRAGON_DEATH_TICKS_125) {
+        g_passive_dragon_killed_125 = 1;
+        m->active = 0;
+        g_save_dirty = 1;
+    }
+    return 1;
+}
+
+static void passive_mobs_ensure_ender_dragon_125(void) {
+    if (g_current_dimension != PEX_DIM_END || g_passive_dragon_killed_125) return;
+    if (passive_dragon_exists_125()) return;
+    PassiveMob *m = passive_mob_alloc();
+    if (!m) return;
+    passive_mob_init(m, PASSIVE_MOB_ENDER_DRAGON, 0.0f, 80.0f, 0.0f);
+    passive_dragon_pick_new_target_125(m);
+    pex_logf("passive mob: spawned Ender Dragon for End dimension");
+    g_save_dirty = 1;
+}
+
+
+#define PEX_MOB_SPAWNER_CACHE_MAX 128
+
+typedef struct PexMobSpawnerRuntime {
+    int active;
+    int x, y, z;
+    int type;              /* Java TileEntityMobSpawner EntityId mapped to PassiveMob type. */
+    int delay;             /* Java Delay tag. */
+    int spawn_count;       /* Java 1.2.5 constant: 4 attempts. */
+    int max_nearby;        /* Java 1.2.5 cap: 6 nearby entities. */
+    int required_range;    /* Java 1.2.5 player activation range: 16. */
+    int spawn_range;       /* Java 1.2.5 random horizontal range: 4. */
+    int last_seen_tick;
+} PexMobSpawnerRuntime;
+
+static PexMobSpawnerRuntime g_passive_spawners[PEX_MOB_SPAWNER_CACHE_MAX];
+
+static void passive_mob_spawner_remove_tile_125(int x, int y, int z) {
+    for (int i = 0; i < PEX_MOB_SPAWNER_CACHE_MAX; ++i) {
+        PexMobSpawnerRuntime *sp = &g_passive_spawners[i];
+        if (sp->active && sp->x == x && sp->y == y && sp->z == z) memset(sp, 0, sizeof(*sp));
+    }
+}
+
+static void passive_spawner_apply_java_defaults_125(PexMobSpawnerRuntime *sp) {
+    if (!sp) return;
+    if (sp->delay < -1 || sp->delay > 2000) sp->delay = 20;
+    if (sp->spawn_count <= 0 || sp->spawn_count > 32) sp->spawn_count = 4;
+    if (sp->max_nearby <= 0 || sp->max_nearby > 64) sp->max_nearby = 6;
+    if (sp->required_range <= 0 || sp->required_range > 64) sp->required_range = 16;
+    if (sp->spawn_range <= 0 || sp->spawn_range > 16) sp->spawn_range = 4;
+}
+
+static int passive_neighbor_block_within_125(int x, int y, int z, int id, int radius) {
+    for (int oy = -radius; oy <= radius; ++oy) {
+        for (int oz = -radius; oz <= radius; ++oz) {
+            for (int ox = -radius; ox <= radius; ++ox) {
+                if (flat_get_block(x + ox, y + oy, z + oz) == id) return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int passive_spawner_type_from_context_125(int x, int y, int z) {
+    if (passive_neighbor_block_within_125(x, y, z, BLOCK_NETHER_BRICK, 8)) return PASSIVE_MOB_BLAZE;
+    if (passive_neighbor_block_within_125(x, y, z, BLOCK_WEB, 8) || passive_neighbor_block_within_125(x, y, z, BLOCK_RAILS, 8)) return PASSIVE_MOB_CAVE_SPIDER;
+    if (passive_neighbor_block_within_125(x, y, z, BLOCK_END_PORTAL_FRAME, 6) || passive_neighbor_block_within_125(x, y, z, BLOCK_STONE_BRICK, 6)) return PASSIVE_MOB_SILVERFISH;
+    if (passive_neighbor_block_within_125(x, y, z, BLOCK_COBBLESTONE, 8) || passive_neighbor_block_within_125(x, y, z, BLOCK_MOSSY_COBBLESTONE, 8)) {
+        unsigned int h = (unsigned int)x * 73428767u ^ (unsigned int)y * 42317861u ^ (unsigned int)z * 91278319u ^ (unsigned int)g_world_seed;
+        h ^= h >> 16; h *= 2246822519u; h ^= h >> 13;
+        switch (h & 3u) {
+            case 0: return PASSIVE_MOB_SKELETON;
+            case 3: return PASSIVE_MOB_SPIDER;
+            default: return PASSIVE_MOB_ZOMBIE;
+        }
+    }
+    return PASSIVE_MOB_PIG; /* TileEntityMobSpawner default mobID is "Pig". */
+}
+
+static PexMobSpawnerRuntime *passive_spawner_runtime_125(int x, int y, int z) {
+    PexMobSpawnerRuntime *free_slot = NULL;
+    PexMobSpawnerRuntime *oldest = &g_passive_spawners[0];
+    for (int i = 0; i < PEX_MOB_SPAWNER_CACHE_MAX; ++i) {
+        PexMobSpawnerRuntime *sp = &g_passive_spawners[i];
+        if (sp->active && sp->x == x && sp->y == y && sp->z == z) {
+            sp->last_seen_tick = g_ingame_ticks;
+            return sp;
+        }
+        if (!sp->active && !free_slot) free_slot = sp;
+        if (sp->last_seen_tick < oldest->last_seen_tick) oldest = sp;
+    }
+    PexMobSpawnerRuntime *sp = free_slot ? free_slot : oldest;
+    memset(sp, 0, sizeof(*sp));
+    sp->active = 1;
+    sp->x = x; sp->y = y; sp->z = z;
+    /* New worlds should get this from TileEntityMobSpawner.EntityId.  Existing
+       PexCraft chunks did not persist that tag into gameplay state, so this
+       context probe is now only a one-time migration/default, not live logic. */
+    sp->type = passive_spawner_type_from_context_125(x, y, z);
+    sp->delay = 20; /* TileEntityMobSpawner ctor. */
+    sp->spawn_count = 4;
+    sp->max_nearby = 6;
+    sp->required_range = 16;
+    sp->spawn_range = 4;
+    sp->last_seen_tick = g_ingame_ticks;
+    passive_spawner_apply_java_defaults_125(sp);
+    return sp;
+}
+
+static int passive_mob_spawner_set_entity_type_125(int x, int y, int z, int type) {
+    if (!passive_mob_type_valid(type)) return 0;
+    PexMobSpawnerRuntime *sp = passive_spawner_runtime_125(x, y, z);
+    if (!sp) return 0;
+    sp->type = type;
+    passive_spawner_apply_java_defaults_125(sp);
+    g_save_dirty = 1;
+    return 1;
+}
+
+static void passive_spawner_update_delay_125(PexMobSpawnerRuntime *sp) {
+    if (!sp) return;
+    sp->delay = 200 + (rand() % 600);
+}
+
+static int passive_mob_count_type_near_box_125(int type, float cx, float cy, float cz, float rx, float ry, float rz) {
+    int n = 0;
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (!m->active || m->death_time > 0 || m->type != type) continue;
+        if (fabsf(m->x - cx) <= rx && fabsf((m->y + m->height * 0.5f) - cy) <= ry && fabsf(m->z - cz) <= rz) ++n;
+    }
+    return n;
+}
+
+static int passive_spawner_can_spawn_mob_125(int type, float x, float y, float z) {
+    if (!passive_mob_type_valid(type)) return 0;
+    if (!passive_mob_has_spawn_clearance(type, x, y, z)) return 0;
+    int bx = (int)floorf(x), by = (int)floorf(y), bz = (int)floorf(z);
+    if (!flat_chunk_generated_at_block(bx, bz)) return 0;
+    if (type == PASSIVE_MOB_SILVERFISH) {
+        float dx = x - g_player_x, dy = y - (g_player_y - 1.62f), dz = z - g_player_z;
+        if (dx*dx + dy*dy + dz*dz <= 5.0f * 5.0f) return 0;
+        return 1;
+    }
+    if (type == PASSIVE_MOB_CAVE_SPIDER || type == PASSIVE_MOB_BLAZE) return 1;
+    if (type == PASSIVE_MOB_PIG) {
+        return passive_mob_air_spawn_base_ok(bx, by, bz) && flat_get_block(bx, by - 1, bz) == BLOCK_GRASS && passive_mob_has_spawn_light(bx, by, bz);
+    }
+    if (passive_mob_category(type) == PEX_CAT_MONSTER) {
+        if ((g_opts.difficulty & 3) == 0) return 0;
+        if (type == PASSIVE_MOB_SPIDER || type == PASSIVE_MOB_ZOMBIE || type == PASSIVE_MOB_SKELETON) return passive_mob_valid_dark_spawn_light(bx, by, bz);
+    }
+    return passive_mob_type_specific_can_spawn(type, bx, by, bz, passive_mob_category(type));
+}
+
+static void passive_spawner_tick_one_125(PexMobSpawnerRuntime *sp) {
+    if (!sp || !sp->active) return;
+    if (flat_get_block(sp->x, sp->y, sp->z) != BLOCK_MOB_SPAWNER) { sp->active = 0; return; }
+    float sx0 = (float)sp->x + 0.5f;
+    float sy0 = (float)sp->y + 0.5f;
+    float sz0 = (float)sp->z + 0.5f;
+    float pdx = sx0 - g_player_x, pdy = sy0 - (g_player_y - 1.62f), pdz = sz0 - g_player_z;
+    passive_spawner_apply_java_defaults_125(sp);
+    float req = (float)sp->required_range;
+    if (pdx*pdx + pdy*pdy + pdz*pdz > req * req) return;
+    /* TileEntityMobSpawner client branch emits smoke/flame here.  Reuse the
+       existing block-hit particle pool to give visible active-spawner feedback. */
+    if ((g_ingame_ticks & 7) == 0) spawn_block_hit_particle(sp->x, sp->y, sp->z, rand() % 6, BLOCK_MOB_SPAWNER);
+    if (sp->delay == -1) passive_spawner_update_delay_125(sp);
+    if (sp->delay > 0) { --sp->delay; return; }
+    int type = sp->type;
+    if (!passive_mob_type_valid(type)) { passive_spawner_update_delay_125(sp); return; }
+    for (int attempt = 0; attempt < sp->spawn_count; ++attempt) {
+        if (passive_mob_count_type_near_box_125(type, (float)sp->x + 0.5f, (float)sp->y + 0.5f, (float)sp->z + 0.5f, 8.0f, 4.0f, 8.0f) >= sp->max_nearby) {
+            passive_spawner_update_delay_125(sp);
+            return;
+        }
+        float sr = (float)sp->spawn_range;
+        float x = (float)sp->x + 0.5f + (pex_rand_float01() - pex_rand_float01()) * sr;
+        float y = (float)(sp->y + (rand() % 3) - 1);
+        float z = (float)sp->z + 0.5f + (pex_rand_float01() - pex_rand_float01()) * sr;
+        if (!passive_spawner_can_spawn_mob_125(type, x, y, z)) continue;
+        PassiveMob *m = passive_mob_alloc();
+        if (!m) { passive_spawner_update_delay_125(sp); return; }
+        passive_mob_init(m, type, x, y, z);
+        if (type == PASSIVE_MOB_SHEEP) m->fleece_color = passive_sheep_random_fleece_color();
+        m->yaw = m->prev_yaw = pex_rand_float01() * 360.0f;
+        m->render_yaw = m->prev_render_yaw = m->yaw;
+        pex_sound_play_at("random.pop", (float)sp->x + 0.5f, (float)sp->y + 0.5f, (float)sp->z + 0.5f, 1.0f, 1.0f);
+        spawn_block_destroy_particles((int)floorf(x), (int)floorf(y), (int)floorf(z), BLOCK_MOB_SPAWNER);
+        passive_spawner_update_delay_125(sp);
+        g_save_dirty = 1;
+    }
+}
+
+static void passive_mobs_tick_spawners_125(void) {
+    if (g_mp_connected || g_player_dead) return;
+    int px = (int)floorf(g_player_x);
+    int py = (int)floorf(g_player_y - 1.62f);
+    int pz = (int)floorf(g_player_z);
+    for (int y = py - 16; y <= py + 16; ++y) {
+        if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) continue;
+        for (int z = pz - 16; z <= pz + 16; ++z) {
+            for (int x = px - 16; x <= px + 16; ++x) {
+                float dx = ((float)x + 0.5f) - g_player_x;
+                float dy = ((float)y + 0.5f) - (g_player_y - 1.62f);
+                float dz = ((float)z + 0.5f) - g_player_z;
+                if (dx*dx + dy*dy + dz*dz > 16.0f * 16.0f) continue;
+                if (flat_get_block(x, y, z) != BLOCK_MOB_SPAWNER) continue;
+                passive_spawner_tick_one_125(passive_spawner_runtime_125(x, y, z));
+            }
+        }
+    }
+}
+
+
+static void passive_spawners_write_binary_125(FILE *f) {
+    char magic[4] = {'P','M','S','P'};
+    fwrite(magic, 1, 4, f);
+    int version = 2;
+    fwrite(&version, sizeof(version), 1, f);
+    int count = 0;
+    for (int i = 0; i < PEX_MOB_SPAWNER_CACHE_MAX; ++i) {
+        PexMobSpawnerRuntime *sp = &g_passive_spawners[i];
+        if (!sp->active) continue;
+        if (flat_get_block(sp->x, sp->y, sp->z) != BLOCK_MOB_SPAWNER) continue;
+        if (!passive_mob_type_valid(sp->type)) continue;
+        ++count;
+    }
+    fwrite(&count, sizeof(count), 1, f);
+    for (int i = 0; i < PEX_MOB_SPAWNER_CACHE_MAX; ++i) {
+        PexMobSpawnerRuntime *sp = &g_passive_spawners[i];
+        if (!sp->active) continue;
+        if (flat_get_block(sp->x, sp->y, sp->z) != BLOCK_MOB_SPAWNER) continue;
+        if (!passive_mob_type_valid(sp->type)) continue;
+        fwrite(&sp->x, sizeof(int), 1, f);
+        fwrite(&sp->y, sizeof(int), 1, f);
+        fwrite(&sp->z, sizeof(int), 1, f);
+        fwrite(&sp->type, sizeof(int), 1, f);
+        fwrite(&sp->delay, sizeof(int), 1, f);
+        fwrite(&sp->spawn_count, sizeof(int), 1, f);
+        fwrite(&sp->max_nearby, sizeof(int), 1, f);
+        fwrite(&sp->required_range, sizeof(int), 1, f);
+        fwrite(&sp->spawn_range, sizeof(int), 1, f);
+        fwrite(&sp->last_seen_tick, sizeof(int), 1, f);
+    }
+}
+
+
+static void passive_dragon_state_write_binary_125(FILE *f) {
+    char magic[4] = {'P','D','R','G'};
+    int version = 1;
+    fwrite(magic, 1, 4, f);
+    fwrite(&version, sizeof(version), 1, f);
+    fwrite(&g_passive_dragon_killed_125, sizeof(g_passive_dragon_killed_125), 1, f);
+}
+
+static void passive_dragon_state_read_binary_125(FILE *f, int save_version) {
+    g_passive_dragon_killed_125 = 0;
+    if (save_version < 31) return;
+    char magic[4];
+    int version = 0;
+    if (fread(magic, 1, 4, f) != 4) return;
+    if (memcmp(magic, "PDRG", 4) != 0) return;
+    if (fread(&version, sizeof(version), 1, f) != 1) return;
+    if (fread(&g_passive_dragon_killed_125, sizeof(g_passive_dragon_killed_125), 1, f) != 1) g_passive_dragon_killed_125 = 0;
+    g_passive_dragon_killed_125 = g_passive_dragon_killed_125 ? 1 : 0;
+}
+
+static void passive_spawners_read_binary_125(FILE *f, int save_version) {
+    memset(g_passive_spawners, 0, sizeof(g_passive_spawners));
+    if (save_version < 30) return;
+    char magic[4];
+    if (fread(magic, 1, 4, f) != 4) return;
+    if (memcmp(magic, "PMSP", 4) != 0) return;
+    int version = 0, count = 0;
+    if (fread(&version, sizeof(version), 1, f) != 1 || fread(&count, sizeof(count), 1, f) != 1) {
+        memset(g_passive_spawners, 0, sizeof(g_passive_spawners));
+        return;
+    }
+    if (count < 0) count = 0;
+    if (count > PEX_MOB_SPAWNER_CACHE_MAX) count = PEX_MOB_SPAWNER_CACHE_MAX;
+    for (int i = 0; i < count; ++i) {
+        PexMobSpawnerRuntime tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        if (fread(&tmp.x, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.y, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.z, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.type, sizeof(int), 1, f) != 1 ||
+            fread(&tmp.delay, sizeof(int), 1, f) != 1) {
+            memset(g_passive_spawners, 0, sizeof(g_passive_spawners));
+            return;
+        }
+        if (version >= 2) {
+            if (fread(&tmp.spawn_count, sizeof(int), 1, f) != 1 ||
+                fread(&tmp.max_nearby, sizeof(int), 1, f) != 1 ||
+                fread(&tmp.required_range, sizeof(int), 1, f) != 1 ||
+                fread(&tmp.spawn_range, sizeof(int), 1, f) != 1 ||
+                fread(&tmp.last_seen_tick, sizeof(int), 1, f) != 1) {
+                memset(g_passive_spawners, 0, sizeof(g_passive_spawners));
+                return;
+            }
+        } else {
+            if (fread(&tmp.last_seen_tick, sizeof(int), 1, f) != 1) {
+                memset(g_passive_spawners, 0, sizeof(g_passive_spawners));
+                return;
+            }
+        }
+        if (!passive_mob_type_valid(tmp.type)) continue;
+        passive_spawner_apply_java_defaults_125(&tmp);
+        tmp.active = 1;
+        g_passive_spawners[i] = tmp;
+    }
+    (void)version;
+}
+
 static void passive_mob_tick_burning(PassiveMob *m) {
     if (!m || m->death_time > 0) return;
     if (passive_is_undead_burner(m->type) && passive_world_is_daytime()) {
@@ -2975,6 +4366,12 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
 
     passive_mob_tick_burning(m);
     if (!m->active || m->death_time > 0) return 0.0f;
+    if (m->type == PASSIVE_MOB_ZOMBIE) passive_zombie_tick_break_door_125(m);
+    if (m->type == PASSIVE_MOB_ENDERMAN && m->rideable <= 0 && passive_player_looking_at_mob_125(m)) {
+        m->rideable = 1;
+        m->egg_timer = 0;
+        pex_sound_play_at("mob.endermen.stare", m->x, m->y, m->z, 1.0f, 1.0f);
+    }
     if (in_liquid) m->ai_task_mask |= PEX_AI_SWIM;
     if (player_d2 < 32.0f * 32.0f) {
         m->ai_age = 0;
@@ -3006,6 +4403,15 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
     int target_mob = -1;
     PassiveMob *tm = NULL;
     int handled_behavior_target = 0;
+    int owned_wolf_has_defense_target =
+        (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m) &&
+         m->target_mob_index >= 0 && m->target_mob_index < MAX_PASSIVE_MOBS &&
+         passive_owned_wolf_can_target_125(m, &g_passive_mobs[m->target_mob_index]));
+
+    /* Java's wolf attack task has higher priority than follow-owner. */
+    if (!owned_wolf_has_defense_target && passive_tameable_follow_owner_125(m)) {
+        handled_behavior_target = 1;
+    }
 
     if (m->type == PASSIVE_MOB_OCELOT && !passive_mob_is_owned_by_player(m) && !m->sheared &&
         player_d2 < 16.0f * 16.0f && !handled_behavior_target) {
@@ -3020,7 +4426,7 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
         handled_behavior_target = 1;
     }
 
-    if (passive_mob_is_breedable_type(m->type)) {
+    if (!handled_behavior_target && passive_mob_is_breedable_type(m->type)) {
         if (m->love_time > 0) {
             int mate = passive_mob_find_love_mate(m, 8.0f);
             if (mate >= 0) {
@@ -3066,6 +4472,8 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
 
     if (handled_behavior_target) {
         target_mob = -1;
+    } else if (owned_wolf_has_defense_target) {
+        target_mob = m->target_mob_index;
     } else if (m->type == PASSIVE_MOB_ZOMBIE) {
         target_mob = passive_mob_find_nearest_target_mob(m, 1, 0, 16.0f);
     } else if (m->type == PASSIVE_MOB_WOLF && !m->sheared) {
@@ -3142,6 +4550,7 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
                 float sp = info ? info->move_speed : 0.23f;
                 if (m->type == PASSIVE_MOB_SPIDER || m->type == PASSIVE_MOB_CAVE_SPIDER) sp = 0.80f;
                 if (m->type == PASSIVE_MOB_ZOMBIE) sp = 0.23f;
+                if (m->type == PASSIVE_MOB_PIG_ZOMBIE && m->rideable > 0) sp = 0.95f;
                 if (m->type == PASSIVE_MOB_SKELETON) sp = 0.25f;
                 if (wants_player && m->type == PASSIVE_MOB_ENDERMAN && player_d2 < 12.0f * 12.0f) sp = 0.65f;
                 if (passive_mob_is_slime_family(m->type)) sp *= 0.55f;
@@ -3179,9 +4588,10 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
         if (m->type == PASSIVE_MOB_GIANT) reach = 6.0f;
         if (m->type == PASSIVE_MOB_ENDER_DRAGON) reach = 8.0f;
         if (m->type == PASSIVE_MOB_CREEPER) {
-            if (player_d2 < 3.0f * 3.0f) {
+            /* EntityAICreeperSwell: start under 3 blocks, keep swelling until >7 blocks, fuseTime=30. */
+            if (player_d2 < 3.0f * 3.0f || (m->egg_timer > 0 && player_d2 < 7.0f * 7.0f)) {
                 if (m->egg_timer <= 0) pex_sound_play_at("random.fuse", m->x, m->y, m->z, 1.0f, 0.5f);
-                m->egg_timer += 2;
+                ++m->egg_timer;
                 if (m->egg_timer >= 30) {
                     if (player_d2 < 5.0f * 5.0f) {
                         PexDamageSource source = pex_damage_source_simple(PEX_DAMAGE_EXPLOSION);
@@ -3190,7 +4600,9 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
                     }
                     passive_creeper_explode(m);
                     pex_sound_play_at("random.explode", m->x, m->y, m->z, 4.0f, 1.0f);
-                    passive_mob_start_death(m);
+                    PexDamageSource self_explosion = pex_damage_source_simple(PEX_DAMAGE_EXPLOSION);
+                    pex_damage_source_set_true_mob(&self_explosion, m);
+                    passive_mob_start_death(m, &self_explosion);
                 }
             } else if (m->egg_timer > 0) {
                 --m->egg_timer;
@@ -3212,10 +4624,7 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
             passive_mob_attack_player(m, 0);
         }
         if (m->type == PASSIVE_MOB_ENDERMAN && (rand() % 240) == 0 && player_d2 > 12.0f * 12.0f) {
-            float oldx = m->x, oldz = m->z;
-            m->x = g_player_x + (float)((rand() % 17) - 8);
-            m->z = g_player_z + (float)((rand() % 17) - 8);
-            pex_sound_play_at("mob.endermen.portal", oldx, m->y, oldz, 1.0f, 1.0f);
+            (void)passive_mob_teleport_random_125(m, 16.0f);
         }
     }
 
@@ -3245,6 +4654,46 @@ static float passive_mob_tick_ai(PassiveMob *m, int in_liquid) {
     return forward;
 }
 
+
+static void passive_silverfish_summon_allies_125(PassiveMob *m) {
+    if (!m || m->type != PASSIVE_MOB_SILVERFISH) return;
+    int bx = (int)floorf(m->x);
+    int by = (int)floorf(m->y);
+    int bz = (int)floorf(m->z);
+    int stopped = 0;
+    for (int oy = 0; !stopped && oy <= 5 && oy >= -5; oy = oy <= 0 ? 1 - oy : 0 - oy) {
+        for (int oz = 0; !stopped && oz <= 10 && oz >= -10; oz = oz <= 0 ? 1 - oz : 0 - oz) {
+            for (int ox = 0; !stopped && ox <= 10 && ox >= -10; ox = ox <= 0 ? 1 - ox : 0 - ox) {
+                int x = bx + ox, y = by + oy, z = bz + oz;
+                if (flat_get_block(x, y, z) != BLOCK_SILVERFISH) continue;
+                spawn_block_destroy_particles(x, y, z, BLOCK_SILVERFISH);
+                flat_set_block(x, y, z, 0);
+                passive_silverfish_spawn_from_block_125(x, y, z);
+                if (rand() & 1) stopped = 1;
+            }
+        }
+    }
+}
+
+static void passive_silverfish_try_hide_125(PassiveMob *m) {
+    if (!m || m->type != PASSIVE_MOB_SILVERFISH || m->death_time > 0) return;
+    if (m->target_mob_index >= 0 || m->has_path_target) return;
+    if (passive_mob_player_distance2(m) < 8.0f * 8.0f) return;
+    static const int sides[6][3] = {{0,-1,0},{0,1,0},{0,0,-1},{0,0,1},{-1,0,0},{1,0,0}};
+    int side = rand() % 6;
+    int x = (int)floorf(m->x) + sides[side][0];
+    int y = (int)floorf(m->y + 0.5f) + sides[side][1];
+    int z = (int)floorf(m->z) + sides[side][2];
+    int id = flat_get_block(x, y, z);
+    int meta = passive_silverfish_block_meta_for_id_125(id);
+    if (meta < 0) return;
+    flat_set_block(x, y, z, BLOCK_SILVERFISH);
+    flat_set_meta_raw(x, y, z, meta);
+    spawn_block_destroy_particles(x, y, z, id);
+    m->active = 0;
+    g_save_dirty = 1;
+}
+
 static void passive_mob_tick_species_behavior(PassiveMob *m) {
     if (m->type == PASSIVE_MOB_CHICKEN) {
         m->chicken_prev_wing_rot = m->chicken_wing_rot;
@@ -3262,9 +4711,13 @@ static void passive_mob_tick_species_behavior(PassiveMob *m) {
             m->egg_timer = rand() % 6000 + 6000;
         }
     } else if (passive_mob_is_slime_family(m->type)) {
+        m->chicken_prev_wing_rot = m->chicken_wing_rot; /* reused as Java slime squishAmount */
+        float target_squish = m->on_ground ? 0.30f : -0.12f;
+        m->chicken_wing_rot += (target_squish - m->chicken_wing_rot) * 0.35f;
         if (m->on_ground && m->jump_cooldown <= 0) {
             m->jump_cooldown = 10 + (rand() % 20);
-            m->my = 0.38f + 0.06f * (float)(m->fleece_color & 3);
+            m->my = 0.38f + 0.06f * (float)(m->fleece_color > 0 ? m->fleece_color : 1);
+            m->chicken_wing_rot = 0.55f;
         }
     } else if (m->type == PASSIVE_MOB_SQUID) {
         m->chicken_prev_wing_rot = m->chicken_wing_rot;
@@ -3277,15 +4730,35 @@ static void passive_mob_tick_species_behavior(PassiveMob *m) {
             if (flat_get_block(x, y - 1, z) == BLOCK_GRASS) {
                 flat_set_block(x, y - 1, z, BLOCK_DIRT);
                 m->sheared = 0;
+                m->attack_time = 40; /* SheepTimer: render the Java head-down eating animation. */
                 if (m->baby_age < 0) { m->baby_age += 1200; if (m->baby_age > 0) m->baby_age = 0; }
                 g_save_dirty = 1;
             }
         }
+    } else if (m->type == PASSIVE_MOB_PIG_ZOMBIE) {
+        if (m->rideable > 0 && m->egg_timer <= 0) {
+            m->rideable = 0;
+            m->has_path_target = 0;
+            passive_path_clear(m);
+        }
     } else if (m->type == PASSIVE_MOB_ENDERMAN) {
         passive_enderman_tick_carry_block(m);
-        if (m->in_water && (m->age % 20) == 0) (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_DROWN), 1);
+        if (m->in_water) {
+            (void)passive_mob_teleport_random_125(m, 32.0f);
+            if ((m->age % 20) == 0) (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_DROWN), 1);
+        }
+    } else if (m->type == PASSIVE_MOB_SILVERFISH) {
+        if (m->tame_state > 0) {
+            --m->tame_state;
+            if (m->tame_state == 0) passive_silverfish_summon_allies_125(m);
+        }
+        if (m->active) passive_silverfish_try_hide_125(m);
     } else if (m->type == PASSIVE_MOB_SNOWMAN) {
         passive_snowman_tick_snow_trail(m);
+        int biome = passive_current_biome_id_at((int)floorf(m->x), (int)floorf(m->z));
+        if ((biome == BIOME_DESERT || biome == BIOME_DESERT_HILLS || biome == BIOME_HELL) && (m->age % 20) == 0) {
+            (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_ON_FIRE), 1);
+        }
         if (m->in_water && (m->age % 20) == 0) (void)pex_mob_attack_entity_from(m, pex_damage_source_simple(PEX_DAMAGE_DROWN), 1);
     }
 }
@@ -3335,7 +4808,7 @@ static void passive_mob_tick_animation(PassiveMob *m, float forward, int in_liqu
     }
 
     float target_amount = (speed > 0.01f && (m->on_ground || in_liquid))
-        ? pex_clamp_float(speed * 7.0f, 0.0f, 1.0f) : 0.0f;
+        ? pex_clamp_float(speed * 4.0f, 0.0f, 1.0f) : 0.0f;
     m->limb_amount += (target_amount - m->limb_amount) * 0.4f;
     m->limb_swing += m->limb_amount;
     if (speed > 0.05f) {
@@ -3365,6 +4838,11 @@ static void passive_mob_tick_living(PassiveMob *m) {
     passive_mob_tick_potions(m);
     if (passive_mob_tick_death(m)) return;
     passive_mob_tick_sounds(m);
+    if (m->type == PASSIVE_MOB_ENDER_DRAGON) {
+        passive_dragon_tick_living_125(m);
+        passive_mob_check_bounds(m);
+        return;
+    }
     int in_liquid = passive_mob_update_liquid_state(m);
     float forward = passive_mob_tick_ai(m, in_liquid);
     passive_mob_tick_species_behavior(m);
@@ -3429,7 +4907,9 @@ static void update_passive_mobs(void) {
        half-streamed terrain and fighting the streaming thread. */
     double spawn_start = now_seconds();
     if (!world_stream_service_active()) {
+        passive_mobs_ensure_ender_dragon_125();
         passive_mobs_try_village_spawns_exact();
+        passive_mobs_tick_spawners_125();
         passive_mobs_try_natural_spawn();
     } else {
         g_passive_perf_last_spawns_skipped_streaming = 1;
@@ -3491,6 +4971,7 @@ typedef struct PassiveMobRenderEntry {
     int baby_age;
     int sitting;
     int held_block;
+    int held_item;
     int love_time;
     int attack_time;
     int hurt;
@@ -3503,6 +4984,8 @@ typedef struct PassiveMobRenderEntry {
     float limb;
     float wing;
     float age;
+    float sheep_eat_amount;
+    float sheep_head_pitch;
     float model_scale;
     float death_time;
 } PassiveMobRenderEntry;
@@ -3562,6 +5045,7 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
         e->baby_age = m->baby_age;
         e->sitting = m->sitting;
         e->held_block = m->held_block;
+        e->held_item = m->held_item;
         e->love_time = m->love_time;
         e->attack_time = m->attack_time;
         e->hurt = (m->hurt_time > 0 || m->death_time > 0);
@@ -3574,14 +5058,23 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
         e->move = m->prev_limb_amount + (m->limb_amount - m->prev_limb_amount) * partial;
         if (e->move > 1.0f) e->move = 1.0f;
         e->limb = m->prev_limb_swing + (m->limb_swing - m->prev_limb_swing) * partial;
+        if (m->baby_age < 0) e->limb *= 3.0f; /* RenderLiving multiplies child limb swing by 3. */
         e->age = (float)m->age + partial;
+        if (m->type == PASSIVE_MOB_SHEEP) {
+            float sheep_timer = (float)m->attack_time;
+            e->sheep_eat_amount = passive_sheep_eat_amount_125(sheep_timer, partial);
+            e->sheep_head_pitch = passive_sheep_head_pitch_125(sheep_timer, partial, e->pitch * 0.0174532925f);
+        }
         e->model_scale = passive_mob_model_scale_for_type(m->type);
-        if (passive_mob_is_slime_family(m->type) && (m->fleece_color & 3) > 0) e->model_scale = (float)(m->fleece_color & 3);
+        if (passive_mob_is_slime_family(m->type) && m->fleece_color > 0) e->model_scale = (float)m->fleece_color;
         e->death_time = m->death_time > 0 ? (float)m->death_time + partial : 0.0f;
         if (m->type == PASSIVE_MOB_CHICKEN) {
             float wr = m->chicken_prev_wing_rot + (m->chicken_wing_rot - m->chicken_prev_wing_rot) * partial;
             float wd = m->chicken_prev_dest_pos + (m->chicken_dest_pos - m->chicken_prev_dest_pos) * partial;
             e->wing = (sinf(wr) + 1.0f) * wd;
+        } else if (passive_mob_is_slime_family(m->type)) {
+            e->wing = m->chicken_prev_wing_rot + (m->chicken_wing_rot - m->chicken_prev_wing_rot) * partial;
+            e->sheep_eat_amount = e->wing; /* reused by the slime/magma renderer as squish */
         }
         if (count >= PEX_PASSIVE_RENDER_LIMIT) break;
     }
@@ -3942,7 +5435,8 @@ static void p125_part_deg(int tx, int ty, float px, float py, float pz,
                   passive_rad_from_deg(rx), passive_rad_from_deg(ry), passive_rad_from_deg(rz));
 }
 
-static void passive_render_p125_quadruped(int type, int fur_layer, float limb, float move, float head_yaw, float head_pitch) {
+static void passive_render_p125_quadruped(int type, int fur_layer, float limb, float move, float head_yaw, float head_pitch,
+                                           float sheep_eat_amount, float sheep_head_pitch) {
     float leg1 = cosf(limb * 0.6662f) * 1.4f * move;
     float leg2 = cosf(limb * 0.6662f + (float)M_PI) * 1.4f * move;
     float body = (float)M_PI * 0.5f;
@@ -3950,7 +5444,9 @@ static void passive_render_p125_quadruped(int type, int fur_layer, float limb, f
     float hp = passive_rad_from_deg(head_pitch);
 
     if (type == PASSIVE_MOB_SHEEP && fur_layer) {
-        p125_part_rad(0,0,   0,6,-8,  -3,-4,-4, 6,6,6, 0.6f,0, hp,hy,0);
+        float sheep_head_y = 6.0f + sheep_eat_amount * 9.0f;
+        hp = sheep_head_pitch;
+        p125_part_rad(0,0,   0,sheep_head_y,-8,  -3,-4,-4, 6,6,6, 0.6f,0, hp,hy,0);
         p125_part_rad(28,8,  0,5,2,   -4,-10,-7, 8,16,6, 1.75f,0, body,0,0);
         p125_part_rad(0,16, -3,12,7, -2,0,-2, 4,6,4, 0.5f,0, leg1,0,0);
         p125_part_rad(0,16,  3,12,7, -2,0,-2, 4,6,4, 0.5f,0, leg2,0,0);
@@ -3960,7 +5456,9 @@ static void passive_render_p125_quadruped(int type, int fur_layer, float limb, f
     }
 
     if (type == PASSIVE_MOB_SHEEP) {
-        p125_part_rad(0,0,   0,6,-8,  -3,-4,-6, 6,6,8, 0.0f,0, hp,hy,0);
+        float sheep_head_y = 6.0f + sheep_eat_amount * 9.0f;
+        hp = sheep_head_pitch;
+        p125_part_rad(0,0,   0,sheep_head_y,-8,  -3,-4,-6, 6,6,8, 0.0f,0, hp,hy,0);
         p125_part_rad(28,8,  0,5,2,   -4,-10,-7, 8,16,6, 0.0f,0, body,0,0);
         p125_part_rad(0,16, -3,12,7, -2,0,-2, 4,12,4, 0.0f,0, leg1,0,0);
         p125_part_rad(0,16,  3,12,7, -2,0,-2, 4,12,4, 0.0f,0, leg2,0,0);
@@ -4165,11 +5663,11 @@ static void passive_render_p125_spider(float limb, float move, float head_yaw, f
     p125_part_rad(18,0,  4,15,-1,-1,-1,-1, 16,2,2, 0,0, 0,y[7],z[7]);
 }
 
-static void passive_render_p125_slime(int magma, int layer, float age) {
+static void passive_render_p125_slime(int magma, int layer, float age, float squish) {
     if (magma) {
         int tx[8] = {0,0,24,24,0,0,0,0};
         int ty[8] = {0,1,10,19,4,5,6,7};
-        float squish = 0.0f;
+        squish = pex_clamp_float(squish, -0.20f, 0.55f);
         for (int i = 0; i < 8; ++i) {
             float py = (float)(-(4 - i)) * squish * 1.7f;
             p125_part_rad(tx[i],ty[i], 0,py,0, -4,16+i,-4, 8,1,8, 0,0,0,0,0);
@@ -4413,23 +5911,25 @@ static void passive_render_p125_dragon(float age, float head_yaw, float head_pit
     }
 }
 
-static void passive_render_quad_model(int type, int fur_layer, int detail, float limb, float move, float head_yaw, float head_pitch, float age, int sitting, int rideable, int held_block) {
+static void passive_render_quad_model(int type, int fur_layer, int detail, float limb, float move, float head_yaw, float head_pitch,
+                                      float age, int sitting, int rideable, int held_block,
+                                      float sheep_eat_amount, float sheep_head_pitch) {
     (void)detail;
     switch (type) {
         case PASSIVE_MOB_PIG:
         case PASSIVE_MOB_SHEEP:
         case PASSIVE_MOB_COW:
         case PASSIVE_MOB_MOOSHROOM:
-            passive_render_p125_quadruped(type, fur_layer, limb, move, head_yaw, head_pitch); break;
+            passive_render_p125_quadruped(type, fur_layer, limb, move, head_yaw, head_pitch, sheep_eat_amount, sheep_head_pitch); break;
         case PASSIVE_MOB_CREEPER:
             passive_render_p125_creeper(limb, move, head_yaw, head_pitch); break;
         case PASSIVE_MOB_SPIDER:
         case PASSIVE_MOB_CAVE_SPIDER:
             passive_render_p125_spider(limb, move, head_yaw, head_pitch); break;
         case PASSIVE_MOB_SLIME:
-            passive_render_p125_slime(0, fur_layer, age); break;
+            passive_render_p125_slime(0, fur_layer, age, sheep_eat_amount); break;
         case PASSIVE_MOB_MAGMA_CUBE:
-            passive_render_p125_slime(1, fur_layer, age); break;
+            passive_render_p125_slime(1, fur_layer, age, sheep_eat_amount); break;
         case PASSIVE_MOB_GHAST:
             passive_render_p125_ghast(age); break;
         case PASSIVE_MOB_BLAZE:
@@ -4616,7 +6116,7 @@ static void draw_passive_mobs(float partial) {
         if (!e->active || !passive_mob_type_valid(e->type)) continue;
         Texture *t = passive_mob_texture_for_type(e->type);
         if (e->type == PASSIVE_MOB_WOLF) {
-            if (e->rideable && tex_mob_wolf_angry.id) t = &tex_mob_wolf_angry;
+            if (e->rideable && e->owner_id != PEX_MOB_OWNER_SINGLEPLAYER && tex_mob_wolf_angry.id) t = &tex_mob_wolf_angry;
             else if (e->sheared && tex_mob_wolf_tame.id) t = &tex_mob_wolf_tame;
         } else if (e->type == PASSIVE_MOB_OCELOT && e->sheared) {
             if ((e->fleece_color & 3) == 1 && tex_mob_cat_black.id) t = &tex_mob_cat_black;
@@ -4634,8 +6134,7 @@ static void draw_passive_mobs(float partial) {
         }
         if (!t || !t->id) continue;
 
-        float shadow_size = 0.7f;
-        if (e->type == PASSIVE_MOB_CHICKEN) shadow_size = 0.3f;
+        float shadow_size = passive_mob_shadow_size_125(e->type);
         if (e->baby_age < 0) shadow_size *= 0.5f;
         draw_java_entity_shadow(e->x, e->y, e->z, shadow_size, 1.0f);
 
@@ -4660,7 +6159,14 @@ static void draw_passive_mobs(float partial) {
         }
         float ms = e->model_scale > 0.0f ? e->model_scale : 1.0f;
         if (e->baby_age < 0) ms *= 0.5f;
-        glScalef(-ms, -ms, ms);
+        if (e->type == PASSIVE_MOB_SLIME || e->type == PASSIVE_MOB_MAGMA_CUBE) {
+            float sq = pex_clamp_float(e->wing, -0.20f, 0.55f) / (ms * 0.50f + 1.0f);
+            float sxz = 1.0f / (sq + 1.0f);
+            float sy = sq + 1.0f;
+            glScalef(-ms * sxz, -ms * sy, ms * sxz);
+        } else {
+            glScalef(-ms, -ms, ms);
+        }
         glTranslatef(0.0f, -24.0f * 0.0625f - 0.0078125f, 0.0f);
 
         if (e->type == PASSIVE_MOB_CHICKEN) {
@@ -4669,7 +6175,7 @@ static void draw_passive_mobs(float partial) {
             glEnd();
         } else {
             glBegin(GL_QUADS);
-            passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
+            passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch);
             glEnd();
             if (e->detail && (e->type == PASSIVE_MOB_SPIDER || e->type == PASSIVE_MOB_CAVE_SPIDER) && tex_mob_spider_eyes.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_spider_eyes.id);
@@ -4677,7 +6183,7 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
                 glBlendFunc(GL_ONE, GL_ONE);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
+                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch);
                 glEnd();
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             }
@@ -4687,48 +6193,51 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
                 glBlendFunc(GL_ONE, GL_ONE);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
+                passive_render_quad_model(e->type, 0, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch);
                 glEnd();
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             }
-            if (e->detail && e->type == PASSIVE_MOB_SLIME) {
+            if (e->type == PASSIVE_MOB_SLIME) {
                 passive_fast_set_tint_alpha(1.0f, 1.0f, 1.0f, 0.45f);
                 glDepthMask(GL_FALSE);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch);
                 glEnd();
                 glDepthMask(GL_TRUE);
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
             }
-            if (e->detail && e->type == PASSIVE_MOB_ENDERMAN && e->held_block > 0) {
+            if (e->type == PASSIVE_MOB_ENDERMAN && e->held_block > 0) {
                 passive_render_enderman_held_block(e->held_block);
             }
-            if (e->detail && e->type == PASSIVE_MOB_MOOSHROOM) passive_render_mooshroom_mushrooms(e->head_yaw);
-            if (e->detail && e->type == PASSIVE_MOB_SKELETON) passive_render_skeleton_bow_item(e->limb, e->move, e->age, e->head_yaw, e->pitch);
-            if (e->detail && e->type == PASSIVE_MOB_PIG_ZOMBIE) passive_render_pigzombie_sword_item(e->limb, e->move, e->age, e->head_yaw, e->pitch);
-            if (e->detail && e->type == PASSIVE_MOB_IRON_GOLEM) passive_render_golem_rose_item(e->attack_time);
-            if (e->detail && e->type == PASSIVE_MOB_SNOWMAN) passive_render_snowman_pumpkin_item(e->head_yaw, e->pitch);
-            if (e->detail && e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
+            if (e->type == PASSIVE_MOB_MOOSHROOM) passive_render_mooshroom_mushrooms(e->head_yaw);
+            if (e->held_item > 0 && (e->type == PASSIVE_MOB_SKELETON || e->type == PASSIVE_MOB_PIG_ZOMBIE || e->type == PASSIVE_MOB_ZOMBIE)) {
+                passive_render_biped_held_item_125(e->type, e->held_item, e->limb, e->move, e->age, e->head_yaw, e->pitch);
+            }
+            if (e->type == PASSIVE_MOB_IRON_GOLEM) passive_render_golem_rose_item(e->attack_time);
+            if (e->type == PASSIVE_MOB_SNOWMAN) passive_render_snowman_pumpkin_item(e->head_yaw, e->pitch);
+            if (e->type == PASSIVE_MOB_SHEEP && !e->sheared && tex_mob_sheep_fur.id) {
                 float fr, fg, fb;
                 passive_sheep_fleece_color(e->fleece_color, &fr, &fg, &fb);
                 glBindTexture(GL_TEXTURE_2D, tex_mob_sheep_fur.id);
                 passive_fast_set_texture_dims(&tex_mob_sheep_fur);
                 passive_fast_set_tint(fr, fg, fb);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch);
                 glEnd();
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
             }
-            if (e->detail && e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
+            if (e->type == PASSIVE_MOB_PIG && e->rideable && tex_mob_saddle.id) {
                 glBindTexture(GL_TEXTURE_2D, tex_mob_saddle.id);
                 passive_fast_set_texture_dims(&tex_mob_saddle);
                 glBegin(GL_QUADS);
-                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block);
+                passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch);
                 glEnd();
             }
         }
         glPopMatrix();
     }
+
+    passive_dragon_crystals_draw_125(partial);
 
     glDisable(GL_ALPHA_TEST);
     passive_fast_set_tint(1.0f, 1.0f, 1.0f);
@@ -4916,12 +6425,20 @@ static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs) {
         fwrite(&m->path_goal_z, sizeof(float), 1, f);
         fwrite(m->potion_duration, sizeof(int), 32, f);
         fwrite(m->potion_amplifier, sizeof(int), 32, f);
+        fwrite(&m->recently_hit, sizeof(int), 1, f);
+        fwrite(&m->last_looting_level, sizeof(int), 1, f);
+        fwrite(&m->held_item, sizeof(int), 1, f);
+        fwrite(m->equipment, sizeof(int), 4, f);
     }
     passive_villages_write_binary_125(f);
+    passive_spawners_write_binary_125(f);
+    passive_dragon_state_write_binary_125(f);
+    passive_dragon_crystal_state_write_binary_125(f);
 }
 
 static void passive_mobs_read_from_file(FILE *f, int version) {
     passive_mobs_reset();
+    memset(g_passive_spawners, 0, sizeof(g_passive_spawners));
     if (version < 16) return;
     int count = 0;
     if (fread(&count, sizeof(count), 1, f) != 1) return;
@@ -5036,6 +6553,21 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
             memset(m->potion_duration, 0, sizeof(m->potion_duration));
             memset(m->potion_amplifier, 0, sizeof(m->potion_amplifier));
         }
+        if (version >= 33) {
+            if (fread(&m->recently_hit, sizeof(int), 1, f) != 1 ||
+                fread(&m->last_looting_level, sizeof(int), 1, f) != 1 ||
+                fread(&m->held_item, sizeof(int), 1, f) != 1 ||
+                fread(m->equipment, sizeof(int), 4, f) != 4) {
+                passive_mobs_reset();
+                return;
+            }
+        } else {
+            m->recently_hit = 0;
+            m->last_looting_level = 0;
+            m->held_item = 0;
+            memset(m->equipment, 0, sizeof(m->equipment));
+            passive_mob_apply_default_equipment_125(m);
+        }
         if (!passive_mob_type_valid(m->type) || m->health <= 0 ||
             !isfinite(m->x) || !isfinite(m->y) || !isfinite(m->z) ||
             m->x < (float)g_flat_world_origin_x - 16.0f ||
@@ -5047,8 +6579,7 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
             memset(m, 0, sizeof(*m));
             continue;
         }
-        int max_health = passive_mob_health_for_type(m->type);
-        if (m->health > max_health) m->health = max_health;
+        passive_mob_clamp_health_current_125(m);
         if (version < 28) {
             m->prev_health = m->health;
             m->damage_remainder = 0;
@@ -5059,8 +6590,13 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         m->prev_render_yaw = m->render_yaw;
         m->width = passive_mob_width_for_type(m->type);
         m->height = passive_mob_height_for_type(m->type);
-        if (passive_mob_is_slime_family(m->type) && (m->fleece_color & 3) > 0) {
-            int sz = m->fleece_color & 3;
+        if (m->held_item < 0) m->held_item = 0;
+        for (int ei = 0; ei < 4; ++ei) if (m->equipment[ei] < 0) m->equipment[ei] = 0;
+        passive_mob_apply_default_equipment_125(m);
+        if (passive_mob_is_slime_family(m->type)) {
+            int sz = m->fleece_color;
+            if (sz != 1 && sz != 2 && sz != 4) sz = 1;
+            m->fleece_color = sz;
             m->width = 0.6f * (float)sz;
             m->height = 0.6f * (float)sz;
         }
@@ -5092,4 +6628,7 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
         if (m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) m->sheared = passive_mob_is_owned_by_player(m) ? 1 : m->sheared;
     }
     passive_villages_read_binary_125(f, version);
+    passive_spawners_read_binary_125(f, version);
+    passive_dragon_state_read_binary_125(f, version);
+    passive_dragon_crystal_state_read_binary_125(f, version);
 }
