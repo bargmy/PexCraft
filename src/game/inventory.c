@@ -433,13 +433,12 @@ static volatile int g_stream_remap_in_progress = 0;
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
-    /* Do not run the full light repair from the gameplay tick.  A Java-sized
-       torch/skylight refresh can touch tens or hundreds of thousands of cells,
-       and doing that here showed up as 40ms+ in ingame/player logic when a block
-       was broken.  Keep a tiny local preview so the edited block reacts right
-       away, then let the stream service finish the full pending repair off the
-       gameplay path. */
-    if (g_flat_persistent_edit_depth == 0) flat_preview_pending_lighting();
+    /* Do not relight from the gameplay/render path.  Player block edits already
+       run the Java-style immediate local update in flat_update_edit_light_now();
+       any larger repair region is for the lighting worker.  This removes the last
+       synchronous relight preview that could sneak into the main thread during
+       edits or redstone/liquid side effects. */
+    if (g_flat_persistent_edit_depth == 0) flat_lighting_worker_wake();
 }
 static int flat_persistent_edit_active(void) { return g_flat_persistent_edit_depth > 0; }
 static int flat_block_intersects_player(int bx, int by, int bz);
@@ -8886,7 +8885,7 @@ typedef struct StreamAsyncResult {
 
 #define STREAM_ASYNC_MAX_WORKERS 4
 #define STREAM_ASYNC_JOB_RING 128
-#define STREAM_ASYNC_RESULT_RING 64
+#define STREAM_ASYNC_RESULT_RING 128
 
 static CRITICAL_SECTION g_stream_async_cs;
 static int g_stream_async_initialized = 0;
@@ -8933,6 +8932,11 @@ static int stream_async_cpu_count(void) {
     memset(&si, 0, sizeof(si));
     GetSystemInfo(&si);
     if (si.dwNumberOfProcessors > 0) return (int)si.dwNumberOfProcessors;
+#elif !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+# ifdef _SC_NPROCESSORS_ONLN
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n > 0 && n < 128) return (int)n;
+# endif
 #endif
     return 2;
 }
@@ -8943,12 +8947,9 @@ static int stream_async_choose_worker_count(void) {
 #else
     int cpu = stream_async_cpu_count();
     if (cpu <= 2) return 1;
-    /* World generation is already heavy and the render thread still has to adopt
-       meshes while the player walks.  Four generator workers could saturate a
-       desktop CPU/GPU driver and show up as sudden frame freezes even though the
-       work was "async".  Keep runtime generation conservative; initial preload
-       still queues ahead and streams in the background. */
-    return 2;
+    if (cpu <= 4) return 2;
+    if (cpu <= 8) return 3;
+    return 4;
 #endif
 }
 
@@ -9643,23 +9644,39 @@ static int stream_chunk_priority_score(int wcx, int wcz) {
     return score;
 }
 
+typedef struct StreamQueuePriorityEntry {
+    int cx, cz;
+    int score;
+    int order;
+} StreamQueuePriorityEntry;
+
+static int stream_queue_priority_entry_cmp(const void *a, const void *b) {
+    const StreamQueuePriorityEntry *pa = (const StreamQueuePriorityEntry*)a;
+    const StreamQueuePriorityEntry *pb = (const StreamQueuePriorityEntry*)b;
+    if (pa->score != pb->score) return (pa->score < pb->score) ? -1 : 1;
+    return pa->order - pb->order;
+}
+
 static void stream_reprioritize_queue(void) {
     int begin = g_stream_gen_queue_index;
     if (begin < 0) begin = 0;
-    if (begin + 1 >= g_stream_gen_queue_count) return;
+    int count = g_stream_gen_queue_count - begin;
+    if (count <= 1) return;
 
-    for (int i = begin + 1; i < g_stream_gen_queue_count; i++) {
-        int cx = g_stream_gen_queue_cx[i];
-        int cz = g_stream_gen_queue_cz[i];
-        int score = stream_chunk_priority_score(cx, cz);
-        int j = i - 1;
-        while (j >= begin && stream_chunk_priority_score(g_stream_gen_queue_cx[j], g_stream_gen_queue_cz[j]) > score) {
-            g_stream_gen_queue_cx[j + 1] = g_stream_gen_queue_cx[j];
-            g_stream_gen_queue_cz[j + 1] = g_stream_gen_queue_cz[j];
-            j--;
-        }
-        g_stream_gen_queue_cx[j + 1] = cx;
-        g_stream_gen_queue_cz[j + 1] = cz;
+    StreamQueuePriorityEntry entries[STREAM_GEN_QUEUE_MAX];
+    if (count > STREAM_GEN_QUEUE_MAX) count = STREAM_GEN_QUEUE_MAX;
+    for (int i = 0; i < count; i++) {
+        int src = begin + i;
+        entries[i].cx = g_stream_gen_queue_cx[src];
+        entries[i].cz = g_stream_gen_queue_cz[src];
+        entries[i].score = stream_chunk_priority_score(entries[i].cx, entries[i].cz);
+        entries[i].order = i;
+    }
+    qsort(entries, (size_t)count, sizeof(entries[0]), stream_queue_priority_entry_cmp);
+    for (int i = 0; i < count; i++) {
+        int dst = begin + i;
+        g_stream_gen_queue_cx[dst] = entries[i].cx;
+        g_stream_gen_queue_cz[dst] = entries[i].cz;
     }
 }
 
@@ -9933,18 +9950,26 @@ static void process_stream_generation_queue(void) {
         return;
     }
 
-    static int s_stream_install_tick = 0;
-    /* During the loading screen we care more about entering the world quickly than
-       about hiding commit hitches, so install every ready chunk.  After gameplay
-       starts, keep the old throttle to avoid frame spikes while walking. */
+    /* Installs happen on the stream service thread, not the render/game thread.
+       The old runtime budget of 1 let the result ring sit full at 64 entries;
+       workers then blocked behind completed chunks while the player saw holes.
+       Use a small adaptive off-thread budget so installs keep up without changing
+       the final terrain/lighting/mesh output. */
     int initial_load = g_stream_generation_keep_completed ? 1 : 0;
-    int allow_install = 1;
-    (void)s_stream_install_tick;
-    if (allow_install) {
-        int max_install = initial_load ? 16 : 1;
-        pex_logf_trace("chunk stream async install tick queue=%d/%d budget=%d", g_stream_gen_queue_index, g_stream_gen_queue_count, max_install);
-        stream_async_install_ready(max_install);
+    int result_backlog = 0;
+    EnterCriticalSection(&g_stream_async_cs);
+    result_backlog = g_stream_async_result_count;
+    LeaveCriticalSection(&g_stream_async_cs);
+
+    int max_install = initial_load ? 32 : 3;
+    if (!initial_load) {
+        if (result_backlog >= 96) max_install = 12;
+        else if (result_backlog >= 48) max_install = 8;
+        else if (result_backlog >= 16) max_install = 5;
     }
+    pex_logf_trace("chunk stream async install tick queue=%d/%d results=%d budget=%d",
+                   g_stream_gen_queue_index, g_stream_gen_queue_count, result_backlog, max_install);
+    stream_async_install_ready(max_install);
     stream_async_submit_next();
 
     if (!stream_generation_active() && !g_stream_generation_keep_completed) {
