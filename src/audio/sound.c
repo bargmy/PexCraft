@@ -16,6 +16,8 @@ static double g_pex_last_missing_sound_notice = 0.0;
 /* pex_menu_music_start_once() uses the same sound backend as effects, but the
    menu track must be stoppable when the user enters/joins a world. */
 static int g_pex_menu_music_request = 0;
+static int g_pex_game_music_ticks_before = -1;
+static int g_pex_game_music_started = 0;
 
 static void pex_sound_make_key_from_rel(const char *rel, char *out, size_t cap) {
     char tmp[160];
@@ -853,47 +855,106 @@ static int pex_sound_record_dependency_report(char *out, size_t cap) { if (out &
 #endif
 
 
-static void pex_menu_music_start_once(void) {
-    if (g_opts.music <= 0.001f) return;
-    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], picked[MAX_PATHBUF];
-    int start = rand() & 3;
-    classic_resources_path(resources, sizeof(resources));
-    path_join(music, sizeof(music), resources, "music");
-    path_join(menu, sizeof(menu), music, "menu");
-    picked[0] = 0;
-    for (int i = 0; i < 4; ++i) {
-        char name[32];
-        snprintf(name, sizeof(name), "menu%d.ogg", ((start + i) & 3) + 1);
-        path_join(picked, sizeof(picked), menu, name);
-        if (file_exists(picked)) break;
-        picked[0] = 0;
+static int pex_background_music_playing(void) {
+#if defined(PEX_PLATFORM_SDL2)
+    if (g_pex_menu_music_channel < 0) return 0;
+    if (pMix_Playing && !pMix_Playing(g_pex_menu_music_channel)) {
+        g_pex_menu_music_channel = -1;
+        return 0;
     }
-    if (!picked[0]) {
-        char sounds[MAX_PATHBUF], music2[MAX_PATHBUF], menu_dir2[MAX_PATHBUF];
-        path_join(sounds, sizeof(sounds), resources, "sounds");
-        path_join(music2, sizeof(music2), sounds, "music");
-        path_join(menu_dir2, sizeof(menu_dir2), music2, "menu");
-        for (int i = 0; i < 4; ++i) {
-            char name[32];
-            snprintf(name, sizeof(name), "menu%d.ogg", ((start + i) & 3) + 1);
-            path_join(picked, sizeof(picked), menu_dir2, name);
-            if (file_exists(picked)) break;
-            picked[0] = 0;
-        }
+    return 1;
+#else
+    return g_pex_game_music_started || g_menu_music_started;
+#endif
+}
+
+static void pex_pick_music_file_from_list(const char **names, int count, const char *base_dir, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    if (!names || count <= 0 || !base_dir || !*base_dir) return;
+    int start = rand() % count;
+    for (int i = 0; i < count; ++i) {
+        const char *name = names[(start + i) % count];
+        if (!name || !*name) continue;
+        path_join(out, cap, base_dir, name);
+        if (file_exists(out)) return;
+        out[0] = 0;
     }
-    if (!picked[0]) return;
+}
+
+static int pex_play_background_music_file(const char *path) {
+    if (!path || !*path || g_opts.music <= 0.001f) return 0;
     float volume = g_opts.music;
     if (volume > 1.0f) volume = 1.0f;
     if (volume < 0.0f) volume = 0.0f;
     g_pex_menu_music_request = 1;
-    pex_sound_backend_play_file(picked, volume, 1.0f);
+    int ok = pex_sound_backend_play_file(path, volume, 1.0f);
     g_pex_menu_music_request = 0;
+    return ok;
+}
+
+static void pex_menu_music_start_once(void) {
+    static const char *menu_tracks[] = { "menu1.ogg", "menu2.ogg", "menu3.ogg", "menu4.ogg" };
+    if (g_opts.music <= 0.001f) return;
+    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], picked[MAX_PATHBUF];
+    classic_resources_path(resources, sizeof(resources));
+    path_join(music, sizeof(music), resources, "music");
+    path_join(menu, sizeof(menu), music, "menu");
+    pex_pick_music_file_from_list(menu_tracks, (int)ARRAY_COUNT(menu_tracks), menu, picked, sizeof(picked));
+    if (!picked[0]) return;
+    if (pex_play_background_music_file(picked)) g_menu_music_started = 1;
 }
 
 static void pex_menu_music_stop(void) {
     g_pex_menu_music_request = 0;
     g_menu_music_started = 0;
+    g_pex_game_music_started = 0;
     sound_backend_stop_menu_music();
+}
+
+static void pex_game_music_tick(void) {
+    static const char *overworld_tracks[] = {
+        "calm1.ogg", "calm2.ogg", "calm3.ogg",
+        "hal1.ogg", "hal2.ogg", "hal3.ogg", "hal4.ogg",
+        "nuance1.ogg", "nuance2.ogg",
+        "piano1.ogg", "piano2.ogg", "piano3.ogg"
+    };
+    static const char *nether_tracks[] = {
+        "nether/nether1.ogg", "nether/nether2.ogg", "nether/nether3.ogg", "nether/nether4.ogg"
+    };
+    static const char *creative_tracks[] = {
+        "creative/creative1.ogg", "creative/creative2.ogg", "creative/creative3.ogg",
+        "creative/creative4.ogg", "creative/creative5.ogg", "creative/creative6.ogg"
+    };
+    char resources[MAX_PATHBUF], music[MAX_PATHBUF], game[MAX_PATHBUF], picked[MAX_PATHBUF];
+
+    if (g_screen != SCREEN_INGAME || g_player_dead) return;
+    if (g_opts.music <= 0.001f) { pex_menu_music_stop(); return; }
+    if (pex_background_music_playing()) return;
+
+    if (g_pex_game_music_ticks_before < 0) g_pex_game_music_ticks_before = rand() % 12000;
+    if (g_pex_game_music_ticks_before > 0) { g_pex_game_music_ticks_before--; return; }
+
+    classic_resources_path(resources, sizeof(resources));
+    path_join(music, sizeof(music), resources, "music");
+    path_join(game, sizeof(game), music, "game");
+    picked[0] = 0;
+
+    if (g_current_dimension == PEX_DIM_NETHER) {
+        pex_pick_music_file_from_list(nether_tracks, (int)ARRAY_COUNT(nether_tracks), game, picked, sizeof(picked));
+    }
+    if (!picked[0] && player_is_creative()) {
+        pex_pick_music_file_from_list(creative_tracks, (int)ARRAY_COUNT(creative_tracks), game, picked, sizeof(picked));
+    }
+    if (!picked[0]) {
+        pex_pick_music_file_from_list(overworld_tracks, (int)ARRAY_COUNT(overworld_tracks), game, picked, sizeof(picked));
+    }
+    if (picked[0] && pex_play_background_music_file(picked)) {
+        g_pex_game_music_started = 1;
+        g_pex_game_music_ticks_before = (rand() % 12000) + 12000;
+    } else {
+        g_pex_game_music_ticks_before = 1200;
+    }
 }
 
 static void pex_sound_missing_notice_once(void) {
@@ -1032,14 +1093,10 @@ static const char *pex_block_step_sound_key(int id) {
 }
 
 static const char *pex_block_dig_sound_key(int id) {
-    const char *step = pex_block_step_sound_key(id);
-    if (!strncmp(step, "step.", 5)) {
-        if (!strcmp(step + 5, "cloth")) return "dig.cloth";
-        if (!strcmp(step + 5, "grass")) return "dig.grass";
-        if (!strcmp(step + 5, "gravel")) return "dig.gravel";
-        if (!strcmp(step + 5, "sand")) return "dig.sand";
-        if (!strcmp(step + 5, "stone")) return "dig.stone";
-        if (!strcmp(step + 5, "wood")) return "dig.wood";
-    }
-    return step;
+    /* Java 1.2.5 StepSound.getBreakSound() returns step.<name> for normal
+       blocks.  Only the glass StepSoundStone and sand StepSoundSand override
+       this.  Do not use the newer dig.* sounds for 1.2.5 mining feedback. */
+    if (id == BLOCK_GLASS || id == BLOCK_GLASS_PANE || id == BLOCK_GLOWSTONE) return "random.glass";
+    if (id == BLOCK_SAND || id == BLOCK_SOUL_SAND) return "step.gravel";
+    return pex_block_step_sound_key(id);
 }

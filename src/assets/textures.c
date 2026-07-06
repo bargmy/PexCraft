@@ -822,46 +822,77 @@ static int classic_sound_manifest_valid(const char *manifest, const char *root) 
         checked++;
     }
     fclose(f);
-    /* The filtered legacy set has hundreds of assets.  A tiny/old marker from
-       the old menu2-only downloader must not count as installed. */
-    return checked >= 400;
+    return checked > 0;
 }
 
-static int classic_sounds_installed(void) {
+static int classic_sound_marker_installed_mask(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return CLASSIC_AUDIO_ALL;
+#else
+    char marker[MAX_PATHBUF];
+    char text[256];
+    FILE *f;
+    classic_sound_marker_path(marker, sizeof(marker));
+    if (!file_exists(marker)) return 0;
+    f = fopen(marker, "r");
+    if (!f) return 0;
+    text[0] = 0;
+    if (!fgets(text, sizeof(text), f)) { fclose(f); return 0; }
+    if (strstr(text, "legacy-all-audio-v2")) { fclose(f); return CLASSIC_AUDIO_ALL; }
+    if (!strstr(text, "legacy-selected-audio-v3")) { fclose(f); return 0; }
+    while (fgets(text, sizeof(text), f)) {
+        if (!strncmp(text, "mask:", 5)) {
+            int mask = atoi(text + 5) & CLASSIC_AUDIO_ALL;
+            fclose(f);
+            return mask;
+        }
+    }
+    fclose(f);
+    return 0;
+#endif
+}
+
+static int classic_sounds_installed_mask(int mask) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    (void)mask;
     return 1;
 #else
     char marker[MAX_PATHBUF];
     char manifest[MAX_PATHBUF];
     char root[MAX_PATHBUF];
-    char text[128];
-    FILE *f;
-
+    int installed_mask;
+    if ((mask & CLASSIC_AUDIO_ALL) == 0) return 1;
     classic_resources_path(root, sizeof(root));
     classic_sound_marker_path(marker, sizeof(marker));
     classic_sound_manifest_path(manifest, sizeof(manifest));
     if (!file_exists(marker) || !file_exists(manifest)) return 0;
-    f = fopen(marker, "r");
-    if (!f) return 0;
-    text[0] = 0;
-    fgets(text, sizeof(text), f);
-    fclose(f);
-    if (!strstr(text, "legacy-no-game-music-v1")) return 0;
+    installed_mask = classic_sound_marker_installed_mask();
+    if ((installed_mask & mask) != (mask & CLASSIC_AUDIO_ALL)) return 0;
     return classic_sound_manifest_valid(manifest, root);
 #endif
 }
 
-static int classic_wants_sound_download(void) {
+static int classic_sounds_installed(void) {
+    return classic_sounds_installed_mask(CLASSIC_AUDIO_ALL);
+}
+
+static int classic_selected_audio_mask(void) {
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    return !classic_sounds_installed();
+    if (!g_opts.download_classic_sounds || g_opts.ignore_classic_sounds_warning) return 0;
+    return g_opts.classic_audio_mask & CLASSIC_AUDIO_ALL;
 #else
     return 0;
 #endif
 }
 
+static int classic_wants_sound_download(void) {
+    return classic_selected_audio_mask() != 0;
+}
+
 static int classic_resources_need_update(void) {
-    int missing_textures = !pack_is_installed() || pack_missing_required_textures();
-    int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
+    int missing_textures = g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures());
+    int audio_mask = classic_selected_audio_mask();
+    int missing_sounds = audio_mask && !classic_sounds_installed_mask(audio_mask);
     if (missing_textures && !g_opts.ignore_classic_resources_warning) return 1;
     if (missing_sounds) return 1;
     return 0;
@@ -872,12 +903,13 @@ static int should_show_pack_download_prompt(void) {
 }
 
 static void classic_resource_missing_summary(char *out, size_t cap) {
-    int missing_textures = !pack_is_installed() || pack_missing_required_textures();
-    int missing_sounds = classic_wants_sound_download() && !classic_sounds_installed();
-    if (missing_textures && missing_sounds) snprintf(out, cap, "Release textures and sounds should be downloaded.");
+    int missing_textures = g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures());
+    int audio_mask = classic_selected_audio_mask();
+    int missing_sounds = audio_mask && !classic_sounds_installed_mask(audio_mask);
+    if (missing_textures && missing_sounds) snprintf(out, cap, "Selected Release textures/audio should be downloaded.");
     else if (missing_textures) snprintf(out, cap, "Release textures should be downloaded.");
-    else if (missing_sounds) snprintf(out, cap, "Release sounds should be downloaded.");
-    else snprintf(out, cap, "Release resources are up to date.");
+    else if (missing_sounds) snprintf(out, cap, "Selected Release audio should be downloaded.");
+    else snprintf(out, cap, "Selected Release resources are up to date.");
 }
 
 static void add_builtin_classic_texture_pack(int *wanted) {
@@ -891,8 +923,8 @@ static void add_builtin_classic_texture_pack(int *wanted) {
     int installed = pack_is_installed();
     if (installed) {
         if (pack_missing_required_textures()) snprintf(e->desc2, sizeof(e->desc2), "Missing item/block/mob textures");
-        else if (classic_wants_sound_download() && !classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Missing Release sounds");
-        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Release textures + sounds");
+        else if (classic_wants_sound_download() && !classic_sounds_installed_mask(classic_selected_audio_mask())) snprintf(e->desc2, sizeof(e->desc2), "Missing Release audio");
+        else if (classic_sounds_installed()) snprintf(e->desc2, sizeof(e->desc2), "Release textures + audio");
         else snprintf(e->desc2, sizeof(e->desc2), "Downloaded from 1.2.5 client.jar");
     } else {
         snprintf(e->desc2, sizeof(e->desc2), "Click to download Release resources");

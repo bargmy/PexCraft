@@ -27,6 +27,7 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
     if (s == SCREEN_TITLE) {
+        if (old_screen == SCREEN_INGAME || old_screen == SCREEN_GENERATING || old_screen == SCREEN_CONNECTING) pex_menu_music_stop();
         if (!g_release_title_state_initialized || old_screen != SCREEN_TITLE) {
             release_title_state_enter();
             g_release_title_state_initialized = 1;
@@ -961,11 +962,28 @@ static void rebuild_screen(void) {
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 120 + 12, 150, 20, "Ignore", BUTTON_NORMAL);
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-        char snd_label[MAX_LABEL];
-        snprintf(snd_label, sizeof(snd_label), "Sounds: %s", g_opts.download_classic_sounds ? "ON" : "OFF");
-        add_button_full(2, g_gui_w / 2 - 100, g_gui_h / 4 + 112, 200, 20, snd_label, BUTTON_NORMAL);
-        add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 140, 150, 20, "Download", BUTTON_NORMAL);
-        add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 140, 150, 20, "Ignore", BUTTON_NORMAL);
+        char label[MAX_LABEL];
+        int mask = g_opts.download_classic_sounds ? (g_opts.classic_audio_mask & CLASSIC_AUDIO_ALL) : 0;
+        int all_on = g_opts.download_classic_textures && ((mask & CLASSIC_AUDIO_ALL) == CLASSIC_AUDIO_ALL);
+        snprintf(label, sizeof(label), "[%c] Select All", all_on ? 'X' : ' ');
+        add_button_full(10, g_gui_w / 2 - 155, g_gui_h / 4 + 78, 150, 20, label, BUTTON_NORMAL);
+        snprintf(label, sizeof(label), "[%c] Textures", g_opts.download_classic_textures ? 'X' : ' ');
+        add_button_full(11, g_gui_w / 2 + 5, g_gui_h / 4 + 78, 150, 20, label, BUTTON_NORMAL);
+        snprintf(label, sizeof(label), "[%c] Mob sounds", (mask & CLASSIC_AUDIO_MOBS) ? 'X' : ' ');
+        add_button_full(12, g_gui_w / 2 - 155, g_gui_h / 4 + 100, 150, 20, label, BUTTON_NORMAL);
+        snprintf(label, sizeof(label), "[%c] UI/Block sounds", (mask & CLASSIC_AUDIO_WORLD_UI) ? 'X' : ' ');
+        add_button_full(13, g_gui_w / 2 + 5, g_gui_h / 4 + 100, 150, 20, label, BUTTON_NORMAL);
+        snprintf(label, sizeof(label), "[%c] Music discs", (mask & CLASSIC_AUDIO_RECORDS) ? 'X' : ' ');
+        add_button_full(14, g_gui_w / 2 - 155, g_gui_h / 4 + 122, 150, 20, label, BUTTON_NORMAL);
+        snprintf(label, sizeof(label), "[%c] Main menu music", (mask & CLASSIC_AUDIO_MENU_MUSIC) ? 'X' : ' ');
+        add_button_full(15, g_gui_w / 2 + 5, g_gui_h / 4 + 122, 150, 20, label, BUTTON_NORMAL);
+        snprintf(label, sizeof(label), "[%c] In-game music", (mask & CLASSIC_AUDIO_GAME_MUSIC) ? 'X' : ' ');
+        add_button_full(16, g_gui_w / 2 - 155, g_gui_h / 4 + 144, 150, 20, label, BUTTON_NORMAL);
+        {
+            Button *dl = add_button_full(0, g_gui_w / 2 + 5, g_gui_h / 4 + 144, 150, 20, "Download selected", BUTTON_NORMAL);
+            dl->enabled = g_opts.download_classic_textures || mask != 0;
+        }
+        add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 170, 200, 20, "Play without selected", BUTTON_NORMAL);
 #else
         add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 4 + 120 + 12, 150, 20, "Download", BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 4 + 120 + 12, 150, 20, "Ignore", BUTTON_NORMAL);
@@ -1256,17 +1274,41 @@ static void on_button(Button *b) {
         }
     } else if (g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) {
         if (b->id == 0) {
+            int mask = g_opts.download_classic_sounds ? (g_opts.classic_audio_mask & CLASSIC_AUDIO_ALL) : 0;
+            if (!g_opts.download_classic_textures && mask == 0) return;
+            if (!g_opts.download_classic_textures) g_opts.ignore_classic_resources_warning = 1;
+            if (mask == 0) g_opts.ignore_classic_sounds_warning = 1;
+            save_options();
             pack_install_start();
-        } else if (b->id == 2) {
-            g_opts.download_classic_sounds = !g_opts.download_classic_sounds;
-            if (g_opts.download_classic_sounds) g_opts.ignore_classic_sounds_warning = 0;
+        } else if (b->id >= 10 && b->id <= 16) {
+            int bit = 0;
+            if (b->id == 10) {
+                int all_on = g_opts.download_classic_textures && g_opts.download_classic_sounds && ((g_opts.classic_audio_mask & CLASSIC_AUDIO_ALL) == CLASSIC_AUDIO_ALL);
+                g_opts.download_classic_textures = all_on ? 0 : 1;
+                g_opts.download_classic_sounds = all_on ? 0 : 1;
+                g_opts.classic_audio_mask = all_on ? 0 : CLASSIC_AUDIO_ALL;
+            } else if (b->id == 11) {
+                g_opts.download_classic_textures = !g_opts.download_classic_textures;
+                if (g_opts.download_classic_textures) g_opts.ignore_classic_resources_warning = 0;
+            } else {
+                if (b->id == 12) bit = CLASSIC_AUDIO_MOBS;
+                else if (b->id == 13) bit = CLASSIC_AUDIO_WORLD_UI;
+                else if (b->id == 14) bit = CLASSIC_AUDIO_RECORDS;
+                else if (b->id == 15) bit = CLASSIC_AUDIO_MENU_MUSIC;
+                else if (b->id == 16) bit = CLASSIC_AUDIO_GAME_MUSIC;
+                if (bit) {
+                    g_opts.classic_audio_mask ^= bit;
+                    g_opts.classic_audio_mask &= CLASSIC_AUDIO_ALL;
+                    g_opts.download_classic_sounds = g_opts.classic_audio_mask != 0;
+                    if (g_opts.download_classic_sounds) g_opts.ignore_classic_sounds_warning = 0;
+                }
+            }
             InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_UNKNOWN);
             save_options();
-            if (classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
-            else set_screen(pex_startup_screen());
+            set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
         } else {
             if (!pack_is_installed() || pack_missing_required_textures()) g_opts.ignore_classic_resources_warning = 1;
-            if (g_opts.download_classic_sounds && !classic_sounds_installed()) g_opts.ignore_classic_sounds_warning = 1;
+            if (classic_selected_audio_mask() && !classic_sounds_installed_mask(classic_selected_audio_mask())) g_opts.ignore_classic_sounds_warning = 1;
             save_options();
             set_screen(pex_startup_screen());
         }

@@ -404,6 +404,7 @@ static void draw_held_map_overlay(void) {
 
 static void draw_hud(void) {
     pex_sound_tick_record_stream();
+    pex_game_music_tick();
     int w = g_gui_w;
     int h = g_gui_h;
     int hotbar_x = w / 2 - 91;
@@ -1413,19 +1414,17 @@ static void draw_pack_download_prompt(void) {
     pack_install_start_size_fetch();
     classic_resource_missing_summary(summary, sizeof(summary));
     draw_default_bg();
-    draw_centered_text("Release Resources Required", g_gui_w / 2, g_gui_h / 4 - 60 + 18, 16777215);
-    draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 45, 16777215);
-    draw_text("Textures come from Minecraft 1.2.5 client.jar.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 61, 10526880);
+    draw_centered_text("Release Resources Download", g_gui_w / 2, g_gui_h / 4 - 60 + 14, 16777215);
+    draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 35, 16777215);
+    draw_text("Choose exactly which official Release assets to download.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 49, 10526880);
+    draw_text("Nothing downloads until you press Download selected.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 60, 10526880);
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    draw_text("Sounds come from legacy.json, excluding in-game songs.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
+    draw_text("Audio uses Mojang legacy.json and is saved by category.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 71, 10526880);
 #else
-    draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 72, 10526880);
+    draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 71, 10526880);
 #endif
     format_download_size(size_line, sizeof(size_line));
-    draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 89, 10526880);
-#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-    draw_text("Downloads sounds, records, UI, mobs, ambience, and menu music.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 100, 10526880);
-#endif
+    draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 88, 10526880);
     draw_all_buttons();
 }
 

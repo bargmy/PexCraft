@@ -324,12 +324,9 @@ int main(int argc, char **argv) {
     init_dirs();
     srand((unsigned int)time(NULL));
     load_options();
-    if (!pack_resources_install_blocking()) {
-        fprintf(stderr, "PexCraft could not download the required Release resources: %s\n",
-                g_classic_install_error[0] ? g_classic_install_error : "check your internet connection");
-        SDL_Quit();
-        return 1;
-    }
+    /* Never download Release resources silently on SDL2.  The main window is
+       created first, then SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT asks the player
+       before any network download starts. */
     char sound_dep_notice[MAX_LABEL * 3];
     if (!pex_sound_record_dependency_report(sound_dep_notice, sizeof(sound_dep_notice))) {
         char msg[MAX_LABEL * 4];

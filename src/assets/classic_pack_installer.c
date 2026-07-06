@@ -24,6 +24,9 @@ static void pack_install_reset_cancel(void) {
 
 static void pack_install_request_cancel(void) {
     InterlockedExchange(&g_classic_install_cancel_requested, 1);
+    g_opts.download_classic_sounds = 0;
+    g_opts.ignore_classic_sounds_warning = 1;
+    save_options();
     log_msg("Release resource download cancel requested");
 }
 
@@ -201,21 +204,20 @@ static unsigned long long file_size_bytes(const char *path) {
     return n > 0 ? (unsigned long long)n : 0ULL;
 }
 
-static int legacy_sound_path_is_valid(const char *path) {
+static int classic_audio_category_for_legacy_path(const char *path) {
     if (!path || !*path) return 0;
-    /* User-selected Release sound set: everything useful for effects, UI,
-       records, ambience, mobs, and main-menu music, but not background
-       in-game music.  The legacy index contains duplicate old/new roots
-       (sound/ and sounds/); those are deduped by output path below. */
-    if (!strncmp(path, "sounds/music/game/", 18)) return 0;
-    if (!strncmp(path, "music/", 6) && strncmp(path, "music/menu/", 11)) return 0;
-    if (!strncmp(path, "sounds/music/menu/", 18)) return 1;
-    if (!strncmp(path, "music/menu/", 11)) return 1;
-    if (!strncmp(path, "sounds/records/", 15)) return 1;
-    if (!strncmp(path, "records/", 8)) return 1;
-    if (!strncmp(path, "sound/", 6)) return 1;
-    if (!strncmp(path, "sounds/", 7)) return 1;
+    if (!strncmp(path, "sounds/music/menu/", 18) || !strncmp(path, "music/menu/", 11)) return CLASSIC_AUDIO_MENU_MUSIC;
+    if (!strncmp(path, "sounds/music/game/", 18)) return CLASSIC_AUDIO_GAME_MUSIC;
+    if (!strncmp(path, "music/", 6)) return CLASSIC_AUDIO_GAME_MUSIC;
+    if (!strncmp(path, "sounds/records/", 15) || !strncmp(path, "records/", 8)) return CLASSIC_AUDIO_RECORDS;
+    if (!strncmp(path, "sound/mob/", 10) || !strncmp(path, "sounds/mob/", 11)) return CLASSIC_AUDIO_MOBS;
+    if (!strncmp(path, "sound/", 6) || !strncmp(path, "sounds/", 7)) return CLASSIC_AUDIO_WORLD_UI;
     return 0;
+}
+
+static int legacy_sound_path_is_valid_for_mask(const char *path, int mask) {
+    int cat = classic_audio_category_for_legacy_path(path);
+    return cat != 0 && (mask & cat) != 0;
 }
 
 static void legacy_sound_make_output_path(const char *path, char *out, size_t cap) {
@@ -223,7 +225,9 @@ static void legacy_sound_make_output_path(const char *path, char *out, size_t ca
     out[0] = 0;
     if (!path || !*path) return;
     if (!strncmp(path, "sounds/music/menu/", 18)) snprintf(out, cap, "music/menu/%s", path + 18);
+    else if (!strncmp(path, "sounds/music/game/", 18)) snprintf(out, cap, "music/game/%s", path + 18);
     else if (!strncmp(path, "music/menu/", 11)) snprintf(out, cap, "%s", path);
+    else if (!strncmp(path, "music/", 6)) snprintf(out, cap, "music/game/%s", path + 6);
     else if (!strncmp(path, "sounds/records/", 15)) snprintf(out, cap, "streaming/%s", path + 15);
     else if (!strncmp(path, "records/", 8)) snprintf(out, cap, "streaming/%s", path + 8);
     else if (!strncmp(path, "sounds/", 7)) snprintf(out, cap, "sound/%s", path + 7);
@@ -246,7 +250,7 @@ static const char *json_find_token(const char *p, const char *end, const char *t
     return NULL;
 }
 
-static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAsset **out_assets, int *out_count, unsigned long long *out_size) {
+static int legacy_sound_parse_index(const char *json, size_t len, int audio_mask, ClassicSoundAsset **out_assets, int *out_count, unsigned long long *out_size) {
     const char *p = json;
     const char *end = json + len;
     int cap = 0, count = 0;
@@ -255,7 +259,7 @@ static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAs
     if (out_assets) *out_assets = NULL;
     if (out_count) *out_count = 0;
     if (out_size) *out_size = 0;
-    if (!json || len == 0) return 0;
+    if (!json || len == 0 || (audio_mask & CLASSIC_AUDIO_ALL) == 0) return 0;
 
     while (p < end) {
         const char *q = strchr(p, '"');
@@ -275,7 +279,7 @@ static int legacy_sound_parse_index(const char *json, size_t len, ClassicSoundAs
         if (key_len == 0 || key_len >= sizeof(key)) { p = r + 1; continue; }
         memcpy(key, q + 1, key_len); key[key_len] = 0;
         p = r + 1;
-        if (!legacy_sound_path_is_valid(key)) continue;
+        if (!legacy_sound_path_is_valid_for_mask(key, audio_mask)) continue;
         char out_rel[MAX_PATHBUF];
         legacy_sound_make_output_path(key, out_rel, sizeof(out_rel));
         if (!out_rel[0]) continue;
@@ -435,7 +439,7 @@ done:
 #endif
 }
 
-static int legacy_sound_index_download_size(unsigned long long *out_bytes, int *out_count) {
+static int legacy_sound_index_download_size(int audio_mask, unsigned long long *out_bytes, int *out_count) {
     char *json = NULL;
     size_t len = 0;
     unsigned long long total = 0;
@@ -444,7 +448,7 @@ static int legacy_sound_index_download_size(unsigned long long *out_bytes, int *
     if (out_bytes) *out_bytes = 0;
     if (out_count) *out_count = 0;
     if (!http_download_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) return 0;
-    ok = legacy_sound_parse_index(json, len, NULL, &count, &total);
+    ok = legacy_sound_parse_index(json, len, audio_mask, NULL, &count, &total);
     free(json);
     if (!ok) return 0;
     if (out_bytes) *out_bytes = total;
@@ -478,13 +482,13 @@ static DWORD WINAPI legacy_sound_download_worker(LPVOID arg) {
         done = (int)atomic_increment_int(&ctx->completed);
         pct = 5 + (int)(((unsigned long long)done * 90ULL) / (unsigned long long)(ctx->count > 0 ? ctx->count : 1));
         if (pct > 95) pct = 95;
-        snprintf(st, sizeof(st), "Downloading Release sounds %d/%d", done, ctx->count);
+        snprintf(st, sizeof(st), "Downloading Release audio %d/%d", done, ctx->count);
         pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, pct, st);
     }
     return 0;
 }
 
-static int legacy_sound_download_all(void) {
+static int legacy_sound_download_selected(int audio_mask) {
     char *json = NULL;
     size_t len = 0;
     ClassicSoundAsset *assets = NULL;
@@ -496,20 +500,21 @@ static int legacy_sound_download_all(void) {
     char root[MAX_PATHBUF];
     char marker[MAX_PATHBUF];
     int ok = 0;
+    int install_mask = (audio_mask | classic_sound_marker_installed_mask()) & CLASSIC_AUDIO_ALL;
     HANDLE threads[CLASSIC_SOUND_DOWNLOAD_THREADS];
     ClassicSoundDownloadCtx ctx;
 
     memset(threads, 0, sizeof(threads));
     memset(&ctx, 0, sizeof(ctx));
 
-    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading legacy sound index...");
+    pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 0, "Downloading legacy asset index...");
     if (!http_download_to_memory(CLASSIC_SOUNDS_INDEX_URL, &json, &len, 2u * 1024u * 1024u)) {
-        pack_install_fail("Could not download legacy sound index");
+        pack_install_fail("Could not download legacy asset index");
         return 0;
     }
-    if (!legacy_sound_parse_index(json, len, &assets, &count, &total)) {
+    if (!legacy_sound_parse_index(json, len, install_mask, &assets, &count, &total)) {
         free(json);
-        pack_install_fail("Could not find Release sounds in legacy sound index");
+        pack_install_fail("Could not find the selected Release audio in legacy asset index");
         return 0;
     }
     free(json);
@@ -528,7 +533,7 @@ static int legacy_sound_download_all(void) {
     if (worker_count < 1) worker_count = 1;
     {
         char st[MAX_LABEL];
-        snprintf(st, sizeof(st), "Downloading Release sounds 0/%d", count);
+        snprintf(st, sizeof(st), "Downloading Release audio 0/%d", count);
         pack_install_set_state(CLASSIC_INSTALL_DOWNLOADING, 5, st);
     }
 
@@ -550,7 +555,7 @@ static int legacy_sound_download_all(void) {
     if (InterlockedCompareExchange(&ctx.failed, 0, 0) || downloaded < count) {
         free(assets);
         if (pack_install_is_cancelled()) pack_install_fail("Download cancelled");
-        else pack_install_fail("Could not download Release sounds");
+        else pack_install_fail("Could not download Release audio");
         return 0;
     }
 
@@ -561,7 +566,7 @@ static int legacy_sound_download_all(void) {
         pxc_mkdirs_for_file(manifest);
         mf = fopen(manifest, "w");
         if (mf) {
-            fprintf(mf, "# PexCraft legacy-no-game-music-v1\n");
+            fprintf(mf, "# PexCraft legacy-selected-audio-v3\n");
             for (int i = 0; i < count; ++i) fprintf(mf, "asset|%s|%u|%s\n", assets[i].out_path, assets[i].size, assets[i].hash);
             fclose(mf);
         }
@@ -570,12 +575,12 @@ static int legacy_sound_download_all(void) {
     classic_sound_marker_path(marker, sizeof(marker));
     if (ok) {
         char text[192];
-        snprintf(text, sizeof(text), "PexCraft legacy-no-game-music-v1\nfiles:%d\nbytes:%llu\n", count, total);
+        snprintf(text, sizeof(text), "PexCraft legacy-selected-audio-v3\nmask:%d\nfiles:%d\nbytes:%llu\n", install_mask, count, total);
         ok = pxc_write_file_all(marker, (const unsigned char *)text, strlen(text));
     }
     free(assets);
     if (!ok) { pack_install_fail("Could not write sound install marker"); return 0; }
-    log_msg("Installed Release sounds with %d threads: %d files, %llu bytes", worker_count, downloaded, total);
+    log_msg("Installed selected Release audio mask %d with %d threads: %d files, %llu bytes", install_mask, worker_count, downloaded, total);
     pex_sound_rescan();
     return 1;
 }
@@ -657,8 +662,9 @@ static int pack_install_query_size_bytes(const char *url, unsigned long long *ou
 
 static DWORD WINAPI pack_install_size_worker(LPVOID unused) {
     (void)unused;
-    int need_textures = !pack_is_installed() || pack_missing_required_textures();
-    int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
+    int need_textures = g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures());
+    int audio_mask = classic_selected_audio_mask();
+    int need_sounds = audio_mask && !classic_sounds_installed_mask(audio_mask);
     int got_any = 0;
 
     InterlockedExchange(&g_classic_texture_download_size_bytes, need_textures ? 0 : -1);
@@ -679,11 +685,11 @@ static DWORD WINAPI pack_install_size_worker(LPVOID unused) {
     if (need_sounds) {
         unsigned long long sound_bytes = 0;
         int sound_count = 0;
-        if (legacy_sound_index_download_size(&sound_bytes, &sound_count) && sound_bytes > 0 && sound_bytes <= 0x7fffffffULL) {
+        if (legacy_sound_index_download_size(audio_mask, &sound_bytes, &sound_count) && sound_bytes > 0 && sound_bytes <= 0x7fffffffULL) {
             InterlockedExchange(&g_classic_sound_download_size_bytes, (LONG)sound_bytes);
             InterlockedExchange(&g_classic_sound_download_count, (LONG)sound_count);
             got_any = 1;
-            log_msg("Release sounds download size: %llu bytes (%d files)", sound_bytes, sound_count);
+            log_msg("Release audio download size: %llu bytes (%d files)", sound_bytes, sound_count);
         }
     } else {
         got_any = 1;
@@ -717,11 +723,15 @@ static void format_download_size(char *out, size_t cap) {
         else snprintf(tex_part, sizeof(tex_part), "Textures: unavailable");
 
 #if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
-        if (classic_sounds_installed()) snprintf(snd_part, sizeof(snd_part), "Release sounds: installed");
-        else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Release sounds: %.2f MB", (double)snd / (1024.0 * 1024.0));
-        else snprintf(snd_part, sizeof(snd_part), "Release sounds: unavailable");
+        {
+            int mask = classic_selected_audio_mask();
+            if (!mask) snprintf(snd_part, sizeof(snd_part), "Audio: none selected");
+            else if (classic_sounds_installed_mask(mask)) snprintf(snd_part, sizeof(snd_part), "Selected audio: installed");
+            else if (snd > 0) snprintf(snd_part, sizeof(snd_part), "Selected audio: %.2f MB", (double)snd / (1024.0 * 1024.0));
+            else snprintf(snd_part, sizeof(snd_part), "Selected audio: unavailable");
+        }
 #else
-        snprintf(snd_part, sizeof(snd_part), "Release sounds: unsupported");
+        snprintf(snd_part, sizeof(snd_part), "Release audio: unsupported");
 #endif
         snprintf(out, cap, "%s | %s", tex_part, snd_part);
         return;
@@ -878,8 +888,9 @@ static DWORD WINAPI pack_install_worker(LPVOID unused) {
     (void)unused;
     char zip_path[MAX_PATHBUF];
     char pack_dir[MAX_PATHBUF];
-    int need_textures = !pack_is_installed() || pack_missing_required_textures();
-    int need_sounds = classic_wants_sound_download() && !classic_sounds_installed();
+    int need_textures = g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures());
+    int audio_mask = classic_selected_audio_mask();
+    int need_sounds = audio_mask && !classic_sounds_installed_mask(audio_mask);
 
     pack_install_reset_cancel();
     ensure_dir(g_texpack_dir);
@@ -901,7 +912,7 @@ static DWORD WINAPI pack_install_worker(LPVOID unused) {
     }
 
     if (need_sounds) {
-        if (!legacy_sound_download_all()) return 0;
+        if (!legacy_sound_download_selected(classic_selected_audio_mask())) return 0;
     }
 
     pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Done!");
@@ -912,8 +923,8 @@ static int pack_resources_need_download(void) {
     int need_textures;
     int need_music;
     ensure_dir(g_texpack_dir);
-    need_textures = !pack_is_installed() || pack_missing_required_textures();
-    need_music = classic_wants_sound_download() && !classic_sounds_installed();
+    need_textures = g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures());
+    need_music = classic_selected_audio_mask() && !classic_sounds_installed_mask(classic_selected_audio_mask());
     return need_textures || need_music;
 }
 
@@ -927,8 +938,8 @@ static int pack_resources_install_blocking(void) {
     pack_asset_path(pack_dir, sizeof(pack_dir));
     snprintf(zip_path, sizeof(zip_path), "%s\\minecraft_1_2_5_client.zip", g_mc_dir);
 
-    need_textures = !pack_is_installed() || pack_missing_required_textures();
-    need_music = classic_wants_sound_download() && !classic_sounds_installed();
+    need_textures = g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures());
+    need_music = classic_selected_audio_mask() && !classic_sounds_installed_mask(classic_selected_audio_mask());
 
     if (!need_textures && !need_music) return 1;
 
@@ -940,7 +951,7 @@ static int pack_resources_install_blocking(void) {
         if (!pack_install_extract_archive(zip_path, pack_dir)) return 0;
     }
     if (need_music) {
-        if (!legacy_sound_download_all()) return 0;
+        if (!legacy_sound_download_selected(classic_selected_audio_mask())) return 0;
     }
 
     pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Release resources ready");

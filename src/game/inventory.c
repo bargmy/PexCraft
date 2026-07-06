@@ -5889,8 +5889,7 @@ static void break_target_block(void) {
     int break_meta = flat_get_meta(g_break_x, g_break_y, g_break_z);
     if (id == 0 || (id == BLOCK_BEDROCK && !player_is_creative())) return;
     player_add_exhaustion(0.025f);
-    if (id == BLOCK_GLASS) pex_sound_play_at("random.glass", (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 1.0f);
-    else pex_sound_play_at(pex_block_step_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
+    pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
 
     if (block_is_door_id(id)) {
         if (g_mp_connected) {
@@ -6049,7 +6048,7 @@ static void update_breaking(void) {
         /* Java PlayerControllerSP plays the step sound before incrementing
            blockDestroySoundCounter, so a newly-mined block gets feedback on the
            first damage tick and then every fourth tick. */
-        pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.50f, 0.8f);
+        pex_sound_play_at(pex_block_step_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.25f, 0.5f);
     }
     g_break_sound_counter += 1.0f;
 

@@ -473,6 +473,14 @@ typedef struct Button {
     char label[MAX_LABEL];
 } Button;
 
+
+#define CLASSIC_AUDIO_MOBS        0x01
+#define CLASSIC_AUDIO_WORLD_UI    0x02
+#define CLASSIC_AUDIO_RECORDS     0x04
+#define CLASSIC_AUDIO_MENU_MUSIC  0x08
+#define CLASSIC_AUDIO_GAME_MUSIC  0x10
+#define CLASSIC_AUDIO_ALL (CLASSIC_AUDIO_MOBS | CLASSIC_AUDIO_WORLD_UI | CLASSIC_AUDIO_RECORDS | CLASSIC_AUDIO_MENU_MUSIC | CLASSIC_AUDIO_GAME_MUSIC)
+
 typedef struct Options {
     float music;
     float sound;
@@ -489,7 +497,9 @@ typedef struct Options {
     int show_fps;
     int renderer_backend; /* RendererBackend saved to options.txt; restart required after changing */
     int ignore_classic_resources_warning;
+    int download_classic_textures;
     int download_classic_sounds;
+    int classic_audio_mask;
     int ignore_classic_sounds_warning;
     char skin[64]; /* selected texture-pack name, kept for old options.txt compatibility */
     char skin_path[MAX_PATHBUF];
@@ -2376,6 +2386,7 @@ static int pack_is_installed(void);
 static int pack_resources_install_blocking(void);
 static void pex_menu_music_start_once(void);
 static void pex_menu_music_stop(void);
+static void pex_game_music_tick(void);
 static int pack_missing_required_textures(void);
 static int classic_sounds_installed(void);
 static void pex_sound_rescan(void);

@@ -25,12 +25,16 @@ static void set_default_options(void) {
     g_selected_renderer_backend = g_opts.renderer_backend;
 #ifdef PEX_PLATFORM_PSP
     g_opts.ignore_classic_resources_warning = 1;
+    g_opts.download_classic_textures = 0;
     g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
     g_opts.ignore_classic_sounds_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
 #else
     g_opts.ignore_classic_resources_warning = 0;
+    g_opts.download_classic_textures = 1;
     g_opts.download_classic_sounds = 1;
+    g_opts.classic_audio_mask = CLASSIC_AUDIO_ALL;
     g_opts.ignore_classic_sounds_warning = 0;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "Default");
 #endif
@@ -92,7 +96,9 @@ static void load_options(void) {
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     g_opts.ignore_classic_resources_warning = 1;
+    g_opts.download_classic_textures = 0;
     g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
     g_opts.ignore_classic_sounds_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
     return;
@@ -124,7 +130,9 @@ static void load_options(void) {
         else if (!strcmp(k, "showFps") || !strcmp(k, "showFPSCounter")) g_opts.show_fps = !strcmp(v, "true");
         else if (!strcmp(k, "renderer") || !strcmp(k, "rendererBackend")) g_opts.renderer_backend = parse_renderer_backend(v);
         else if (!strcmp(k, "ignoreClassicResourcesWarning") || !strcmp(k, "ignoreClassicPackWarning")) g_opts.ignore_classic_resources_warning = !strcmp(v, "true");
+        else if (!strcmp(k, "downloadClassicTextures")) g_opts.download_classic_textures = !strcmp(v, "true");
         else if (!strcmp(k, "downloadClassicSounds")) g_opts.download_classic_sounds = !strcmp(v, "true");
+        else if (!strcmp(k, "classicAudioMask")) g_opts.classic_audio_mask = atoi(v);
         else if (!strcmp(k, "ignoreClassicSoundsWarning")) g_opts.ignore_classic_sounds_warning = !strcmp(v, "true");
         else if (!strcmp(k, "skin")) snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", v);
         else if (!strcmp(k, "skinPath")) snprintf(g_opts.skin_path, sizeof(g_opts.skin_path), "%s", v);
@@ -164,10 +172,14 @@ static void load_options(void) {
     if (g_opts.fov < 70.0f) g_opts.fov = 70.0f;
     if (g_opts.fov > 110.0f) g_opts.fov = 110.0f;
     if (g_opts.renderer_backend < 0 || g_opts.renderer_backend >= RENDERER_COUNT) g_opts.renderer_backend = RENDERER_OPENGL;
+    g_opts.classic_audio_mask &= CLASSIC_AUDIO_ALL;
+    if (g_opts.download_classic_sounds && g_opts.classic_audio_mask == 0) g_opts.download_classic_sounds = 0;
 #ifdef PEX_PLATFORM_PSP
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_opts.ignore_classic_resources_warning = 1;
+    g_opts.download_classic_textures = 0;
     g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
     g_opts.ignore_classic_sounds_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
 #endif
@@ -185,7 +197,9 @@ static void save_options(void) {
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     g_opts.ignore_classic_resources_warning = 1;
+    g_opts.download_classic_textures = 0;
     g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
     g_opts.ignore_classic_sounds_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
     return;
@@ -214,7 +228,9 @@ static void save_options(void) {
     fprintf(f, "showFps:%s\n", g_opts.show_fps ? "true" : "false");
     fprintf(f, "renderer:%s\n", renderer_backend_keys[(g_opts.renderer_backend >= 0 && g_opts.renderer_backend < RENDERER_COUNT) ? g_opts.renderer_backend : RENDERER_OPENGL]);
     fprintf(f, "ignoreClassicResourcesWarning:%s\n", g_opts.ignore_classic_resources_warning ? "true" : "false");
+    fprintf(f, "downloadClassicTextures:%s\n", g_opts.download_classic_textures ? "true" : "false");
     fprintf(f, "downloadClassicSounds:%s\n", g_opts.download_classic_sounds ? "true" : "false");
+    fprintf(f, "classicAudioMask:%d\n", g_opts.classic_audio_mask & CLASSIC_AUDIO_ALL);
     fprintf(f, "ignoreClassicSoundsWarning:%s\n", g_opts.ignore_classic_sounds_warning ? "true" : "false");
     fprintf(f, "skin:%s\n", g_opts.skin);
     fprintf(f, "skinPath:%s\n", g_opts.skin_path);

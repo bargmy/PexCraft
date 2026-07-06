@@ -526,7 +526,7 @@ static void pex_startup_download_update_ui(PexStartupDownloadDialog *ctx) {
         EnableWindow(ctx->download_button, FALSE);
         EnableWindow(ctx->quit_button, FALSE);
     } else {
-        SetWindowTextA(ctx->status_text, "Ready to download official Release textures and Moog City 2.");
+        SetWindowTextA(ctx->status_text, "Ready to download official Release textures and audio.");
         SetWindowTextA(ctx->download_button, "Download");
         EnableWindow(ctx->download_button, TRUE);
         SetWindowTextA(ctx->quit_button, "Quit");
@@ -584,11 +584,11 @@ static LRESULT CALLBACK startup_resource_wndproc(HWND hwnd, UINT msg, WPARAM wpa
             ctx->title = CreateWindowExA(0, "STATIC", "PexCraft needs Release resources", WS_CHILD | WS_VISIBLE,
                 20, 18, 460, 24, hwnd, NULL, g_inst, NULL);
             ctx->body = CreateWindowExA(0, "STATIC",
-                "This port downloads the official Minecraft 1.2.5 Release textures and only Moog City 2. Nothing is bundled in the executable.",
+                "This port downloads the official Minecraft 1.2.5 Release textures and audio. Nothing is bundled in the executable, and no download starts until you press Download.",
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 50, 460, 44, hwnd, NULL, g_inst, NULL);
             ctx->size_text = CreateWindowExA(0, "STATIC", "Download size: checking Mojang...",
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 98, 460, 20, hwnd, NULL, g_inst, NULL);
-            ctx->status_text = CreateWindowExA(0, "STATIC", "Ready to download official Release textures and Moog City 2.",
+            ctx->status_text = CreateWindowExA(0, "STATIC", "Ready to download official Release textures and audio.",
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 150, 460, 22, hwnd, NULL, g_inst, NULL);
             ctx->download_button = CreateWindowExA(0, "BUTTON", "Download", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 288, 186, 94, 28, hwnd, (HMENU)(INT_PTR)PEX_STARTUP_DL_BUTTON_DOWNLOAD, g_inst, NULL);
