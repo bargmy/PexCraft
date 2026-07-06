@@ -716,11 +716,22 @@ static float flat_light_level_brightness_base(int level, float base) {
     return (1.0f - inv) / (inv * 3.0f + 1.0f) * (1.0f - base) + base;
 }
 
+static int flat_dimension_has_sky(int dimension) {
+    return dimension == PEX_DIM_OVERWORLD;
+}
+
+static int flat_current_dimension_has_sky(void) {
+    return flat_dimension_has_sky(g_current_dimension);
+}
+
+static float flat_light_table_base_for_dimension(int dimension) {
+    /* Java-style provider brightness: Nether has no skylight, but it is not
+       pitch black.  Its WorldProvider uses a 0.1F base brightness table. */
+    return (dimension == PEX_DIM_NETHER) ? 0.1f : 0.0f;
+}
+
 static float flat_light_table_base(void) {
-    /* This client only has an overworld-like provider today.  Keeping the base
-       as a function makes the Nether 0.1F table a one-line change if dimensions
-       are added later. */
-    return 0.0f;
+    return flat_light_table_base_for_dimension(g_current_dimension);
 }
 
 static float flat_light_level_brightness(int level) {
@@ -988,6 +999,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     int h = y1 - y0 + 1;
     int d = z1 - z0 + 1;
     int cap = w * h * d;
+    int has_sky = flat_current_dimension_has_sky();
     unsigned char *sky = (unsigned char*)calloc((size_t)cap, 1);
     unsigned char *block = (unsigned char*)calloc((size_t)cap, 1);
     FlatLightQueueCell *q = (FlatLightQueueCell*)malloc(sizeof(FlatLightQueueCell) * (size_t)cap);
@@ -1005,7 +1017,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     int tail = 0;
     for (int z = z0; z <= z1; ++z) {
         for (int x = x0; x <= x1; ++x) {
-            int light = 15;
+            int light = has_sky ? 15 : 0;
             for (int y = y1; y >= y0; --y) {
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
                 int bid = flat_get_block(x, y, z);
@@ -1014,7 +1026,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
             }
         }
     }
-    if (propagate_sky) {
+    if (propagate_sky && has_sky) {
         tail = 0;
         for (int z = z0; z <= z1; ++z) {
             for (int x = x0; x <= x1; ++x) {
@@ -1117,7 +1129,7 @@ static void flat_relight_fast_surface_chunk(int cx, int cz) {
         int fz = flat_z_index(z);
         for (int x = x0; x <= x1; ++x) {
             int fx = flat_index(x);
-            int light = 15;
+            int light = flat_current_dimension_has_sky() ? 15 : 0;
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int yi = flat_y_index(y);
                 int id = g_flat_blocks[yi][fz][fx];
@@ -1136,11 +1148,12 @@ static void flat_relight_fast_surface_chunk(int cx, int cz) {
 }
 
 
-static void flat_compute_chunk_light(const unsigned char *buf, unsigned char *sky, unsigned char *block) {
+static void flat_compute_chunk_light(const unsigned char *buf, unsigned char *sky, unsigned char *block, int dimension) {
     if (!buf || !sky || !block) return;
+    int has_sky = flat_dimension_has_sky(dimension);
     for (int lx = 0; lx < 16; lx++) {
         for (int lz = 0; lz < 16; lz++) {
-            int light = 15;
+            int light = has_sky ? 15 : 0;
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int bi = flat_chunk_buf_index(lx, y, lz);
                 int id = buf[bi];
@@ -1216,7 +1229,7 @@ static void flat_reset_sky_light(int lcx, int lcz) {
             for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
                 int fx = x0 + lx;
                 int id = g_flat_blocks[yi][fz][fx];
-                g_flat_sky_light[yi][fz][fx] = 15;
+                g_flat_sky_light[yi][fz][fx] = flat_current_dimension_has_sky() ? 15 : 0;
                 g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
             }
         }
@@ -1233,6 +1246,7 @@ static void flat_apply_environment_light(int lcx, int lcz) {
 }
 
 static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
+    if (!flat_current_dimension_has_sky()) return 0;
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
     if (!g_flat_world_chunk_generated[lcz][lcx]) return 0;
     int x0 = g_flat_world_origin_x + lcx * FLAT_RENDER_CHUNK;
@@ -1353,6 +1367,7 @@ static int flat_can_block_see_sky_slow(int x, int y, int z) {
 }
 
 static int flat_compute_light_value_kind(int kind, int x, int y, int z) {
+    if (kind == FLAT_JAVA_LIGHT_KIND_SKY && !flat_current_dimension_has_sky()) return 0;
     int id = flat_get_block(x, y, z);
     int opacity = flat_light_opacity_for_id(id);
     if (opacity == 0) opacity = 1;
@@ -1719,12 +1734,12 @@ static int psp_safe_height_at(int x, int z, long long seed) {
 }
 #endif
 
-static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *out, unsigned char *out_meta, int world_type, long long seed, TerrainProvider *reuse_tp) {
+static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *out, unsigned char *out_meta, int world_type, long long seed, TerrainProvider *reuse_tp, int dimension) {
     if (!out) return;
     memset(out, 0, FLAT_CHUNK_BLOCK_COUNT);
     if (out_meta) memset(out_meta, 0, FLAT_CHUNK_BLOCK_COUNT);
 
-    if (g_current_dimension != 0) {
+    if (dimension != PEX_DIM_OVERWORLD) {
         unsigned char *beta_blocks = (unsigned char*)calloc(32768u, 1);
         unsigned char *beta_data = (unsigned char*)calloc(16384u, 1);
         unsigned char heightmap[256];
@@ -1733,7 +1748,7 @@ static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *ou
         memset(biome_array, 0, sizeof(biome_array));
 
         if (beta_blocks && beta_data) {
-            worldgen_generate_dimension_chunk_arrays(seed, g_current_dimension, cx, cz, beta_blocks, beta_data, heightmap, biome_array);
+            worldgen_generate_dimension_chunk_arrays(seed, dimension, cx, cz, beta_blocks, beta_data, heightmap, biome_array);
             for (int lx = 0; lx < 16; lx++) {
                 for (int lz = 0; lz < 16; lz++) {
                     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
@@ -1865,7 +1880,7 @@ static void flat_generate_chunk_base_with_meta(int cx, int cz, unsigned char *ou
 }
 
 static void flat_generate_chunk_base(int cx, int cz, unsigned char *out, int world_type, long long seed, TerrainProvider *reuse_tp) {
-    flat_generate_chunk_base_with_meta(cx, cz, out, NULL, world_type, seed, reuse_tp);
+    flat_generate_chunk_base_with_meta(cx, cz, out, NULL, world_type, seed, reuse_tp, g_current_dimension);
 }
 
 static void flat_generate_chunk_base_to_buffer(int cx, int cz, unsigned char *out) {
@@ -1961,7 +1976,7 @@ static void flat_load_chunk_delta(int cx, int cz) {
 }
 
 
-static void flat_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap, int create_dir) {
+static void flat_chunk_delta_path_for_dimension_dir(const char *world_dir, int dimension, int cx, int cz, char *out, size_t cap, int create_dir) {
     if (!world_dir || !world_dir[0]) {
         if (cap) out[0] = 0;
         return;
@@ -1970,14 +1985,18 @@ static void flat_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz,
     base36_i32(cx, bx, sizeof(bx));
     base36_i32(cz, bz, sizeof(bz));
     char dir[MAX_PATHBUF];
-    if (g_current_dimension == -1)
+    if (dimension == PEX_DIM_NETHER)
         snprintf(dir, sizeof(dir), "%s\\DIM-1\\chunks", world_dir);
-    else if (g_current_dimension == 1)
+    else if (dimension == PEX_DIM_END)
         snprintf(dir, sizeof(dir), "%s\\DIM1\\chunks", world_dir);
     else
         snprintf(dir, sizeof(dir), "%s\\chunks", world_dir);
     if (create_dir) make_dir_recursive(dir);
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
+}
+
+static void flat_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap, int create_dir) {
+    flat_chunk_delta_path_for_dimension_dir(world_dir, g_current_dimension, cx, cz, out, cap, create_dir);
 }
 
 static void flat_legacy_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz, char *out, size_t cap) {
@@ -1991,14 +2010,14 @@ static void flat_legacy_chunk_delta_path_for_dir(const char *world_dir, int cx, 
     snprintf(out, cap, "%s\\pexcraft_modified_chunks\\c.%s.%s.pcd", world_dir, bx, bz);
 }
 
-static void flat_load_chunk_delta_for_dir(const char *world_dir, int cx, int cz,
-                                                                unsigned char *buf, unsigned char *meta) {
+static void flat_load_chunk_delta_for_dimension_dir(const char *world_dir, int dimension, int cx, int cz,
+                                                                          unsigned char *buf, unsigned char *meta) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
-    (void)world_dir; (void)cx; (void)cz; (void)buf; (void)meta; return;
+    (void)world_dir; (void)dimension; (void)cx; (void)cz; (void)buf; (void)meta; return;
 #endif
     if (!world_dir || !world_dir[0] || !buf || !meta) return;
     char path[MAX_PATHBUF];
-    flat_chunk_delta_path_for_dir(world_dir, cx, cz, path, sizeof(path), 0);
+    flat_chunk_delta_path_for_dimension_dir(world_dir, dimension, cx, cz, path, sizeof(path), 0);
     FILE *f = fopen(path, "rb");
     if (!f) {
         flat_legacy_chunk_delta_path_for_dir(world_dir, cx, cz, path, sizeof(path));
@@ -2018,6 +2037,11 @@ static void flat_load_chunk_delta_for_dir(const char *world_dir, int cx, int cz,
         memset(meta, 0, FLAT_CHUNK_BLOCK_COUNT);
     }
     fclose(f);
+}
+
+static void flat_load_chunk_delta_for_dir(const char *world_dir, int cx, int cz,
+                                                                unsigned char *buf, unsigned char *meta) {
+    flat_load_chunk_delta_for_dimension_dir(world_dir, g_current_dimension, cx, cz, buf, meta);
 }
 
 static int g_copy_chunk_skip_main_light = 0;
@@ -2565,7 +2589,7 @@ static int beta_preview_copy_chunk_to_flat(int cx, int cz) {
     unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
     if (!buf || !meta) { free(buf); free(meta); return 0; }
     TerrainProvider *reuse = (g_world_type == 1) ? beta_stream_provider() : NULL;
-    flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse);
+    flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse, g_current_dimension);
     flat_copy_chunk_buffers(cx, cz, buf, meta);
     /* Overlay only gameplay edits.  Unchanged chunks live only as seed + coords. */
     flat_load_chunk_delta_for_dir(g_loaded_world_dir, cx, cz, buf, meta);
@@ -3057,7 +3081,7 @@ static void flat_generate_portal_travel_blocks(float px, float pz) {
     if (buf && meta) {
         for (int cz = min_cz; cz <= max_cz; ++cz) {
             for (int cx = min_cx; cx <= max_cx; ++cx) {
-                flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse);
+                flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse, g_current_dimension);
                 flat_load_chunk_delta_for_dir(g_loaded_world_dir, cx, cz, buf, meta);
                 flat_copy_chunk_buffers(cx, cz, buf, meta);
                 stream_mark_chunk_generated(stream_local_chunk_x(cx), stream_local_chunk_z(cz));
@@ -3079,6 +3103,7 @@ static void flat_relight_chunks_near(float px, float pz, int radius_chunks) {
     int pcz = floor_div16((int)floorf(pz));
     if (radius_chunks < 0) radius_chunks = 0;
     if (radius_chunks > 4) radius_chunks = 4;
+    int any = 0;
     for (int cz = pcz - radius_chunks; cz <= pcz + radius_chunks; ++cz) {
         for (int cx = pcx - radius_chunks; cx <= pcx + radius_chunks; ++cx) {
             int lcx = stream_local_chunk_x(cx);
@@ -3086,7 +3111,12 @@ static void flat_relight_chunks_near(float px, float pz, int radius_chunks) {
             if (!flat_local_chunk_valid(lcx, lcz)) continue;
             if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
             flat_relight_fast_surface_chunk(cx, cz);
+            any = 1;
         }
+    }
+    if (any) {
+        flat_mark_light_dirty_region((pcx - radius_chunks) * 16, (pcz - radius_chunks) * 16,
+                                     (pcx + radius_chunks) * 16 + 15, (pcz + radius_chunks) * 16 + 15);
     }
 }
 
@@ -3138,7 +3168,7 @@ static void flat_generate_traceplace_area(int center_wcx, int center_wcz, int ra
     if (buf && meta) {
         for (int cz = min_cz; cz <= max_cz; ++cz) {
             for (int cx = min_cx; cx <= max_cx; ++cx) {
-                flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse);
+                flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse, g_current_dimension);
                 flat_load_chunk_delta_for_dir(g_loaded_world_dir, cx, cz, buf, meta);
                 flat_copy_chunk_buffers(cx, cz, buf, meta);
                 stream_mark_chunk_generated(stream_local_chunk_x(cx), stream_local_chunk_z(cz));
@@ -8786,6 +8816,7 @@ static void flat_lighting_worker_shutdown(void) {
 typedef struct StreamAsyncJob {
     int cx, cz;
     int type;
+    int dimension;
     int epoch;
     long long seed;
     char world_dir[MAX_PATHBUF];
@@ -8939,7 +8970,7 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
         if (r.buf && r.meta && r.sky && r.blocklight) {
             TerrainProvider *reuse = NULL;
-            if (job.type == 1) {
+            if (job.type == 1 && job.dimension == PEX_DIM_OVERWORLD) {
                 if (!worker_tp_valid || worker_tp_seed != job.seed) {
                     if (worker_tp_valid && worker_tp) {
                         terrain_provider_free(worker_tp);
@@ -8957,9 +8988,9 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
                 }
                 reuse = worker_tp_valid ? worker_tp : NULL;
             }
-            flat_generate_chunk_base_with_meta(job.cx, job.cz, r.buf, r.meta, job.type, job.seed, reuse);
-            flat_load_chunk_delta_for_dir(job.world_dir, job.cx, job.cz, r.buf, r.meta);
-            flat_compute_chunk_light(r.buf, r.sky, r.blocklight);
+            flat_generate_chunk_base_with_meta(job.cx, job.cz, r.buf, r.meta, job.type, job.seed, reuse, job.dimension);
+            flat_load_chunk_delta_for_dimension_dir(job.world_dir, job.dimension, job.cx, job.cz, r.buf, r.meta);
+            flat_compute_chunk_light(r.buf, r.sky, r.blocklight, job.dimension);
         } else {
             stream_async_free_result_payload(&r);
         }
@@ -9077,6 +9108,7 @@ static void stream_async_submit_next(void) {
         job->cx = g_stream_gen_queue_cx[g_stream_gen_queue_index];
         job->cz = g_stream_gen_queue_cz[g_stream_gen_queue_index];
         job->type = g_world_type;
+        job->dimension = g_current_dimension;
         job->seed = g_world_seed;
         job->epoch = g_stream_generation_epoch;
         snprintf(job->world_dir, sizeof(job->world_dir), "%s", g_loaded_world_dir);
