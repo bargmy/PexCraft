@@ -4204,7 +4204,13 @@ static int dear_memories_use_book(ItemStack *held) {
     if (g_mp_connected || pex_net_is_connecting()) return 0;
     if (!stack_is_dear_memories_book(held)) return 0;
 
-    hud_add_chat("It was a fun time. Time flied so fast i couldnt even ask his name, but does it matter? did it matter at all? he was gonna leave someday anyway. but if you ever decided to read this, remember me, so i wouldnt be your forgotten memories.");
+    hud_add_chat("It was a fun time. Time flied so fast");
+    hud_add_chat("i couldnt even ask his name, but does");
+    hud_add_chat("it matter? did it matter at all? he");
+    hud_add_chat("was gonna leave someday anyway. but if");
+    hud_add_chat("you ever decided to read this, remember");
+    hud_add_chat("me, so i wouldnt be your forgotten");
+    hud_add_chat("memories.");
     hud_add_chat(" ");
     hud_add_chat("With love,");
     hud_add_chat("Dear Memories");
