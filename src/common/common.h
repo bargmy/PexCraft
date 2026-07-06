@@ -2391,6 +2391,8 @@ static void handle_grabbed_mouse_move(int px, int py);
 static void flat_world_reset_blocks(void);
 static void flat_center_origin_near(float px, float pz);
 static void flat_generate_origin_blocks(void);
+static void flat_generate_portal_travel_blocks(float px, float pz);
+static void flat_relight_chunks_near(float px, float pz, int radius_chunks);
 static void flat_prepare_initial_generation(void);
 static void flat_begin_initial_generation(void);
 static void flat_continue_initial_generation(void);

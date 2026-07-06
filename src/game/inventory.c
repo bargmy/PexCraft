@@ -1970,7 +1970,12 @@ static void flat_chunk_delta_path_for_dir(const char *world_dir, int cx, int cz,
     base36_i32(cx, bx, sizeof(bx));
     base36_i32(cz, bz, sizeof(bz));
     char dir[MAX_PATHBUF];
-    snprintf(dir, sizeof(dir), "%s\\chunks", world_dir);
+    if (g_current_dimension == -1)
+        snprintf(dir, sizeof(dir), "%s\\DIM-1\\chunks", world_dir);
+    else if (g_current_dimension == 1)
+        snprintf(dir, sizeof(dir), "%s\\DIM1\\chunks", world_dir);
+    else
+        snprintf(dir, sizeof(dir), "%s\\chunks", world_dir);
     if (create_dir) make_dir_recursive(dir);
     snprintf(out, cap, "%s\\c.%s.%s.dat", dir, bx, bz);
 }
@@ -2040,7 +2045,7 @@ static void flat_copy_chunk_buffers(int cx, int cz, const unsigned char *buf, co
     int lcz = stream_local_chunk_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
     if (!g_copy_chunk_skip_main_light) flat_relight_fast_surface_chunk(cx, cz);
-    if (flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
+    if (!g_copy_chunk_skip_main_light && flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
 }
 
 static void save_one_modified_flat_chunk(int lcx, int lcz) {
@@ -2290,6 +2295,8 @@ static void stream_mark_neighbor_dirty_if_border_changed(int src_cx, int src_cz,
     flat_mark_section_dirty(nx, nz, sy);
 }
 
+static int g_stream_suppress_generated_chunk_light_dirty = 0;
+
 static void stream_mark_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
@@ -2302,6 +2309,12 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
            rebuild from the settled world.  Running per-chunk light here was both
            slow and the source of mixed-brightness spawn chunks. */
         flat_publish_light_ready(lcx, lcz, 0, 1);
+    } else if (g_stream_suppress_generated_chunk_light_dirty) {
+        /* Portal travel installs a target-dimension neighborhood synchronously so
+           Teleporter-style search/create can run immediately.  Do not enqueue one
+           full lighting region per installed chunk here; that merged into a huge
+           32x32-window lighting pass and looked like a freeze right after entry. */
+        flat_publish_light_ready(lcx, lcz, 1, 1);
     } else {
         /* Runtime streaming may show a fast local light preview, but the expensive
            neighbor-aware pass is queued/batched for the lighting worker instead of
@@ -3003,6 +3016,78 @@ static void flat_generate_origin_blocks(void) {
     }
 
     flat_mark_all_chunks_dirty();
+}
+
+static void flat_generate_portal_travel_blocks(float px, float pz) {
+    /* Dimension travel must not rebuild/light the whole 32x32 active window on
+       the gameplay thread.  Install only the Teleporter search neighborhood
+       synchronously, then let normal streaming fill the rest of the window. */
+    flat_prepare_initial_generation();
+    stream_reset_initial_batch();
+
+    int pcx = floor_div16((int)floorf(px));
+    int pcz = floor_div16((int)floorf(pz));
+    int radius_chunks = (128 + 15) / 16 + 1; /* Nether portal search radius in chunks. */
+    if (radius_chunks < 9) radius_chunks = 9;
+
+    int base_cx = floor_div16(g_flat_world_origin_x);
+    int base_cz = floor_div16(g_flat_world_origin_z);
+    int min_cx = pcx - radius_chunks;
+    int max_cx = pcx + radius_chunks;
+    int min_cz = pcz - radius_chunks;
+    int max_cz = pcz + radius_chunks;
+    int window_max_cx = base_cx + FLAT_RENDER_CHUNKS - 1;
+    int window_max_cz = base_cz + FLAT_RENDER_CHUNKS - 1;
+    if (min_cx < base_cx) min_cx = base_cx;
+    if (min_cz < base_cz) min_cz = base_cz;
+    if (max_cx > window_max_cx) max_cx = window_max_cx;
+    if (max_cz > window_max_cz) max_cz = window_max_cz;
+
+    unsigned char *buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+    unsigned char *meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+    TerrainProvider *reuse = NULL;
+#if !(defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII))
+    reuse = (g_current_dimension == PEX_DIM_OVERWORLD && g_world_type == 1) ? beta_stream_provider() : NULL;
+#endif
+    int old_skip_light = g_copy_chunk_skip_main_light;
+    int old_suppress_light_dirty = g_stream_suppress_generated_chunk_light_dirty;
+    g_copy_chunk_skip_main_light = 1;
+    g_stream_suppress_generated_chunk_light_dirty = 1;
+
+    if (buf && meta) {
+        for (int cz = min_cz; cz <= max_cz; ++cz) {
+            for (int cx = min_cx; cx <= max_cx; ++cx) {
+                flat_generate_chunk_base_with_meta(cx, cz, buf, meta, g_world_type, g_world_seed, reuse);
+                flat_load_chunk_delta_for_dir(g_loaded_world_dir, cx, cz, buf, meta);
+                flat_copy_chunk_buffers(cx, cz, buf, meta);
+                stream_mark_chunk_generated(stream_local_chunk_x(cx), stream_local_chunk_z(cz));
+            }
+        }
+    }
+
+    g_copy_chunk_skip_main_light = old_skip_light;
+    g_stream_suppress_generated_chunk_light_dirty = old_suppress_light_dirty;
+    free(buf);
+    free(meta);
+
+    flat_mark_all_chunks_dirty();
+    pex_logf("dimension: portal travel preload chunks=%d..%d,%d..%d", min_cx, max_cx, min_cz, max_cz);
+}
+
+static void flat_relight_chunks_near(float px, float pz, int radius_chunks) {
+    int pcx = floor_div16((int)floorf(px));
+    int pcz = floor_div16((int)floorf(pz));
+    if (radius_chunks < 0) radius_chunks = 0;
+    if (radius_chunks > 4) radius_chunks = 4;
+    for (int cz = pcz - radius_chunks; cz <= pcz + radius_chunks; ++cz) {
+        for (int cx = pcx - radius_chunks; cx <= pcx + radius_chunks; ++cx) {
+            int lcx = stream_local_chunk_x(cx);
+            int lcz = stream_local_chunk_z(cz);
+            if (!flat_local_chunk_valid(lcx, lcz)) continue;
+            if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
+            flat_relight_fast_surface_chunk(cx, cz);
+        }
+    }
 }
 
 

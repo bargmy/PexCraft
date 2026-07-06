@@ -434,13 +434,16 @@ static void dimension_teleport_player(int target_dim) {
     g_player_motion_z = 0.0f;
     g_player_fall_distance = 0.0f;
 
-    /* Rebuild the active world window for the target dimension before portal
-       search/creation.  Marking meshes dirty only changed visuals; it left the
-       old dimension's block buffer in place, causing the Nether to look like
-       the Overworld with a red sky. */
+    /* Rebuild only the target portal neighborhood before search/creation.
+       Rebuilding and relighting the full 32x32 active window here could stall
+       the gameplay thread for tens of seconds right after the portal effect. */
     flat_center_origin_near(g_player_x, g_player_z);
-    flat_generate_origin_blocks();
-    flat_lighting_worker_wake();
+    if (target_dim == PEX_DIM_NETHER || target_dim == PEX_DIM_OVERWORLD) {
+        flat_generate_portal_travel_blocks(g_player_x, g_player_z);
+    } else {
+        flat_generate_origin_blocks();
+        flat_lighting_worker_wake();
+    }
 
     /* For Nether/Overworld transitions: find or create the destination portal. */
     if (target_dim == PEX_DIM_NETHER || target_dim == PEX_DIM_OVERWORLD) {
@@ -466,6 +469,13 @@ static void dimension_teleport_player(int target_dim) {
                                                   &dest.player_x, &dest.player_y, &dest.player_z);
             dimension_apply_portal_destination(&dest);
         }
+    }
+
+    /* Light only the arrival neighborhood immediately; regular streaming/lighting
+       can settle the rest after the player is already back in control. */
+    if (target_dim == PEX_DIM_NETHER || target_dim == PEX_DIM_OVERWORLD) {
+        flat_relight_chunks_near(g_player_x, g_player_z, 2);
+        flat_lighting_worker_wake();
     }
 
     /* Java keeps a short portal cooldown after travel so a player standing in
