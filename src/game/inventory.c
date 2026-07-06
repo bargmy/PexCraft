@@ -9149,8 +9149,12 @@ static void stream_async_submit_next(void) {
     if (!g_stream_async_event || g_stream_async_worker_count <= 0) return;
 
     int submitted = 0;
-    int job_backlog_limit = g_stream_generation_keep_completed ? STREAM_ASYNC_JOB_RING : g_stream_async_worker_count * 2;
-    if (job_backlog_limit < g_stream_async_worker_count) job_backlog_limit = g_stream_async_worker_count;
+    /* Runtime streaming should keep workers fed far enough ahead to satisfy
+       large render distances.  A workers*2 backlog was too shallow: at 8 chunks
+       the pool could drain the tiny job ring, then wait for the service thread
+       while the player saw holes.  This is still fully async and bounded. */
+    int job_backlog_limit = g_stream_generation_keep_completed ? STREAM_ASYNC_JOB_RING : g_stream_async_worker_count * 8;
+    if (job_backlog_limit < g_stream_async_worker_count * 2) job_backlog_limit = g_stream_async_worker_count * 2;
     if (job_backlog_limit > STREAM_ASYNC_JOB_RING) job_backlog_limit = STREAM_ASYNC_JOB_RING;
     EnterCriticalSection(&g_stream_async_cs);
     while (!g_stream_async_stop &&
@@ -9540,7 +9544,12 @@ static void stream_mark_chunk_dirty(int lcx, int lcz) {
 
 
 static int stream_queue_contains_chunk(int wcx, int wcz) {
-    for (int i = g_stream_gen_queue_index; i < g_stream_gen_queue_count; i++) {
+    /* Keep submitted chunks in the duplicate check until the current streaming
+       epoch is cleared.  When the visible-radius queue is refreshed while
+       workers are active, g_stream_gen_queue_index may already be past jobs
+       sitting in the worker ring.  Searching only the unsubmitted tail let those
+       chunks be appended again and wasted worker time. */
+    for (int i = 0; i < g_stream_gen_queue_count; i++) {
         if (g_stream_gen_queue_cx[i] == wcx && g_stream_gen_queue_cz[i] == wcz) return 1;
     }
     return 0;
@@ -9680,9 +9689,10 @@ static void stream_reprioritize_queue(void) {
     }
 }
 
-static int stream_queue_visible_chunks(void) {
-    stream_generation_queue_clear();
+static int stream_queue_visible_chunks_internal(int clear_existing) {
+    if (clear_existing) stream_generation_queue_clear();
 
+    int before_total = g_stream_gen_queue_count;
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
     int pcx = stream_local_chunk_x(floor_div16((int)floorf(g_player_x)));
@@ -9695,7 +9705,6 @@ static int stream_queue_visible_chunks(void) {
     int radius = stream_render_radius();
     stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, radius);
     for (int ring = 0; ring <= radius; ring++) {
-        int before = g_stream_gen_queue_count;
         for (int dz = -ring; dz <= ring; dz++) {
             for (int dx = -ring; dx <= ring; dx++) {
                 if (ring != 0 && abs(dx) != ring && abs(dz) != ring) continue;
@@ -9707,12 +9716,18 @@ static int stream_queue_visible_chunks(void) {
             }
         }
         /* Queue every missing visible ring now that chunk generation, full
-           light propagation, and section meshing have independent workers.
-           The old one-ring queue left high render-distance worlds with visible
-           holes until the whole previous ring completed. */
-        (void)before;
+           light propagation, and section meshing have independent workers. */
     }
-    return g_stream_gen_queue_count > 0;
+    if (g_stream_gen_queue_count > before_total) stream_reprioritize_queue();
+    return g_stream_gen_queue_count > g_stream_gen_queue_index;
+}
+
+static int stream_queue_visible_chunks(void) {
+    return stream_queue_visible_chunks_internal(1);
+}
+
+static int stream_append_visible_chunks(void) {
+    return stream_queue_visible_chunks_internal(0);
 }
 
 static void stream_queue_missing_chunks(int old_origin_x, int old_origin_z) {
@@ -9961,11 +9976,11 @@ static void process_stream_generation_queue(void) {
     result_backlog = g_stream_async_result_count;
     LeaveCriticalSection(&g_stream_async_cs);
 
-    int max_install = initial_load ? 32 : 3;
+    int max_install = initial_load ? 32 : 4;
     if (!initial_load) {
-        if (result_backlog >= 96) max_install = 12;
-        else if (result_backlog >= 48) max_install = 8;
-        else if (result_backlog >= 16) max_install = 5;
+        if (result_backlog >= 96) max_install = 16;
+        else if (result_backlog >= 48) max_install = 12;
+        else if (result_backlog >= 16) max_install = 8;
     }
     pex_logf_trace("chunk stream async install tick queue=%d/%d results=%d budget=%d",
                    g_stream_gen_queue_index, g_stream_gen_queue_count, result_backlog, max_install);
@@ -10154,10 +10169,20 @@ static int world_stream_service_active(void) {
 }
 
 static void update_infinite_world_streaming(void) {
-    /* Do a tiny amount of terrain generation per tick.  This is the important
-       part: new chunks are no longer built all at once on the frame that the
-       streaming message appears. */
-    process_stream_generation_queue();
+    /* Keep high render-distance streaming aligned to the current player chunk.
+       The previous scheduler returned as soon as any generation was active, so
+       with an 8+ chunk view distance the workers could keep finishing an old
+       queue while newly visible chunks around the player were not even queued
+       yet.  Refreshing/appending the visible radius here only mutates async
+       queues; terrain generation, lighting, and mesh work remain off the
+       main/render thread. */
+    int active_before = stream_generation_active();
+    if (active_before) {
+        stream_append_visible_chunks();
+        process_stream_generation_queue();
+    } else {
+        process_stream_generation_queue();
+    }
     if (stream_generation_active()) return;
 
     /* After the fast spawn-area load, fill the requested render-distance area
