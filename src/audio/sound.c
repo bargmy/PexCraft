@@ -170,6 +170,12 @@ typedef void (*PFN_Mix_Quit)(void);
 typedef void (*PFN_Mix_CloseAudio)(void);
 typedef int (*PFN_Mix_AllocateChannels)(int);
 typedef Mix_Chunk *(*PFN_Mix_LoadWAV_RW)(SDL_RWops *, int);
+typedef struct Mix_Music Mix_Music;
+typedef Mix_Music *(*PFN_Mix_LoadMUS)(const char *);
+typedef int (*PFN_Mix_PlayMusic)(Mix_Music *, int);
+typedef int (*PFN_Mix_HaltMusic)(void);
+typedef int (*PFN_Mix_VolumeMusic)(int);
+typedef void (*PFN_Mix_FreeMusic)(Mix_Music *);
 typedef int (*PFN_Mix_PlayChannel)(int, Mix_Chunk *, int);
 typedef int (*PFN_Mix_HaltChannel)(int);
 typedef int (*PFN_Mix_VolumeChunk)(Mix_Chunk *, int);
@@ -182,6 +188,11 @@ static PFN_Mix_Quit pMix_Quit = NULL;
 static PFN_Mix_CloseAudio pMix_CloseAudio = NULL;
 static PFN_Mix_AllocateChannels pMix_AllocateChannels = NULL;
 static PFN_Mix_LoadWAV_RW pMix_LoadWAV_RW = NULL;
+static PFN_Mix_LoadMUS pMix_LoadMUS = NULL;
+static PFN_Mix_PlayMusic pMix_PlayMusic = NULL;
+static PFN_Mix_HaltMusic pMix_HaltMusic = NULL;
+static PFN_Mix_VolumeMusic pMix_VolumeMusic = NULL;
+static PFN_Mix_FreeMusic pMix_FreeMusic = NULL;
 static PFN_Mix_PlayChannel pMix_PlayChannel = NULL;
 static PFN_Mix_HaltChannel pMix_HaltChannel = NULL;
 static PFN_Mix_VolumeChunk pMix_VolumeChunk = NULL;
@@ -189,6 +200,7 @@ static PFN_Mix_Volume pMix_Volume = NULL;
 static PFN_Mix_FreeChunk pMix_FreeChunk = NULL;
 static int g_mix_ready = 0;
 static int g_pex_menu_music_channel = -1;
+static Mix_Music *g_pex_record_music = NULL;
 
 typedef struct PexSoundChunkCache { char path[MAX_PATHBUF]; Mix_Chunk *chunk; } PexSoundChunkCache;
 #define PEX_SOUND_CHUNK_CACHE_MAX 128
@@ -235,6 +247,11 @@ static int pex_sound_backend_init(void) {
         pMix_CloseAudio = (PFN_Mix_CloseAudio)pex_sdl_load_mixer_symbol("Mix_CloseAudio");
         pMix_AllocateChannels = (PFN_Mix_AllocateChannels)pex_sdl_load_mixer_symbol("Mix_AllocateChannels");
         pMix_LoadWAV_RW = (PFN_Mix_LoadWAV_RW)pex_sdl_load_mixer_symbol("Mix_LoadWAV_RW");
+        pMix_LoadMUS = (PFN_Mix_LoadMUS)pex_sdl_load_mixer_symbol("Mix_LoadMUS");
+        pMix_PlayMusic = (PFN_Mix_PlayMusic)pex_sdl_load_mixer_symbol("Mix_PlayMusic");
+        pMix_HaltMusic = (PFN_Mix_HaltMusic)pex_sdl_load_mixer_symbol("Mix_HaltMusic");
+        pMix_VolumeMusic = (PFN_Mix_VolumeMusic)pex_sdl_load_mixer_symbol("Mix_VolumeMusic");
+        pMix_FreeMusic = (PFN_Mix_FreeMusic)pex_sdl_load_mixer_symbol("Mix_FreeMusic");
         pMix_PlayChannel = (PFN_Mix_PlayChannel)pex_sdl_load_mixer_symbol("Mix_PlayChannel");
         pMix_HaltChannel = (PFN_Mix_HaltChannel)pex_sdl_load_mixer_symbol("Mix_HaltChannel");
         pMix_VolumeChunk = (PFN_Mix_VolumeChunk)pex_sdl_load_mixer_symbol("Mix_VolumeChunk");
@@ -243,7 +260,7 @@ static int pex_sound_backend_init(void) {
         if (!pMix_OpenAudio || !pMix_LoadWAV_RW || !pMix_PlayChannel) { log_msg("Sound backend: SDL2_mixer missing required symbols"); return 0; }
     }
     SDL_InitSubSystem(SDL_INIT_AUDIO);
-    if (pMix_Init) pMix_Init(0x00000002); /* MIX_INIT_OGG */
+    if (pMix_Init) pMix_Init(0x00000002 | 0x00000008 | 0x00000010); /* MOD/MP3/OGG where supported. */
     if (pMix_OpenAudio(44100, AUDIO_S16SYS, 2, 1024) != 0) { log_msg("Sound backend: Mix_OpenAudio failed"); return 0; }
     if (pMix_AllocateChannels) pMix_AllocateChannels(32);
     g_mix_ready = 1;
@@ -327,6 +344,33 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return ch >= 0;
 }
 
+static void pex_sound_backend_stop_record(void) {
+    if (pMix_HaltMusic) pMix_HaltMusic();
+    if (g_pex_record_music && pMix_FreeMusic) pMix_FreeMusic(g_pex_record_music);
+    g_pex_record_music = NULL;
+}
+
+static int pex_sound_backend_play_record_file(const char *path, float volume) {
+    if (!path || !*path) return 0;
+    if (!pex_sound_backend_init()) return 0;
+    if (!pMix_LoadMUS || !pMix_PlayMusic) {
+        return pex_sound_backend_play_file(path, volume, 1.0f);
+    }
+    pex_sound_backend_stop_record();
+    Mix_Music *m = pMix_LoadMUS(path);
+    if (!m) return pex_sound_backend_play_file(path, volume, 1.0f);
+    int v = (int)(volume * 128.0f);
+    if (v < 0) v = 0;
+    if (v > 128) v = 128;
+    if (pMix_VolumeMusic) pMix_VolumeMusic(v);
+    if (pMix_PlayMusic(m, 0) != 0) {
+        if (pMix_FreeMusic) pMix_FreeMusic(m);
+        return 0;
+    }
+    g_pex_record_music = m;
+    return 1;
+}
+
 static void sound_backend_stop_menu_music(void) {
     if (pMix_HaltChannel && g_pex_menu_music_channel >= 0) {
         pMix_HaltChannel(g_pex_menu_music_channel);
@@ -336,6 +380,7 @@ static void sound_backend_stop_menu_music(void) {
 
 static void pex_sound_shutdown(void) {
     sound_backend_stop_menu_music();
+    pex_sound_backend_stop_record();
     for (int i = 0; i < g_sound_pitch_cache_count; ++i) {
         free(g_sound_pitch_cache[i].chunk.abuf);
         g_sound_pitch_cache[i].chunk.abuf = NULL;
@@ -560,12 +605,19 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     return 1;
 }
 
+static void pex_sound_backend_stop_record(void) { }
+
+static int pex_sound_backend_play_record_file(const char *path, float volume) {
+    return pex_sound_backend_play_file(path, volume, 1.0f);
+}
+
 static void sound_backend_stop_menu_music(void) {
     InterlockedIncrement((volatile LONG *)&g_pex_menu_music_stop_generation);
 }
 
 static void pex_sound_shutdown(void) {
     sound_backend_stop_menu_music();
+    pex_sound_backend_stop_record();
     for (int i = 0; i < g_win_sound_cache_count; ++i) {
         free(g_win_sound_cache[i].data);
         g_win_sound_cache[i].data = NULL;
@@ -577,6 +629,8 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     (void)path; (void)volume; (void)pitch;
     return 0;
 }
+static void pex_sound_backend_stop_record(void) { }
+static int pex_sound_backend_play_record_file(const char *path, float volume) { (void)path; (void)volume; return 0; }
 static void sound_backend_stop_menu_music(void) { }
 static void pex_sound_shutdown(void) { }
 #endif
@@ -616,6 +670,52 @@ static void pex_sound_missing_notice_once(void) {
     if (t - g_pex_last_missing_sound_notice < 8.0) return;
     g_pex_last_missing_sound_notice = t;
     log_msg("Sound requested but Moog City 2 is not installed or no OGG backend is available");
+}
+
+static float pex_record_volume_at(float x, float y, float z, float volume) {
+    float dx = x - g_player_x, dy = y - g_player_y, dz = z - g_player_z;
+    float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+    const float max_dist = 64.0f;
+    float atten = 1.0f - dist / max_dist;
+    if (atten <= 0.0f) return 0.0f;
+    if (atten > 1.0f) atten = 1.0f;
+    float final_volume = volume * atten * g_opts.music;
+    if (final_volume > 1.0f) final_volume = 1.0f;
+    if (final_volume < 0.0f) final_volume = 0.0f;
+    return final_volume;
+}
+
+static void pex_sound_stop_record(void) {
+    pex_sound_backend_stop_record();
+}
+
+static int pex_sound_play_record_file_at(const char *path, float x, float y, float z, float volume) {
+    if (!path || !*path) return 0;
+    if (g_opts.music <= 0.001f) return 0;
+    float final_volume = pex_record_volume_at(x, y, z, volume);
+    if (final_volume <= 0.001f) return 0;
+    if (!pex_sound_backend_play_record_file(path, final_volume)) {
+        pex_sound_missing_notice_once();
+        return 0;
+    }
+    return 1;
+}
+
+static int pex_sound_play_record_key_at(const char *key, float x, float y, float z, float volume) {
+    if (!key || !*key) return 0;
+    const char *path = pex_sound_find_file(key);
+    if (!path) { pex_sound_missing_notice_once(); return 0; }
+    return pex_sound_play_record_file_at(path, x, y, z, volume);
+}
+
+static int pex_sound_play_twoface_record_at(float x, float y, float z, float volume) {
+    char path[MAX_PATHBUF];
+    path_join(path, sizeof(path), g_mc_dir, "twoface.mp3");
+    if (!file_exists(path)) {
+        log_msg("Custom record missing: %s", path);
+        return 0;
+    }
+    return pex_sound_play_record_file_at(path, x, y, z, volume);
 }
 
 static void pex_sound_play(const char *key, float volume, float pitch) {

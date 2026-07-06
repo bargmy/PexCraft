@@ -785,7 +785,7 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
 }
 
 
-static void draw_hovering_text(const char *lines[], int line_count, int mx, int my) {
+static void draw_hovering_text_colored(const char *lines[], int line_count, int mx, int my, int first_color) {
     if (!lines || line_count <= 0) return;
     int width = 0;
     for (int i = 0; i < line_count; ++i) {
@@ -816,10 +816,31 @@ static void draw_hovering_text(const char *lines[], int line_count, int mx, int 
     draw_gradient(x - 3, y + h + 2, x + width + 3, y + h + 3, border2, border2);
 
     for (int i = 0; i < line_count; ++i) {
-        int color = (i == 0) ? 0xFFFFFF : 0xA0A0A0;
+        int color = (i == 0) ? first_color : 0xA0A0A0;
         draw_text(lines[i], x, y, color);
         if (i == 0) y += 2;
         y += 10;
+    }
+}
+
+static void draw_hovering_text(const char *lines[], int line_count, int mx, int my) {
+    draw_hovering_text_colored(lines, line_count, mx, my, 0xFFFFFF);
+}
+
+static int item_tooltip_first_line_color(const ItemStack *st) {
+    if (st && item_is_record_id(st->id)) return 0x55FFFF;
+    return 0xFFFFFF;
+}
+
+static void append_item_extra_tooltip_lines(const ItemStack *st, const char *lines[], int *line_count, char potion_lines[][96], int potion_cap) {
+    if (!st || !lines || !line_count) return;
+    if (item_is_record_id(st->id) && *line_count < 10) {
+        const char *rec = record_tooltip_line_for_id(st->id);
+        if (rec && rec[0]) lines[(*line_count)++] = rec;
+    }
+    if (st->id == ITEM_POTION) {
+        int n = pex_potion_tooltip_lines(st, potion_lines, potion_cap);
+        for (int i = 0; i < n && *line_count < 10; ++i) lines[(*line_count)++] = potion_lines[i];
     }
 }
 
@@ -842,10 +863,7 @@ static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
     int line_count = 0;
     lines[line_count++] = name;
 
-    if (st->id == ITEM_POTION) {
-        int n = pex_potion_tooltip_lines(st, potion_lines, 8);
-        for (int i = 0; i < n && line_count < 10; ++i) lines[line_count++] = potion_lines[i];
-    }
+    append_item_extra_tooltip_lines(st, lines, &line_count, potion_lines, 8);
 
     int max_damage = item_max_damage(st->id);
     char durability[64];
@@ -856,7 +874,7 @@ static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
         lines[line_count++] = durability;
     }
 
-    draw_hovering_text(lines, line_count, mx, my);
+    draw_hovering_text_colored(lines, line_count, mx, my, item_tooltip_first_line_color(st));
 }
 
 static void draw_hovered_item_tooltip(void) {
@@ -931,11 +949,8 @@ static void draw_creative_tooltip(int mx, int my) {
                 char potion_lines[8][96];
                 int line_count = 0;
                 lines[line_count++] = name;
-                if (g_inventory[hb].id == ITEM_POTION) {
-                    int n = pex_potion_tooltip_lines(&g_inventory[hb], potion_lines, 8);
-                    for (int i = 0; i < n && line_count < 10; ++i) lines[line_count++] = potion_lines[i];
-                }
-                draw_hovering_text(lines, line_count, mx, my);
+                append_item_extra_tooltip_lines(&g_inventory[hb], lines, &line_count, potion_lines, 8);
+                draw_hovering_text_colored(lines, line_count, mx, my, item_tooltip_first_line_color(&g_inventory[hb]));
             }
         }
         return;
@@ -947,11 +962,8 @@ static void draw_creative_tooltip(int mx, int my) {
         char potion_lines[8][96];
         int line_count = 0;
         lines[line_count++] = name;
-        if (st.id == ITEM_POTION) {
-            int n = pex_potion_tooltip_lines(&st, potion_lines, 8);
-            for (int i = 0; i < n && line_count < 10; ++i) lines[line_count++] = potion_lines[i];
-        }
-        draw_hovering_text(lines, line_count, mx, my);
+        append_item_extra_tooltip_lines(&st, lines, &line_count, potion_lines, 8);
+        draw_hovering_text_colored(lines, line_count, mx, my, item_tooltip_first_line_color(&st));
     }
 }
 

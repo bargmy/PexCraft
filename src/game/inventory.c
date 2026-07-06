@@ -28,7 +28,7 @@ static int stack_limit_for_id(int id) {
         id == ITEM_SHEARS || id == ITEM_POTION || id == ITEM_EXP_BOTTLE ||
         id == ITEM_RECORD13 || id == ITEM_RECORD_CAT || id == ITEM_RECORD_BLOCKS || id == ITEM_RECORD_CHIRP ||
         id == ITEM_RECORD_FAR || id == ITEM_RECORD_MALL || id == ITEM_RECORD_MELLOHI || id == ITEM_RECORD_STAL ||
-        id == ITEM_RECORD_STRAD || id == ITEM_RECORD_WARD || id == ITEM_RECORD_11) return 1;
+        id == ITEM_RECORD_STRAD || id == ITEM_RECORD_WARD || id == ITEM_RECORD_11 || id == ITEM_RECORD_TWOFACE) return 1;
     if (id == ITEM_SNOWBALL || id == ITEM_EGG || id == ITEM_ENDER_PEARL) return 16;
     (void)id;
     return ITEM_MAX_STACK;
@@ -86,7 +86,7 @@ static const int g_creative_items_125[] = {
     ITEM_ENDER_PEARL, ITEM_BLAZE_ROD, ITEM_GHAST_TEAR, ITEM_GOLD_NUGGET, ITEM_NETHER_WART, ITEM_GLASS_BOTTLE, ITEM_SPIDER_EYE, ITEM_FERMENTED_SPIDER_EYE,
     ITEM_BLAZE_POWDER, ITEM_MAGMA_CREAM, ITEM_BREWING_STAND, ITEM_CAULDRON, ITEM_EYE_OF_ENDER, ITEM_SPECKLED_MELON, ITEM_EXP_BOTTLE, ITEM_FIREBALL_CHARGE,
     ITEM_RECORD13, ITEM_RECORD_CAT, ITEM_RECORD_BLOCKS, ITEM_RECORD_CHIRP, ITEM_RECORD_FAR, ITEM_RECORD_MALL, ITEM_RECORD_MELLOHI, ITEM_RECORD_STAL,
-    ITEM_RECORD_STRAD, ITEM_RECORD_WARD, ITEM_RECORD_11
+    ITEM_RECORD_STRAD, ITEM_RECORD_WARD, ITEM_RECORD_11, ITEM_RECORD_TWOFACE
 };
 
 static const int g_creative_spawn_egg_damage_125[] = {
@@ -7377,7 +7377,34 @@ static int block_is_rail_id(int id) {
 }
 
 static int item_is_record_id(int id) {
-    return id >= ITEM_RECORD13 && id <= ITEM_RECORD_11;
+    return (id >= ITEM_RECORD13 && id <= ITEM_RECORD_11) || id == ITEM_RECORD_TWOFACE;
+}
+
+
+static const char *record_name_for_id(int id) {
+    switch (id) {
+        case ITEM_RECORD13: return "13";
+        case ITEM_RECORD_CAT: return "cat";
+        case ITEM_RECORD_BLOCKS: return "blocks";
+        case ITEM_RECORD_CHIRP: return "chirp";
+        case ITEM_RECORD_FAR: return "far";
+        case ITEM_RECORD_MALL: return "mall";
+        case ITEM_RECORD_MELLOHI: return "mellohi";
+        case ITEM_RECORD_STAL: return "stal";
+        case ITEM_RECORD_STRAD: return "strad";
+        case ITEM_RECORD_WARD: return "ward";
+        case ITEM_RECORD_11: return "11";
+        default: return NULL;
+    }
+}
+
+static const char *record_tooltip_line_for_id(int id) {
+    static char line[96];
+    if (id == ITEM_RECORD_TWOFACE) return "wowaka - 裏表ラバーズ";
+    const char *name = record_name_for_id(id);
+    if (!name) return NULL;
+    snprintf(line, sizeof(line), "C418 - %s", name);
+    return line;
 }
 
 static const char *record_sound_key(int id) {
@@ -7478,8 +7505,13 @@ static int jukebox_insert_record(int x, int y, int z, int record_item) {
     if (!jt) return 0;
     jt->record_item = record_item;
     flat_set_meta_raw(x, y, z, 1); /* Java BlockJukeBox stores 1 in block metadata; record id is in its tile entity. */
-    const char *snd = record_sound_key(record_item);
-    if (snd) pex_sound_play_at(snd, (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 4.0f, 1.0f);
+    const float sx = (float)x + 0.5f, sy = (float)y + 0.5f, sz = (float)z + 0.5f;
+    if (record_item == ITEM_RECORD_TWOFACE) {
+        pex_sound_play_twoface_record_at(sx, sy, sz, 4.0f);
+    } else {
+        const char *snd = record_sound_key(record_item);
+        if (snd) pex_sound_play_record_key_at(snd, sx, sy, sz, 4.0f);
+    }
     g_save_dirty = 1;
     return 1;
 }
@@ -7489,9 +7521,12 @@ static int jukebox_eject_record(int x, int y, int z) {
     JukeboxTile *jt = jukebox_find_tile(x, y, z, 0);
     int rec = jt ? jt->record_item : 0;
     if (!item_is_record_id(rec)) return 0;
-    const char *snd = record_sound_key(rec);
-    if (snd) pex_sound_play_at(snd, (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.0f, 1.0f);
-    spawn_item_stack((float)x + 0.5f, (float)y + 1.0f, (float)z + 0.5f, make_stack(rec, 1, 0), 0);
+    pex_sound_stop_record();
+    float r = 0.7f;
+    float ox = ((float)rand() / (float)RAND_MAX) * r + (1.0f - r) * 0.5f;
+    float oy = ((float)rand() / (float)RAND_MAX) * r + (1.0f - r) * 0.2f + 0.6f;
+    float oz = ((float)rand() / (float)RAND_MAX) * r + (1.0f - r) * 0.5f;
+    spawn_item_stack((float)x + ox, (float)y + oy, (float)z + oz, make_stack(rec, 1, 0), 1);
     if (jt) memset(jt, 0, sizeof(*jt));
     flat_set_meta_raw(x, y, z, 0);
     g_save_dirty = 1;

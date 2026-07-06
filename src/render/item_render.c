@@ -144,6 +144,7 @@ static int item_icon_tile(int id) {
         case ITEM_RECORD_STRAD: return 248;
         case ITEM_RECORD_WARD: return 249;
         case ITEM_RECORD_11: return 250;
+        case ITEM_RECORD_TWOFACE: return 250;
         default: return 0;
     }
 
@@ -1092,10 +1093,7 @@ static const char *item_display_name(int id) {
     if (id == ITEM_MONSTER_PLACER) return "Spawn Egg";
     if (id == ITEM_EXP_BOTTLE) return "Bottle o' Enchanting";
     if (id == ITEM_FIREBALL_CHARGE) return "Fire Charge";
-    if (id == ITEM_RECORD13 || id == ITEM_RECORD_CAT || id == ITEM_RECORD_BLOCKS ||
-        id == ITEM_RECORD_CHIRP || id == ITEM_RECORD_FAR || id == ITEM_RECORD_MALL ||
-        id == ITEM_RECORD_MELLOHI || id == ITEM_RECORD_STAL || id == ITEM_RECORD_STRAD ||
-        id == ITEM_RECORD_WARD || id == ITEM_RECORD_11) return "Music Disc";
+    if (item_is_record_id(id)) return "Music Disc";
     return "";
 }
 

@@ -1394,6 +1394,7 @@ typedef enum PexDimension {
 #define ITEM_RECORD_STRAD 2264
 #define ITEM_RECORD_WARD 2265
 #define ITEM_RECORD_11 2266
+#define ITEM_RECORD_TWOFACE 2267
 /* Legacy/alias IDs kept so old save/tool code still compiles while the Java names are available. */
 #define BLOCK_WOOD_PLANKS BLOCK_PLANKS
 #define BLOCK_NOTE BLOCK_NOTE_BLOCK
