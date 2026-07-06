@@ -2968,9 +2968,12 @@ static void flat_generate_origin_blocks(void) {
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
 
-    if (g_world_type == 1) {
+    if (g_world_type == 1 && g_current_dimension == PEX_DIM_OVERWORLD) {
         /* Exact same Beta 1.0 generator as before.  The difference is that the
-           result is not saved unless gameplay edits the chunk. */
+           result is not saved unless gameplay edits the chunk.  Only use this
+           Overworld batch path in the Overworld; Nether/End chunks must go
+           through flat_generate_chunk_base_to_buffer(), which dispatches to the
+           dimension generator. */
         beta_preview_generate_world();
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++)
             for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++) {

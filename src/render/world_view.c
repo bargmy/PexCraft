@@ -5,6 +5,9 @@ static void draw_item3d_from_texture(Texture *atlas, int tile);
 static void setup_world_projection(void);
 static void apply_view_bobbing(float partial);
 static void apply_hurt_camera_effect(float partial);
+static void apply_portal_camera_effect(float partial);
+static void update_portal_texture_animation(void);
+static void draw_portal_overlay(void);
 
 typedef struct PexSkyJavaRandom {
     uint64_t seed;
@@ -990,6 +993,7 @@ static void apply_player_camera(float partial) {
 
     apply_hurt_camera_effect(partial);
     apply_view_bobbing(partial);
+    apply_portal_camera_effect(partial);
 
     if (g_third_person_view) {
         /* Java 1.2.5 EntityRenderer.orientCamera semantics:
@@ -1033,6 +1037,141 @@ static void terrain_tile_uv(int tile, float *u0, float *v0, float *u1, float *v1
     *v0 = ((float)ty + 0.01f) / th;
     *u1 = ((float)tx + 15.99f) / tw;
     *v1 = ((float)ty + 15.99f) / th;
+}
+
+#define PEX_PORTAL_TILE 14
+#define PEX_PORTAL_FRAME_COUNT 32
+static unsigned char g_portal_anim_frames[PEX_PORTAL_FRAME_COUNT][16 * 16 * 4];
+static int g_portal_anim_ready = 0;
+static int g_portal_uploaded_frame = -1;
+static unsigned char *g_portal_uploaded_rgba = NULL;
+static int g_portal_uploaded_w = 0;
+static int g_portal_uploaded_h = 0;
+static int g_portal_anim_terrain_dirty = 0;
+
+static int pex_portal_clamp_u8(int v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return v;
+}
+
+static void pex_portal_build_frames(void) {
+    if (g_portal_anim_ready) return;
+    PexSkyJavaRandom rng;
+    pex_sky_java_random_set_seed(&rng, 100LL);
+    const float pi = 3.14159265358979323846f;
+    for (int frame = 0; frame < PEX_PORTAL_FRAME_COUNT; ++frame) {
+        for (int y = 0; y < 16; ++y) {
+            for (int x = 0; x < 16; ++x) {
+                float accum = 0.0f;
+                for (int layer = 0; layer < 2; ++layer) {
+                    float cx = (float)(layer * 16) * 0.5f;
+                    float cy = (float)(layer * 16) * 0.5f;
+                    float dx = ((float)x - cx) / 16.0f * 2.0f;
+                    float dy = ((float)y - cy) / 16.0f * 2.0f;
+                    if (dx < -1.0f) dx += 2.0f;
+                    if (dx >= 1.0f) dx -= 2.0f;
+                    if (dy < -1.0f) dy += 2.0f;
+                    if (dy >= 1.0f) dy -= 2.0f;
+                    float d2 = dx * dx + dy * dy;
+                    float spin = atan2f(dy, dx) + (((float)frame / 32.0f) * pi * 2.0f - d2 * 10.0f + (float)(layer * 2)) * (float)(layer * 2 - 1);
+                    float wave = (sinf(spin) + 1.0f) * 0.5f;
+                    accum += (wave / (d2 + 1.0f)) * 0.5f;
+                }
+                accum += pex_sky_java_random_next_float(&rng) * 0.1f;
+                int b = (int)(accum * 100.0f + 155.0f);
+                int r = (int)(accum * accum * 200.0f + 55.0f);
+                int g = (int)(accum * accum * accum * accum * 255.0f);
+                int a = (int)(accum * 100.0f + 155.0f);
+                unsigned char *dst = &g_portal_anim_frames[frame][(y * 16 + x) * 4];
+                dst[0] = (unsigned char)pex_portal_clamp_u8(r);
+                dst[1] = (unsigned char)pex_portal_clamp_u8(g);
+                dst[2] = (unsigned char)pex_portal_clamp_u8(b);
+                dst[3] = (unsigned char)pex_portal_clamp_u8(a);
+            }
+        }
+    }
+    g_portal_anim_ready = 1;
+}
+
+static void update_portal_texture_animation(void) {
+    if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return;
+    int tx = (PEX_PORTAL_TILE & 15) * 16;
+    int ty = (PEX_PORTAL_TILE >> 4) * 16;
+    if (tx + 16 > tex_terrain.w || ty + 16 > tex_terrain.h) return;
+    pex_portal_build_frames();
+    int frame = (g_ingame_ticks + 1) & (PEX_PORTAL_FRAME_COUNT - 1);
+    if (frame == g_portal_uploaded_frame && g_portal_uploaded_rgba == tex_terrain.rgba &&
+        g_portal_uploaded_w == tex_terrain.w && g_portal_uploaded_h == tex_terrain.h) {
+        return;
+    }
+    const unsigned char *src = g_portal_anim_frames[frame];
+    for (int y = 0; y < 16; ++y) {
+        unsigned char *dst = &tex_terrain.rgba[((ty + y) * tex_terrain.w + tx) * 4];
+        memcpy(dst, src + y * 16 * 4, 16u * 4u);
+    }
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
+    g_portal_anim_terrain_dirty = 1; /* force direct backends to rebuild their terrain texture from the updated CPU atlas */
+    g_portal_uploaded_frame = frame;
+    g_portal_uploaded_rgba = tex_terrain.rgba;
+    g_portal_uploaded_w = tex_terrain.w;
+    g_portal_uploaded_h = tex_terrain.h;
+}
+
+static float portal_interpolated_amount(float partial) {
+    float a = g_prev_time_in_portal + (g_time_in_portal - g_prev_time_in_portal) * partial;
+    if (a < 0.0f) a = 0.0f;
+    if (a > 1.0f) a = 1.0f;
+    return a;
+}
+
+static void apply_portal_camera_effect(float partial) {
+    float a = portal_interpolated_amount(partial);
+    if (a <= 0.0f) return;
+    float warp = 5.0f / (a * a + 5.0f) - a * 0.04f;
+    warp *= warp;
+    float spin = ((float)g_ingame_ticks + partial) * 20.0f;
+    glRotatef(spin, 0.0f, 1.0f, 1.0f);
+    glScalef(1.0f / warp, 1.0f, 1.0f);
+    glRotatef(-spin, 0.0f, 1.0f, 1.0f);
+}
+
+static void draw_portal_overlay(void) {
+    if (!tex_terrain.id) return;
+    float a = portal_interpolated_amount(g_frame_partial);
+    if (a <= 0.0f) return;
+    if (a < 1.0f) {
+        a *= a;
+        a *= a;
+        a = a * 0.8f + 0.2f;
+    }
+    float u0, v0, u1, v1;
+    terrain_tile_uv(PEX_PORTAL_TILE, &u0, &v0, &u1, &v1);
+    glDisable(GL_FOG);
+    setup_gui_projection();
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(1.0f, 1.0f, 1.0f, a);
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v1); glVertex2f(0.0f, (float)g_gui_h);
+    glTexCoord2f(u1, v1); glVertex2f((float)g_gui_w, (float)g_gui_h);
+    glTexCoord2f(u1, v0); glVertex2f((float)g_gui_w, 0.0f);
+    glTexCoord2f(u0, v0); glVertex2f(0.0f, 0.0f);
+    glEnd();
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_ALPHA_TEST);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
 
@@ -1837,6 +1976,10 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
 static PexTextureHandle flat_direct_terrain_handle(void) {
     PexRendererBackend *rb = flat_direct_backend();
     if (!rb || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
+    if (g_portal_anim_terrain_dirty) {
+        g_flat_direct_terrain_rgba = NULL;
+        g_portal_anim_terrain_dirty = 0;
+    }
     if (g_flat_direct_terrain_texture && g_flat_direct_terrain_rgba == tex_terrain.rgba &&
         g_flat_direct_terrain_w == tex_terrain.w && g_flat_direct_terrain_h == tex_terrain.h) {
         return g_flat_direct_terrain_texture;
@@ -2163,6 +2306,68 @@ static void add_splash_particle(float x, float y, float z, float mx, float my, f
     if (p->max_age < 1) p->max_age = 1;
 }
 
+static void add_portal_particle(float x, float y, float z, float mx, float my, float mz) {
+    DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
+    memset(p, 0, sizeof(*p));
+    p->active = 1;
+    p->kind = PARTICLE_PORTAL;
+    p->tile = rand() & 7;
+    p->x = p->prev_x = p->ox = x;
+    p->y = p->prev_y = p->oy = y;
+    p->z = p->prev_z = p->oz = z;
+    p->mx = mx;
+    p->my = my;
+    p->mz = mz;
+    float c = frand01() * 0.6f + 0.4f;
+    p->r = c * 0.9f;
+    p->g = c * 0.3f;
+    p->b = c;
+    p->scale = frand01() * 0.2f + 0.5f;
+    p->gravity = 0.0f;
+    p->max_age = (int)(frand01() * 10.0f) + 40;
+    p->age = 0;
+}
+
+static void spawn_portal_block_particles(int bx, int by, int bz) {
+    for (int i = 0; i < 4; ++i) {
+        float x = (float)bx + frand01();
+        float y = (float)by + frand01();
+        float z = (float)bz + frand01();
+        float mx = (frand01() - 0.5f) * 0.5f;
+        float my = (frand01() - 0.5f) * 0.5f;
+        float mz = (frand01() - 0.5f) * 0.5f;
+        int side = (rand() & 1) * 2 - 1;
+        int xneg_portal = flat_in_bounds(bx - 1, by, bz) && flat_get_block(bx - 1, by, bz) == BLOCK_PORTAL;
+        int xpos_portal = flat_in_bounds(bx + 1, by, bz) && flat_get_block(bx + 1, by, bz) == BLOCK_PORTAL;
+        if (!xneg_portal && !xpos_portal) {
+            x = (float)bx + 0.5f + 0.25f * (float)side;
+            mx = frand01() * 2.0f * (float)side;
+        } else {
+            z = (float)bz + 0.5f + 0.25f * (float)side;
+            mz = frand01() * 2.0f * (float)side;
+        }
+        add_portal_particle(x, y, z, mx, my, mz);
+    }
+}
+
+static void update_portal_ambient_effects(void) {
+    if (g_mp_connected || g_player_dead) return;
+    int pcx = (int)floorf(g_player_x);
+    int pcy = (int)floorf(g_player_y - 0.6f);
+    int pcz = (int)floorf(g_player_z);
+    for (int attempt = 0; attempt < 18; ++attempt) {
+        int x = pcx + (rand() % 33) - 16;
+        int y = pcy + (rand() % 17) - 8;
+        int z = pcz + (rand() % 33) - 16;
+        if (!flat_in_bounds(x, y, z) || flat_get_block(x, y, z) != BLOCK_PORTAL) continue;
+        if ((rand() % 100) == 0) {
+            pex_sound_play_at("portal.portal", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.5f, 0.8f + frand01() * 0.4f);
+        }
+        spawn_portal_block_particles(x, y, z);
+        break;
+    }
+}
+
 static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz) {
     float width = 0.6f; /* player width in Entity.java */
     int n = (int)(1.0f + width * 20.0f);
@@ -2200,6 +2405,13 @@ static void update_dig_particles(void) {
             p->my *= 0.85f;
             p->mz *= 0.85f;
             if (!block_is_water(flat_get_block((int)floorf(p->x), (int)floorf(p->y), (int)floorf(p->z)))) p->active = 0;
+        } else if (p->kind == PARTICLE_PORTAL) {
+            float t = (float)p->age / (float)(p->max_age > 0 ? p->max_age : 1);
+            float curve = -t + t * t * 2.0f;
+            curve = 1.0f - curve;
+            p->x = p->ox + p->mx * curve;
+            p->y = p->oy + p->my * curve + (1.0f - t);
+            p->z = p->oz + p->mz * curve;
         } else {
             p->my -= (p->kind == PARTICLE_SPLASH ? 0.06f : 0.04f) * p->gravity;
             p->x += p->mx;
@@ -2285,6 +2497,15 @@ static void draw_dig_particles(float partial) {
             float pz = p->prev_z + (p->z - p->prev_z) * partial;
             float q = 0.1f * p->scale;
             float br = flat_light_brightness((int)floorf(px), (int)floorf(py), (int)floorf(pz));
+            if (p->kind == PARTICLE_PORTAL) {
+                float life = ((float)p->age + partial) / (float)(p->max_age > 0 ? p->max_age : 1);
+                if (life < 0.0f) life = 0.0f;
+                if (life > 1.0f) life = 1.0f;
+                float grow = 1.0f - life;
+                grow = 1.0f - grow * grow;
+                q = 0.1f * p->scale * grow;
+                br = 1.0f;
+            }
             glColor4f(p->r * br, p->g * br, p->b * br, 1.0f);
             world_tex_vertex(px - cos_yaw * q - x_rot * q, py - yz_rot * q, pz - sin_yaw * q - z_rot * q, u0, v1);
             world_tex_vertex(px - cos_yaw * q + x_rot * q, py + yz_rot * q, pz - sin_yaw * q + z_rot * q, u0, v0);
@@ -7755,6 +7976,7 @@ static void psp_fast_draw_world(void) {
 
 static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
+    update_portal_texture_animation();
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_FAST_WORLD) && PEX_PSP_FAST_WORLD
     psp_fast_draw_world();
     glEnable(GL_DEPTH_TEST);
@@ -8124,5 +8346,6 @@ static void draw_ingame_world_view(int with_hand) {
     draw_flat_test_world();
     if (with_hand && !g_third_person_view) draw_first_person_hand();
     draw_in_block_overlay();
+    draw_portal_overlay();
     setup_gui_projection();
 }

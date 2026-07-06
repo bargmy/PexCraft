@@ -498,6 +498,7 @@ static void ingame_tick(void) {
     profile_add_time(PROF_ENTITY_PASSIVE_MOBS, prof_part);
     prof_part = profile_begin();
     update_dig_particles();
+    update_portal_ambient_effects();
     profile_add_time(PROF_PARTICLES, prof_part);
     if (!g_mp_connected) {
         prof_part = profile_begin();

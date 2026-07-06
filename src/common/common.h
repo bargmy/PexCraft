@@ -868,6 +868,9 @@ static int g_world_map_features = 1;
 static long long g_world_seed = 0;
 static int g_current_dimension = 0; /* 0=Overworld, -1=Nether, 1=End (PexDimension) */
 static int g_portal_timer = 0;      /* ticks player has been standing in a Nether portal */
+static int g_portal_cooldown = 0;   /* Java-style timeUntilPortal cooldown after travel */
+static float g_time_in_portal = 0.0f;      /* Java-style 0..1 portal overlay/camera amount */
+static float g_prev_time_in_portal = 0.0f; /* previous tick value for partial-tick interpolation */
 static int g_creative_scroll_row = 0;
 static float g_creative_scroll = 0.0f;
 static int g_creative_dragging_scroll = 0;
@@ -1888,7 +1891,7 @@ static CRITICAL_SECTION g_save_cs;
 #else
 #define MAX_DIG_PARTICLES 384
 #endif
-typedef enum ParticleKind { PARTICLE_DIG = 0, PARTICLE_BUBBLE = 1, PARTICLE_SPLASH = 2 } ParticleKind;
+typedef enum ParticleKind { PARTICLE_DIG = 0, PARTICLE_BUBBLE = 1, PARTICLE_SPLASH = 2, PARTICLE_PORTAL = 3 } ParticleKind;
 
 typedef struct DigParticle {
     int active;
@@ -1897,6 +1900,7 @@ typedef struct DigParticle {
     float x, y, z;
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
+    float ox, oy, oz;
     float r, g, b;
     float scale;
     float gravity;
@@ -2434,9 +2438,11 @@ static int furnace_cook_scaled(int pixels);
 static void world_left_mouse_released(void);
 static void ingame_right_click(void);
 static void ingame_right_release(void);
+static float frand01(void);
 static void spawn_block_destroy_particles(int bx, int by, int bz, int block_id);
 static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block_id);
 static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz);
+static void update_portal_ambient_effects(void);
 static void update_dig_particles(void);
 static void draw_item_stack_gui(const ItemStack *st, int x, int y);
 static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y);
