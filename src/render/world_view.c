@@ -2473,8 +2473,9 @@ static void draw_dig_particles(float partial) {
         float py = p->prev_y + (p->y - p->prev_y) * partial;
         float pz = p->prev_z + (p->z - p->prev_z) * partial;
         float q = 0.1f * p->scale;
+        float br = flat_light_brightness((int)floorf(px), (int)floorf(py), (int)floorf(pz));
 
-        glColor4f(p->r, p->g, p->b, 1.0f);
+        glColor4f(p->r * br, p->g * br, p->b * br, 1.0f);
         world_tex_vertex(px - cos_yaw * q - x_rot * q, py - yz_rot * q, pz - sin_yaw * q - z_rot * q, su0, sv1);
         world_tex_vertex(px - cos_yaw * q + x_rot * q, py + yz_rot * q, pz - sin_yaw * q + z_rot * q, su0, sv0);
         world_tex_vertex(px + cos_yaw * q + x_rot * q, py + yz_rot * q, pz + sin_yaw * q + z_rot * q, su1, sv0);
@@ -3129,7 +3130,7 @@ static void draw_dropped_item_sprite(int tile) {
     float u0, v0, u1, v1;
     item_tile_uv(tile, &u0, &v0, &u1, &v1);
 
-    glColor4f(1,1,1,1);
+    /* Caller sets entity/item brightness before drawing. */
     glDisable(GL_CULL_FACE);
     glBindTexture(GL_TEXTURE_2D, tex_items.id);
     glEnable(GL_ALPHA_TEST);
@@ -3148,7 +3149,7 @@ static void draw_dropped_terrain_sprite(int tile) {
     float u0, v0, u1, v1;
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
 
-    glColor4f(1,1,1,1);
+    /* Caller sets entity/item brightness before drawing. */
     glDisable(GL_CULL_FACE);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glEnable(GL_ALPHA_TEST);
@@ -3275,6 +3276,7 @@ static void draw_projectiles(float partial) {
         else if (p->type == FLAT_PROJECTILE_SNOWBALL) item = ITEM_SNOWBALL;
         else if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) item = ITEM_FIREBALL_CHARGE;
         int tile = item_icon_tile(item);
+        entity_item_light_prepare(x, y, z);
         glPushMatrix();
         glTranslatef(x, y, z);
         if (p->type == FLAT_PROJECTILE_ARROW) {
@@ -3285,7 +3287,7 @@ static void draw_projectiles(float partial) {
             glRotatef(45.0f, 1.0f, 0.0f, 0.0f);
             glScalef(0.05625f, 0.05625f, 0.05625f);
             glTranslatef(-4.0f, 0.0f, 0.0f);
-            glColor4f(1,1,1,1);
+            /* Caller/entity brightness stays in the current GL color. */
             glBegin(GL_QUADS);
             float u0 = au0, u1 = au0 + (au1 - au0) * 0.35f;
             float v0 = av0 + (av1 - av0) * 0.35f, v1 = av0 + (av1 - av0) * 0.70f;
@@ -3356,6 +3358,16 @@ static float entity_light_factor_at(float x, float y, float z) {
     return br;
 }
 
+static void entity_item_light_prepare(float x, float y, float z) {
+    float br = entity_light_factor_at(x, y, z);
+    glColor4f(br, br, br, 1.0f);
+    int lx = (int)floorf(x);
+    int ly = (int)floorf(y);
+    int lz = (int)floorf(z);
+    world_style_set_pos(lx, ly, lz);
+    world_light_set_pos(lx, ly, lz);
+}
+
 static void draw_dropped_items(void) {
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float yaw = lerp_angle(pr->prev_yaw, pr->yaw, g_frame_partial);
@@ -3380,8 +3392,7 @@ static void draw_dropped_items(void) {
         draw_java_entity_shadow(x, y, z, 0.15f, 1.0f);
 
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        float entity_br = entity_light_factor_at(x, y + 0.5f, z);
-        glColor4f(entity_br, entity_br, entity_br, 1);
+        entity_item_light_prepare(x, y + 0.5f, z);
         glPushMatrix();
         glTranslatef(x, y + bob, z);
         glRotatef((((float)e->age + g_frame_partial) / 20.0f + e->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
@@ -3451,6 +3462,7 @@ static void draw_pickup_fx_items(void) {
         float y = fx->start_y + (py - fx->start_y) * t;
         float z = fx->start_z + (pz - fx->start_z) * t;
 
+        entity_item_light_prepare(x, y + 0.5f, z);
         glPushMatrix();
         glTranslatef(x, y, z);
         glRotatef((((float)fx->age + g_frame_partial) / 20.0f + fx->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
@@ -7227,6 +7239,9 @@ static void draw_armor_model_for_slots(const ItemStack armor_slots[4],
     }
 }
 
+static void draw_local_player_held_item_125(float x, float eye_y, float z,
+                                            float arm_pitch, float arm_yaw, float arm_roll);
+
 static void draw_third_person_player(void) {
     if (!g_third_person_view || !tex_steve.id) return;
 
@@ -7330,6 +7345,7 @@ static void draw_third_person_player(void) {
                                right_arm_pitch, right_arm_yaw, right_arm_roll,
                                left_arm_pitch, left_arm_yaw, left_arm_roll,
                                right_leg_pitch, left_leg_pitch);
+    draw_local_player_held_item_125(x, eye_y, z, right_arm_pitch, right_arm_yaw, right_arm_roll);
 
     glDisable(GL_ALPHA_TEST);
     steve_set_tint(1.0f, 1.0f, 1.0f);
@@ -7387,14 +7403,14 @@ static void multiplayer_apply_right_arm_postrender_125(float arm_pitch, float ar
     if (arm_pitch != 0.0f) glRotatef(arm_pitch, 1.0f, 0.0f, 0.0f);
 }
 
-static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float arm_pitch, float arm_yaw, float arm_roll) {
-    if (!r || r->held_item_id <= 0 || r->held_item_count <= 0) return;
-    int id = r->held_item_id;
+static void draw_biped_held_item_125(int id, int count, float light_x, float light_y, float light_z,
+                                       float arm_pitch, float arm_yaw, float arm_roll) {
+    if (id <= 0 || count <= 0) return;
 
+    entity_item_light_prepare(light_x, light_y, light_z);
     glPushMatrix();
     multiplayer_apply_right_arm_postrender_125(arm_pitch, arm_yaw, arm_roll);
     glTranslatef(-1.0f / 16.0f, 7.0f / 16.0f, 1.0f / 16.0f);
-    glColor4f(1, 1, 1, 1);
 
     if (render_item_as_block_id(id) && tex_terrain.id) {
         /* RenderBiped held 3D-block branch. */
@@ -7447,6 +7463,20 @@ static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float
     }
 
     glPopMatrix();
+}
+
+static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float arm_pitch, float arm_yaw, float arm_roll) {
+    if (!r || r->held_item_id <= 0 || r->held_item_count <= 0) return;
+    draw_biped_held_item_125(r->held_item_id, r->held_item_count, r->x, r->y, r->z,
+                             arm_pitch, arm_yaw, arm_roll);
+}
+
+static void draw_local_player_held_item_125(float x, float eye_y, float z,
+                                            float arm_pitch, float arm_yaw, float arm_roll) {
+    const ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    if (stack_empty(held)) return;
+    draw_biped_held_item_125(held->id, held->count, x, eye_y, z,
+                             arm_pitch, arm_yaw, arm_roll);
 }
 
 static void draw_multiplayer_remote_players(void) {
@@ -7598,7 +7628,10 @@ static void draw_multiplayer_name_tags(void) {
         if (tw <= 0) continue;
 
         float feet_y = r->y - 1.62f;
-        float label_y = feet_y + 2.3f;
+        /* Java RenderLivingLabel anchors labels above the entity height.  The
+           previous 2.3F sat almost on the Steve head; 2.55F gives the old
+           small air gap above the 1.8-block player. */
+        float label_y = feet_y + 2.55f;
         float scale = (1.0f / 60.0f) * 1.6f;
         int half = tw / 2;
 
@@ -8236,7 +8269,7 @@ static void draw_item3d_from_texture(Texture *atlas, int tile) {
     glRotatef(335.0f, 0.0f, 0.0f, 1.0f);
     glTranslatef(-0.9375f, -0.0625f, 0.0f);
 
-    glColor4f(1, 1, 1, 1);
+    /* Caller supplies entity/item brightness through the current GL color. */
 
     glBegin(GL_QUADS);
     /* front */
@@ -8348,6 +8381,8 @@ static void draw_first_person_hand(void) {
     ItemStack *held = &g_equipped_item;
     float equip = g_prev_equipped_progress + (g_equipped_progress - g_prev_equipped_progress) * g_frame_partial;
     if (equip < 0.0f) equip = 0.0f; if (equip > 1.0f) equip = 1.0f;
+
+    entity_item_light_prepare(g_player_x, g_player_y, g_player_z);
 
     if (!stack_empty(held) && render_item_as_block_id(held->id) && tex_terrain.id) {
         /* ItemRenderer held-block branch: when a block is selected Java renders the
