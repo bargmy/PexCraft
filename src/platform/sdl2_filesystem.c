@@ -69,7 +69,15 @@ static double profile_percent(double ms) {
     return (ms * 100.0) / denom;
 }
 
-static void log_msg(const char *fmt, ...) { (void)fmt; }
+static void log_msg(const char *fmt, ...) {
+    if (!fmt) return;
+    char msg[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    pex_logf("%s", msg);
+}
 
 static void path_join(char *out, size_t cap, const char *a, const char *b) {
     snprintf(out, cap, "%s/%s", a, b);

@@ -201,6 +201,86 @@ static PFN_Mix_FreeChunk pMix_FreeChunk = NULL;
 static int g_mix_ready = 0;
 static int g_pex_menu_music_channel = -1;
 static Mix_Music *g_pex_record_music = NULL;
+static pid_t g_pex_record_external_pid = -1;
+
+static void pex_sdl_stop_external_record(void) {
+    if (g_pex_record_external_pid > 0) {
+        int status = 0;
+        kill(g_pex_record_external_pid, SIGTERM);
+        for (int i = 0; i < 20; ++i) {
+            pid_t r = waitpid(g_pex_record_external_pid, &status, WNOHANG);
+            if (r == g_pex_record_external_pid || r < 0) { g_pex_record_external_pid = -1; return; }
+            SDL_Delay(5);
+        }
+        kill(g_pex_record_external_pid, SIGKILL);
+        waitpid(g_pex_record_external_pid, &status, 0);
+        g_pex_record_external_pid = -1;
+    }
+}
+
+static int pex_sdl_command_exists(const char *cmd) {
+    const char *path_env;
+    char path_copy[2048];
+    char *save = NULL;
+    char *dir;
+    if (!cmd || !*cmd) return 0;
+    if (strchr(cmd, '/')) return access(cmd, X_OK) == 0;
+    path_env = getenv("PATH");
+    if (!path_env || !*path_env) return 0;
+    snprintf(path_copy, sizeof(path_copy), "%s", path_env);
+    for (dir = strtok_r(path_copy, ":", &save); dir; dir = strtok_r(NULL, ":", &save)) {
+        char full[MAX_PATHBUF];
+        if (!*dir) dir = ".";
+        snprintf(full, sizeof(full), "%s/%s", dir, cmd);
+        if (access(full, X_OK) == 0) return 1;
+    }
+    return 0;
+}
+
+static void pex_sdl_child_silence_stdio(void) {
+    int fd = open("/dev/null", O_RDWR);
+    if (fd >= 0) {
+        dup2(fd, STDIN_FILENO);
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        if (fd > STDERR_FILENO) close(fd);
+    }
+}
+
+static int pex_sdl_spawn_external_record(const char *path, float volume) {
+    char vol[32];
+    char scale[32];
+    pid_t pid;
+    int pct;
+    if (!path || !*path || volume <= 0.001f) return 0;
+    pct = (int)(volume * 100.0f + 0.5f);
+    if (pct < 1) pct = 1;
+    if (pct > 100) pct = 100;
+    snprintf(vol, sizeof(vol), "%d", pct);
+    snprintf(scale, sizeof(scale), "%d", (int)(32768.0f * volume + 0.5f));
+
+    const char *player = NULL;
+    if (pex_sdl_command_exists("ffplay")) player = "ffplay";
+    else if (pex_sdl_command_exists("mpv")) player = "mpv";
+    else if (pex_sdl_command_exists("mpg123")) player = "mpg123";
+    else if (pex_sdl_command_exists("cvlc")) player = "cvlc";
+    if (!player) { log_msg("Record backend: no SDL2_mixer MP3 support and no ffplay/mpv/mpg123/cvlc fallback found"); return 0; }
+
+    pex_sdl_stop_external_record();
+    pid = fork();
+    if (pid < 0) return 0;
+    if (pid == 0) {
+        pex_sdl_child_silence_stdio();
+        if (!strcmp(player, "ffplay")) execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", vol, path, (char *)NULL);
+        else if (!strcmp(player, "mpv")) { char arg[64]; snprintf(arg, sizeof(arg), "--volume=%d", pct); execlp("mpv", "mpv", "--no-video", "--really-quiet", arg, path, (char *)NULL); }
+        else if (!strcmp(player, "mpg123")) execlp("mpg123", "mpg123", "-q", "-f", scale, path, (char *)NULL);
+        else if (!strcmp(player, "cvlc")) execlp("cvlc", "cvlc", "--play-and-exit", "--intf", "dummy", path, (char *)NULL);
+        _exit(127);
+    }
+    g_pex_record_external_pid = pid;
+    log_msg("Record backend: playing %s through %s", path, player);
+    return 1;
+}
 
 typedef struct PexSoundChunkCache { char path[MAX_PATHBUF]; Mix_Chunk *chunk; } PexSoundChunkCache;
 #define PEX_SOUND_CHUNK_CACHE_MAX 128
@@ -345,27 +425,37 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
 }
 
 static void pex_sound_backend_stop_record(void) {
+    pex_sdl_stop_external_record();
     if (pMix_HaltMusic) pMix_HaltMusic();
     if (g_pex_record_music && pMix_FreeMusic) pMix_FreeMusic(g_pex_record_music);
     g_pex_record_music = NULL;
 }
 
 static int pex_sound_backend_play_record_file(const char *path, float volume) {
+    Mix_Music *m;
+    int v;
     if (!path || !*path) return 0;
-    if (!pex_sound_backend_init()) return 0;
-    if (!pMix_LoadMUS || !pMix_PlayMusic) {
-        return pex_sound_backend_play_file(path, volume, 1.0f);
-    }
+    if (volume <= 0.001f) return 0;
+    if (!pex_sound_backend_init()) return pex_sdl_spawn_external_record(path, volume);
     pex_sound_backend_stop_record();
-    Mix_Music *m = pMix_LoadMUS(path);
-    if (!m) return pex_sound_backend_play_file(path, volume, 1.0f);
-    int v = (int)(volume * 128.0f);
+    if (!pMix_LoadMUS || !pMix_PlayMusic) {
+        if (pex_sound_backend_play_file(path, volume, 1.0f)) return 1;
+        return pex_sdl_spawn_external_record(path, volume);
+    }
+    m = pMix_LoadMUS(path);
+    if (!m) {
+        log_msg("Record backend: Mix_LoadMUS failed for %s", path);
+        if (pex_sound_backend_play_file(path, volume, 1.0f)) return 1;
+        return pex_sdl_spawn_external_record(path, volume);
+    }
+    v = (int)(volume * 128.0f);
     if (v < 0) v = 0;
     if (v > 128) v = 128;
     if (pMix_VolumeMusic) pMix_VolumeMusic(v);
     if (pMix_PlayMusic(m, 0) != 0) {
         if (pMix_FreeMusic) pMix_FreeMusic(m);
-        return 0;
+        log_msg("Record backend: Mix_PlayMusic failed for %s", path);
+        return pex_sdl_spawn_external_record(path, volume);
     }
     g_pex_record_music = m;
     return 1;
@@ -675,11 +765,12 @@ static void pex_sound_missing_notice_once(void) {
 static float pex_record_volume_at(float x, float y, float z, float volume) {
     float dx = x - g_player_x, dy = y - g_player_y, dz = z - g_player_z;
     float dist = sqrtf(dx*dx + dy*dy + dz*dz);
-    const float max_dist = 64.0f;
+    const float max_dist = 64.0f; /* SoundManager.newStreamingSource uses 16 * 4. */
     float atten = 1.0f - dist / max_dist;
+    (void)volume; /* 1.2.5 passes 1.0F but records are fixed at 0.5 * soundVolume. */
     if (atten <= 0.0f) return 0.0f;
     if (atten > 1.0f) atten = 1.0f;
-    float final_volume = volume * atten * g_opts.music;
+    float final_volume = 0.5f * atten * g_opts.sound;
     if (final_volume > 1.0f) final_volume = 1.0f;
     if (final_volume < 0.0f) final_volume = 0.0f;
     return final_volume;
@@ -691,9 +782,10 @@ static void pex_sound_stop_record(void) {
 
 static int pex_sound_play_record_file_at(const char *path, float x, float y, float z, float volume) {
     if (!path || !*path) return 0;
-    if (g_opts.music <= 0.001f) return 0;
+    if (g_opts.sound <= 0.001f) { pex_sound_stop_record(); return 0; }
     float final_volume = pex_record_volume_at(x, y, z, volume);
     if (final_volume <= 0.001f) return 0;
+    sound_backend_stop_menu_music();
     if (!pex_sound_backend_play_record_file(path, final_volume)) {
         pex_sound_missing_notice_once();
         return 0;

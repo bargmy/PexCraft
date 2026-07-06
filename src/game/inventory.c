@@ -7400,7 +7400,7 @@ static const char *record_name_for_id(int id) {
 
 static const char *record_tooltip_line_for_id(int id) {
     static char line[96];
-    if (id == ITEM_RECORD_TWOFACE) return "wowaka - 裏表ラバーズ";
+    if (id == ITEM_RECORD_TWOFACE) return "wowaka - Two Faced Lovers";
     const char *name = record_name_for_id(id);
     if (!name) return NULL;
     snprintf(line, sizeof(line), "C418 - %s", name);
