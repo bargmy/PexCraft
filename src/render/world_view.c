@@ -3256,6 +3256,8 @@ static void draw_vehicles(float partial) {
     }
 }
 
+static void entity_item_light_prepare(float x, float y, float z);
+
 static void draw_projectiles(float partial) {
     if (!tex_items.id) return;
     glEnable(GL_TEXTURE_2D);
