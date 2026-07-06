@@ -4972,6 +4972,7 @@ typedef struct PassiveMobRenderEntry {
     int sitting;
     int held_block;
     int held_item;
+    int owner_id;
     int love_time;
     int attack_time;
     int hurt;
@@ -5046,6 +5047,7 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
         e->sitting = m->sitting;
         e->held_block = m->held_block;
         e->held_item = m->held_item;
+        e->owner_id = m->owner_id;
         e->love_time = m->love_time;
         e->attack_time = m->attack_time;
         e->hurt = (m->hurt_time > 0 || m->death_time > 0);
