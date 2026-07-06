@@ -7340,11 +7340,6 @@ static void draw_third_person_player(void) {
 
 
 
-static GLdouble g_name_modelview[16];
-static GLdouble g_name_projection[16];
-static GLint g_name_viewport[4];
-static int g_name_matrices_valid = 0;
-
 static int multiplayer_renderable_remote_player_count(void) {
     if (!g_mp_connected) return 0;
     int count = 0;
@@ -7357,28 +7352,100 @@ static int multiplayer_renderable_remote_player_count(void) {
     return count;
 }
 
+static int pex_item_full3d_125(int id) {
+    switch (id) {
+        case ITEM_STICK:
+        case ITEM_BONE:
+        case ITEM_FISHING_ROD:
+        case ITEM_SWORD_IRON: case ITEM_WOODEN_SWORD: case ITEM_STONE_SWORD:
+        case ITEM_SWORD_DIAMOND: case ITEM_SWORD_GOLD:
+        case ITEM_SHOVEL_IRON: case ITEM_WOODEN_SHOVEL: case ITEM_STONE_SHOVEL:
+        case ITEM_SHOVEL_DIAMOND: case ITEM_SHOVEL_GOLD:
+        case ITEM_PICKAXE_IRON: case ITEM_WOODEN_PICKAXE: case ITEM_STONE_PICKAXE:
+        case ITEM_PICKAXE_DIAMOND: case ITEM_PICKAXE_GOLD:
+        case ITEM_AXE_IRON: case ITEM_WOODEN_AXE: case ITEM_STONE_AXE:
+        case ITEM_AXE_DIAMOND: case ITEM_AXE_GOLD:
+        case ITEM_HOE_WOOD: case ITEM_HOE_STONE: case ITEM_HOE_IRON:
+        case ITEM_HOE_DIAMOND: case ITEM_HOE_GOLD:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int pex_item_rotates_around_when_rendering_125(int id) {
+    return id == ITEM_FISHING_ROD;
+}
+
+static void multiplayer_apply_right_arm_postrender_125(float arm_pitch, float arm_yaw, float arm_roll) {
+    /* Same ModelRenderer.postRender order used by bipedRightArm: translate to
+       the right-arm pivot, then apply Z/Y/X rotations.  The player root is
+       already in the Java ModelBiped coordinate system at 1/16 scale. */
+    glTranslatef(-5.0f * 0.0625f, 2.0f * 0.0625f, 0.0f);
+    if (arm_roll != 0.0f) glRotatef(arm_roll, 0.0f, 0.0f, 1.0f);
+    if (arm_yaw != 0.0f) glRotatef(arm_yaw, 0.0f, 1.0f, 0.0f);
+    if (arm_pitch != 0.0f) glRotatef(arm_pitch, 1.0f, 0.0f, 0.0f);
+}
+
 static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float arm_pitch, float arm_yaw, float arm_roll) {
     if (!r || r->held_item_id <= 0 || r->held_item_count <= 0) return;
     int id = r->held_item_id;
+
     glPushMatrix();
-    glTranslatef(-5.0f * 0.0625f, 2.0f * 0.0625f, 0.0f);
-    glRotatef(arm_roll, 0.0f, 0.0f, 1.0f);
-    glRotatef(arm_yaw, 0.0f, 1.0f, 0.0f);
-    glRotatef(arm_pitch, 1.0f, 0.0f, 0.0f);
-    glTranslatef(-2.0f * 0.0625f, 10.0f * 0.0625f, -2.0f * 0.0625f);
-    glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
-    glScalef(0.375f, 0.375f, 0.375f);
+    multiplayer_apply_right_arm_postrender_125(arm_pitch, arm_yaw, arm_roll);
+    glTranslatef(-1.0f / 16.0f, 7.0f / 16.0f, 1.0f / 16.0f);
     glColor4f(1, 1, 1, 1);
-    if (render_item_as_block_id(id)) {
+
+    if (render_item_as_block_id(id) && tex_terrain.id) {
+        /* RenderBiped held 3D-block branch. */
+        float s = 0.5f * (12.0f / 16.0f);
+        glTranslatef(0.0f, 3.0f / 16.0f, -(5.0f / 16.0f));
+        glRotatef(20.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+        glScalef(s, -s, s);
         glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
         draw_block_item_model(id, -0.5f, -0.5f, -0.5f);
-    } else if (world_item_is_block_id(id)) {
+    } else if (id == ITEM_BOW && tex_items.id) {
+        float s = 10.0f / 16.0f;
+        glTranslatef(0.0f, 2.0f / 16.0f, 5.0f / 16.0f);
+        glRotatef(-20.0f, 0.0f, 1.0f, 0.0f);
+        glScalef(s, -s, s);
+        glRotatef(-100.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+        draw_item3d_from_texture(&tex_items, item_icon_tile(id));
+    } else if (pex_item_full3d_125(id) && tex_items.id) {
+        float s = 10.0f / 16.0f;
+        if (pex_item_rotates_around_when_rendering_125(id)) {
+            glRotatef(180.0f, 0.0f, 0.0f, 1.0f);
+            glTranslatef(0.0f, -(2.0f / 16.0f), 0.0f);
+        }
+        glTranslatef(0.0f, 3.0f / 16.0f, 0.0f);
+        glScalef(s, -s, s);
+        glRotatef(-100.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+        draw_item3d_from_texture(&tex_items, item_icon_tile(id));
+    } else if (world_item_is_block_id(id) && tex_terrain.id) {
+        float s = 6.0f / 16.0f;
+        glTranslatef(0.25f, 3.0f / 16.0f, -(3.0f / 16.0f));
+        glScalef(s, s, s);
+        glRotatef(60.0f, 0.0f, 0.0f, 1.0f);
+        glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(20.0f, 0.0f, 0.0f, 1.0f);
         glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
         draw_dropped_terrain_sprite(world_block_item_tile(id));
-    } else {
+    } else if (tex_items.id) {
+        /* Ordinary held items remain the old flat icon transform.  Full3D tools,
+           swords, stick, bone, bow, and fishing rod take the branches above. */
+        float s = 6.0f / 16.0f;
+        glTranslatef(0.25f, 3.0f / 16.0f, -(3.0f / 16.0f));
+        glScalef(s, s, s);
+        glRotatef(60.0f, 0.0f, 0.0f, 1.0f);
+        glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
+        glRotatef(20.0f, 0.0f, 0.0f, 1.0f);
         glBindTexture(GL_TEXTURE_2D, tex_items.id);
         draw_dropped_item_sprite(item_icon_tile(id));
     }
+
     glPopMatrix();
 }
 
@@ -7488,20 +7555,36 @@ static void draw_multiplayer_remote_players(void) {
     glPopMatrix();
 }
 
-static void draw_multiplayer_name_tags(void) {
-    if (!g_mp_connected || !g_name_matrices_valid) return;
+static void multiplayer_name_tag_view_angles(float *out_yaw, float *out_pitch) {
+    const PexPlayerRenderState *pr = &g_player_render_frame;
+    float yaw = lerp_angle(pr->prev_yaw, pr->yaw, g_frame_partial);
+    float pitch = pr->prev_pitch + (pr->pitch - pr->prev_pitch) * g_frame_partial;
+    if (g_third_person_view == 2) {
+        yaw += 180.0f;
+        pitch = -pitch;
+    }
+    if (out_yaw) *out_yaw = yaw;
+    if (out_pitch) *out_pitch = pitch;
+}
 
-    setup_gui_projection();
-    glDisable(GL_DEPTH_TEST);
+static void draw_multiplayer_name_tags(void) {
+    if (!g_mp_connected || !tex_font.id) return;
+
+    float view_yaw = 0.0f;
+    float view_pitch = 0.0f;
+    multiplayer_name_tag_view_angles(&view_yaw, &view_pitch);
+
     glDisable(GL_FOG);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_TEXTURE_2D);
 
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
         PexNetRenderPlayerState *r = &g_mp_render_players[i];
         if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
         if (r->health <= 0) continue;
+
         float dx = r->x - g_player_render_frame.x;
         float dy = r->y - g_player_render_frame.y;
         float dz = r->z - g_player_render_frame.z;
@@ -7509,33 +7592,58 @@ static void draw_multiplayer_name_tags(void) {
         int sneaking = (r->flags & PEX_PLAYER_FLAG_SNEAKING) != 0;
         float max_dist = sneaking ? 32.0f : 64.0f;
         if (dist > max_dist) continue;
+
         const char *name = r->name[0] ? r->name : "Player";
-        GLdouble sx, sy, sz;
-        if (!gluProject((GLdouble)r->x, (GLdouble)(r->y + (sneaking ? 0.42f : 0.62f)), (GLdouble)r->z,
-                        g_name_modelview, g_name_projection, g_name_viewport,
-                        &sx, &sy, &sz)) {
-            continue;
-        }
-        if (sz < 0.0 || sz > 1.0) continue;
-        int x = (int)(sx / (double)g_gui_scale);
-        int y = (int)(((double)g_win_h - sy) / (double)g_gui_scale);
         int tw = text_width(name);
         if (tw <= 0) continue;
-        /* Java RenderLiving label: fixed GUI-size text over a translucent black
-           strip. Distance only gates visibility; it should not keep shrinking. */
-        float scale = sneaking ? 0.85f : 1.0f;
-        int pad = 2;
+
+        float feet_y = r->y - 1.62f;
+        float label_y = feet_y + 2.3f;
+        float scale = (1.0f / 60.0f) * 1.6f;
+        int half = tw / 2;
+
         glPushMatrix();
-        glTranslatef((float)x, (float)y, 0.0f);
-        glScalef(scale, scale, 1.0f);
-        draw_rect(-tw / 2 - pad, -4, tw / 2 + pad, 5, (int)0x40000000u);
-        glEnable(GL_TEXTURE_2D);
-        draw_text(name, -tw / 2, -3, 0xFFFFFF);
-        glDisable(GL_TEXTURE_2D);
+        glTranslatef(r->x, label_y, r->z);
+        glNormal3f(0.0f, 1.0f, 0.0f);
+        glRotatef(-view_yaw, 0.0f, 1.0f, 0.0f);
+        glRotatef(view_pitch, 1.0f, 0.0f, 0.0f);
+        glScalef(-scale, -scale, scale);
+
+        if (sneaking) {
+            /* Sneaking labels in 1.2.5 are smaller/closer and translucent, and
+               they keep depth testing so they do not shout through walls. */
+            glTranslatef(0.0f, 0.25f / scale, 0.0f);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_DEPTH_TEST);
+            glDisable(GL_TEXTURE_2D);
+            draw_rect(-half - 1, -1, half + 1, 8, (int)0x40000000u);
+            glEnable(GL_TEXTURE_2D);
+            glDepthMask(GL_TRUE);
+            draw_text_no_shadow(name, -tw / 2, 0, (int)0x20FFFFFFu);
+        } else {
+            /* Normal player labels are world-space billboards.  Draw the black
+               strip and faint text without depth test, then the white text with
+               depth test, matching the old RenderLivingLabel two-pass look. */
+            glDepthMask(GL_FALSE);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_TEXTURE_2D);
+            draw_rect(-half - 1, -1, half + 1, 8, (int)0x40000000u);
+            glEnable(GL_TEXTURE_2D);
+            draw_text_no_shadow(name, -tw / 2, 0, (int)0x20FFFFFFu);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE);
+            draw_text_no_shadow(name, -tw / 2, 0, 0xFFFFFF);
+        }
+
         glPopMatrix();
     }
 
     glEnable(GL_TEXTURE_2D);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_FOG);
     glColor4f(1, 1, 1, 1);
 }
 
@@ -8052,23 +8160,12 @@ static void draw_flat_test_world(void) {
 
     entity_part = profile_begin();
     draw_multiplayer_remote_players();
+    draw_multiplayer_name_tags();
     profile_add_time(PROF_ENTITY_REMOTE_PLAYERS, entity_part);
 
-    /* glGet* readbacks can hard-stall D3D11/GL compatibility backends.  The
-       matrices are only needed for multiplayer name tags, so do not read GPU
-       state in normal single-player entity rendering. */
-    if (remote_player_count > 0) {
-        entity_part = profile_begin();
-        glGetDoublev(GL_MODELVIEW_MATRIX, g_name_modelview);
-        glGetDoublev(GL_PROJECTION_MATRIX, g_name_projection);
-        glGetIntegerv(GL_VIEWPORT, g_name_viewport);
-        g_name_matrices_valid = 1;
-        if (g_loggy_enabled) g_loggy_entity_matrix_reads += 3;
-        profile_add_time(PROF_ENTITY_MATRIX_READBACK, entity_part);
-    } else {
-        g_name_matrices_valid = 0;
-        if (g_loggy_enabled) g_loggy_entity_matrix_skips++;
-    }
+    /* Name tags are now rendered as world-space billboards, so multiplayer no
+       longer needs glGet* matrix readbacks just to project labels into GUI. */
+    if (g_loggy_enabled) g_loggy_entity_matrix_skips++;
 
     entity_part = profile_begin();
     draw_falling_blocks(g_frame_partial);
@@ -8114,7 +8211,6 @@ static void draw_flat_test_world(void) {
     glDisable(GL_FOG);
     glEnable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
-    draw_multiplayer_name_tags();
 }
 
 
