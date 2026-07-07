@@ -338,6 +338,15 @@ static int sdl2_release_audio_missing_mask(void) {
     return CLASSIC_AUDIO_ALL & ~sdl2_release_audio_installed_mask();
 }
 
+static int sdl2_release_resources_missing_actual(void) {
+    /* SDL2 launcher gate: use actual files/markers only, not the saved
+       "ignore" or "download disabled" options. If anything is missing,
+       show the native selector before entering the game. */
+    if (!sdl2_release_textures_installed()) return 1;
+    if (sdl2_release_audio_missing_mask() != 0) return 1;
+    return 0;
+}
+
 static void sdl2_release_check_line(char *out, size_t cap, const char *name, int selected, int installed) {
     snprintf(out, cap, "[%c] %-24s %s", installed ? '-' : (selected ? 'X' : ' '), name, installed ? "(installed - locked)" : "");
 }
@@ -473,13 +482,9 @@ static int sdl2_native_release_resources_run_download(void) {
 
     InterlockedExchange(&g_classic_install_state, CLASSIC_INSTALL_IDLE);
     if (cancelled || !strcmp(g_classic_install_error, "Canceled")) {
-        g_opts.download_classic_textures = 0;
-        g_opts.download_classic_sounds = 0;
-        g_opts.classic_audio_mask = 0;
-        g_opts.ignore_classic_resources_warning = 1;
-        g_opts.ignore_classic_sounds_warning = 1;
-        save_options();
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, APP_TITLE " - Resources", "Resource download canceled. The game will continue without the selected resources.", NULL);
+        /* Cancel is not a permanent opt-out. Missing resources must keep
+           showing the native selector on the next launch. */
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, APP_TITLE " - Resources", "Resource download canceled. The game will continue without the selected resources for this launch.", NULL);
     } else {
         char msg[MAX_LABEL * 3];
         snprintf(msg, sizeof(msg), "Could not install Release resources.\n\n%s\n\nThe game will continue without silently retrying in-game.", g_classic_install_error[0] ? g_classic_install_error : "Unknown error");
@@ -491,8 +496,8 @@ static int sdl2_native_release_resources_run_download(void) {
 static void sdl2_native_release_resources_prompt(void) {
     int textures_installed = sdl2_release_textures_installed();
     int missing_audio = sdl2_release_audio_missing_mask();
-    int textures = (g_opts.download_classic_textures && !textures_installed) ? 1 : 0;
-    int audio_mask = g_opts.download_classic_sounds ? (g_opts.classic_audio_mask & missing_audio) : 0;
+    int textures = textures_installed ? 0 : 1;
+    int audio_mask = missing_audio;
     int running = 1;
 
     g_sdl2_native_resource_prompt_handled = 1;
@@ -543,7 +548,34 @@ static void sdl2_native_release_resources_prompt(void) {
             data.numbuttons = nb;
             data.buttons = buttons;
             data.colorScheme = &colors;
-            if (SDL_ShowMessageBox(&data, &buttonid) != 0) buttonid = 101;
+            if (SDL_ShowMessageBox(&data, &buttonid) != 0) {
+                /* Never silently continue if the full checklist dialog fails.
+                   Some SDL backends dislike many native buttons, so retry with
+                   a minimal native dialog. If even that cannot be shown, stop
+                   startup rather than launching past a missing-resource prompt. */
+                SDL_MessageBoxButtonData fb[2] = {
+                    { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 100, "Download all missing" },
+                    { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 101, "Play without selected" }
+                };
+                SDL_MessageBoxData fbdata;
+                memset(&fbdata, 0, sizeof(fbdata));
+                fbdata.flags = SDL_MESSAGEBOX_WARNING;
+                fbdata.window = NULL;
+                fbdata.title = APP_TITLE " - Release Resources";
+                fbdata.message = text;
+                fbdata.numbuttons = 2;
+                fbdata.buttons = fb;
+                fbdata.colorScheme = &colors;
+                if (SDL_ShowMessageBox(&fbdata, &buttonid) != 0) {
+                    fprintf(stderr, "PexCraft: Release resource popup could not be displayed; refusing to continue silently.\n");
+                    SDL_Quit();
+                    exit(4);
+                }
+                if (buttonid == 100) {
+                    textures = textures_installed ? 0 : 1;
+                    audio_mask = missing_audio;
+                }
+            }
         }
 
         switch (buttonid) {
@@ -560,12 +592,9 @@ static void sdl2_native_release_resources_prompt(void) {
                 break;
             case 101:
             case -1:
-                g_opts.download_classic_textures = 0;
-                g_opts.download_classic_sounds = 0;
-                g_opts.classic_audio_mask = 0;
-                g_opts.ignore_classic_resources_warning = 1;
-                g_opts.ignore_classic_sounds_warning = 1;
-                save_options();
+                /* Do not permanently suppress the native resource selector.
+                   "Play without selected" is only for this launch; if resources
+                   are still missing, the native popup appears again next time. */
                 running = 0;
                 break;
             case 102:
@@ -612,7 +641,7 @@ int main(int argc, char **argv) {
     /* Native resource prompt must happen before the game window/GL UI exists.
        It does not use Minecraft textures, fonts, or in-game screens, and it
        does not download anything until the player presses Download selected. */
-    if (should_show_pack_download_prompt()) sdl2_native_release_resources_prompt();
+    if (sdl2_release_resources_missing_actual()) sdl2_native_release_resources_prompt();
     char sound_dep_notice[MAX_LABEL * 3];
     if (!pex_sound_record_dependency_report(sound_dep_notice, sizeof(sound_dep_notice))) {
         char msg[MAX_LABEL * 4];
@@ -648,8 +677,10 @@ int main(int argc, char **argv) {
         loggy_init();
         if (g_glrc) SDL_GL_MakeCurrent(g_hwnd, g_glrc);
     }
-    if (!g_sdl2_native_resource_prompt_handled && should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
-    else if (!g_sdl2_native_resource_prompt_handled && !strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
+    /* SDL2 uses the native pre-game selector. Never fall back to the in-game
+       download prompt, because that UI depends on textures/fonts that may be
+       missing. */
+    if (!g_sdl2_native_resource_prompt_handled && !strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else set_screen(pex_startup_screen());
     InitializeCriticalSection(&g_save_cs);
     main_loop();
