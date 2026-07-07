@@ -6,7 +6,7 @@
 #include <d3d9.h>
 
 #ifndef PEX_D3D9_FVF
-#define PEX_D3D9_FVF (D3DFVF_XYZ | D3DFVF_TEX1 | D3DFVF_DIFFUSE)
+#define PEX_D3D9_FVF (D3DFVF_XYZ | D3DFVF_TEX2 | D3DFVF_DIFFUSE)
 #endif
 
 typedef struct PexD3D9Vertex {
@@ -17,6 +17,7 @@ typedef struct PexD3D9Vertex {
        and color bits as UVs.  That caused the dark/green untextured world. */
     DWORD color;
     float u, v;
+    float lu, lv;
 } PexD3D9Vertex;
 
 typedef struct PexD3D9Mesh {
@@ -47,6 +48,9 @@ typedef struct PexD3D9Native {
 
     PexD3D9Mesh meshes[PEX_RENDERER_MAX_MESHES];
     PexD3D9TextureNative textures[PEX_RENDERER_MAX_TEXTURES];
+    IDirect3DTexture9 *lightmap_tex;
+    unsigned int lightmap_version;
+    int lightmap_base_key;
     uint32_t next_mesh;
     uint32_t next_texture;
 
@@ -110,6 +114,61 @@ static DWORD d3d9_pack_argb(uint32_t rgba) {
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
+static void d3d9_light_uv(uint32_t packed_light, float *u, float *v) {
+    int sky = (int)((packed_light >> 20) & 15u);
+    int block = (int)((packed_light >> 4) & 15u);
+    if (u) *u = ((float)block + 0.5f) / 16.0f;
+    if (v) *v = ((float)sky + 0.5f) / 16.0f;
+}
+
+static float d3d9_light_level_brightness(int level, float base) {
+    if (level < 0) level = 0;
+    if (level > 15) level = 15;
+    float inv = 1.0f - (float)level / 15.0f;
+    return (1.0f - inv) / (inv * 3.0f + 1.0f) * (1.0f - base) + base;
+}
+
+static DWORD d3d9_lightmap_argb(int sky, int block, float sun, float base) {
+    float light_sky = d3d9_light_level_brightness(sky, base) * (sun * 0.95f + 0.05f);
+    float light_block = d3d9_light_level_brightness(block, base) * 1.5f;
+    float sky_rg = light_sky * (sun * 0.65f + 0.35f);
+    float torch_g = light_block * ((light_block * 0.6f + 0.4f) * 0.6f + 0.4f);
+    float torch_b = light_block * (light_block * light_block * 0.6f + 0.4f);
+    float rr = (sky_rg + light_block) * 0.96f + 0.03f;
+    float gg = (sky_rg + torch_g) * 0.96f + 0.03f;
+    float bb = (light_sky + torch_b) * 0.96f + 0.03f;
+    int r = (int)(rr * 255.0f + 0.5f);
+    int g = (int)(gg * 255.0f + 0.5f);
+    int b = (int)(bb * 255.0f + 0.5f);
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    return 0xff000000u | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
+}
+
+static int d3d9_update_lightmap(const PexRenderState *s) {
+    if (!g_pxr_d3d9.dev || !s || !s->lightmap_enabled) return 0;
+    int base_key = (int)(s->lightmap_base * 1000.0f + 0.5f);
+    if (!g_pxr_d3d9.lightmap_tex) {
+        if (FAILED(IDirect3DDevice9_CreateTexture(g_pxr_d3d9.dev, 16, 16, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g_pxr_d3d9.lightmap_tex, NULL))) return 0;
+        g_pxr_d3d9.lightmap_version = 0;
+        g_pxr_d3d9.lightmap_base_key = -1000000;
+    }
+    if (g_pxr_d3d9.lightmap_version == s->lightmap_version && g_pxr_d3d9.lightmap_base_key == base_key) return 1;
+    D3DLOCKED_RECT lr;
+    if (FAILED(IDirect3DTexture9_LockRect(g_pxr_d3d9.lightmap_tex, 0, &lr, NULL, 0))) return 0;
+    for (int sky = 0; sky < 16; ++sky) {
+        DWORD *row = (DWORD*)((unsigned char*)lr.pBits + sky * lr.Pitch);
+        for (int block = 0; block < 16; ++block) {
+            row[block] = d3d9_lightmap_argb(sky, block, s->lightmap_sun, s->lightmap_base);
+        }
+    }
+    IDirect3DTexture9_UnlockRect(g_pxr_d3d9.lightmap_tex, 0);
+    g_pxr_d3d9.lightmap_version = s->lightmap_version;
+    g_pxr_d3d9.lightmap_base_key = base_key;
+    return 1;
+}
+
 static void pxr_d3d9_release_mesh(PexD3D9Mesh *m) {
     if (!m) return;
     if (m->vb) { IDirect3DVertexBuffer9_Release(m->vb); m->vb = NULL; }
@@ -148,6 +207,8 @@ static void d3d9_set_initial_states(void) {
     IDirect3DDevice9_SetTextureStageState(d, 0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
     IDirect3DDevice9_SetTextureStageState(d, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
     IDirect3DDevice9_SetTextureStageState(d, 0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+    IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
     g_pxr_d3d9.cache_valid = 0;
 }
 
@@ -213,6 +274,7 @@ static void d3d9_shutdown(void) {
     for (uint32_t i = 1; i < PEX_RENDERER_MAX_TEXTURES; ++i) {
         if (g_pxr_d3d9.textures[i].tex) { IDirect3DTexture9_Release(g_pxr_d3d9.textures[i].tex); g_pxr_d3d9.textures[i].tex = NULL; }
     }
+    if (g_pxr_d3d9.lightmap_tex) { IDirect3DTexture9_Release(g_pxr_d3d9.lightmap_tex); g_pxr_d3d9.lightmap_tex = NULL; }
     pxr_d3d9_release_dynamic();
     if (g_pxr_d3d9.dev) { IDirect3DDevice9_Release(g_pxr_d3d9.dev); g_pxr_d3d9.dev = NULL; }
     if (!g_pxr_d3d9.borrowed_device && g_pxr_d3d9.d3d) { IDirect3D9_Release(g_pxr_d3d9.d3d); g_pxr_d3d9.d3d = NULL; }
@@ -334,6 +396,7 @@ static int d3d9_upload_mesh_to_slot(uint32_t id, const PexMesh *mesh) {
             vdst[i].color = d3d9_pack_argb(mesh->vertices[i].color);
             vdst[i].u = mesh->vertices[i].u;
             vdst[i].v = mesh->vertices[i].v;
+            d3d9_light_uv(mesh->vertices[i].light, &vdst[i].lu, &vdst[i].lv);
         }
         IDirect3DVertexBuffer9_Unlock(m->vb);
     }
@@ -387,6 +450,22 @@ static void pxr_d3d9_apply_state(const PexRenderState *s) {
         }
         g_pxr_d3d9.last_texture_enabled = s->texture_enabled;
         g_pxr_d3d9.last_texture = s->texture;
+    }
+    if (s->lightmap_enabled && d3d9_update_lightmap(s)) {
+        IDirect3DDevice9_SetTexture(d, 1, (IDirect3DBaseTexture9*)g_pxr_d3d9.lightmap_tex);
+        IDirect3DDevice9_SetSamplerState(d, 1, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        IDirect3DDevice9_SetSamplerState(d, 1, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        IDirect3DDevice9_SetSamplerState(d, 1, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        IDirect3DDevice9_SetSamplerState(d, 1, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_COLORARG1, D3DTA_CURRENT);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_COLORARG2, D3DTA_TEXTURE);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_ALPHAARG1, D3DTA_CURRENT);
+    } else {
+        IDirect3DDevice9_SetTexture(d, 1, NULL);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
     }
     if (!g_pxr_d3d9.cache_valid || g_pxr_d3d9.last_blend != s->blend_enabled) {
         IDirect3DDevice9_SetRenderState(d, D3DRS_ALPHABLENDENABLE, s->blend_enabled ? TRUE : FALSE);
@@ -458,7 +537,7 @@ static void d3d9_draw_dynamic(const PexMesh *mesh, const PexRenderState *state) 
     if (FAILED(IDirect3DVertexBuffer9_Lock(g_pxr_d3d9.dynamic_vb, 0, mesh->vertex_count * sizeof(PexD3D9Vertex), (void**)&vdst, D3DLOCK_DISCARD))) return;
     for (uint32_t i = 0; i < mesh->vertex_count; ++i) {
         vdst[i].x = mesh->vertices[i].x; vdst[i].y = mesh->vertices[i].y; vdst[i].z = mesh->vertices[i].z;
-        vdst[i].color = d3d9_pack_argb(mesh->vertices[i].color); vdst[i].u = mesh->vertices[i].u; vdst[i].v = mesh->vertices[i].v;
+        vdst[i].color = d3d9_pack_argb(mesh->vertices[i].color); vdst[i].u = mesh->vertices[i].u; vdst[i].v = mesh->vertices[i].v; d3d9_light_uv(mesh->vertices[i].light, &vdst[i].lu, &vdst[i].lv);
     }
     IDirect3DVertexBuffer9_Unlock(g_pxr_d3d9.dynamic_vb);
     if (FAILED(IDirect3DIndexBuffer9_Lock(g_pxr_d3d9.dynamic_ib, 0, mesh->index_count * sizeof(uint32_t), (void**)&idst, D3DLOCK_DISCARD))) return;

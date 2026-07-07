@@ -52,6 +52,10 @@ typedef struct PexRenderState {
     float fog_start;
     float fog_end;
     uint32_t fog_color;
+    int lightmap_enabled;
+    unsigned int lightmap_version;
+    float lightmap_sun;
+    float lightmap_base;
     float modelview[16];
     float projection[16];
 } PexRenderState;
