@@ -6966,17 +6966,19 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         }
 
         if (needs) {
-            if (async_mesh) {
-                /* Never fall back to rebuilding a direct section mesh on the
-                   render/game thread just because the worker queue is full.
-                   Leaving the section dirty for the next frame is cheaper than
-                   doing the heavy meshing work on the main thread during chunk
-                   streaming. */
-                int near_player_edit = (refs[i].dist2 < (48.0f * 48.0f));
-                if (near_player_edit) (void)async_mesh_submit_priority(sy, cx, cz);
-                else (void)async_section_mesh_submit(sy, cx, cz);
+            int near_player_edit = recent_edit && (refs[i].dist2 < (48.0f * 48.0f));
+            if (async_mesh && !near_player_edit) {
+                /* Never fall back to rebuilding a background/streaming section mesh
+                   on the render/game thread just because the worker queue is full.
+                   Player edits are handled below as a Java-style immediate rebuild. */
+                (void)async_section_mesh_submit(sy, cx, cz);
             } else {
-                pex_logf_trace("chunk mesh sync rebuild sy=%d local=%d,%d", sy, cx, cz);
+                /* Java 1.2.5 rebuilds dirty WorldRenderer display lists directly
+                   from RenderGlobal.updateRenderers().  The async C path can leave
+                   a just-placed block hidden behind queued stream meshes, so rebuild
+                   the near edited section synchronously and let stale worker results
+                   be rejected by the section mesh version check. */
+                pex_logf_trace("chunk mesh sync rebuild sy=%d local=%d,%d edit=%d", sy, cx, cz, near_player_edit ? 1 : 0);
                 rebuild_flat_section_list(sy, cx, cz);
             }
             rebuilds_left--;

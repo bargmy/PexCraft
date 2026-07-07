@@ -655,12 +655,22 @@ static int flat_get_level(int x, int y, int z) {
 }
 
 
+static int flat_section_has_storage_at_block(int x, int y, int z) {
+    if (!flat_in_bounds(x, y, z)) return 0;
+    if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
+    int lcx = flat_local_chunk_x(x);
+    int lcz = flat_local_chunk_z(z);
+    int sy = flat_section_y_for_world(y);
+    if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return 0;
+    return (g_flat_chunk_section_non_empty_mask[lcz][lcx] & (unsigned short)(1u << sy)) != 0;
+}
+
 static int flat_get_sky_light(int x, int y, int z) {
     if (g_async_mesh_sky_light) {
         if (x < g_async_mesh_x0 || y < g_async_mesh_y0 || z < g_async_mesh_z0 ||
             x >= g_async_mesh_x0 + g_async_mesh_w ||
             y >= g_async_mesh_y0 + g_async_mesh_h ||
-            z >= g_async_mesh_z0 + g_async_mesh_d) return 15;
+            z >= g_async_mesh_z0 + g_async_mesh_d) return flat_java_default_sky_light();
         int ix = x - g_async_mesh_x0;
         int iy = y - g_async_mesh_y0;
         int iz = z - g_async_mesh_z0;
@@ -669,7 +679,7 @@ static int flat_get_sky_light(int x, int y, int z) {
     if (y < FLAT_WORLD_Y_MIN) return 0;
     if (y > FLAT_WORLD_Y_MAX) return flat_java_default_sky_light();
     if (!flat_in_bounds(x, y, z)) return flat_java_default_sky_light();
-    if (!flat_chunk_has_render_data_at_block(x, z)) return flat_java_default_sky_light();
+    if (!flat_section_has_storage_at_block(x, y, z)) return flat_java_default_sky_light();
     return g_flat_sky_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
 }
 
@@ -685,7 +695,7 @@ static int flat_get_block_light(int x, int y, int z) {
         return g_async_mesh_block_light[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix] & 15;
     }
     if (!flat_in_bounds(x, y, z)) return 0;
-    if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
+    if (!flat_section_has_storage_at_block(x, y, z)) return 0;
     return g_flat_block_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
 }
 
