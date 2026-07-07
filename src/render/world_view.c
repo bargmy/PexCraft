@@ -1494,14 +1494,6 @@ static PexRendererBackend *flat_direct_backend(void) {
 #endif
 }
 
-static int flat_direct_backend_uses_dynamic_lightmap(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
-    return 0;
-#else
-    return pex_using_d3d9() || pex_using_d3d11();
-#endif
-}
-
 static uint32_t flat_pack_current_rgba(void) {
     int r = (int)(g_d3d9.color[0] * 255.0f + 0.5f);
     int g = (int)(g_d3d9.color[1] * 255.0f + 0.5f);
@@ -1726,19 +1718,10 @@ static int flat_direct_reserve(FlatDirectMeshBuilder *b, uint32_t add_v, uint32_
     return 1;
 }
 
-static void flat_direct_builder_init(FlatDirectMeshBuilder *b) {
-    if (!b) return;
+static void flat_direct_begin(FlatDirectMeshBuilder *b) {
     memset(b, 0, sizeof(*b));
     b->color = flat_pack_rgba4f(1.0f, 1.0f, 1.0f, 1.0f);
     b->light = flat_fullbright_packed_light();
-}
-
-static void flat_direct_select_builder(FlatDirectMeshBuilder *b) {
-    g_flat_direct_builder = b;
-}
-
-static void flat_direct_begin(FlatDirectMeshBuilder *b) {
-    flat_direct_builder_init(b);
     g_flat_direct_builder = b;
     pex_gl_suppress_immediate(1);
 }
@@ -1914,7 +1897,6 @@ static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
 
 static void flat_direct_resolve_builder_lightmap(FlatDirectMeshBuilder *b) {
     if (!b || !b->v || b->light_resolved) return;
-    if (flat_direct_backend_uses_dynamic_lightmap()) return;
     for (uint32_t i = 0; i < b->vcount; ++i) {
         b->v[i].color = flat_apply_lightmap_to_color(b->v[i].color, b->v[i].light);
     }
@@ -2227,10 +2209,6 @@ static void flat_direct_make_state(PexRenderState *st, int pass) {
     st->fog_start = g_d3d9.fog_start;
     st->fog_end = g_d3d9.fog_end;
     st->fog_color = g_d3d9.fog_color;
-    st->lightmap_enabled = flat_direct_backend_uses_dynamic_lightmap() ? 1 : 0;
-    st->lightmap_version = flat_current_lightmap_version();
-    st->lightmap_sun = flat_light_sun_brightness(1.0f);
-    st->lightmap_base = flat_light_table_base();
 #if defined(PEX_PLATFORM_WII)
     glGetFloatv(GL_MODELVIEW_MATRIX, st->modelview);
     glGetFloatv(GL_PROJECTION_MATRIX, st->projection);
@@ -5942,88 +5920,82 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     if (z1 >= origin_z + FLAT_WORLD_SIZE) z1 = origin_z + FLAT_WORLD_SIZE - 1;
     if (y1 > FLAT_WORLD_Y_MAX) y1 = FLAT_WORLD_Y_MAX;
 
-    int has0 = 0, has1 = 0;
+    int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
     FlatDirectMeshBuilder mb0, mb1;
-    flat_direct_builder_init(&mb0);
-    flat_direct_builder_init(&mb1);
 
-    pex_gl_suppress_immediate(1);
-    flat_direct_select_builder(&mb0);
+    flat_direct_begin(&mb0);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
-
     for (int y = y0; y <= y1; y++) {
         for (int z = z0; z <= z1; z++) {
             for (int x = x0; x <= x1; x++) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
-
-                if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) {
-                    flat_direct_select_builder(&mb1);
-                    draw_special_block_model(id, x, y, z);
-                    has1 = 1;
-                    continue;
-                }
-
-                if (id == BLOCK_SNOW_LAYER) {
-                    flat_direct_select_builder(&mb0);
-                    emit_snow_layer_block(x, y, z);
-                    has0 = 1;
-                    continue;
-                }
-
-                if (block_is_liquid(id) && flat_separate_liquid_pass_enabled()) {
-                    flat_direct_select_builder(&mb1);
-                    emit_liquid_block_faces(id, x, y, z);
-                    has1 = 1;
-                    continue;
-                }
-
-                if (block_uses_special_model(id)) {
-                    flat_direct_select_builder(&mb0);
-                    draw_special_block_model(id, x, y, z);
-                    has0 = 1;
-                    continue;
-                }
-
-                if (block_uses_cross_plant_model(id)) {
-                    flat_direct_select_builder(&mb0);
-                    emit_cross_plant_block(id, x, y, z);
-                    has0 = 1;
-                    continue;
-                }
-
-                flat_direct_select_builder(&mb0);
-                if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
-                    for (int face = 0; face < 6; face++) {
-                        if (flat_face_exposed_for_block(id, x, y, z, face)) {
-                            emit_world_block_face(id, x, y, z, face);
-                            has0 = 1;
-                        }
-                    }
-                    continue;
-                }
-
-                for (int face = 0; face < 6; face++) {
-                    if (flat_face_exposed_for_block(id, x, y, z, face)) {
-                        emit_world_block_face(id, x, y, z, face);
-                        has0 = 1;
-                    }
-                }
-
+                if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) { has1 = 1; continue; }
+                if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
+                if (block_is_liquid(id)) { if (flat_separate_liquid_pass_enabled()) { has1 = 1; continue; } }
+                if (block_uses_special_model(id)) { has_special = 1; continue; }
+                if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
+                if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { has_cutout = 1; continue; }
                 if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
                     for (int face = 2; face <= 5; face++) {
-                        if (grass_side_overlay_face_needed(x, y, z, face)) {
-                            emit_grass_side_overlay_face(x, y, z, face);
-                            has0 = 1;
+                        if (grass_side_overlay_face_needed(x, y, z, face)) { has_cutout = 1; break; }
+                    }
+                }
+                for (int face = 0; face < 6; face++) {
+                    if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
+                }
+            }
+        }
+    }
+    if (has_special) {
+        for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
+            int id = flat_get_block(x, y, z);
+            if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) { draw_special_block_model(id, x, y, z); has0 = 1; }
+        }
+    }
+    if (has_cutout) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_ALPHA_TEST);
+        glAlphaFunc(GL_GREATER, 0.5f);
+        for (int y = y0; y <= y1; y++) {
+            for (int z = z0; z <= z1; z++) {
+                for (int x = x0; x <= x1; x++) {
+                    int id = flat_get_block(x, y, z);
+                    if (!id) continue;
+                    if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); has0 = 1; continue; }
+                    if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
+                        for (int face = 0; face < 6; face++) {
+                            if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
+                        }
+                    }
+                    if (id == BLOCK_GRASS && flat_fancy_grass_overlay_enabled()) {
+                        for (int face = 2; face <= 5; face++) {
+                            if (grass_side_overlay_face_needed(x, y, z, face)) { emit_grass_side_overlay_face(x, y, z, face); has0 = 1; }
                         }
                     }
                 }
             }
         }
+        glDisable(GL_ALPHA_TEST);
     }
+    glColor4f(1,1,1,1);
+    flat_direct_end();
 
+    flat_direct_begin(&mb1);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    if (has1) {
+        for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
+            int id = flat_get_block(x, y, z);
+            if (block_is_liquid(id)) {
+                if (flat_separate_liquid_pass_enabled()) emit_liquid_block_faces(id, x, y, z);
+            } else if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) {
+                draw_special_block_model(id, x, y, z);
+            }
+        }
+    }
     glColor4f(1,1,1,1);
     flat_direct_end();
 
@@ -6290,39 +6262,6 @@ static void async_mesh_clear_results(AsyncSectionMeshResult *queue, int count) {
     for (int i = 0; i < count; i++) async_section_mesh_free_result(&queue[i]);
 }
 
-static int async_section_mesh_capture_snapshot(AsyncSectionMeshJob *job) {
-    if (!job) return 0;
-    if (job->cx < 0 || job->cx >= FLAT_RENDER_CHUNKS ||
-        job->cz < 0 || job->cz >= FLAT_RENDER_CHUNKS ||
-        job->sy < 0 || job->sy >= FLAT_RENDER_SECTIONS_Y) return 0;
-    if (g_stream_remap_in_progress) return 0;
-
-    int sx0 = job->origin_x + job->cx * FLAT_RENDER_CHUNK - 1;
-    int sy0 = FLAT_WORLD_Y_MIN + job->sy * FLAT_RENDER_SECTION - 1;
-    int sz0 = job->origin_z + job->cz * FLAT_RENDER_CHUNK - 1;
-    double snapshot_start = profile_begin();
-    if (g_loggy_enabled) {
-        g_loggy_mesh_submit_snapshot_cells += ASYNC_SECTION_MESH_W * ASYNC_SECTION_MESH_H * ASYNC_SECTION_MESH_D;
-    }
-    for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
-        int wy = sy0 + iy;
-        for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
-            int wz = sz0 + iz;
-            for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
-                int wx = sx0 + ix;
-                int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
-                job->blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
-                job->meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
-                job->levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
-                job->sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
-                job->block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
-            }
-        }
-    }
-    profile_add_time(PROF_MESH_SUBMIT_SNAPSHOT, snapshot_start);
-    return !g_stream_remap_in_progress;
-}
-
 static int async_mesh_push_upload_job(AsyncSectionMeshResult *r) {
     for (;;) {
         EnterCriticalSection(&g_async_section_mesh_cs);
@@ -6405,6 +6344,8 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
             double upload_worker_start = now_seconds();
             if (pex_using_d3d11()) {
                 int ok0 = 1, ok1 = 1;
+                flat_direct_resolve_builder_lightmap(&r.mb0);
+                flat_direct_resolve_builder_lightmap(&r.mb1);
                 if (!r.skip0 && r.mb0.vcount > 0 && r.mb0.icount > 0) {
                     PexMesh mesh; memset(&mesh, 0, sizeof(mesh));
                     mesh.vertices = r.mb0.v; mesh.indices = r.mb0.i;
@@ -6478,19 +6419,6 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             int skip0 = 1, skip1 = 1;
             memset(&mb0, 0, sizeof(mb0));
             memset(&mb1, 0, sizeof(mb1));
-
-            if (!async_section_mesh_capture_snapshot(&job)) {
-                if (job.sy >= 0 && job.sy < FLAT_RENDER_SECTIONS_Y &&
-                    job.cz >= 0 && job.cz < FLAT_RENDER_CHUNKS &&
-                    job.cx >= 0 && job.cx < FLAT_RENDER_CHUNKS) {
-                    g_flat_section_mesh_building[job.sy][job.cz][job.cx] = 0;
-                    g_flat_section_dirty[job.sy][job.cz][job.cx] = 1;
-                }
-                EnterCriticalSection(&g_async_section_mesh_cs);
-                g_async_section_mesh_busy = 0;
-                LeaveCriticalSection(&g_async_section_mesh_cs);
-                continue;
-            }
 
             g_async_mesh_blocks = job.blocks;
             g_async_mesh_meta = job.meta;
@@ -6623,9 +6551,30 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     job.version = g_flat_section_mesh_version[sy][cz][cx];
     job.light_version = g_flat_chunk_light_version[cz][cx];
     job.priority = priority ? 1 : 0;
+    int sx0 = job.origin_x + cx * FLAT_RENDER_CHUNK - 1;
+    int sy0 = FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION - 1;
+    int sz0 = job.origin_z + cz * FLAT_RENDER_CHUNK - 1;
+    double snapshot_start = profile_begin();
     if (g_loggy_enabled) {
         g_loggy_mesh_submit_calls++;
+        g_loggy_mesh_submit_snapshot_cells += ASYNC_SECTION_MESH_W * ASYNC_SECTION_MESH_H * ASYNC_SECTION_MESH_D;
     }
+    for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
+        int wy = sy0 + iy;
+        for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
+            int wz = sz0 + iz;
+            for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
+                int wx = sx0 + ix;
+                int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
+                job.blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
+                job.meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
+                job.levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
+                job.sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
+                job.block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
+            }
+        }
+    }
+    profile_add_time(PROF_MESH_SUBMIT_SNAPSHOT, snapshot_start);
 
     EnterCriticalSection(&g_async_section_mesh_cs);
     if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx]) {

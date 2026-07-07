@@ -444,6 +444,7 @@ static void flat_mark_generated_section(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty(int cx, int cz, int sy);
 static int flat_section_has_blocks(int lcx, int lcz, int sy);
 static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
+static int flat_current_dimension_has_sky(void);
 static void flat_bump_light_version(int lcx, int lcz);
 static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections);
 static int flat_chunk_light_ready(int lcx, int lcz);
@@ -513,6 +514,19 @@ static int flat_chunk_generated_at_block(int x, int z) {
     int lcx = flat_local_chunk_x(x);
     int lcz = flat_local_chunk_z(z);
     return flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx];
+}
+
+static int flat_java_default_sky_light(void) {
+    return flat_current_dimension_has_sky() ? 15 : 0;
+}
+
+static int flat_chunk_has_render_data_at_block(int x, int z) {
+    /* Java 1.2.5 World/ChunkCache returns EnumSkyBlock.defaultLightValue
+       for missing chunks instead of reading zeroed chunk storage.  The C port
+       keeps a fixed streaming window whose arrays are memset to zero; without
+       this guard, in-window but not-yet-generated neighbor chunks become black
+       when a section mesh samples its 1-block border. */
+    return flat_chunk_generated_at_block(x, z);
 }
 
 static int flat_player_columns_generated_at(float px, float pz) {
@@ -595,6 +609,7 @@ static int flat_get_block(int x, int y, int z) {
         return g_async_mesh_blocks[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix];
     }
     if (!flat_in_bounds(x, y, z)) return 0;
+    if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
     return g_flat_blocks[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
 }
 
@@ -610,6 +625,7 @@ static int flat_get_meta(int x, int y, int z) {
         return g_async_mesh_meta[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix];
     }
     if (!flat_in_bounds(x, y, z)) return 0;
+    if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
     return g_flat_meta[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
 }
 
@@ -634,6 +650,7 @@ static int flat_get_level(int x, int y, int z) {
         return g_async_mesh_levels[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix];
     }
     if (!flat_in_bounds(x, y, z)) return 0;
+    if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
     return g_flat_levels[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
 }
 
@@ -650,8 +667,9 @@ static int flat_get_sky_light(int x, int y, int z) {
         return g_async_mesh_sky_light[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix] & 15;
     }
     if (y < FLAT_WORLD_Y_MIN) return 0;
-    if (y > FLAT_WORLD_Y_MAX) return 15;
-    if (!flat_in_bounds(x, y, z)) return 15;
+    if (y > FLAT_WORLD_Y_MAX) return flat_java_default_sky_light();
+    if (!flat_in_bounds(x, y, z)) return flat_java_default_sky_light();
+    if (!flat_chunk_has_render_data_at_block(x, z)) return flat_java_default_sky_light();
     return g_flat_sky_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
 }
 
@@ -667,6 +685,7 @@ static int flat_get_block_light(int x, int y, int z) {
         return g_async_mesh_block_light[((iy * g_async_mesh_d) + iz) * g_async_mesh_w + ix] & 15;
     }
     if (!flat_in_bounds(x, y, z)) return 0;
+    if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
     return g_flat_block_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
 }
 
@@ -1014,7 +1033,7 @@ static void flat_propagate_light_region(unsigned char *arr, int x0, int y0, int 
     }
 }
 
-static void flat_relight_region_impl(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky, int publish_ready) {
+static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky) {
     if (rx1 < rx0) { int t = rx0; rx0 = rx1; rx1 = t; }
     if (rz1 < rz0) { int t = rz0; rz0 = rz1; rz1 = t; }
     if (margin < 0) margin = 0;
@@ -1103,11 +1122,22 @@ static void flat_relight_region_impl(int rx0, int rz0, int rx1, int rz1, int mar
                 if ((g_flat_sky_light[yi][fz][fx] & 15) != new_sky ||
                     (g_flat_block_light[yi][fz][fx] & 15) != new_block) {
                     int lsy = yi / FLAT_RENDER_SECTION;
-                    if (flat_section_index_valid(lsy) && flat_local_chunk_valid(lcx, lcz) &&
-                        !changed_sections[lsy][lcz][lcx]) {
-                        changed_sections[lsy][lcz][lcx] = 1;
+                    if (flat_section_index_valid(lsy) && flat_local_chunk_valid(lcx, lcz)) {
+                        if (!changed_sections[lsy][lcz][lcx]) {
+                            changed_sections[lsy][lcz][lcx] = 1;
+                            changed_section_count++;
+                        }
                         changed_chunks[lcz][lcx] = 1;
-                        changed_section_count++;
+                        /* Java markBlockNeedsUpdate2(x,y,z) -> markBlocksForUpdate
+                           (x-1..x+1, y-1..y+1, z-1..z+1).  Because renderers are
+                           16^3, this only adds neighbor sections when the changed
+                           light cell is on a 16-block boundary. */
+                        if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0 && flat_local_chunk_valid(lcx - 1, lcz) && !changed_sections[lsy][lcz][lcx - 1]) { changed_sections[lsy][lcz][lcx - 1] = 1; changed_section_count++; }
+                        if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1 && flat_local_chunk_valid(lcx + 1, lcz) && !changed_sections[lsy][lcz][lcx + 1]) { changed_sections[lsy][lcz][lcx + 1] = 1; changed_section_count++; }
+                        if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0 && flat_local_chunk_valid(lcx, lcz - 1) && !changed_sections[lsy][lcz - 1][lcx]) { changed_sections[lsy][lcz - 1][lcx] = 1; changed_section_count++; }
+                        if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1 && flat_local_chunk_valid(lcx, lcz + 1) && !changed_sections[lsy][lcz + 1][lcx]) { changed_sections[lsy][lcz + 1][lcx] = 1; changed_section_count++; }
+                        if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0 && flat_section_index_valid(lsy - 1) && !changed_sections[lsy - 1][lcz][lcx]) { changed_sections[lsy - 1][lcz][lcx] = 1; changed_section_count++; }
+                        if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1 && flat_section_index_valid(lsy + 1) && !changed_sections[lsy + 1][lcz][lcx]) { changed_sections[lsy + 1][lcz][lcx] = 1; changed_section_count++; }
                     }
                     g_flat_sky_light[yi][fz][fx] = new_sky;
                     g_flat_block_light[yi][fz][fx] = new_block;
@@ -1118,25 +1148,8 @@ static void flat_relight_region_impl(int rx0, int rz0, int rx1, int rz1, int mar
     for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
             if (changed_chunks[lcz][lcx]) {
+                g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
                 flat_bump_light_version(lcx, lcz);
-            }
-        }
-    }
-    if (publish_ready) {
-        int rcx0 = floor_div16(rx0);
-        int rcz0 = floor_div16(rz0);
-        int rcx1 = floor_div16(rx1);
-        int rcz1 = floor_div16(rz1);
-        int base_cx = floor_div16(g_flat_world_origin_x);
-        int base_cz = floor_div16(g_flat_world_origin_z);
-        for (int wcz = rcz0; wcz <= rcz1; ++wcz) {
-            int lcz = wcz - base_cz;
-            for (int wcx = rcx0; wcx <= rcx1; ++wcx) {
-                int lcx = wcx - base_cx;
-                if (!flat_local_chunk_valid(lcx, lcz) || !g_flat_world_chunk_generated[lcz][lcx]) continue;
-                if (!g_flat_chunk_light_ready[lcz][lcx]) {
-                    flat_publish_light_ready(lcx, lcz, 1, 1);
-                }
             }
         }
     }
@@ -1152,14 +1165,6 @@ static void flat_relight_region_impl(int rx0, int rz0, int rx1, int rz1, int mar
     pex_logf_trace("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
     (void)changed_section_count;
     free(sky); free(block); free(q);
-}
-
-static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky) {
-    flat_relight_region_impl(rx0, rz0, rx1, rz1, margin, propagate_sky, 1);
-}
-
-static void flat_relight_region_preview(int rx0, int rz0, int rx1, int rz1, int margin, int propagate_sky) {
-    flat_relight_region_impl(rx0, rz0, rx1, rz1, margin, propagate_sky, 0);
 }
 
 static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
@@ -1392,12 +1397,15 @@ static void flat_mark_light_cell_changed(int x, int y, int z) {
     int fz = flat_z_index(z);
     int lcx = fx / FLAT_RENDER_CHUNK;
     int lcz = fz / FLAT_RENDER_CHUNK;
-    int sy = (y - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
     if (flat_local_chunk_valid(lcx, lcz)) {
         g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
         flat_bump_light_version(lcx, lcz);
     }
-    flat_mark_section_dirty(lcx, lcz, sy);
+    /* Java RenderGlobal.markBlockNeedsUpdate2 expands the changed light cell by
+       one block.  That only crosses renderer boundaries at section/chunk edges;
+       this helper mirrors that targeted expansion instead of dirtying every
+       neighboring section unconditionally. */
+    flat_mark_sections_dirty_near_block(x, y, z);
 }
 
 static void flat_set_light_value_kind(int kind, int x, int y, int z, int value) {
@@ -1624,7 +1632,7 @@ static void flat_preview_pending_lighting(void) {
     /* Small, synchronous visual preview only.  This is intentionally much
        smaller than the full 15-block light update; it avoids gameplay hitches
        while making the edited area update before the async/full pass completes. */
-    flat_relight_region_preview(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
+    flat_relight_region(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
 }
 
 static int flat_take_pending_light_region(int *x0, int *z0, int *x1, int *z1) {
@@ -2291,7 +2299,12 @@ static void flat_bump_light_version(int lcx, int lcz) {
 
 static int flat_chunk_light_ready(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
-    return g_flat_world_chunk_generated[lcz][lcx] && g_flat_chunk_light_ready[lcz][lcx];
+    /* Java has no separate final-light-ready gate for terrain rendering: a
+       generated chunk is renderable, and missing/stale light falls back to the
+       EnumSkyBlock defaults until light updates dirty/rebuild renderers.  Keep
+       g_flat_chunk_light_ready as an internal repair-state/version trigger, but
+       do not let it hide generated terrain. */
+    return g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
 }
 
 static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections) {
@@ -2392,14 +2405,14 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
         flat_publish_light_ready(lcx, lcz, 0, 1);
     } else if (g_stream_suppress_generated_chunk_light_dirty) {
         /* Portal travel installs a target-dimension neighborhood synchronously so
-           Teleporter-style search/create can run immediately.  Keep existing
-           portal behavior, but do not let normal runtime streaming use this fast
-           path: streamed chunks must wait for the final relight before meshing. */
+           Teleporter-style search/create can run immediately.  Do not enqueue one
+           full lighting region per installed chunk here; that merged into a huge
+           32x32-window lighting pass and looked like a freeze right after entry. */
         flat_publish_light_ready(lcx, lcz, 1, 1);
     } else {
-        /* Runtime streaming may copy a local light preview, but that preview is not
-           final neighbor-aware lighting.  Leave the chunk non-meshable until
-           flat_relight_region() completes and publishes readiness for this chunk. */
+        /* Runtime streaming may show a fast local light preview, but the expensive
+           neighbor-aware pass is queued/batched for the lighting worker instead of
+           blocking the stream commit thread for every chunk. */
         flat_publish_light_ready(lcx, lcz, 0, 1);
         {
             int wcx = floor_div16(g_flat_world_origin_x) + lcx;
@@ -10191,36 +10204,14 @@ static void flat_run_initial_light_settle(void) {
         int rx1 = (base_cx + max_lcx) * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1;
         int rz1 = (base_cz + max_lcz) * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1;
 
-        /* Do not run one 50-chunk + 16-margin full-height relight before entry.
-           Settle only the spawn-near generated island synchronously, then queue the
-           whole preload island for the lighting worker.  Non-spawn chunks remain
-           non-meshable until that final worker pass publishes them ready. */
-        int player_lcx = floor_div16((int)floorf(g_player_x)) - base_cx;
-        int player_lcz = floor_div16((int)floorf(g_player_z)) - base_cz;
-        if (player_lcx < min_lcx) player_lcx = min_lcx;
-        if (player_lcx > max_lcx) player_lcx = max_lcx;
-        if (player_lcz < min_lcz) player_lcz = min_lcz;
-        if (player_lcz > max_lcz) player_lcz = max_lcz;
-        int near_min_lcx = player_lcx - 2;
-        int near_max_lcx = player_lcx + 2;
-        int near_min_lcz = player_lcz - 2;
-        int near_max_lcz = player_lcz + 2;
-        if (near_min_lcx < min_lcx) near_min_lcx = min_lcx;
-        if (near_min_lcz < min_lcz) near_min_lcz = min_lcz;
-        if (near_max_lcx > max_lcx) near_max_lcx = max_lcx;
-        if (near_max_lcz > max_lcz) near_max_lcz = max_lcz;
-
-        int nrx0 = (base_cx + near_min_lcx) * FLAT_RENDER_CHUNK;
-        int nrz0 = (base_cz + near_min_lcz) * FLAT_RENDER_CHUNK;
-        int nrx1 = (base_cx + near_max_lcx) * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1;
-        int nrz1 = (base_cz + near_max_lcz) * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1;
-
-        g_stream_initial_light_settle_progress = 15;
-        flat_relight_region(nrx0, nrz0, nrx1, nrz1, 1, 1);
-        g_stream_initial_light_settle_progress = 75;
-        if (nrx0 != rx0 || nrz0 != rz0 || nrx1 != rx1 || nrz1 != rz1) {
-            flat_mark_light_dirty_region(rx0, rz0, rx1, rz1);
-        }
+        /* Java 1.2.5 preloads terrain chunks and lets renderers rebuild from the
+           chunk light data already generated with each chunk.  It does not run a
+           new full-island relight before entering the world.  Queue the same area
+           for asynchronous edge/neighbor repair, but do not block the loading
+           screen or terrain visibility on that repair. */
+        g_stream_initial_light_settle_progress = 30;
+        flat_mark_light_dirty_region(rx0, rz0, rx1, rz1);
+        flat_lighting_worker_wake();
         g_stream_initial_light_settle_progress = 90;
         for (int lcz = min_lcz; lcz <= max_lcz; ++lcz) {
             for (int lcx = min_lcx; lcx <= max_lcx; ++lcx) {

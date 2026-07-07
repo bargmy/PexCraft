@@ -52,7 +52,6 @@ typedef struct PexD3D11CBNative {
     float projection[16];
     float fog_color[4];
     float fog_params[4];
-    float light_params[4];
 } PexD3D11CBNative;
 
 typedef struct PexD3D11Native {
@@ -356,30 +355,27 @@ static int pxr_d3d11_compile_shader(const char *src, const char *entry, const ch
 static int pxr_d3d11_create_pipeline(void) {
     static const char *vs_src =
         "#pragma pack_matrix(row_major)\n"
-        "cbuffer C : register(b0) { row_major float4x4 uModelView; row_major float4x4 uProj; float4 uFogColor; float4 uFogParams; float4 uLightParams; };\n"
-        "struct VSIn { float3 pos:POSITION; float2 uv:TEXCOORD0; float4 color:COLOR0; uint light:TEXCOORD1; };\n"
-        "struct VSOut { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; float4 color:COLOR0; float fog:TEXCOORD2; };\n"
-        "float light_level(uint level, float base) { float inv = 1.0 - (float)level / 15.0; return (1.0 - inv) / (inv * 3.0 + 1.0) * (1.0 - base) + base; }\n"
-        "float3 lightmap(uint packedLight) { uint sky = (packedLight >> 20) & 15; uint block = (packedLight >> 4) & 15; float sun = uLightParams.y; float base = uLightParams.z; float lightSky = light_level(sky, base) * (sun * 0.95 + 0.05); float lightBlock = light_level(block, base) * 1.5; float skyRG = lightSky * (sun * 0.65 + 0.35); float torchG = lightBlock * ((lightBlock * 0.6 + 0.4) * 0.6 + 0.4); float torchB = lightBlock * (lightBlock * lightBlock * 0.6 + 0.4); return saturate(float3(skyRG + lightBlock, skyRG + torchG, lightSky + torchB) * 0.96 + 0.03); }\n"
-        "VSOut main(VSIn i) { VSOut o; float4 v = mul(float4(i.pos,1), uModelView); o.pos = mul(v, uProj); o.uv=i.uv; o.color=i.color; if (uLightParams.x > 0.5) o.color.rgb *= lightmap(i.light); o.fog = saturate((uFogParams.y - abs(v.z)) / max(0.0001, uFogParams.y-uFogParams.x)); return o; }\n";
+        "cbuffer C : register(b0) { row_major float4x4 uModelView; row_major float4x4 uProj; float4 uFogColor; float4 uFogParams; };\n"
+        "struct VSIn { float3 pos:POSITION; float2 uv:TEXCOORD0; float4 color:COLOR0; };\n"
+        "struct VSOut { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; float4 color:COLOR0; float fog:TEXCOORD1; };\n"
+        "VSOut main(VSIn i) { VSOut o; float4 v = mul(float4(i.pos,1), uModelView); o.pos = mul(v, uProj); o.uv=i.uv; o.color=i.color; o.fog = saturate((uFogParams.y - abs(v.z)) / max(0.0001, uFogParams.y-uFogParams.x)); return o; }\n";
     static const char *ps_src =
         "Texture2D t0 : register(t0); SamplerState s0 : register(s0);\n"
         "#pragma pack_matrix(row_major)\n"
-        "cbuffer C : register(b0) { row_major float4x4 uModelView; row_major float4x4 uProj; float4 uFogColor; float4 uFogParams; float4 uLightParams; };\n"
-        "struct PSIn { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; float4 color:COLOR0; float fog:TEXCOORD2; };\n"
+        "cbuffer C : register(b0) { row_major float4x4 uModelView; row_major float4x4 uProj; float4 uFogColor; float4 uFogParams; };\n"
+        "struct PSIn { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; float4 color:COLOR0; float fog:TEXCOORD1; };\n"
         "float4 main(PSIn i) : SV_TARGET { float4 tex = t0.Sample(s0, i.uv); float4 c = tex * i.color; if (uFogParams.w > 0.5 && c.a < 0.10) discard; if (uFogParams.z > 0.5) c.rgb = lerp(uFogColor.rgb, c.rgb, i.fog); return c; }\n";
     ID3DBlob *vsb = NULL, *psb = NULL;
     if (!pxr_d3d11_compile_shader(vs_src, "main", "vs_4_0", &vsb)) return 0;
     if (!pxr_d3d11_compile_shader(ps_src, "main", "ps_4_0", &psb)) { ID3DBlob_Release(vsb); return 0; }
     if (FAILED(ID3D11Device_CreateVertexShader(g_pxr_d3d11.dev, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), NULL, &g_pxr_d3d11.vs))) { ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
     if (FAILED(ID3D11Device_CreatePixelShader(g_pxr_d3d11.dev, ID3DBlob_GetBufferPointer(psb), ID3DBlob_GetBufferSize(psb), NULL, &g_pxr_d3d11.ps))) { ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
-    D3D11_INPUT_ELEMENT_DESC layout[4];
+    D3D11_INPUT_ELEMENT_DESC layout[3];
     memset(layout, 0, sizeof(layout));
     layout[0].SemanticName = "POSITION"; layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT; layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; layout[0].AlignedByteOffset = 0;
     layout[1].SemanticName = "TEXCOORD"; layout[1].Format = DXGI_FORMAT_R32G32_FLOAT; layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; layout[1].AlignedByteOffset = 12;
     layout[2].SemanticName = "COLOR"; layout[2].Format = DXGI_FORMAT_R8G8B8A8_UNORM; layout[2].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; layout[2].AlignedByteOffset = 20;
-    layout[3].SemanticName = "TEXCOORD"; layout[3].SemanticIndex = 1; layout[3].Format = DXGI_FORMAT_R32_UINT; layout[3].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; layout[3].AlignedByteOffset = 24;
-    HRESULT hr = ID3D11Device_CreateInputLayout(g_pxr_d3d11.dev, layout, 4, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), &g_pxr_d3d11.input_layout);
+    HRESULT hr = ID3D11Device_CreateInputLayout(g_pxr_d3d11.dev, layout, 3, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), &g_pxr_d3d11.input_layout);
     ID3DBlob_Release(vsb); ID3DBlob_Release(psb);
     if (FAILED(hr)) return 0;
 
@@ -699,10 +695,6 @@ static void pxr_d3d11_apply_state(const PexRenderState *s) {
         cb->fog_params[1] = s->fog_end;
         cb->fog_params[2] = s->fog_enabled ? 1.0f : 0.0f;
         cb->fog_params[3] = s->alpha_test_enabled ? 1.0f : 0.0f;
-        cb->light_params[0] = s->lightmap_enabled ? 1.0f : 0.0f;
-        cb->light_params[1] = s->lightmap_sun;
-        cb->light_params[2] = s->lightmap_base;
-        cb->light_params[3] = 0.0f;
         ID3D11DeviceContext_Unmap(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.constant_buffer, 0);
     }
     ID3D11DeviceContext_VSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);

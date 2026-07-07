@@ -114,7 +114,13 @@ static int32_t jr_next_int_bound(JavaRandom *r, int32_t bound) {
     if (bound <= 0) return 0;
     if ((bound & -bound) == bound) return (int32_t)((bound * (int64_t)jr_next(r, 31)) >> 31);
     int32_t bits, val;
-    do { bits = jr_next(r, 31); val = bits % bound; } while (bits - val + (bound - 1) < 0);
+    do {
+        bits = jr_next(r, 31);
+        val = bits % bound;
+        /* Java Random.nextInt(bound) performs this overflow test in signed
+           32-bit int arithmetic.  Avoid C signed-overflow UB while preserving
+           the exact wraparound condition. */
+    } while ((int32_t)((uint32_t)bits - (uint32_t)val + (uint32_t)(bound - 1)) < 0);
     return val;
 }
 static int64_t jr_next_long(JavaRandom *r) { return ((int64_t)jr_next(r, 32) << 32) + (int64_t)jr_next(r, 32); }
@@ -245,12 +251,34 @@ static void perlin_fill(PerlinNoise *n, double *out, double x0, double y0, doubl
 typedef struct OctaveNoise { int octaves; PerlinNoise p[16]; } OctaveNoise;
 static void octave_init(OctaveNoise *o, JavaRandom *r, int count) { o->octaves = count; for (int i = 0; i < count && i < 16; i++) perlin_init(&o->p[i], r); }
 static double octave_noise2(OctaveNoise *o, double x, double z) { double v=0.0, f=1.0; for(int i=0;i<o->octaves;i++){ v += perlin_noise2(&o->p[i], x*f, z*f) / f; f /= 2.0; } return v; }
+static double java_octave_fold_scaled_coord(double scaled_coord) {
+    /* NoiseGeneratorOctaves.generateNoiseOctaves folds only the already-scaled
+       X/Z base coordinates to a 24-bit range before calling Perlin.  This is
+       observable for large/negative chunk coordinates and is required for
+       Java 1.2.5 block-for-block parity.  Y is intentionally not folded. */
+    int64_t whole = (int64_t)floor(scaled_coord);
+    scaled_coord -= (double)whole;
+    whole %= INT64_C(16777216);
+    return scaled_coord + (double)whole;
+}
+static double java_octave_fold_unscaled_base(double base, double scale) {
+    if (scale == 0.0) return base;
+    return java_octave_fold_scaled_coord(base * scale) / scale;
+}
 static double *octave_fill3(OctaveNoise *o, double *out, int *cap, double x,double y,double z,int xs,int ys,int zs,double sx,double sy,double sz) {
     int n = xs*ys*zs;
     if (!out || *cap < n) { free(out); out = (double*)malloc(sizeof(double)*n); *cap = n; }
     for (int i=0;i<n;i++) out[i]=0.0;
     double amp=1.0;
-    for(int i=0;i<o->octaves;i++){ perlin_fill(&o->p[i], out, x,y,z,xs,ys,zs, sx*amp, sy*amp, sz*amp, amp); amp/=2.0; }
+    for(int i=0;i<o->octaves;i++){
+        double osx = sx * amp;
+        double osy = sy * amp;
+        double osz = sz * amp;
+        double ox = java_octave_fold_unscaled_base(x, osx);
+        double oz = java_octave_fold_unscaled_base(z, osz);
+        perlin_fill(&o->p[i], out, ox, y, oz, xs, ys, zs, osx, osy, osz, amp);
+        amp/=2.0;
+    }
     return out;
 }
 static double *octave_fill2_bridge(OctaveNoise *o, double *out, int *cap, int x,int z,int xs,int zs,double sx,double sz,double dummy) {
@@ -1192,11 +1220,11 @@ static void qm_replace_surface(TerrainProvider *tp, int cx, int cz, unsigned cha
 }
 
 /* mp.java / dr.java */
-static void cave_carve_node(JavaRandom *globalRand, int chunkX, int chunkZ, unsigned char *blocks, double x, double y, double z, float radius, float yaw, float pitch, int step, int maxStep, double heightScale) {
+static void cave_carve_node(TerrainProvider *tp, int64_t nodeSeed, int chunkX, int chunkZ, unsigned char *blocks, double x, double y, double z, float radius, float yaw, float pitch, int step, int maxStep, double heightScale) {
     double centerX = chunkX * 16 + 8;
     double centerZ = chunkZ * 16 + 8;
     float yawVel=0.0f, pitchVel=0.0f;
-    JavaRandom rand; jr_set_seed(&rand, jr_next_long(globalRand));
+    JavaRandom rand; jr_set_seed(&rand, nodeSeed);
     if(maxStep <= 0) { int base = 8 * 16 - 16; maxStep = base - jr_next_int_bound(&rand, base/4); }
     int mainBranch = 0;
     if(step == -1) { step = maxStep / 2; mainBranch = 1; }
@@ -1216,8 +1244,12 @@ static void cave_carve_node(JavaRandom *globalRand, int chunkX, int chunkZ, unsi
         pitchVel += (jr_next_float(&rand)-jr_next_float(&rand))*jr_next_float(&rand)*2.0f;
         yawVel += (jr_next_float(&rand)-jr_next_float(&rand))*jr_next_float(&rand)*4.0f;
         if(!mainBranch && step == splitStep && radius > 1.0f) {
-            cave_carve_node(globalRand,chunkX,chunkZ,blocks,x,y,z,jr_next_float(&rand)*0.5f+0.5f,yaw-(float)(M_PI/2.0),pitch/3.0f,step,maxStep,1.0);
-            cave_carve_node(globalRand,chunkX,chunkZ,blocks,x,y,z,jr_next_float(&rand)*0.5f+0.5f,yaw+(float)(M_PI/2.0),pitch/3.0f,step,maxStep,1.0);
+            int64_t leftSeed = jr_next_long(&rand);
+            float leftRadius = jr_next_float(&rand)*0.5f+0.5f;
+            cave_carve_node(tp,leftSeed,chunkX,chunkZ,blocks,x,y,z,leftRadius,yaw-(float)(M_PI/2.0),pitch/3.0f,step,maxStep,1.0);
+            int64_t rightSeed = jr_next_long(&rand);
+            float rightRadius = jr_next_float(&rand)*0.5f+0.5f;
+            cave_carve_node(tp,rightSeed,chunkX,chunkZ,blocks,x,y,z,rightRadius,yaw+(float)(M_PI/2.0),pitch/3.0f,step,maxStep,1.0);
             return;
         }
         if(mainBranch || jr_next_int_bound(&rand,4) != 0) {
@@ -1237,7 +1269,7 @@ static void cave_carve_node(JavaRandom *globalRand, int chunkX, int chunkZ, unsi
                 for(int xx=minX; !foundLiquid && xx<maxX; xx++) for(int zz=minZ; !foundLiquid && zz<maxZ; zz++) for(int yy=maxY+1; !foundLiquid && yy>=minY-1; yy--) {
                     int idx=chunk_index(xx,yy,zz);
                     if(yy>=0 && yy<128) {
-                        if(blocks[idx] == BLK_WATER || blocks[idx] == BLK_STILL_WATER || blocks[idx] == BLK_LAVA || blocks[idx] == BLK_STILL_LAVA) foundLiquid=1;
+                        if(blocks[idx] == BLK_WATER || blocks[idx] == BLK_STILL_WATER) foundLiquid=1;
                         if(yy != minY-1 && xx != minX && xx != maxX-1 && zz != minZ && zz != maxZ-1) yy = minY;
                     }
                 }
@@ -1254,8 +1286,8 @@ static void cave_carve_node(JavaRandom *globalRand, int chunkX, int chunkZ, unsi
                                     unsigned char id=blocks[idx];
                                     if(id == BLK_GRASS) hitGrass=1;
                                     if(id == BLK_STONE || id == BLK_DIRT || id == BLK_GRASS) {
-                                        if(yy < 10) blocks[idx] = BLK_STILL_LAVA;
-                                        else { blocks[idx] = 0; if(hitGrass && blocks[idx-1] == BLK_DIRT) blocks[idx-1] = BLK_GRASS; }
+                                        if(yy < 10) blocks[idx] = BLK_LAVA;
+                                        else { blocks[idx] = 0; if(hitGrass && blocks[idx-1] == BLK_DIRT) blocks[idx-1] = biome_manager_get(&tp->biomeManager, xx + chunkX*16, zz + chunkZ*16, 1, 1)[0].top; }
                                     }
                                 }
                                 idx--;
@@ -1269,10 +1301,11 @@ static void cave_carve_node(JavaRandom *globalRand, int chunkX, int chunkZ, unsi
         step++;
     }
 }
-static void cave_big_room(JavaRandom *globalRand, int chunkX, int chunkZ, unsigned char *blocks, double x, double y, double z) {
-    cave_carve_node(globalRand, chunkX, chunkZ, blocks, x, y, z, 1.0f + jr_next_float(globalRand) * 6.0f, 0.0f, 0.0f, -1, -1, 0.5);
+static void cave_big_room(TerrainProvider *tp, JavaRandom *sourceRand, int chunkX, int chunkZ, unsigned char *blocks, double x, double y, double z) {
+    int64_t nodeSeed = jr_next_long(sourceRand);
+    cave_carve_node(tp, nodeSeed, chunkX, chunkZ, blocks, x, y, z, 1.0f + jr_next_float(sourceRand) * 6.0f, 0.0f, 0.0f, -1, -1, 0.5);
 }
-static void caves_for_source(JavaRandom *rand, int srcX, int srcZ, int chunkX, int chunkZ, unsigned char *blocks) {
+static void caves_for_source(TerrainProvider *tp, JavaRandom *rand, int srcX, int srcZ, int chunkX, int chunkZ, unsigned char *blocks) {
     int count = jr_next_int_bound(rand, jr_next_int_bound(rand, jr_next_int_bound(rand, 40) + 1) + 1);
     if(jr_next_int_bound(rand, 15) != 0) count = 0;
     for(int i=0;i<count;i++) {
@@ -1280,12 +1313,12 @@ static void caves_for_source(JavaRandom *rand, int srcX, int srcZ, int chunkX, i
         double y = jr_next_int_bound(rand, jr_next_int_bound(rand,120)+8);
         double z = srcZ*16 + jr_next_int_bound(rand,16);
         int tunnels=1;
-        if(jr_next_int_bound(rand,4) == 0) { cave_big_room(rand, chunkX, chunkZ, blocks, x,y,z); tunnels += jr_next_int_bound(rand,4); }
+        if(jr_next_int_bound(rand,4) == 0) { cave_big_room(tp, rand, chunkX, chunkZ, blocks, x,y,z); tunnels += jr_next_int_bound(rand,4); }
         for(int j=0;j<tunnels;j++) {
             float yaw = jr_next_float(rand) * (float)M_PI * 2.0f;
             float pitch = (jr_next_float(rand) - 0.5f) * 2.0f / 8.0f;
             float rad = jr_next_float(rand) * 2.0f + jr_next_float(rand);
-            cave_carve_node(rand, chunkX, chunkZ, blocks, x,y,z,rad,yaw,pitch,0,0,1.0);
+            cave_carve_node(tp, jr_next_long(rand), chunkX, chunkZ, blocks, x,y,z,rad,yaw,pitch,0,0,1.0);
         }
     }
 }
@@ -1296,7 +1329,7 @@ static void qm_generate_caves(TerrainProvider *tp, int cx, int cz, unsigned char
     for(int sx=cx-8; sx<=cx+8; sx++) for(int sz=cz-8; sz<=cz+8; sz++) {
         int64_t seed = (int64_t)(((uint64_t)(int64_t)sx * (uint64_t)s1) ^ ((uint64_t)(int64_t)sz * (uint64_t)s2) ^ (uint64_t)tp->worldSeed);
         jr_set_seed(&rand, seed);
-        caves_for_source(&rand, sx, sz, cx, cz, blocks);
+        caves_for_source(tp, &rand, sx, sz, cx, cz, blocks);
     }
 }
 
@@ -1458,15 +1491,16 @@ static void place_ore_vein(unsigned char *blocks, JavaRandom *r, int id, int cou
     double x2 = x + 8 - beta_sin(angle) * count / 8.0f;
     double z1 = z + 8 + beta_cos(angle) * count / 8.0f;
     double z2 = z + 8 - beta_cos(angle) * count / 8.0f;
-    double y1 = y + jr_next_int_bound(r,3) + 2;
-    double y2 = y + jr_next_int_bound(r,3) + 2;
+    double y1 = y + jr_next_int_bound(r,3) - 2;
+    double y2 = y + jr_next_int_bound(r,3) - 2;
     for(int i=0;i<=count;i++) {
         double px=x1+(x2-x1)*i/count, py=y1+(y2-y1)*i/count, pz=z1+(z2-z1)*i/count;
         double rnd = jr_next_double(r) * count / 16.0;
-        double sx=(sin(i*M_PI/count)+1.0)*rnd + 1.0;
-        double sy=(sin(i*M_PI/count)+1.0)*rnd + 1.0;
-        int minX=(int)(px-sx/2.0), minY=(int)(py-sy/2.0), minZ=(int)(pz-sx/2.0);
-        int maxX=(int)(px+sx/2.0), maxY=(int)(py+sy/2.0), maxZ=(int)(pz+sx/2.0);
+        double wave = (double)(beta_sin((float)i * (float)M_PI / (float)count) + 1.0f);
+        double sx=wave*rnd + 1.0;
+        double sy=wave*rnd + 1.0;
+        int minX=beta_floor_double(px-sx/2.0), minY=beta_floor_double(py-sy/2.0), minZ=beta_floor_double(pz-sx/2.0);
+        int maxX=beta_floor_double(px+sx/2.0), maxY=beta_floor_double(py+sy/2.0), maxZ=beta_floor_double(pz+sx/2.0);
         for(int xx=minX;xx<=maxX;xx++) for(int yy=minY;yy<=maxY;yy++) for(int zz=minZ;zz<=maxZ;zz++) {
             if(xx>=0&&xx<16&&yy>=0&&yy<128&&zz>=0&&zz<16) {
                 double dx=(xx+0.5-px)/(sx/2.0), dy=(yy+0.5-py)/(sy/2.0), dz=(zz+0.5-pz)/(sx/2.0);
@@ -1620,15 +1654,16 @@ static void canvas_place_minable(GenCanvas *cv, JavaRandom *r, int id, int count
     double x2 = x + 8 - beta_sin(angle) * count / 8.0f;
     double z1 = z + 8 + beta_cos(angle) * count / 8.0f;
     double z2 = z + 8 - beta_cos(angle) * count / 8.0f;
-    double y1 = y + jr_next_int_bound(r,3) + 2;
-    double y2 = y + jr_next_int_bound(r,3) + 2;
+    double y1 = y + jr_next_int_bound(r,3) - 2;
+    double y2 = y + jr_next_int_bound(r,3) - 2;
     for(int i=0;i<=count;i++) {
         double px=x1+(x2-x1)*i/count, py=y1+(y2-y1)*i/count, pz=z1+(z2-z1)*i/count;
         double rnd = jr_next_double(r) * count / 16.0;
-        double sx=(sin(i*M_PI/count)+1.0)*rnd + 1.0;
-        double sy=(sin(i*M_PI/count)+1.0)*rnd + 1.0;
-        int minX=(int)(px-sx/2.0), minY=(int)(py-sy/2.0), minZ=(int)(pz-sx/2.0);
-        int maxX=(int)(px+sx/2.0), maxY=(int)(py+sy/2.0), maxZ=(int)(pz+sx/2.0);
+        double wave = (double)(beta_sin((float)i * (float)M_PI / (float)count) + 1.0f);
+        double sx=wave*rnd + 1.0;
+        double sy=wave*rnd + 1.0;
+        int minX=beta_floor_double(px-sx/2.0), minY=beta_floor_double(py-sy/2.0), minZ=beta_floor_double(pz-sx/2.0);
+        int maxX=beta_floor_double(px+sx/2.0), maxY=beta_floor_double(py+sy/2.0), maxZ=beta_floor_double(pz+sx/2.0);
         for(int xx=minX;xx<=maxX;xx++) for(int yy=minY;yy<=maxY;yy++) for(int zz=minZ;zz<=maxZ;zz++) {
             double dx=(xx+0.5-px)/(sx/2.0), dy=(yy+0.5-py)/(sy/2.0), dz=(zz+0.5-pz)/(sx/2.0);
             if(dx*dx+dy*dy+dz*dz < 1.0) {
@@ -2221,7 +2256,27 @@ static void canvas_place_liquid_spring(GenCanvas *cv, int id, int x, int y, int 
     if(canvas_get(cv,x,y,z+1)==0) air++;
     if(stone==3 && air==1) canvas_set(cv,x,y,z,(unsigned char)id);
 }
-static int canvas_lake(GenCanvas *cv, JavaRandom *r, int liquid, int x, int y, int z) {
+static int canvas_lake_has_sky_light(GenCanvas *cv, int x, int y, int z) {
+    for(int yy=y+1; yy<128; ++yy) {
+        int id = canvas_get(cv,x,yy,z);
+        if(id == 0 || id == BLK_LEAVES || id == BLK_SNOW_LAYER || id == BLK_WATER || id == BLK_STILL_WATER || id == BLK_ICE) continue;
+        return 0;
+    }
+    return 1;
+}
+static int canvas_lake_can_freeze_water(TerrainProvider *tp, GenCanvas *cv, int x, int y, int z) {
+    if(y < 0 || y >= 256) return 0;
+    int id = canvas_get(cv,x,y,z);
+    if(id != BLK_WATER && id != BLK_STILL_WATER) return 0;
+    WorldBiome bio = biome_manager_get(&tp->biomeManager, x, z, 1, 1)[0];
+    if(bio.temperature > 0.15f) return 0;
+    /* Java WorldGenLakes calls World.isBlockHydratedDirectly(), which requires
+       block light below 10.  During chunk population no placed block-light source
+       is represented in this canvas, so the generated lake water matches that
+       predicate whenever the biome temperature allows freezing. */
+    return 1;
+}
+static int canvas_lake(TerrainProvider *tp, GenCanvas *cv, JavaRandom *r, int liquid, int x, int y, int z) {
     x -= 8; z -= 8;
     while(y > 0 && canvas_get(cv,x,y,z)==0) y--;
     y -= 4;
@@ -2241,7 +2296,13 @@ static int canvas_lake(GenCanvas *cv, JavaRandom *r, int liquid, int x, int y, i
         if(edge) { int id=canvas_get(cv,x+xx,y+yy,z+zz); if(yy>=4 && cv_is_liquid_id(id)) return 0; if(yy<4 && !cv_is_solid_id(id) && id != liquid) return 0; }
     }
     for(int xx=0;xx<16;xx++) for(int zz=0;zz<16;zz++) for(int yy=0;yy<8;yy++) if(carve[(xx*16+zz)*8+yy]) canvas_set(cv,x+xx,y+yy,z+zz,(unsigned char)(yy>=4?0:liquid));
-    for(int xx=0;xx<16;xx++) for(int zz=0;zz<16;zz++) for(int yy=4;yy<8;yy++) if(carve[(xx*16+zz)*8+yy] && canvas_get(cv,x+xx,y+yy-1,z+zz)==BLK_DIRT) canvas_set(cv,x+xx,y+yy-1,z+zz,BLK_GRASS);
+    for(int xx=0;xx<16;xx++) for(int zz=0;zz<16;zz++) for(int yy=4;yy<8;yy++) if(carve[(xx*16+zz)*8+yy] && canvas_get(cv,x+xx,y+yy-1,z+zz)==BLK_DIRT && canvas_lake_has_sky_light(cv,x+xx,y+yy,z+zz)) {
+        WorldBiome bio = biome_manager_get(&tp->biomeManager, x+xx, z+zz, 1, 1)[0];
+        canvas_set(cv,x+xx,y+yy-1,z+zz,(bio.top == BLK_MYCELIUM) ? BLK_MYCELIUM : BLK_GRASS);
+    }
+    if(liquid == BLK_WATER || liquid == BLK_STILL_WATER) {
+        for(int xx=0;xx<16;xx++) for(int zz=0;zz<16;zz++) if(canvas_lake_can_freeze_water(tp,cv,x+xx,y+4,z+zz)) canvas_set(cv,x+xx,y+4,z+zz,BLK_ICE);
+    }
     if(liquid == BLK_LAVA || liquid == BLK_STILL_LAVA) {
         for(int xx=0;xx<16;xx++) for(int zz=0;zz<16;zz++) for(int yy=0;yy<8;yy++) {
             int edge=!carve[(xx*16+zz)*8+yy] && ((xx<15&&carve[((xx+1)*16+zz)*8+yy])||(xx>0&&carve[((xx-1)*16+zz)*8+yy])||(zz<15&&carve[(xx*16+zz+1)*8+yy])||(zz>0&&carve[(xx*16+zz-1)*8+yy])||(yy<7&&carve[(xx*16+zz)*8+yy+1])||(yy>0&&carve[(xx*16+zz)*8+yy-1]));
@@ -2955,8 +3016,8 @@ static void qm_populate_canvas(TerrainProvider *tp, GenCanvas *cv, int cx, int c
             if(vwx >= baseX-48 && vwx <= baseX+64 && vwz >= baseZ-48 && vwz <= baseZ+64) villageGenerated = 1;
         }
     }
-    if(!villageGenerated && jr_next_int_bound(r,4)==0) canvas_lake(cv,r,BLK_STILL_WATER,baseX+jr_next_int_bound(r,16)+8,jr_next_int_bound(r,128),baseZ+jr_next_int_bound(r,16)+8);
-    if(!villageGenerated && jr_next_int_bound(r,8)==0) { int x=baseX+jr_next_int_bound(r,16)+8, y=jr_next_int_bound(r,jr_next_int_bound(r,120)+8), z=baseZ+jr_next_int_bound(r,16)+8; if(y<63 || jr_next_int_bound(r,10)==0) canvas_lake(cv,r,BLK_STILL_LAVA,x,y,z); }
+    if(!villageGenerated && jr_next_int_bound(r,4)==0) canvas_lake(tp,cv,r,BLK_STILL_WATER,baseX+jr_next_int_bound(r,16)+8,jr_next_int_bound(r,128),baseZ+jr_next_int_bound(r,16)+8);
+    if(!villageGenerated && jr_next_int_bound(r,8)==0) { int x=baseX+jr_next_int_bound(r,16)+8, y=jr_next_int_bound(r,jr_next_int_bound(r,120)+8), z=baseZ+jr_next_int_bound(r,16)+8; if(y<63 || jr_next_int_bound(r,10)==0) canvas_lake(tp,cv,r,BLK_STILL_LAVA,x,y,z); }
     for(int i=0;i<8;i++) canvas_dungeon(cv,r,baseX+jr_next_int_bound(r,16)+8,jr_next_int_bound(r,128),baseZ+jr_next_int_bound(r,16)+8);
 
     /* BiomeDecorator.generateOres(), in exact Java order. */
