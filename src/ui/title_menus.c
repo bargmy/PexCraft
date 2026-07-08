@@ -624,6 +624,11 @@ static void draw_language_screen(void) {
         int content_h = pex_language_content_height();
         int max_scroll = pex_language_max_scroll_pixels();
 
+        /* Java GuiSlot.drawScreen paints the scrolling language section as a
+           darker tiled dirt panel between top/bottom, not as the plain full
+           screen background.  The UV scroll is tied to amountScrolled. */
+        draw_tiled_rect_tint(0, top, g_gui_w, bottom, 0x202020, g_language_scroll);
+
         for (int i = 0; i < visible; ++i) {
             int idx = first + i;
             int y = pex_language_row_y(idx);
@@ -639,6 +644,13 @@ static void draw_language_screen(void) {
             /* Java GuiSlotLanguage temporarily forces bidi while drawing each language name. */
             draw_centered_text_force_bidi(name, g_gui_w / 2, y + 1, 16777215);
         }
+
+        /* Java GuiSlot overlays the regions outside the list and fades the
+           first/last 4 pixels of the scroll viewport before drawing the bar. */
+        draw_tiled_overlay_background(0, top, 255, 255);
+        draw_tiled_overlay_background(bottom, g_gui_h, 255, 255);
+        draw_gradient(0, top, g_gui_w, top + 4, 0xFF000000, 0x00000000);
+        draw_gradient(0, bottom - 4, g_gui_w, bottom, 0x00000000, 0xFF000000);
 
         if (max_scroll > 0 && content_h > 0) {
             int track_x = g_gui_w / 2 + 124;
