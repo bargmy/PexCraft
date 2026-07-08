@@ -2302,6 +2302,12 @@ static double g_last_time = 0.0;
 static long long g_world_time = 0;
 
 static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_default_pack_icon, tex_unknown_pack;
+/* Java 1.2.5 FontRenderer Unicode glyph pages: /font/glyph_sizes.bin and /font/glyph_%02X.png.
+   Pages are loaded lazily by the GUI font renderer so non-Latin language names
+   from /lang/languages.txt render instead of disappearing at byte >= 127. */
+static Texture tex_font_glyph[256];
+static unsigned char font_glyph_widths[65536];
+static int font_glyph_widths_loaded = 0;
 static Texture tex_icons, tex_inventory, tex_allitems, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;

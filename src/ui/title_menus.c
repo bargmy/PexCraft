@@ -637,7 +637,7 @@ static void draw_language_screen(void) {
                 draw_rect(g_gui_w / 2 - 109, y - 1, g_gui_w / 2 + 109, y + 15, 0xFF000000);
             }
             /* Java GuiSlotLanguage temporarily forces bidi while drawing each language name. */
-            draw_centered_text(name, g_gui_w / 2, y + 1, 16777215);
+            draw_centered_text_force_bidi(name, g_gui_w / 2, y + 1, 16777215);
         }
 
         if (max_scroll > 0 && content_h > 0) {

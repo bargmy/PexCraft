@@ -70,6 +70,23 @@ static char *pex_lang_trim(char *s) {
     return s;
 }
 
+static int pex_lang_split_java_equals(char *line, char **out_key, char **out_value) {
+    /* StringTranslate.loadLanguage/loadLanguageList used String.split("=") and
+       accepted only length == 2.  That means lines with no '=' or extra '=' are
+       ignored instead of treating the first '=' as a delimiter. */
+    char *eq;
+    if (out_key) *out_key = NULL;
+    if (out_value) *out_value = NULL;
+    if (!line) return 0;
+    eq = strchr(line, '=');
+    if (!eq) return 0;
+    if (strchr(eq + 1, '=')) return 0;
+    *eq++ = 0;
+    if (out_key) *out_key = pex_lang_trim(line);
+    if (out_value) *out_value = pex_lang_trim(eq);
+    return 1;
+}
+
 static int pex_lang_utf8_has_java_unicode(const char *s) {
     const unsigned char *p = (const unsigned char *)s;
     while (p && *p) {
@@ -189,11 +206,7 @@ static int pex_language_load_list_from_disk(void) {
         char *s = pex_lang_trim(line);
         char *eq;
         if (!*s || *s == '#') continue;
-        eq = strchr(s, '=');
-        if (!eq) continue;
-        *eq++ = 0;
-        s = pex_lang_trim(s);
-        eq = pex_lang_trim(eq);
+        if (!pex_lang_split_java_equals(s, &s, &eq)) continue;
         if (!*s || !*eq) continue;
         if (g_pex_lang_count >= PEX_LANG_MAX_LANGUAGES) break;
         snprintf(g_pex_langs[g_pex_lang_count].code, sizeof(g_pex_langs[g_pex_lang_count].code), "%s", s);
@@ -229,12 +242,8 @@ static int pex_language_load_lang_file_into_table(const char *code) {
         char *s = pex_lang_trim(line);
         char *eq;
         if (!*s || *s == '#') continue;
-        eq = strchr(s, '=');
-        if (!eq) continue;
-        *eq++ = 0;
-        s = pex_lang_trim(s);
-        eq = pex_lang_trim(eq);
-        if (*s) pex_lang_table_set(s, eq);
+        if (!pex_lang_split_java_equals(s, &s, &eq)) continue;
+        if (*s && *eq) pex_lang_table_set(s, eq);
     }
     fclose(f);
     return 1;
@@ -477,7 +486,7 @@ static int pex_language_download_from_jar_blocking(void) {
     if (!pack_install_download_client_jar(CLASSIC_PACK_URL, zip_path)) return 0;
 #endif
     err[0] = 0;
-    pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting languages...");
+    pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting languages and font glyphs...");
     ok = pxc_extract_zip_lang_file(zip_path, pack_dir, err, sizeof(err));
     DeleteFileA(zip_path);
     if (!ok) {

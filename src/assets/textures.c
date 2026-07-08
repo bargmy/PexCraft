@@ -709,6 +709,9 @@ static int pack_is_installed(void) {
     return release_file_exists_in_dir(dir, "terrain.png") &&
            release_file_exists_in_dir(dir, "gui/gui.png") &&
            release_file_exists_in_dir(dir, "font/default.png") &&
+           release_file_exists_in_dir(dir, "font/glyph_sizes.bin") &&
+           release_file_exists_in_dir(dir, "font/glyph_04.png") &&
+           release_file_exists_in_dir(dir, "font/glyph_06.png") &&
            release_file_exists_in_dir(dir, "title/mclogo.png") &&
            release_file_exists_in_dir(dir, "title/mojang.png") &&
            release_file_exists_in_dir(dir, "title/bg/panorama0.png");
@@ -725,6 +728,9 @@ static int pack_missing_required_textures(void) {
         "gui/items.png",
         "gui/icons.png",
         "font/default.png",
+        "font/glyph_sizes.bin",
+        "font/glyph_04.png",
+        "font/glyph_06.png",
         "title/mclogo.png",
         "title/mojang.png",
         "title/bg/panorama0.png",

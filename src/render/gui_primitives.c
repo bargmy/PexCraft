@@ -256,13 +256,206 @@ static void draw_default_bg(void) {
     draw_tiled_background_tint(0x404040, 0);
 }
 
-static int font_index(unsigned char ch) {
-    if (ch < 32) return -1;
-    if (ch < 127) return ch - 32;
+static unsigned int font_utf8_next(const unsigned char **pp) {
+    const unsigned char *p = pp && *pp ? *pp : (const unsigned char *)"";
+    unsigned int cp;
+    if (!*p) return 0;
+    if (*p < 0x80u) { cp = *p++; *pp = p; return cp; }
+    if ((*p & 0xE0u) == 0xC0u && (p[1] & 0xC0u) == 0x80u) {
+        cp = ((*p & 0x1Fu) << 6) | (p[1] & 0x3Fu);
+        p += 2; *pp = p; return cp;
+    }
+    if ((*p & 0xF0u) == 0xE0u && (p[1] & 0xC0u) == 0x80u && (p[2] & 0xC0u) == 0x80u) {
+        cp = ((*p & 0x0Fu) << 12) | ((p[1] & 0x3Fu) << 6) | (p[2] & 0x3Fu);
+        p += 3; *pp = p; return cp;
+    }
+    if ((*p & 0xF8u) == 0xF0u && (p[1] & 0xC0u) == 0x80u && (p[2] & 0xC0u) == 0x80u && (p[3] & 0xC0u) == 0x80u) {
+        cp = ((*p & 0x07u) << 18) | ((p[1] & 0x3Fu) << 12) | ((p[2] & 0x3Fu) << 6) | (p[3] & 0x3Fu);
+        p += 4; *pp = p; return cp;
+    }
+    cp = *p++;
+    *pp = p;
+    return cp;
+}
+
+static int font_utf8_put(char *out, size_t cap, size_t *n, unsigned int cp) {
+    if (!out || !n || cap == 0) return 0;
+    if (cp <= 0x7Fu) {
+        if (*n + 1 >= cap) return 0;
+        out[(*n)++] = (char)cp;
+    } else if (cp <= 0x7FFu) {
+        if (*n + 2 >= cap) return 0;
+        out[(*n)++] = (char)(0xC0u | (cp >> 6));
+        out[(*n)++] = (char)(0x80u | (cp & 0x3Fu));
+    } else if (cp <= 0xFFFFu) {
+        if (*n + 3 >= cap) return 0;
+        out[(*n)++] = (char)(0xE0u | (cp >> 12));
+        out[(*n)++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[(*n)++] = (char)(0x80u | (cp & 0x3Fu));
+    } else {
+        if (*n + 4 >= cap) return 0;
+        out[(*n)++] = (char)(0xF0u | (cp >> 18));
+        out[(*n)++] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+        out[(*n)++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[(*n)++] = (char)(0x80u | (cp & 0x3Fu));
+    }
+    out[*n] = 0;
+    return 1;
+}
+
+static int font_codepoint_is_rtl(unsigned int cp) {
+    return (cp >= 0x0590u && cp <= 0x08FFu) ||
+           (cp >= 0xFB1Du && cp <= 0xFDFFu) ||
+           (cp >= 0xFE70u && cp <= 0xFEFFu);
+}
+
+static int font_codepoint_is_ltr(unsigned int cp) {
+    return (cp >= '0' && cp <= '9') ||
+           (cp >= 'A' && cp <= 'Z') ||
+           (cp >= 'a' && cp <= 'z') ||
+           (cp >= 0x00C0u && cp <= 0x024Fu) ||
+           (cp >= 0x0400u && cp <= 0x052Fu);
+}
+
+static unsigned int font_bidi_mirror(unsigned int cp) {
+    switch (cp) {
+        case '(': return ')'; case ')': return '(';
+        case '[': return ']'; case ']': return '[';
+        case '{': return '}'; case '}': return '{';
+        case '<': return '>'; case '>': return '<';
+        default: return cp;
+    }
+}
+
+static int font_bidi_reorder_utf8(const char *src, char *dst, size_t cap) {
+    enum { MAX_CPS = 2048, MAX_RUNS = 256 };
+    unsigned int cps[MAX_CPS];
+    int types[MAX_CPS];
+    int run_start[MAX_RUNS], run_end[MAX_RUNS], run_type[MAX_RUNS];
+    int n = 0, has_rtl = 0, runs = 0;
+    const unsigned char *p = (const unsigned char *)src;
+    if (!src || !dst || cap == 0) return 0;
+    while (*p && n < MAX_CPS) {
+        unsigned int cp = font_utf8_next(&p);
+        cps[n++] = cp;
+        if (font_codepoint_is_rtl(cp)) has_rtl = 1;
+    }
+    if (!has_rtl) return 0;
+    for (int i = 0; i < n; ++i) {
+        if (font_codepoint_is_rtl(cps[i])) types[i] = 1;
+        else if (font_codepoint_is_ltr(cps[i])) types[i] = 0;
+        else types[i] = -1;
+    }
+    /* Java uses java.text.Bidi.  This compact fallback covers the language-list
+       use case: an RTL base paragraph with visually reordered RTL runs and
+       mirrored brackets, while preserving LTR runs such as numbers/US tags. */
+    for (int i = 0; i < n; ) {
+        int t = types[i];
+        int j;
+        if (t < 0) t = (i > 0 && types[i - 1] >= 0) ? types[i - 1] : 1;
+        j = i + 1;
+        while (j < n) {
+            int tj = types[j];
+            if (tj < 0) tj = t;
+            if (tj != t) break;
+            ++j;
+        }
+        if (runs < MAX_RUNS) {
+            run_start[runs] = i;
+            run_end[runs] = j;
+            run_type[runs] = t;
+            ++runs;
+        }
+        i = j;
+    }
+    dst[0] = 0;
+    size_t outn = 0;
+    for (int r = runs - 1; r >= 0; --r) {
+        if (run_type[r]) {
+            for (int i = run_end[r] - 1; i >= run_start[r]; --i) {
+                if (!font_utf8_put(dst, cap, &outn, font_bidi_mirror(cps[i]))) break;
+            }
+        } else {
+            for (int i = run_start[r]; i < run_end[r]; ++i) {
+                if (!font_utf8_put(dst, cap, &outn, cps[i])) break;
+            }
+        }
+    }
+    return 1;
+}
+
+static int font_index(unsigned int cp) {
+    if (cp < 32u) return -1;
+    if (cp < 256u) return (int)cp;
     return -1;
 }
 
+static void font_unload_unicode_pages(void) {
+    for (int i = 0; i < 256; ++i) free_texture(&tex_font_glyph[i]);
+    memset(font_glyph_widths, 0, sizeof(font_glyph_widths));
+    font_glyph_widths_loaded = 0;
+}
+
+static int font_load_glyph_widths(void) {
+    char root[MAX_PATHBUF], path[MAX_PATHBUF];
+    FILE *f;
+    size_t got;
+    if (font_glyph_widths_loaded) return font_glyph_widths_loaded > 0;
+    memset(font_glyph_widths, 0, sizeof(font_glyph_widths));
+    pack_asset_path(root, sizeof(root));
+    snprintf(path, sizeof(path), "%s\\font\\glyph_sizes.bin", root);
+    f = fopen(path, "rb");
+    if (!f) {
+        snprintf(path, sizeof(path), "%s/font/glyph_sizes.bin", root);
+        f = fopen(path, "rb");
+    }
+    if (!f) { font_glyph_widths_loaded = -1; return 0; }
+    got = fread(font_glyph_widths, 1, sizeof(font_glyph_widths), f);
+    fclose(f);
+    font_glyph_widths_loaded = got > 0 ? 1 : -1;
+    return font_glyph_widths_loaded > 0;
+}
+
+static Texture *font_load_glyph_page(unsigned int page) {
+    char rel[64];
+    if (page >= 256u) return NULL;
+    if (!tex_font_glyph[page].id) {
+        snprintf(rel, sizeof(rel), "font\\glyph_%02X.png", page & 255u);
+        try_release_texture(&tex_font_glyph[page], rel, 0);
+    }
+    return tex_font_glyph[page].id ? &tex_font_glyph[page] : NULL;
+}
+
+static int font_unicode_width(unsigned int cp) {
+    unsigned char b;
+    int left, right;
+    if (cp == 32u) return 4;
+    if (cp >= 65536u || !font_load_glyph_widths()) return 0;
+    b = font_glyph_widths[cp];
+    if (!b) return 0;
+    left = b >> 4;
+    right = b & 15;
+    if (right > 7) { right = 15; left = 0; }
+    ++right;
+    return (right - left) / 2 + 1;
+}
+
+static int font_codepoint_width(unsigned int cp, int unicode_flag) {
+    int idx;
+    if (cp == 0xA7u) return -1;
+    if (cp == 32u) return 4;
+    idx = font_index(cp);
+    if (idx >= 0 && !unicode_flag) return font_widths[idx];
+    if (cp < 65536u) {
+        int w = font_unicode_width(cp);
+        if (w > 0) return w;
+    }
+    if (idx >= 0) return font_widths[idx];
+    return 0;
+}
+
 static void init_font_widths(void) {
+    font_unload_unicode_pages();
     memset(font_widths, 0, sizeof(font_widths));
     for (int i = 0; i < 256; i++) {
         int col = i % 16;
@@ -285,11 +478,15 @@ static void init_font_widths(void) {
 
 static int text_width(const char *s) {
     int w = 0;
+    int unicode_flag = pex_current_language_is_unicode();
+    const unsigned char *p = (const unsigned char*)s;
     if (!s) return 0;
-    for (const unsigned char *p = (const unsigned char*)s; *p; p++) {
-        if (*p == 0xA7 && p[1]) { p++; continue; }
-        int idx = font_index(*p);
-        if (idx >= 0) w += font_widths[idx + 32];
+    while (*p) {
+        unsigned int cp = font_utf8_next(&p);
+        int cw;
+        if (cp == 0xA7u && *p) { (void)font_utf8_next(&p); continue; }
+        cw = font_codepoint_width(cp, unicode_flag);
+        if (cw > 0) w += cw;
     }
     return w;
 }
@@ -300,43 +497,91 @@ static int shadow_color(int color) {
     return (int)(a + ((c & 0xFCFCFCu) >> 2));
 }
 
-static void draw_text_raw(const char *s, int x, int y, int color) {
+static int draw_unicode_glyph(unsigned int cp, int x, int y, int color, int italic) {
+    unsigned char b;
+    int left, right, src_x, src_y, src_w, dst_w;
+    Texture *page_tex;
+    if (cp >= 65536u || !font_load_glyph_widths()) return 0;
+    b = font_glyph_widths[cp];
+    if (!b) return 0;
+    page_tex = font_load_glyph_page(cp / 256u);
+    if (!page_tex) return 0;
+    left = b >> 4;
+    right = b & 15;
+    if (right > 7) { right = 15; left = 0; }
+    src_x = (int)(cp % 16u) * 16 + left;
+    src_y = (int)((cp & 255u) / 16u) * 16;
+    src_w = right + 1 - left;
+    if (src_w <= 0) return 0;
+    dst_w = (src_w + 1) / 2;
+    if (dst_w <= 0) dst_w = 1;
+    if (italic) x += 1;
+    draw_textured_rect_part_scaled(page_tex, x, y, dst_w, 8, src_x, src_y, src_w, 16, color);
+    return 1;
+}
+
+static void draw_text_raw_impl(const char *s, int x, int y, int color, int force_bidi) {
+    char bidi_buf[4096];
+    int unicode_flag = pex_current_language_is_unicode();
+    int cx = x;
     if (!s) return;
+    if ((force_bidi || pex_current_language_is_bidi()) && font_bidi_reorder_utf8(s, bidi_buf, sizeof(bidi_buf))) s = bidi_buf;
     if (g_loggy_enabled) {
+        const unsigned char *lp = (const unsigned char*)s;
         g_loggy_gui_text_calls++;
-        for (const unsigned char *lp = (const unsigned char*)s; *lp; ++lp) {
-            if (*lp == 0xA7 && lp[1]) { lp++; continue; }
-            if (font_index(*lp) >= 0) g_loggy_gui_text_chars++;
+        while (*lp) {
+            unsigned int cp = font_utf8_next(&lp);
+            if (cp == 0xA7u && *lp) { (void)font_utf8_next(&lp); continue; }
+            if (font_codepoint_width(cp, unicode_flag) > 0) g_loggy_gui_text_chars++;
         }
     }
-    glBindTexture(GL_TEXTURE_2D, tex_font.id);
     set_color_int(color);
-    int cx = x;
-    for (const unsigned char *p = (const unsigned char*)s; *p; p++) {
-        if (*p == 0xA7 && p[1]) { p++; continue; }
-        int idx = font_index(*p);
-        if (idx >= 0) {
-            int code = idx + 32;
-            int sx = (code % 16) * 8;
-            int sy = (code / 16) * 8;
-            draw_textured_modal_rect(&tex_font, cx, y, sx, sy, 8, 8, color);
-            cx += font_widths[code];
+    const unsigned char *p = (const unsigned char*)s;
+    while (*p) {
+        unsigned int cp = font_utf8_next(&p);
+        int idx, adv;
+        if (cp == 0xA7u && *p) { (void)font_utf8_next(&p); continue; }
+        adv = font_codepoint_width(cp, unicode_flag);
+        if (adv <= 0) continue;
+        idx = font_index(cp);
+        if (!(idx >= 0 && !unicode_flag) && cp < 65536u && draw_unicode_glyph(cp, cx, y, color, 0)) {
+            cx += adv;
+            continue;
         }
+        if (idx >= 0) {
+            int sx = (idx % 16) * 8;
+            int sy = (idx / 16) * 8;
+            draw_textured_modal_rect(&tex_font, cx, y, sx, sy, 8, 8, color);
+        }
+        cx += adv;
     }
     glColor4f(1,1,1,1);
 }
 
+static void draw_text_raw(const char *s, int x, int y, int color) {
+    draw_text_raw_impl(s, x, y, color, 0);
+}
+
 static void draw_text(const char *s, int x, int y, int color) {
-    draw_text_raw(s, x + 1, y + 1, shadow_color(color));
-    draw_text_raw(s, x, y, color);
+    draw_text_raw_impl(s, x + 1, y + 1, shadow_color(color), 0);
+    draw_text_raw_impl(s, x, y, color, 0);
 }
 
 static void draw_text_no_shadow(const char *s, int x, int y, int color) {
-    draw_text_raw(s, x, y, color);
+    draw_text_raw_impl(s, x, y, color, 0);
+}
+
+static void draw_text_force_bidi(const char *s, int x, int y, int color) {
+    draw_text_raw_impl(s, x + 1, y + 1, shadow_color(color), 1);
+    draw_text_raw_impl(s, x, y, color, 1);
 }
 
 static void draw_centered_text(const char *s, int cx, int y, int color) {
     draw_text(s, cx - text_width(s) / 2, y, color);
+}
+
+static void draw_centered_text_force_bidi(const char *s, int cx, int y, int color) {
+    draw_text_force_bidi(s, cx - text_width(s) / 2, y, color);
 }
 
 static void button_label(Button *b, const char *fmt, ...) {

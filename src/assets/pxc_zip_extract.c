@@ -88,8 +88,21 @@ static int pxc_zip_entry_should_skip(const char *name) {
     if (pxc_ascii_starts_ci(name, "META-INF/") || pxc_ascii_starts_ci(name, "META-INF\\")) return 1;
     if (pxc_ascii_ends_ci(name, ".class")) return 1;
     if (pxc_zip_extract_lang_only) {
-        if (!pxc_ascii_starts_ci(name, "lang/")) return 1;
-        if (!pxc_ascii_ends_ci(name, ".lang") && !pxc_ascii_ends_ci(name, "languages.txt")) return 1;
+        /* Language-only repair must also bring Java FontRenderer Unicode data.
+           Minecraft 1.2.5 draws translated/non-Latin language names through
+           /font/glyph_sizes.bin and /font/glyph_%02X.png; extracting only /lang
+           leaves Russian, Persian, Arabic, Hebrew, Chinese, etc. present in
+           languages.txt but impossible to render. */
+        if (pxc_ascii_starts_ci(name, "lang/")) {
+            if (!pxc_ascii_ends_ci(name, ".lang") && !pxc_ascii_ends_ci(name, "languages.txt")) return 1;
+            return 0;
+        }
+        if (pxc_ascii_starts_ci(name, "font/")) {
+            if (pxc_ascii_ends_ci(name, "font/default.png") ||
+                pxc_ascii_ends_ci(name, "font/glyph_sizes.bin") ||
+                (pxc_ascii_starts_ci(name, "font/glyph_") && pxc_ascii_ends_ci(name, ".png"))) return 0;
+        }
+        return 1;
     }
     return 0;
 }
