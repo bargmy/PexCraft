@@ -675,6 +675,20 @@ static int font_width_from_glyph_size_byte(unsigned char b) {
     return (right - left) / 2 + 1;
 }
 
+static int font_width_from_cfont_size_byte(unsigned char b) {
+    int left, right;
+    if (!b) return 0;
+    left = b >> 4;
+    right = b & 15;
+    /* Embedded cfont pages come from modern resource-pack glyph pages / TTFs.
+       Their width nibbles are real 0..15 source-pixel bounds.  Do not apply
+       Java 1.2.5's glyph_sizes.bin sentinel rule here, because values such as
+       0x09 are common for 10-pixel-wide bitmap letters; treating right > 7 as
+       a full 16-pixel cell makes Cyrillic/Arabic/etc. look letter-spaced. */
+    if (right < left) return 0;
+    return (right - left + 1) / 2 + 1;
+}
+
 static int font_unicode_width(unsigned int cp) {
     unsigned char b;
     int family;
@@ -683,7 +697,7 @@ static int font_unicode_width(unsigned int cp) {
     family = cfont_family_for_codepoint(font_effective_language_code(), cp);
     if (family != CFONT_NONE) {
         b = cfont_width_byte(family, cp);
-        if (b) return font_width_from_glyph_size_byte(b);
+        if (b) return font_width_from_cfont_size_byte(b);
     }
     if (!font_load_glyph_widths()) return 0;
     return font_width_from_glyph_size_byte(font_glyph_widths[cp]);
@@ -838,7 +852,11 @@ static float draw_unicode_glyph_java(unsigned int cp, float x, float y, int colo
     if (!b || !page_tex) return 0.0f;
     left = b >> 4;
     right = b & 15;
-    if (right > 7) { right = 15; left = 0; }
+    if (family == CFONT_NONE) {
+        if (right > 7) { right = 15; left = 0; }
+    } else if (right < left) {
+        return 0.0f;
+    }
     src_x = (float)(cp % 16u * 16u) + (float)left;
     src_y = (float)((cp & 255u) / 16u * 16u);
     src_w = (float)(right + 1 - left) - 0.02f;
