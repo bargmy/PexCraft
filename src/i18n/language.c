@@ -357,14 +357,18 @@ static const char *tr_key_default(const char *key, const char *fallback) {
     const char *v;
     if (!key) return fallback ? fallback : "";
     if (!g_lang_list_loaded) pex_set_language_code(g_opts.language[0] ? g_opts.language : "en_US");
-    v = pex_lang_lookup_loaded_key(key);
-    if (v) return v;
+    /* Prefer the newer legacy-asset key before the old 1.2.5 key for bridged
+       names.  We always load en_US first, so an old English texturePack.* key
+       can otherwise hide a translated resourcePack.* value from the selected
+       legacy.json language. */
     for (int i = 0; i < (int)ARRAY_COUNT(pex_lang_key_aliases); ++i) {
         if (pex_lang_str_eq(pex_lang_key_aliases[i].primary, key)) {
             v = pex_lang_lookup_loaded_key(pex_lang_key_aliases[i].secondary);
             if (v) return v;
         }
     }
+    v = pex_lang_lookup_loaded_key(key);
+    if (v) return v;
     return fallback ? fallback : key;
 }
 
@@ -519,10 +523,45 @@ static void language_ensure_selected_visible(void) {
     g_language_drag_scroll_pixels = 0;
 }
 
+static int g_language_drag_mode = 0; /* 0=list swipe, 1=scrollbar thumb */
+static int g_language_drag_anchor_y = 0;
+static int g_language_drag_start_scroll = 0;
+
+static void language_mouse_down(int mx, int my) {
+    int top = pex_language_top();
+    int bottom = pex_language_bottom();
+    int track_x = g_gui_w / 2 + 124;
+    int max_scroll = pex_language_max_scroll_pixels();
+    g_language_drag_mode = 0;
+    g_language_drag_anchor_y = my;
+    g_language_drag_start_scroll = g_language_scroll;
+    if (max_scroll > 0 && my >= top && my <= bottom && mx >= track_x - 3 && mx <= track_x + 9) {
+        g_language_drag_mode = 1;
+    }
+}
+
+static void language_mouse_up(void) {
+    g_language_drag_mode = 0;
+}
+
 static void language_drag_scroll(int delta_y) {
     if (delta_y == 0) return;
-    /* Dragging the visible scrollbar/list downward should move downward in the list. */
-    g_language_scroll += delta_y;
+    if (g_language_drag_mode) {
+        int top = pex_language_top();
+        int bottom = pex_language_bottom();
+        int view_h = pex_language_view_height();
+        int content_h = pex_language_content_height();
+        int max_scroll = pex_language_max_scroll_pixels();
+        int thumb_h = content_h > 0 ? (view_h * view_h / content_h) : view_h;
+        int track = bottom - top;
+        if (thumb_h < 32) thumb_h = 32;
+        if (thumb_h > view_h - 8) thumb_h = view_h - 8;
+        if (track - thumb_h > 0) g_language_scroll = g_language_drag_start_scroll + (g_mouse_y - g_language_drag_anchor_y) * max_scroll / (track - thumb_h);
+    } else {
+        /* Swiping the list itself keeps the old/natural behavior: the content
+           follows the drag, so dragging downward moves toward earlier rows. */
+        g_language_scroll -= delta_y;
+    }
     language_clamp_scroll();
     rebuild_screen();
 }

@@ -4,10 +4,12 @@ static int g_release_panorama_timer = 0;
 
 static void init_title_blocks(void) {
     if (title_inited) return;
-    srand(12345);
+    unsigned int title_seed = 12345u;
     for (int x = 0; x < TITLE_COLS; x++) {
         for (int y = 0; y < TITLE_ROWS; y++) {
-            double z = 10.0 + y + ((double)rand() / RAND_MAX) * 32.0 + x;
+            title_seed = title_seed * 1103515245u + 12345u;
+            double rnd = (double)((title_seed >> 16) & 0x7FFFu) / 32767.0;
+            double z = 10.0 + y + rnd * 32.0 + x;
             title_z[x][y] = title_z_prev[x][y] = z;
             title_vel[x][y] = 0.0;
         }
@@ -1021,6 +1023,26 @@ static void draw_texpack(void) {
         draw_text(e->name, g_gui_w / 2 - 92 - 16 + 34, row_y + 1, 16777215);
         draw_text(e->desc1, g_gui_w / 2 - 92 - 16 + 34, row_y + 12, 8421504);
         draw_text(e->desc2, g_gui_w / 2 - 92 - 16 + 34, row_y + 22, 8421504);
+    }
+
+    {
+        int max_scroll = g_texpack_count * 36 - (bottom - top - 4);
+        if (max_scroll < 0) max_scroll = 0;
+        if (max_scroll > 0) {
+            int content_h = g_texpack_count * 36;
+            int view_h = bottom - top;
+            int bar_x0 = g_gui_w / 2 + 124;
+            int bar_x1 = bar_x0 + 6;
+            int thumb_h = content_h > 0 ? (view_h * view_h / content_h) : view_h;
+            int thumb_y;
+            if (thumb_h < 32) thumb_h = 32;
+            if (thumb_h > view_h - 8) thumb_h = view_h - 8;
+            thumb_y = top + g_texpack_scroll * (view_h - thumb_h) / max_scroll;
+            if (thumb_y < top) thumb_y = top;
+            draw_rect(bar_x0, top, bar_x1, bottom, 0);
+            draw_rect(bar_x0, thumb_y, bar_x1, thumb_y + thumb_h, 8421504);
+            draw_rect(bar_x0, thumb_y, bar_x1 - 1, thumb_y + thumb_h - 1, 12632256);
+        }
     }
 
     draw_tiled_rect_tint(0, 0, g_gui_w, top, 0x404040, 0);

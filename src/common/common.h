@@ -815,6 +815,9 @@ static int g_selected_renderer_backend = RENDERER_OPENGL;
 static int g_renderer_prompt_target_screen = SCREEN_TITLE;
 static int g_renderer_backend_unavailable_notice = 0;
 static int g_texpack_drag_anchor = -1;
+static int g_texpack_drag_mode = 0; /* 0=list swipe, 1=scrollbar thumb */
+static int g_texpack_drag_start_y = 0;
+static int g_texpack_drag_start_scroll = 0;
 static char g_current_texpack[MAX_LABEL] = "Default";
 #if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static void *g_wic_factory = NULL;
@@ -877,6 +880,9 @@ static int g_world_save_count = 0;
 static int g_selected_world_index = -1;
 static int g_world_save_scroll = 0;
 static int g_world_drag_scroll_pixels = 0;
+static int g_world_drag_mode = 0; /* 0=list swipe, 1=scrollbar thumb */
+static int g_world_drag_start_y = 0;
+static int g_world_drag_start_scroll = 0;
 static int g_world_type = 1; /* 0 superflat, 1 default terrain */
 static int g_game_mode = 0;  /* 0 survival, 1 creative */
 static int g_world_map_features = 1;
@@ -2380,6 +2386,8 @@ static int pex_current_language_is_unicode(void);
 static int pex_current_language_is_bidi(void);
 static int pex_language_runtime_files_available(void);
 static void language_scroll_by(int rows);
+static void language_mouse_down(int mx, int my);
+static void language_mouse_up(void);
 static void language_drag_scroll(int delta_y);
 static void language_ensure_selected_visible(void);
 static int pex_language_download_from_jar_blocking(void);
@@ -2394,6 +2402,7 @@ static int pack_is_installed(void);
 static int pack_resources_install_blocking(void);
 static void pex_menu_music_start_once(void);
 static void pex_menu_music_stop(void);
+static void pex_game_music_reset_delay(int ticks);
 static void pex_game_music_tick(void);
 static int pack_missing_required_textures(void);
 static int classic_sounds_installed(void);
@@ -2433,6 +2442,7 @@ static int legacy_assets_any_missing(void);
 static int legacy_asset_group_missing(int category);
 static void legacy_asset_group_summary(int category, char *out, size_t cap);
 static void legacy_asset_button_label(int category, char *out, size_t cap);
+static void legacy_asset_button_lines(int category, char *line1, size_t cap1, char *line2, size_t cap2);
 static int legacy_asset_group_progress_percent(int category);
 static void legacy_assets_start_download(int mask);
 static int legacy_assets_is_downloading(void);
@@ -2454,6 +2464,7 @@ static int legacy_assets_any_missing(void) { return 0; }
 static int legacy_asset_group_missing(int category) { (void)category; return 0; }
 static void legacy_asset_group_summary(int category, char *out, size_t cap) { (void)category; if (out && cap) snprintf(out, cap, "Legacy asset downloads are not available on this platform."); }
 static void legacy_asset_button_label(int category, char *out, size_t cap) { (void)category; if (out && cap) snprintf(out, cap, "Unavailable"); }
+static void legacy_asset_button_lines(int category, char *line1, size_t cap1, char *line2, size_t cap2) { (void)category; if (line1 && cap1) snprintf(line1, cap1, "Unavailable"); if (line2 && cap2) line2[0] = 0; }
 static int legacy_asset_group_progress_percent(int category) { (void)category; return 0; }
 static void legacy_assets_start_download(int mask) { (void)mask; }
 static int legacy_assets_is_downloading(void) { return 0; }

@@ -893,14 +893,32 @@ static int pex_play_background_music_file(const char *path) {
     return ok;
 }
 
+static void pex_game_music_reset_delay(int ticks) {
+    if (ticks < 0) ticks = 0;
+    g_pex_game_music_ticks_before = ticks;
+    g_pex_game_music_started = 0;
+}
+
 static void pex_menu_music_start_once(void) {
     static const char *menu_tracks[] = { "menu1.ogg", "menu2.ogg", "menu3.ogg", "menu4.ogg" };
+    static const char *legacy_title_tracks[] = {
+        "calm1.ogg", "calm2.ogg", "calm3.ogg",
+        "hal1.ogg", "hal2.ogg", "hal3.ogg", "hal4.ogg",
+        "nuance1.ogg", "nuance2.ogg",
+        "piano1.ogg", "piano2.ogg", "piano3.ogg"
+    };
     if (g_opts.music <= 0.001f) return;
-    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], picked[MAX_PATHBUF];
+    char resources[MAX_PATHBUF], music[MAX_PATHBUF], menu[MAX_PATHBUF], game[MAX_PATHBUF], picked[MAX_PATHBUF];
     classic_resources_path(resources, sizeof(resources));
     path_join(music, sizeof(music), resources, "music");
     path_join(menu, sizeof(menu), music, "menu");
+    path_join(game, sizeof(game), music, "game");
     pex_pick_music_file_from_list(menu_tracks, (int)ARRAY_COUNT(menu_tracks), menu, picked, sizeof(picked));
+    /* 1.2.5/legacy assets do not have modern menu1-menu4 files; their music
+       lives in music/*.ogg.  The legacy downloader maps those into music/game,
+       so title-screen music should fall back to that pool instead of playing
+       the same one built-in/menu track forever. */
+    if (!picked[0]) pex_pick_music_file_from_list(legacy_title_tracks, (int)ARRAY_COUNT(legacy_title_tracks), game, picked, sizeof(picked));
     if (!picked[0]) return;
     if (pex_play_background_music_file(picked)) g_menu_music_started = 1;
 }
@@ -932,7 +950,7 @@ static void pex_game_music_tick(void) {
     if (g_opts.music <= 0.001f) { pex_menu_music_stop(); return; }
     if (pex_background_music_playing()) return;
 
-    if (g_pex_game_music_ticks_before < 0) g_pex_game_music_ticks_before = rand() % 12000;
+    if (g_pex_game_music_ticks_before < 0) g_pex_game_music_ticks_before = 40 + (rand() % 80);
     if (g_pex_game_music_ticks_before > 0) { g_pex_game_music_ticks_before--; return; }
 
     classic_resources_path(resources, sizeof(resources));

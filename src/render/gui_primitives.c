@@ -1007,6 +1007,25 @@ static int button_hover(Button *b, int mx, int my) {
     return b->visible && mx >= b->x && my >= b->y && mx < b->x + b->w && my < b->y + b->h;
 }
 
+static void draw_button_bg_9patch(Button *b, int state) {
+    int src_y = 46 + state * 20;
+    int half = b->w / 2;
+    if (b->h == 20) {
+        draw_textured_modal_rect(&tex_gui, b->x, b->y, 0, src_y, half, 20, 0xFFFFFF);
+        draw_textured_modal_rect(&tex_gui, b->x + half, b->y, 200 - half, src_y, b->w - half, 20, 0xFFFFFF);
+        return;
+    }
+    /* Minecraft's gui.png button is only 20 px high.  Taller asset buttons
+       must stretch the middle strip, otherwise sampling beyond those 20 px
+       exposes unrelated gui.png tiles. */
+    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y, half, 5, 0, src_y, half, 5, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x + half, b->y, b->w - half, 5, 200 - (b->w - half), src_y, b->w - half, 5, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y + 5, half, b->h - 10, 0, src_y + 9, half, 1, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x + half, b->y + 5, b->w - half, b->h - 10, 200 - (b->w - half), src_y + 9, b->w - half, 1, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y + b->h - 5, half, 5, 0, src_y + 15, half, 5, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x + half, b->y + b->h - 5, b->w - half, 5, 200 - (b->w - half), src_y + 15, b->w - half, 5, 0xFFFFFF);
+}
+
 static void draw_button(Button *b) {
     if (!b->visible) return;
     if (g_loggy_enabled) g_loggy_gui_buttons++;
@@ -1016,8 +1035,7 @@ static void draw_button(Button *b) {
     if (!b->enabled) state = 0;
     else if (hover) state = 2;
     if (b->kind == BUTTON_SLIDER) state = 0;
-    draw_textured_modal_rect(&tex_gui, b->x, b->y, 0, 46 + state * 20, b->w / 2, b->h, 0xFFFFFF);
-    draw_textured_modal_rect(&tex_gui, b->x + b->w / 2, b->y, 200 - b->w / 2, 46 + state * 20, b->w / 2, b->h, 0xFFFFFF);
+    draw_button_bg_9patch(b, state);
     if (b->kind == BUTTON_SLIDER) {
         int knob = b->x + (int)(b->slider_value * (float)(b->w - 8));
         draw_textured_modal_rect(&tex_gui, knob, b->y, 0, 66, 4, 20, 0xFFFFFF);
@@ -1029,22 +1047,28 @@ static void draw_button(Button *b) {
         return;
     }
     int col;
-    if (g_screen == SCREEN_ASSETS && b->id >= 6100 && b->id < 6107) {
-        int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
-        int cat = cats[b->id - 6100];
-        legacy_asset_button_label(cat, b->label, sizeof(b->label));
-        if (legacy_assets_is_downloading() && (legacy_assets_download_mask() & cat)) {
-            int p = legacy_asset_group_progress_percent(cat);
-            int px0 = b->x + 3;
-            int py0 = b->y + b->h - 5;
-            int px1 = b->x + b->w - 3;
-            draw_rect(px0, py0, px1, py0 + 2, 0xFF555555);
-            draw_rect(px0, py0, px0 + ((px1 - px0) * p) / 100, py0 + 2, 0xFF55FF55);
-        }
-    }
     if (!b->enabled) col = -6250336;
     else if (hover) col = 16777120;
     else col = 14737632;
+    if (g_screen == SCREEN_ASSETS && b->id >= 6100 && b->id < 6107) {
+        int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
+        int cat = cats[b->id - 6100];
+        char line1[MAX_LABEL], line2[MAX_LABEL];
+        legacy_asset_button_lines(cat, line1, sizeof(line1), line2, sizeof(line2));
+        draw_centered_text(line1, b->x + b->w / 2, b->y + 5, col);
+        if (line2[0]) draw_centered_text(line2, b->x + b->w / 2, b->y + 17, col);
+        if (legacy_assets_is_downloading() && (legacy_assets_download_mask() & cat)) {
+            int p = legacy_asset_group_progress_percent(cat);
+            int px0 = b->x + 3;
+            int py0 = b->y + b->h - 4;
+            int px1 = b->x + b->w - 3;
+            if (p < 0) p = 0;
+            if (p > 100) p = 100;
+            draw_rect(px0, py0, px1, py0 + 2, 0xFF555555);
+            draw_rect(px0, py0, px0 + ((px1 - px0) * p) / 100, py0 + 2, 0xFF55FF55);
+        }
+        return;
+    }
     draw_centered_text(b->label, b->x + b->w / 2, b->y + (b->h - 8) / 2, col);
 }
 

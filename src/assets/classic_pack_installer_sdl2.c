@@ -609,28 +609,45 @@ static int legacy_asset_group_progress_percent(int category) {
     return (int)((done * 100ULL) / total);
 }
 
-static void legacy_asset_button_label(int category, char *out, size_t cap) {
+static void legacy_asset_button_lines(int category, char *line1, size_t cap1, char *line2, size_t cap2) {
     int state = InterlockedCompareExchange(&g_legacy_download_state, 0, 0);
     int active = InterlockedCompareExchange(&g_legacy_download_mask, 0, 0) & category;
     int slot = legacy_category_slot(category);
-    char miss[64];
-    if (!out || cap == 0) return;
+    if (line1 && cap1) snprintf(line1, cap1, "%s", legacy_category_name(category));
+    if (line2 && cap2) line2[0] = 0;
+    if (!line2 || cap2 == 0) return;
     if ((state == CLASSIC_INSTALL_DOWNLOADING || state == CLASSIC_INSTALL_EXTRACTING) && active) {
         unsigned long long done = 0, total = 0, left = 0;
-        char done_s[32], total_s[32], left_s[32];
+        char done_s[24], total_s[24], left_s[24];
         int p;
         legacy_asset_group_current_bytes(category, &done, &total, &left);
         p = total ? (int)((done * 100ULL) / total) : (int)InterlockedCompareExchange(&g_legacy_download_progress, 0, 0);
+        if (p < 0) p = 0;
+        if (p > 100) p = 100;
         pex_format_size(done, done_s, sizeof(done_s));
         pex_format_size(total, total_s, sizeof(total_s));
         pex_format_size(left, left_s, sizeof(left_s));
-        /* Keep all live download information on the asset button itself. */
-        snprintf(out, cap, "%s %d%% %s/%s L:%s", legacy_category_name(category), p, done_s, total_s, left_s);
+        snprintf(line2, cap2, "%d%% %s/%s %s left", p, done_s, total_s, left_s);
     } else {
-        if (slot >= 0 && slot < 7) pex_format_size(g_legacy_missing_bytes[slot], miss, sizeof(miss));
-        else snprintf(miss, sizeof(miss), "?");
-        snprintf(out, cap, "%s (%s)", legacy_category_name(category), miss);
+        char miss[32];
+        int files = 0;
+        if (slot >= 0 && slot < 7) {
+            pex_format_size(g_legacy_missing_bytes[slot], miss, sizeof(miss));
+            files = g_legacy_missing_count[slot];
+        } else {
+            snprintf(miss, sizeof(miss), "?");
+        }
+        if (files > 0) snprintf(line2, cap2, "%s missing", miss);
+        else snprintf(line2, cap2, "Done");
     }
+}
+
+static void legacy_asset_button_label(int category, char *out, size_t cap) {
+    char a[64], b[96];
+    if (!out || cap == 0) return;
+    legacy_asset_button_lines(category, a, sizeof(a), b, sizeof(b));
+    if (b[0]) snprintf(out, cap, "%s - %s", a, b);
+    else snprintf(out, cap, "%s", a);
 }
 
 static DWORD WINAPI legacy_asset_download_worker(LPVOID arg) {
@@ -778,6 +795,8 @@ static void legacy_assets_tick(void) {
         WaitForSingleObject(g_legacy_index_thread, 0);
         CloseHandle(g_legacy_index_thread);
         g_legacy_index_thread = NULL;
+        legacy_assets_recompute_status();
+        if (g_screen == SCREEN_ASSETS) rebuild_screen();
     }
 }
 

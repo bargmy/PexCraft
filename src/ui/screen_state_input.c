@@ -38,6 +38,7 @@ static void set_screen(ScreenId s) {
         /* Menu music is a title-screen-only sound.  Stop it as soon as a local
            world load, multiplayer join, or gameplay entry starts. */
         pex_menu_music_stop();
+        pex_game_music_reset_delay(40);
     }
     if (s == SCREEN_WORLD_SELECT || s == SCREEN_WORLD_DELETE) {
         g_selected_world_index = -1;
@@ -734,10 +735,42 @@ static void rename_selected_world_save(void) {
     set_screen(SCREEN_WORLD_SELECT);
 }
 
+static void world_save_mouse_down(int mx, int my) {
+    int top = 32;
+    int bottom = g_gui_h - 64;
+    int max_scroll = g_world_save_count - world_save_visible_rows();
+    int bar_x0 = g_gui_w / 2 + 124;
+    g_world_drag_mode = 0;
+    g_world_drag_start_y = my;
+    g_world_drag_start_scroll = g_world_save_scroll;
+    g_world_drag_scroll_pixels = 0;
+    if (max_scroll > 0 && my >= top && my <= bottom && mx >= bar_x0 - 3 && mx <= bar_x0 + 9) g_world_drag_mode = 1;
+}
+
+static void world_save_mouse_up(void) {
+    g_world_drag_mode = 0;
+    g_world_drag_scroll_pixels = 0;
+}
+
 static void world_save_drag_scroll(int delta_y) {
     if (g_screen != SCREEN_WORLD_SELECT && g_screen != SCREEN_WORLD_DELETE) return;
     if (delta_y == 0) return;
-    g_world_drag_scroll_pixels += delta_y;
+    if (g_world_drag_mode) {
+        int top = 32;
+        int bottom = g_gui_h - 64;
+        int view_h = bottom - top;
+        int content_h = g_world_save_count * 36;
+        int max_scroll = g_world_save_count - world_save_visible_rows();
+        int thumb_h = content_h > 0 ? (view_h * view_h / content_h) : view_h;
+        if (thumb_h < 32) thumb_h = 32;
+        if (thumb_h > view_h - 8) thumb_h = view_h - 8;
+        if (max_scroll < 0) max_scroll = 0;
+        if (view_h - thumb_h > 0) g_world_save_scroll = g_world_drag_start_scroll + (g_mouse_y - g_world_drag_start_y) * max_scroll / (view_h - thumb_h);
+        clamp_world_save_scroll();
+        rebuild_screen();
+        return;
+    }
+    g_world_drag_scroll_pixels -= delta_y;
     int rows = 0;
     while (g_world_drag_scroll_pixels >= 36) {
         rows++;
@@ -820,7 +853,7 @@ static void rebuild_screen(void) {
         int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
         int grid_w = g_gui_w - 40;
         int gap = 6;
-        int button_h = 26;
+        int button_h = 32;
         int start_x, button_w;
         int y0 = 58;
         int shown = 0;
@@ -842,7 +875,7 @@ static void rebuild_screen(void) {
                     int row = shown / 3;
                     Button *bb;
                     legacy_asset_button_label(cat, label, sizeof(label));
-                    bb = add_button_full(6100 + i, start_x + col * (button_w + gap), y0 + row * (button_h + 8), button_w, button_h, label, BUTTON_NORMAL);
+                    bb = add_button_full(6100 + i, start_x + col * (button_w + gap), y0 + row * (button_h + 6), button_w, button_h, label, BUTTON_NORMAL);
                     if (bb && downloading) bb->enabled = 0;
                     shown++;
                 }
@@ -1377,13 +1410,31 @@ static void on_button(Button *b) {
     }
 }
 
+static int texpack_max_scroll_pixels(void) {
+    int top = 32;
+    int bottom = g_gui_h - 58 + 4;
+    int max_scroll = g_texpack_count * 36 - (bottom - top - 4);
+    if (max_scroll < 0) max_scroll = 0;
+    return max_scroll;
+}
+
 static void texpack_mouse_down(int mx, int my) {
     int top = 32;
     int bottom = g_gui_h - 58 + 4;
+    int max_scroll = texpack_max_scroll_pixels();
+    int bar_x0 = g_gui_w / 2 + 124;
+    g_texpack_drag_mode = 0;
+    g_texpack_drag_start_y = my;
+    g_texpack_drag_start_scroll = g_texpack_scroll;
     if (my >= top && my <= bottom) {
         int left = g_gui_w / 2 - 110;
         int right = g_gui_w / 2 + 110;
         int idx = (my - top + g_texpack_scroll - 2) / 36;
+        if (max_scroll > 0 && mx >= bar_x0 - 3 && mx <= bar_x0 + 9) {
+            g_texpack_drag_anchor = my;
+            g_texpack_drag_mode = 1;
+            return;
+        }
         if (mx >= left && mx <= right && idx >= 0 && idx < g_texpack_count) {
             TexturePackEntry *e = &g_texpacks[idx];
             if (e->is_builtin_classic && !pack_is_installed()) {
@@ -1404,8 +1455,20 @@ static void texpack_mouse_down(int mx, int my) {
 
 static void texpack_mouse_drag(int my) {
     if (g_texpack_drag_anchor >= 0) {
-        g_texpack_scroll += (my - g_texpack_drag_anchor);
-        g_texpack_drag_anchor = my;
+        if (g_texpack_drag_mode) {
+            int top = 32;
+            int bottom = g_gui_h - 58 + 4;
+            int view_h = bottom - top;
+            int content_h = g_texpack_count * 36;
+            int max_scroll = texpack_max_scroll_pixels();
+            int thumb_h = content_h > 0 ? (view_h * view_h / content_h) : view_h;
+            if (thumb_h < 32) thumb_h = 32;
+            if (thumb_h > view_h - 8) thumb_h = view_h - 8;
+            if (view_h - thumb_h > 0) g_texpack_scroll = g_texpack_drag_start_scroll + (my - g_texpack_drag_start_y) * max_scroll / (view_h - thumb_h);
+        } else {
+            g_texpack_scroll -= (my - g_texpack_drag_anchor);
+            g_texpack_drag_anchor = my;
+        }
         clamp_texpack_scroll();
     }
 }
@@ -1441,6 +1504,9 @@ static void mouse_down(int mx, int my) {
         if (player_is_creative()) update_breaking();
         return;
     }
+    if (g_screen == SCREEN_LANGUAGE) language_mouse_down(mx, my);
+    if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) world_save_mouse_down(mx, my);
+
     if (g_screen == SCREEN_CREATE_WORLD) {
         int x = g_gui_w / 2 - 100;
         int y = 60;
@@ -1504,7 +1570,9 @@ static void mouse_up(int mx, int my) {
     g_mouse_down = 0;
     if (g_drag_slider) g_drag_slider->dragging = 0;
     g_drag_slider = NULL;
-    if (g_screen == SCREEN_TEXPACK) g_texpack_drag_anchor = -1;
+    if (g_screen == SCREEN_TEXPACK) { g_texpack_drag_anchor = -1; g_texpack_drag_mode = 0; }
+    if (g_screen == SCREEN_LANGUAGE) language_mouse_up();
+    if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) world_save_mouse_up();
     if (g_screen == SCREEN_CREATIVE) g_creative_dragging_scroll = 0;
 }
 
