@@ -1266,26 +1266,53 @@ static void flat_mark_chunk_block_light_dirty(int cx, int cz) {
 
 static void flat_copy_light_buffers_to_world(int cx, int cz, const unsigned char *sky, const unsigned char *block) {
     if (!sky || !block) return;
-    for (int lx = 0; lx < 16; lx++) {
-        int wx = cx * 16 + lx;
-        if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-        int fx = flat_index(wx);
-        for (int lz = 0; lz < 16; lz++) {
-            int wz = cz * 16 + lz;
-            if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-            int fz = flat_z_index(wz);
-            for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
-                int bi = flat_chunk_buf_index(lx, y, lz);
-                int yi = flat_y_index(y);
-                g_flat_sky_light[yi][fz][fx] = sky[bi] & 15;
-                g_flat_block_light[yi][fz][fx] = block[bi] & 15;
+
+    int x0 = cx * 16 - g_flat_world_origin_x;
+    int z0 = cz * 16 - g_flat_world_origin_z;
+    if (x0 >= 0 && z0 >= 0 && x0 + 16 <= FLAT_WORLD_SIZE && z0 + 16 <= FLAT_WORLD_SIZE) {
+        /* Fast streaming commit path: copied chunks are full 16x16 columns inside
+           the active terrain window.  The old triple-loop recomputed world x/z/y
+           indexes for every cell and became the unprofiled 600ms+ "stream_worker"
+           time while terrain itself was only ~60ms. */
+        for (int yi = 0; yi < FLAT_WORLD_HEIGHT; ++yi) {
+            const unsigned char *src_sky_y = sky + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK);
+            const unsigned char *src_blk_y = block + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK);
+            for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
+                unsigned char *dst_sky = &g_flat_sky_light[yi][z0 + lz][x0];
+                unsigned char *dst_blk = &g_flat_block_light[yi][z0 + lz][x0];
+                const unsigned char *ss = src_sky_y + lz * FLAT_RENDER_CHUNK;
+                const unsigned char *sb = src_blk_y + lz * FLAT_RENDER_CHUNK;
+                for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
+                    dst_sky[lx] = ss[lx] & 15;
+                    dst_blk[lx] = sb[lx] & 15;
+                }
+            }
+        }
+    } else {
+        for (int lx = 0; lx < 16; lx++) {
+            int wx = cx * 16 + lx;
+            if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
+            int fx = flat_index(wx);
+            for (int lz = 0; lz < 16; lz++) {
+                int wz = cz * 16 + lz;
+                if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
+                int fz = flat_z_index(wz);
+                for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+                    int bi = flat_chunk_buf_index(lx, y, lz);
+                    int yi = flat_y_index(y);
+                    g_flat_sky_light[yi][fz][fx] = sky[bi] & 15;
+                    g_flat_block_light[yi][fz][fx] = block[bi] & 15;
+                }
             }
         }
     }
     int lcx = stream_local_chunk_x(cx);
     int lcz = stream_local_chunk_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) {
-        flat_publish_light_ready(lcx, lcz, 0, 1);
+        /* Do not dirty all chunk sections here.  stream_mark_chunk_generated()
+           owns the single generated-section dirty pass.  Dirtying here as well
+           made every streamed result bump light/version and mesh state twice. */
+        flat_publish_light_ready(lcx, lcz, 1, 0);
     }
 }
 
@@ -1570,10 +1597,47 @@ static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_i
 }
 
 
-static int g_flat_light_dirty = 0;
+static int g_flat_light_dirty = 0; /* pending rectangle count, kept as int for Loggy */
 static int g_flat_light_x0 = 0, g_flat_light_z0 = 0, g_flat_light_x1 = 0, g_flat_light_z1 = 0;
 static CRITICAL_SECTION g_flat_light_dirty_cs;
 static int g_flat_light_dirty_cs_initialized = 0;
+
+#define FLAT_LIGHT_DIRTY_QUEUE_MAX 64
+typedef struct FlatLightDirtyRegion { int x0, z0, x1, z1; } FlatLightDirtyRegion;
+static FlatLightDirtyRegion g_flat_light_dirty_regions[FLAT_LIGHT_DIRTY_QUEUE_MAX];
+
+static long long flat_light_region_area(int x0, int z0, int x1, int z1) {
+    long long w = (long long)x1 - (long long)x0 + 1;
+    long long d = (long long)z1 - (long long)z0 + 1;
+    if (w < 1) w = 1;
+    if (d < 1) d = 1;
+    return w * d;
+}
+
+static int flat_light_regions_touch_or_overlap(const FlatLightDirtyRegion *r, int x0, int z0, int x1, int z1) {
+    const int gap = 2;
+    if (!r) return 0;
+    return !(x1 + gap < r->x0 || x0 - gap > r->x1 ||
+             z1 + gap < r->z0 || z0 - gap > r->z1);
+}
+
+static void flat_light_dirty_recompute_bounds_unlocked(void) {
+    if (g_flat_light_dirty <= 0) {
+        g_flat_light_x0 = g_flat_light_z0 = g_flat_light_x1 = g_flat_light_z1 = 0;
+        return;
+    }
+    g_flat_light_x0 = g_flat_light_dirty_regions[0].x0;
+    g_flat_light_z0 = g_flat_light_dirty_regions[0].z0;
+    g_flat_light_x1 = g_flat_light_dirty_regions[0].x1;
+    g_flat_light_z1 = g_flat_light_dirty_regions[0].z1;
+    for (int i = 1; i < g_flat_light_dirty; ++i) {
+        FlatLightDirtyRegion *r = &g_flat_light_dirty_regions[i];
+        if (r->x0 < g_flat_light_x0) g_flat_light_x0 = r->x0;
+        if (r->z0 < g_flat_light_z0) g_flat_light_z0 = r->z0;
+        if (r->x1 > g_flat_light_x1) g_flat_light_x1 = r->x1;
+        if (r->z1 > g_flat_light_z1) g_flat_light_z1 = r->z1;
+    }
+}
 
 static void flat_light_dirty_lock(void) {
     if (g_flat_light_dirty_cs_initialized) return;
@@ -1585,23 +1649,56 @@ static int flat_lighting_pending_dirty(void) {
     int pending = 0;
     flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
-    pending = g_flat_light_dirty ? 1 : 0;
+    pending = g_flat_light_dirty > 0 ? 1 : 0;
     LeaveCriticalSection(&g_flat_light_dirty_cs);
     return pending;
 }
 
 static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1) {
+    if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+    if (z1 < z0) { int t = z0; z0 = z1; z1 = t; }
     flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
-    if (!g_flat_light_dirty) {
-        g_flat_light_dirty = 1;
-        g_flat_light_x0 = x0; g_flat_light_z0 = z0; g_flat_light_x1 = x1; g_flat_light_z1 = z1;
-    } else {
-        if (x0 < g_flat_light_x0) g_flat_light_x0 = x0;
-        if (z0 < g_flat_light_z0) g_flat_light_z0 = z0;
-        if (x1 > g_flat_light_x1) g_flat_light_x1 = x1;
-        if (z1 > g_flat_light_z1) g_flat_light_z1 = z1;
+
+    for (int i = 0; i < g_flat_light_dirty; ++i) {
+        FlatLightDirtyRegion *r = &g_flat_light_dirty_regions[i];
+        if (flat_light_regions_touch_or_overlap(r, x0, z0, x1, z1)) {
+            if (x0 < r->x0) r->x0 = x0;
+            if (z0 < r->z0) r->z0 = z0;
+            if (x1 > r->x1) r->x1 = x1;
+            if (z1 > r->z1) r->z1 = z1;
+            flat_light_dirty_recompute_bounds_unlocked();
+            LeaveCriticalSection(&g_flat_light_dirty_cs);
+            flat_lighting_worker_wake();
+            return;
+        }
     }
+
+    if (g_flat_light_dirty < FLAT_LIGHT_DIRTY_QUEUE_MAX) {
+        FlatLightDirtyRegion *r = &g_flat_light_dirty_regions[g_flat_light_dirty++];
+        r->x0 = x0; r->z0 = z0; r->x1 = x1; r->z1 = z1;
+    } else {
+        /* Queue overflow should be rare.  Merge into the region whose area grows the
+           least instead of expanding one global rectangle across unrelated chunks. */
+        int best = 0;
+        long long best_grow = 0x7fffffffffffffffLL;
+        for (int i = 0; i < g_flat_light_dirty; ++i) {
+            FlatLightDirtyRegion *r = &g_flat_light_dirty_regions[i];
+            int nx0 = r->x0 < x0 ? r->x0 : x0;
+            int nz0 = r->z0 < z0 ? r->z0 : z0;
+            int nx1 = r->x1 > x1 ? r->x1 : x1;
+            int nz1 = r->z1 > z1 ? r->z1 : z1;
+            long long grow = flat_light_region_area(nx0, nz0, nx1, nz1) - flat_light_region_area(r->x0, r->z0, r->x1, r->z1);
+            if (grow < best_grow) { best_grow = grow; best = i; }
+        }
+        FlatLightDirtyRegion *r = &g_flat_light_dirty_regions[best];
+        if (x0 < r->x0) r->x0 = x0;
+        if (z0 < r->z0) r->z0 = z0;
+        if (x1 > r->x1) r->x1 = x1;
+        if (z1 > r->z1) r->z1 = z1;
+    }
+
+    flat_light_dirty_recompute_bounds_unlocked();
     LeaveCriticalSection(&g_flat_light_dirty_cs);
     flat_lighting_worker_wake();
 }
@@ -1627,7 +1724,11 @@ static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, in
            blocks and streaming do not stall the main/render thread. */
         flat_mark_light_dirty_region(x - 15, z - 15, x + 15, z + 15);
     } else {
-        flat_mark_light_dirty_around_block(x, y, z);
+        /* Same light value and same opacity cannot change sky/block light.  The
+           old code still queued a background relight for every harmless state
+           change, and independent tiny edits were merged into a huge rectangle. */
+        (void)x; (void)y; (void)z;
+        return;
     }
 }
 
@@ -1635,8 +1736,13 @@ static void flat_preview_pending_lighting(void) {
     int dirty = 0, x0 = 0, z0 = 0, x1 = 0, z1 = 0;
     flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
-    dirty = g_flat_light_dirty;
-    x0 = g_flat_light_x0; z0 = g_flat_light_z0; x1 = g_flat_light_x1; z1 = g_flat_light_z1;
+    dirty = g_flat_light_dirty > 0 ? 1 : 0;
+    if (dirty) {
+        x0 = g_flat_light_dirty_regions[0].x0;
+        z0 = g_flat_light_dirty_regions[0].z0;
+        x1 = g_flat_light_dirty_regions[0].x1;
+        z1 = g_flat_light_dirty_regions[0].z1;
+    }
     LeaveCriticalSection(&g_flat_light_dirty_cs);
     if (!dirty) return;
     int cx = (x0 + x1) / 2;
@@ -1651,13 +1757,20 @@ static int flat_take_pending_light_region(int *x0, int *z0, int *x1, int *z1) {
     if (g_stream_remap_in_progress) return 0;
     flat_light_dirty_lock();
     EnterCriticalSection(&g_flat_light_dirty_cs);
-    if (!g_flat_light_dirty || g_stream_remap_in_progress) {
+    if (g_flat_light_dirty <= 0 || g_stream_remap_in_progress) {
         LeaveCriticalSection(&g_flat_light_dirty_cs);
         return 0;
     }
-    *x0 = g_flat_light_x0; *z0 = g_flat_light_z0;
-    *x1 = g_flat_light_x1; *z1 = g_flat_light_z1;
-    g_flat_light_dirty = 0;
+    *x0 = g_flat_light_dirty_regions[0].x0;
+    *z0 = g_flat_light_dirty_regions[0].z0;
+    *x1 = g_flat_light_dirty_regions[0].x1;
+    *z1 = g_flat_light_dirty_regions[0].z1;
+    if (g_flat_light_dirty > 1) {
+        memmove(g_flat_light_dirty_regions, g_flat_light_dirty_regions + 1,
+                (size_t)(g_flat_light_dirty - 1) * sizeof(g_flat_light_dirty_regions[0]));
+    }
+    g_flat_light_dirty--;
+    flat_light_dirty_recompute_bounds_unlocked();
     LeaveCriticalSection(&g_flat_light_dirty_cs);
     return 1;
 }
@@ -2124,27 +2237,63 @@ static void flat_load_chunk_delta_for_dir(const char *world_dir, int cx, int cz,
 static int g_copy_chunk_skip_main_light = 0;
 static void flat_copy_chunk_buffers(int cx, int cz, const unsigned char *buf, const unsigned char *meta) {
     if (!buf) return;
-    for (int lx = 0; lx < 16; lx++) {
-        int wx = cx * 16 + lx;
-        if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-        int fx = flat_index(wx);
-        for (int lz = 0; lz < 16; lz++) {
-            int wz = cz * 16 + lz;
-            if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-            int fz = flat_z_index(wz);
-            for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
-                int bi = flat_chunk_buf_index(lx, y, lz);
-                int id = buf[bi];
-                unsigned char m = meta ? meta[bi] : 0;
-                g_flat_blocks[flat_y_index(y)][fz][fx] = (unsigned char)id;
-                g_flat_meta[flat_y_index(y)][fz][fx] = m;
-                g_flat_levels[flat_y_index(y)][fz][fx] = block_is_liquid(id) ? (m & 15) : 0;
-            }
-        }
-    }
+
     int lcx = stream_local_chunk_x(cx);
     int lcz = stream_local_chunk_z(cz);
-    if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
+    int x0 = cx * 16 - g_flat_world_origin_x;
+    int z0 = cz * 16 - g_flat_world_origin_z;
+    unsigned short nonempty_mask = 0;
+
+    if (x0 >= 0 && z0 >= 0 && x0 + 16 <= FLAT_WORLD_SIZE && z0 + 16 <= FLAT_WORLD_SIZE) {
+        /* Hot streamed-chunk commit path.  On PC the active world is 512x256x512;
+           one chunk copy is 65,536 blocks.  The old code called flat_index(),
+           flat_z_index(), flat_y_index(), and flat_chunk_buf_index() for every
+           cell, then scanned the entire chunk again for occupancy.  With 40-60
+           completed results this was the real missing 600ms+ service time. */
+        for (int yi = 0; yi < FLAT_WORLD_HEIGHT; ++yi) {
+            unsigned short bit = (unsigned short)(1u << (yi / FLAT_RENDER_SECTION));
+            const unsigned char *src_b_y = buf + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK);
+            const unsigned char *src_m_y = meta ? (meta + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK)) : NULL;
+            for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
+                unsigned char *dst_b = &g_flat_blocks[yi][z0 + lz][x0];
+                unsigned char *dst_m = &g_flat_meta[yi][z0 + lz][x0];
+                unsigned char *dst_l = &g_flat_levels[yi][z0 + lz][x0];
+                const unsigned char *sb = src_b_y + lz * FLAT_RENDER_CHUNK;
+                const unsigned char *sm = src_m_y ? (src_m_y + lz * FLAT_RENDER_CHUNK) : NULL;
+                for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
+                    int id = sb[lx];
+                    unsigned char m = sm ? sm[lx] : 0;
+                    dst_b[lx] = (unsigned char)id;
+                    dst_m[lx] = m;
+                    dst_l[lx] = block_is_liquid(id) ? (m & 15) : 0;
+                    if (id) nonempty_mask |= bit;
+                }
+            }
+        }
+        if (flat_local_chunk_valid(lcx, lcz)) g_flat_chunk_section_non_empty_mask[lcz][lcx] = nonempty_mask;
+    } else {
+        for (int lx = 0; lx < 16; lx++) {
+            int wx = cx * 16 + lx;
+            if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
+            int fx = flat_index(wx);
+            for (int lz = 0; lz < 16; lz++) {
+                int wz = cz * 16 + lz;
+                if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
+                int fz = flat_z_index(wz);
+                for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+                    int bi = flat_chunk_buf_index(lx, y, lz);
+                    int yi = flat_y_index(y);
+                    int id = buf[bi];
+                    unsigned char m = meta ? meta[bi] : 0;
+                    g_flat_blocks[yi][fz][fx] = (unsigned char)id;
+                    g_flat_meta[yi][fz][fx] = m;
+                    g_flat_levels[yi][fz][fx] = block_is_liquid(id) ? (m & 15) : 0;
+                }
+            }
+        }
+        if (flat_local_chunk_valid(lcx, lcz)) flat_refresh_chunk_occupancy(lcx, lcz);
+    }
+
     if (!g_copy_chunk_skip_main_light) flat_relight_fast_surface_chunk(cx, cz);
     if (!g_copy_chunk_skip_main_light && flat_chunk_buffer_has_light_source(buf)) flat_mark_chunk_block_light_dirty(cx, cz);
 }
@@ -2463,6 +2612,15 @@ static void stream_mark_neighbor_dirty_if_border_changed(int src_cx, int src_cz,
 
 static int g_stream_suppress_generated_chunk_light_dirty = 0;
 
+/* Runtime streamed chunks already arrive with per-column/per-block light buffers
+   computed on the worker (StreamAsyncResult.sky/blocklight).  The old runtime
+   install path still marked every installed chunk as "light not ready" and
+   merged all streamed chunks into one global dirty rectangle.  With 40-60
+   completed results waiting, that produced light_worker spikes around 1s+ and
+   left generated chunks visually/gameplay-delayed even though terrain generation
+   had already finished. */
+static int g_stream_runtime_chunk_light_repair = 0;
+
 static void stream_mark_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
@@ -2470,11 +2628,11 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
     g_flat_chunk_initial_preload[lcz][lcx] = g_stream_generation_keep_completed ? 1 : 0;
 
     if (g_stream_generation_keep_completed) {
-        /* Spawn preload must not run one full 48x48xheight light pass per chunk.
-           Java 1.2.5 preloads the terrain area, drains lighting, then lets renderers
-           rebuild from the settled world.  Running per-chunk light here was both
-           slow and the source of mixed-brightness spawn chunks. */
-        flat_publish_light_ready(lcx, lcz, 0, 1);
+        /* Initial preload chunks now arrive with computed per-column sky/block light
+           just like runtime async stream chunks.  Do not publish them as light-not-ready:
+           that created a second hidden light/mesh repair phase after the loading
+           screen and made the first seconds of gameplay feel delayed. */
+        flat_publish_light_ready(lcx, lcz, 1, 1);
     } else if (g_stream_suppress_generated_chunk_light_dirty) {
         /* Portal travel installs a target-dimension neighborhood synchronously so
            Teleporter-style search/create can run immediately.  Do not enqueue one
@@ -2482,11 +2640,18 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
            32x32-window lighting pass and looked like a freeze right after entry. */
         flat_publish_light_ready(lcx, lcz, 1, 1);
     } else {
-        /* Runtime streaming may show a fast local light preview, but the expensive
-           neighbor-aware pass is queued/batched for the lighting worker instead of
-           blocking the stream commit thread for every chunk. */
-        flat_publish_light_ready(lcx, lcz, 0, 1);
-        {
+        /* Runtime streaming installs light buffers that were generated with the
+           chunk.  Do NOT enqueue one dirty light region per streamed chunk here.
+           flat_mark_light_dirty_region() coalesces by expanding a single bounding
+           rectangle, so a ring of streamed chunks becomes one huge relight job.
+           That is exactly what the log showed: terrain ~60ms, pushwait ~0ms, but
+           light_worker ~1000ms and result backlog still high.
+
+           Neighbor-perfect light repairs can be explicitly re-enabled for testing
+           with g_stream_runtime_chunk_light_repair, but the default path must make
+           generated terrain visible immediately like Java's chunk render update. */
+        flat_publish_light_ready(lcx, lcz, 1, 0);
+        if (g_stream_runtime_chunk_light_repair) {
             int wcx = floor_div16(g_flat_world_origin_x) + lcx;
             int wcz = floor_div16(g_flat_world_origin_z) + lcz;
             flat_mark_light_dirty_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15);
@@ -2497,7 +2662,7 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
        This replaces the old 3x3x16 section scan performed for every installed
        streamed chunk.  Only the new chunk gets invalidated; existing neighbor
        meshes stay drawable and are dirtied only on shared borders. */
-    unsigned short mask = flat_refresh_chunk_occupancy(lcx, lcz);
+    unsigned short mask = g_flat_chunk_section_non_empty_mask[lcz][lcx];
     g_flat_world_chunk_dirty[lcz][lcx] = 1;
     g_flat_world_chunk_valid[lcz][lcx] = 0;
     g_flat_renderer_sort_dirty = 1;
@@ -2965,16 +3130,29 @@ static void flat_prepare_initial_generation(void) {
     g_flat_section_geometry_dirty = 0;
 }
 
-static int stream_initial_load_chunk_target(void) {
+static int stream_initial_load_radius(void) {
 #if defined(PEX_PLATFORM_WII)
-    return 9;
+    return 1;
 #elif defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
-    return 25;
+    return 2;
+#elif defined(PEX_PLATFORM_PSP)
+    return 3;
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    int r = stream_render_radius();
+    if (r > 4) r = 4;
+    return r;
 #else
-    /* Desktop/Android loading screen target requested by the user: publish up
-       to 50 missing chunks before entering gameplay.  Only missing chunks are
-       queued; already-loaded/generated chunks are skipped by stream_queue_add. */
-    return 50;
+    /* Desktop root-cause fix: the old loader used a hard-coded target of 50
+       chunks, and the complete-ring queue logic actually stopped at 49 (rings
+       0..3).  Immediately after entering gameplay, update_infinite_world_streaming
+       then queued the *real* render-distance area, which is why Loggy showed
+       installed=49 followed by gen_queue totals like 132/312, dozens of async
+       results, and long "world is still catching up" delays.
+
+       Preload the same radius that gameplay will render, so the loading screen
+       pays that cost before control is handed to the player instead of pushing a
+       second hidden terrain build into chat/pause/ingame. */
+    return stream_render_radius();
 #endif
 }
 
@@ -3003,6 +3181,8 @@ typedef struct StreamInitialBetaBatchState {
     unsigned char *beta_data;
     unsigned char *buf;
     unsigned char *meta;
+    unsigned char *sky;
+    unsigned char *blocklight;
     GenCanvas cv;
 } StreamInitialBetaBatchState;
 
@@ -3020,6 +3200,8 @@ static void stream_initial_beta_batch_free(void) {
     free(s->beta_data);
     free(s->buf);
     free(s->meta);
+    free(s->sky);
+    free(s->blocklight);
     memset(s, 0, sizeof(*s));
     g_stream_initial_batch_running = 0;
 }
@@ -3050,17 +3232,17 @@ static void flat_begin_initial_generation(void) {
     if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
     if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
-    int target = stream_initial_load_chunk_target();
-    for (int ring = 0; ring < FLAT_RENDER_CHUNKS && g_stream_gen_queue_count < target; ring++) {
+    int target_radius = stream_initial_load_radius();
+    if (target_radius < 0) target_radius = 0;
+    if (target_radius > (FLAT_RENDER_CHUNKS / 2) - 1) target_radius = (FLAT_RENDER_CHUNKS / 2) - 1;
+    for (int ring = 0; ring <= target_radius; ring++) {
         /* Release 1.2.5 preloads a square/ring around spawn.  Do not seed the
            loading-screen queue with the in-game directional corridor: that can
            create holes inside the preload bounds, and those holes make the final
            skylight settle treat missing chunks as air.  Keep only complete rings
            so the first visible world is a stable, contiguous spawn island. */
-        int ring_slots = (ring == 0) ? 1 : ring * 8;
-        if (ring > 0 && g_stream_gen_queue_count + ring_slots > target) break;
-        for (int dz = -ring; dz <= ring && g_stream_gen_queue_count < target; dz++) {
-            for (int dx = -ring; dx <= ring && g_stream_gen_queue_count < target; dx++) {
+        for (int dz = -ring; dz <= ring; dz++) {
+            for (int dx = -ring; dx <= ring; dx++) {
                 if (ring != 0 && abs(dx) != ring && abs(dz) != ring) continue;
                 int lcx = pcx + dx;
                 int lcz = pcz + dz;
@@ -9423,11 +9605,17 @@ static void stream_async_submit_next(void) {
     if (!g_stream_async_event || g_stream_async_worker_count <= 0) return;
 
     int submitted = 0;
-    /* Runtime streaming should keep workers fed far enough ahead to satisfy
-       large render distances.  A workers*2 backlog was too shallow: at 8 chunks
-       the pool could drain the tiny job ring, then wait for the service thread
-       while the player saw holes.  This is still fully async and bounded. */
+    int result_backlog = 0;
+    EnterCriticalSection(&g_stream_async_cs);
+    result_backlog = g_stream_async_result_count;
+    LeaveCriticalSection(&g_stream_async_cs);
+    /* Runtime streaming should keep workers fed, but not keep creating completed
+       results faster than the world can commit them.  The user's log showed
+       jobs/results piled up (results=61) while terrain generation itself was not
+       the long phase.  Back-pressure on result backlog prevents invisible chunks
+       from accumulating behind commit/mesh work. */
     int job_backlog_limit = g_stream_generation_keep_completed ? STREAM_ASYNC_JOB_RING : g_stream_async_worker_count * 8;
+    if (!g_stream_generation_keep_completed && result_backlog >= 32) job_backlog_limit = g_stream_async_worker_count;
     if (job_backlog_limit < g_stream_async_worker_count * 2) job_backlog_limit = g_stream_async_worker_count * 2;
     if (job_backlog_limit > STREAM_ASYNC_JOB_RING) job_backlog_limit = STREAM_ASYNC_JOB_RING;
     EnterCriticalSection(&g_stream_async_cs);
@@ -9456,6 +9644,9 @@ static void stream_async_submit_next(void) {
 
 static int stream_async_install_ready(int max_install) {
     int installed = 0;
+    double install_total_t0 = now_seconds();
+    double install_deadline = install_total_t0 + (g_stream_generation_keep_completed ? 0.050 : 0.010);
+    double last_one_ms = 0.0;
     while (installed < max_install) {
         StreamAsyncResult r;
         memset(&r, 0, sizeof(r));
@@ -9473,6 +9664,7 @@ static int stream_async_install_ready(int max_install) {
 
         if (r.epoch == g_stream_generation_epoch &&
             stream_world_chunk_in_window(r.cx, r.cz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+            double one_t0 = now_seconds();
             g_copy_chunk_skip_main_light = (r.sky && r.blocklight) ? 1 : 0;
             flat_copy_chunk_buffers(r.cx, r.cz, r.buf, r.meta);
             g_copy_chunk_skip_main_light = 0;
@@ -9480,10 +9672,15 @@ static int stream_async_install_ready(int max_install) {
             stream_mark_chunk_generated(stream_local_chunk_x(r.cx), stream_local_chunk_z(r.cz));
             g_stream_gen_queue_installed_count++;
             installed++;
+            last_one_ms = (now_seconds() - one_t0) * 1000.0;
         }
 
         stream_async_free_result_payload(&r);
+        if (installed > 0 && now_seconds() >= install_deadline) break;
     }
+    g_prof_stream_service_install_ms = (now_seconds() - install_total_t0) * 1000.0;
+    g_prof_stream_service_installs = installed;
+    g_prof_stream_install_one_ms = last_one_ms;
     return installed;
 }
 
@@ -10114,13 +10311,16 @@ static int stream_generate_initial_batch(void) {
         s->beta_data = (unsigned char*)calloc(16384u, 1);
         s->buf = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
         s->meta = (unsigned char*)calloc(FLAT_CHUNK_BLOCK_COUNT, 1);
+        s->sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
+        s->blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
         s->cv.minCx = min_cx - 1;
         s->cv.minCz = min_cz - 1;
         s->cv.chunks = canvas_chunks;
         s->cv.blocks = (unsigned char*)calloc((size_t)s->cv.chunks * (size_t)s->cv.chunks * 32768u, 1);
         s->cv.meta = s->cv.blocks ? (unsigned char*)calloc((size_t)s->cv.chunks * (size_t)s->cv.chunks * 32768u, 1) : NULL;
 
-        if (!s->tp || !s->beta_blocks || !s->beta_data || !s->buf || !s->meta || !s->cv.blocks || !s->cv.meta) {
+        if (!s->tp || !s->beta_blocks || !s->beta_data || !s->buf || !s->meta ||
+            !s->sky || !s->blocklight || !s->cv.blocks || !s->cv.meta) {
             stream_reset_initial_batch();
             return 0;
         }
@@ -10205,6 +10405,8 @@ static int stream_generate_initial_batch(void) {
             memset(s->beta_data, 0, 16384u);
             memset(s->buf, 0, FLAT_CHUNK_BLOCK_COUNT);
             memset(s->meta, 0, FLAT_CHUNK_BLOCK_COUNT);
+            memset(s->sky, 0, FLAT_CHUNK_BLOCK_COUNT);
+            memset(s->blocklight, 0, FLAT_CHUNK_BLOCK_COUNT);
             extract_canvas_chunk(&s->cv, wcx, wcz, s->beta_blocks, s->beta_data);
             for (int lx = 0; lx < 16; ++lx) {
                 for (int lz = 0; lz < 16; ++lz) {
@@ -10225,9 +10427,11 @@ static int stream_generate_initial_batch(void) {
             }
             flat_load_chunk_delta_for_dir(g_loaded_world_dir, wcx, wcz, s->buf, s->meta);
 
+            flat_compute_chunk_light(s->buf, s->sky, s->blocklight, g_current_dimension);
             g_copy_chunk_skip_main_light = 1;
             flat_copy_chunk_buffers(wcx, wcz, s->buf, s->meta);
             g_copy_chunk_skip_main_light = 0;
+            flat_copy_light_buffers_to_world(wcx, wcz, s->sky, s->blocklight);
             stream_mark_chunk_generated(lcx, lcz);
 
             g_stream_gen_queue_index = i + 1;
@@ -10289,16 +10493,22 @@ static void process_stream_generation_queue(void) {
     result_backlog = g_stream_async_result_count;
     LeaveCriticalSection(&g_stream_async_cs);
 
-    int max_install = initial_load ? 32 : 4;
+    int max_install = initial_load ? 32 : 8;
     if (!initial_load) {
-        if (result_backlog >= 96) max_install = 16;
-        else if (result_backlog >= 48) max_install = 12;
-        else if (result_backlog >= 16) max_install = 8;
+        /* Results are already generated terrain.  A low install budget left logs
+           with results=61 while the visible world still had holes.  Installing is
+           now cheap because runtime installs no longer enqueue huge light-repair
+           rectangles, so drain completed results aggressively. */
+        if (result_backlog >= 96) max_install = 64;
+        else if (result_backlog >= 48) max_install = 48;
+        else if (result_backlog >= 16) max_install = 24;
     }
     pex_logf_trace("chunk stream async install tick queue=%d/%d results=%d budget=%d",
                    g_stream_gen_queue_index, g_stream_gen_queue_count, result_backlog, max_install);
     stream_async_install_ready(max_install);
+    double submit_t0 = now_seconds();
     stream_async_submit_next();
+    g_prof_stream_service_submit_ms = (now_seconds() - submit_t0) * 1000.0;
 
     if (!stream_generation_active() && !g_stream_generation_keep_completed) {
         stream_generation_queue_clear();

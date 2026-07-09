@@ -251,8 +251,11 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "\nTHREADS / WORKERS:\n");
     loggy_appendf(&out, &left, "  main role=%d async_tick last=%.3f avg=%.3f samples=%d\n",
                   g_pex_profile_thread_role, g_prof_async_tick_last_ms, g_prof_async_tick_avg_ms, g_prof_async_tick_samples);
-    loggy_appendf(&out, &left, "  stream_worker last=%.3f avg=%.3f samples=%d workers=%d last_chunk=%d,%d terrain=%.3f delta=%.3f light=%.3f pushwait=%.3f\n",
+    loggy_appendf(&out, &left, "  stream_service last=%.3f avg=%.3f samples=%d workers=%d install=%.3f n=%d one=%.3f submit=%.3f\n",
                   g_prof_stream_worker_last_ms, g_prof_stream_worker_avg_ms, g_prof_stream_worker_samples, stream_workers,
+                  g_prof_stream_service_install_ms, g_prof_stream_service_installs,
+                  g_prof_stream_install_one_ms, g_prof_stream_service_submit_ms);
+    loggy_appendf(&out, &left, "  stream_chunk last_chunk=%d,%d terrain=%.3f delta=%.3f light=%.3f pushwait=%.3f\n",
                   g_prof_stream_worker_last_cx, g_prof_stream_worker_last_cz,
                   g_prof_stream_worker_terrain_ms, g_prof_stream_worker_delta_ms,
                   g_prof_stream_worker_light_ms, g_prof_stream_worker_push_wait_ms);
