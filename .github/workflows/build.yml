@@ -16,7 +16,35 @@ env:
 
 jobs:
 
+  notify_build_start:
+    name: Telegram build start
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Send Telegram building message
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+        run: python3 .github/scripts/telegram_build_status.py start
+
   windows:
+    needs: notify_build_start
     name: Windows ${{ matrix.arch }} MinGW - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -191,6 +219,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   windows_arm64:
+    needs: notify_build_start
     name: Windows arm64 Clang/MinGW - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -334,6 +363,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   linux:
+    needs: notify_build_start
     name: Linux SDL2/OpenGL - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -456,6 +486,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   lgwebos:
+    needs: notify_build_start
     name: LG webOS ${{ matrix.arch }} - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -665,6 +696,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   android:
+    needs: notify_build_start
     name: Android arm64 APK - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -835,6 +867,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   android_tv:
+    needs: notify_build_start
     name: Android TV APK - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -1006,6 +1039,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   wii:
+    needs: notify_build_start
     name: Nintendo Wii DOL - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -1159,6 +1193,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   psp:
+    needs: notify_build_start
     name: Sony PSP EBOOT - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
@@ -1269,6 +1304,7 @@ jobs:
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
   xbox_uwp:
+    needs: notify_build_start
     name: Xbox One UWP Dev Mode - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{

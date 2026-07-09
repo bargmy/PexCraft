@@ -416,6 +416,7 @@ static int font_utf8_contains_arabic(const char *src) {
 }
 
 static int font_arabic_prev_join_left(const unsigned int *cps, int n, int idx) {
+    (void)n;
     for (int i = idx - 1; i >= 0; --i) {
         const FontArabicForm *f;
         if (font_arabic_is_mark(cps[i])) continue;

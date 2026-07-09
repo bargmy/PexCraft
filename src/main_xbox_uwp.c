@@ -81,6 +81,7 @@ static int pex_renderer_d3d11_xbox_init_corewindow(void *core_window_unknown, in
 #include "worldgen/level.c"
 #include "game/world_session.c"
 #include "i18n/language.c"
+#include "render/cfont.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
 #include "audio/sound.c"
