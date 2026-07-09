@@ -440,6 +440,7 @@ static int stream_local_chunk_x(int wcx);
 static int stream_local_chunk_z(int wcz);
 static void flat_mark_chunks_dirty_near(int x, int z);
 static void flat_mark_sections_dirty_near_block(int x, int y, int z);
+static void flat_mark_light_sections_dirty_near_block(int x, int y, int z);
 static void flat_mark_generated_section(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty(int cx, int cz, int sy);
 static void flat_mark_edit_section_dirty(int cx, int cz, int sy);
@@ -1439,11 +1440,12 @@ static void flat_mark_light_cell_changed(int x, int y, int z) {
         g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
         flat_bump_light_version(lcx, lcz);
     }
-    /* Java RenderGlobal.markBlockNeedsUpdate2 expands the changed light cell by
-       one block.  That only crosses renderer boundaries at section/chunk edges;
-       this helper mirrors that targeted expansion instead of dirtying every
-       neighboring section unconditionally. */
-    flat_mark_sections_dirty_near_block(x, y, z);
+    /* Light changes must not enter the edit-priority mesh queue.  Only the
+       actual block edit needs instant/synchronous renderer priority; propagated
+       light can rebuild normally in the visible-section pass.  Using
+       flat_mark_sections_dirty_near_block() here was the source of Loggy lines
+       like edit_priority sync=29 after one click. */
+    flat_mark_light_sections_dirty_near_block(x, y, z);
 }
 
 static void flat_set_light_value_kind(int kind, int x, int y, int z, int value) {
@@ -1585,11 +1587,10 @@ static void flat_mark_visual_light_changed(int x, int y, int z) {
     int sy = flat_section_y_for_world(y);
     if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return;
 
-    /* This is intentionally edit-priority, not generic dirty.  A visual light
-       seed exists only to make the just-edited area render now with sane
-       brightness; the full light worker will mark exact sections later. */
-    flat_bump_light_version(lcx, lcz);
-    flat_mark_edit_section_dirty(lcx, lcz, sy);
+    /* Preview light is purely visual.  Dirty the affected section, but do not
+       put it into the edit-priority queue; the real edited block section is
+       already queued by flat_set_block_raw(). */
+    flat_mark_section_dirty(lcx, lcz, sy);
 }
 
 static void flat_set_preview_light_kind(int kind, int x, int y, int z, int value, int only_raise) {
@@ -1691,8 +1692,11 @@ static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_i
     flat_seed_edit_visual_sky_light(x, y, z, old_opacity, new_opacity);
     flat_seed_edit_visual_block_light(x, y, z, old_light, new_light);
 
+    /* Normal opacity edits need a small local light repair so breaking/placing
+       does not leave a visible black column.  Keep it bounded: light sources use
+       their real 15-block influence radius, ordinary opaque edits use a 9x9
+       region, and mesh priority is handled only by the block geometry edit. */
     int radius = (old_light > 0 || new_light > 0) ? 15 : 4;
-    if (old_opacity != new_opacity && (old_light > 0 || new_light > 0)) radius = 15;
     flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     return 1;
 }
@@ -1821,9 +1825,10 @@ static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, in
            seeds a tiny no-black visual preview and queues exact lighting. */
         if (flat_update_edit_light_now(x, y, z, old_id, new_id)) return;
 
-        /* Non-player/batched updates still use the worker path so fluids/falling
-           blocks and streaming do not stall the main/render thread. */
-        flat_mark_light_dirty_region(x - 15, z - 15, x + 15, z + 15);
+        /* Non-player/batched updates still use the worker path, but do not turn
+           a harmless opacity-only block update into a 31x31xheight relight. */
+        int radius = (old_light > 0 || new_light > 0) ? 15 : 4;
+        flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     } else {
         /* Same light value and same opacity cannot change sky/block light.  The
            old code still queued a background relight for every harmless state
@@ -2581,6 +2586,23 @@ static void flat_mark_section_dirty(int cx, int cz, int sy) {
     g_flat_renderer_sort_dirty = 1;
 }
 
+static void flat_mark_light_sections_dirty_near_block(int x, int y, int z) {
+    if (!flat_in_bounds(x, y, z)) return;
+    int fx = flat_index(x);
+    int fz = flat_z_index(z);
+    int cx0 = fx / FLAT_RENDER_CHUNK;
+    int cz0 = fz / FLAT_RENDER_CHUNK;
+    int sy0 = (y - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
+
+    flat_mark_section_dirty(cx0, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0 - 1, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0 + 1, cz0, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0, cz0 - 1, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0, cz0 + 1, sy0);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_section_dirty(cx0, cz0, sy0 - 1);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_section_dirty(cx0, cz0, sy0 + 1);
+}
+
 static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return;
     /* A player/block edit should be visible quickly.  Java adds the touched
@@ -2606,6 +2628,49 @@ static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
     if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_edit_section_dirty(cx0, cz0 + 1, sy0);
     if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_edit_section_dirty(cx0, cz0, sy0 - 1);
     if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_edit_section_dirty(cx0, cz0, sy0 + 1);
+}
+
+
+#define FLAT_VISUAL_EDIT_MAX 48
+typedef struct FlatVisualEditBlock {
+    int x, y, z;
+    int id;
+    int tick;
+} FlatVisualEditBlock;
+static FlatVisualEditBlock g_flat_visual_edits[FLAT_VISUAL_EDIT_MAX];
+static int g_flat_visual_edit_count = 0;
+
+static void flat_note_visual_edit_block(int x, int y, int z, int id) {
+    if (id <= 0 || !flat_in_bounds(x, y, z)) return;
+    /* This is not correctness lighting or a mesh cache.  It is a one-block
+       visual receipt so the click is visible before the slow GL/display-list
+       section mesh catches up. */
+    for (int i = 0; i < g_flat_visual_edit_count; ++i) {
+        if (g_flat_visual_edits[i].x == x && g_flat_visual_edits[i].y == y && g_flat_visual_edits[i].z == z) {
+            g_flat_visual_edits[i].id = id;
+            g_flat_visual_edits[i].tick = g_ingame_ticks;
+            return;
+        }
+    }
+    if (g_flat_visual_edit_count >= FLAT_VISUAL_EDIT_MAX) {
+        memmove(g_flat_visual_edits, g_flat_visual_edits + 1, sizeof(g_flat_visual_edits[0]) * (FLAT_VISUAL_EDIT_MAX - 1));
+        g_flat_visual_edit_count = FLAT_VISUAL_EDIT_MAX - 1;
+    }
+    g_flat_visual_edits[g_flat_visual_edit_count].x = x;
+    g_flat_visual_edits[g_flat_visual_edit_count].y = y;
+    g_flat_visual_edits[g_flat_visual_edit_count].z = z;
+    g_flat_visual_edits[g_flat_visual_edit_count].id = id;
+    g_flat_visual_edits[g_flat_visual_edit_count].tick = g_ingame_ticks;
+    g_flat_visual_edit_count++;
+}
+
+static void flat_prune_visual_edit_index(int i) {
+    if (i < 0 || i >= g_flat_visual_edit_count) return;
+    if (i + 1 < g_flat_visual_edit_count) {
+        memmove(g_flat_visual_edits + i, g_flat_visual_edits + i + 1,
+                sizeof(g_flat_visual_edits[0]) * (size_t)(g_flat_visual_edit_count - i - 1));
+    }
+    g_flat_visual_edit_count--;
 }
 
 static int flat_section_has_blocks(int lcx, int lcz, int sy) {
@@ -2812,6 +2877,7 @@ static void flat_set_block_raw(int x, int y, int z, int id) {
         g_flat_meta[yi][zi][xi] = 0;
         flat_update_section_after_block_change(x, y, z, id);
         flat_mark_sections_dirty_near_block(x, y, z);
+        if (flat_persistent_edit_active() && id > 0) flat_note_visual_edit_block(x, y, z, id);
         if (flat_light_opacity_for_id(old_id) != flat_light_opacity_for_id(id) ||
             flat_block_light_value_for_id(old_id) != flat_block_light_value_for_id(id)) {
             flat_mark_light_dirty_for_change(x, y, z, old_id, id);

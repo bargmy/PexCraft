@@ -8382,6 +8382,44 @@ static void psp_fast_draw_world(void) {
 }
 #endif
 
+static void draw_flat_visual_edit_overlays(void) {
+    if (g_flat_visual_edit_count <= 0 || !tex_terrain.id) return;
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(1, 1, 1, 1);
+#if !defined(PEX_PLATFORM_PSP)
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
+#endif
+    for (int i = 0; i < g_flat_visual_edit_count; ) {
+        FlatVisualEditBlock *e = &g_flat_visual_edits[i];
+        if (!flat_in_bounds(e->x, e->y, e->z) || flat_get_block(e->x, e->y, e->z) != e->id ||
+            (g_ingame_ticks - e->tick) > 20) {
+            flat_prune_visual_edit_index(i);
+            continue;
+        }
+        int lcx = flat_local_chunk_x(e->x);
+        int lcz = flat_local_chunk_z(e->z);
+        int sy = flat_section_y_for_world(e->y);
+        if (flat_local_chunk_valid(lcx, lcz) && flat_section_index_valid(sy) &&
+            g_flat_section_valid[sy][lcz][lcx] && !g_flat_section_dirty[sy][lcz][lcx] &&
+            !g_flat_section_mesh_building[sy][lcz][lcx]) {
+            flat_prune_visual_edit_index(i);
+            continue;
+        }
+        draw_world_block_exposed(e->id, e->x, e->y, e->z);
+        i++;
+    }
+#if !defined(PEX_PLATFORM_PSP)
+    glDisable(GL_POLYGON_OFFSET_FILL);
+#endif
+    glColor4f(1, 1, 1, 1);
+}
+
 static void draw_flat_test_world(void) {
     if (!tex_terrain.id) return;
     update_portal_texture_animation();
@@ -8449,6 +8487,7 @@ static void draw_flat_test_world(void) {
     profile_add_time(PROF_MESH_MAIN, prof_part);
     prof_part = profile_begin();
     draw_flat_section_passes(g_flat_visible_sections, visible_count);
+    draw_flat_visual_edit_overlays();
     profile_add_time(PROF_WORLD_DRAW, prof_part);
 
     prof_part = profile_begin();

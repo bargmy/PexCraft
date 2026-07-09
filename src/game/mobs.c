@@ -1242,11 +1242,13 @@ static int passive_mob_column_spawn_y_for_category(int type, int cat, int x, int
         passive_spawn_y_cache_put(type, cat, x, z, -9999);
         return -9999;
     }
-    if (flat_sky_light_needs_rebuild_at_block(x, z)) {
-        flat_queue_light_repair_at_block(x, z);
-        passive_spawn_y_cache_put(type, cat, x, z, -9999);
-        return -9999;
-    }
+    /* Natural mob spawning must never repair skylight.  That check scanned a
+       chunk column grid for many spawn probes and queued full chunk relights,
+       showing up as Entity passive mobs ~4ms and light_worker ~250ms while the
+       player was simply placing blocks.  Spawning can tolerate stale light for
+       a tick; the renderer/lighting system owns repairs. */
+    (void)flat_sky_light_needs_rebuild_at_block;
+    (void)flat_queue_light_repair_at_block;
     if (passive_spawn_y_cache_get(type, cat, x, z, &cached_y)) {
         ++g_prof_mob_spawn_probe_hits_last;
         return cached_y;
