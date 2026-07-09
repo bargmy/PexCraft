@@ -1212,7 +1212,7 @@ static void draw_chat_screen(void) {
     char field[160];
     snprintf(field, sizeof(field), "> %s%s", g_chat_input, (g_ingame_ticks / 6 % 2 == 0) ? "_" : "");
     draw_rect(2, g_gui_h - 14, g_gui_w - 2, g_gui_h - 2, (int)0x80000000u);
-    draw_text(field, 4, g_gui_h - 12, 14737632);
+    draw_text_chat_plain(field, 4, g_gui_h - 12, 14737632);
 }
 
 

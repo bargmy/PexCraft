@@ -350,7 +350,8 @@ static const PexLangKeyAlias pex_lang_key_aliases[] = {
        falling back to English. */
     {"texturePack.title", "resourcePack.title"},
     {"texturePack.openFolder", "resourcePack.openFolder"},
-    {"texturePack.folderInfo", "resourcePack.folderInfo"}
+    {"texturePack.folderInfo", "resourcePack.folderInfo"},
+    {"menu.game", "menu.paused"}
 };
 
 static int pex_lang_value_is_bridge_english(const char *key, const char *value, const char *fallback) {
@@ -369,13 +370,18 @@ static int pex_lang_value_is_bridge_english(const char *key, const char *value, 
         return pex_lang_str_eq(value, "(Place resource pack files here)") ||
                pex_lang_str_eq(value, "(Place texture pack files here)");
     }
+    if (pex_lang_str_eq(key, "menu.game")) {
+        return pex_lang_str_eq(value, "Game menu") ||
+               pex_lang_str_eq(value, "Game Menu") ||
+               pex_lang_str_eq(value, "Paused");
+    }
     return 0;
 }
 
 static const char *tr_key_default(const char *key, const char *fallback) {
     const char *exact;
     if (!key) return fallback ? fallback : "";
-    if (!g_lang_list_loaded) pex_set_language_code(g_opts.language[0] ? g_opts.language : "en_US");
+    if (!g_lang_list_loaded || g_lang_table_count <= 0) pex_set_language_code(g_opts.language[0] ? g_opts.language : "en_US");
     exact = pex_lang_lookup_loaded_key(key);
     if (exact && !pex_lang_value_is_bridge_english(key, exact, fallback)) return exact;
 

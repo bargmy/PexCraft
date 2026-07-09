@@ -323,6 +323,7 @@ static int font_utf8_put(char *out, size_t cap, size_t *n, unsigned int cp) {
 
 
 static const char *g_font_language_override = NULL;
+static int g_font_disable_context_bidi = 0;
 
 static const char *font_effective_language_code(void) {
     return (g_font_language_override && g_font_language_override[0]) ? g_font_language_override : pex_current_language_code();
@@ -497,7 +498,7 @@ static const char *font_prepare_text_for_render(const char *src, int force_bidi,
         cur = shaped;
         did_shape = 1;
     }
-    if ((force_bidi || pex_current_language_is_bidi() || font_language_is_arabic_script()) && font_bidi_reorder_utf8(cur, buf, cap)) return buf;
+    if ((force_bidi || (!g_font_disable_context_bidi && (pex_current_language_is_bidi() || font_language_is_arabic_script()))) && font_bidi_reorder_utf8(cur, buf, cap)) return buf;
     if (did_shape) {
         snprintf(buf, cap, "%s", shaped);
         return buf;
@@ -963,6 +964,84 @@ static void draw_text_force_bidi(const char *s, int x, int y, int color) {
     draw_text_raw_impl(s, x + 1, y + 1, shadow_color(color), 1, 1);
     draw_text_raw_impl(s, x, y, color, 1, 0);
 }
+
+static int font_utf8_contains_rtl_script(const char *src) {
+    const unsigned char *p = (const unsigned char *)src;
+    while (p && *p) {
+        unsigned int cp = font_utf8_next(&p);
+        if (font_codepoint_is_rtl(cp)) return 1;
+    }
+    return 0;
+}
+
+static void draw_text_ltr_context(const char *s, int x, int y, int color) {
+    int old_disable = g_font_disable_context_bidi;
+    g_font_disable_context_bidi = 1;
+    draw_text_raw_impl(s, x + 1, y + 1, shadow_color(color), 0, 1);
+    draw_text_raw_impl(s, x, y, color, 0, 0);
+    g_font_disable_context_bidi = old_disable;
+}
+
+static int text_width_ltr_context(const char *s) {
+    int old_disable = g_font_disable_context_bidi;
+    int w;
+    g_font_disable_context_bidi = 1;
+    w = text_width_prepared(s, 0);
+    g_font_disable_context_bidi = old_disable;
+    return w;
+}
+
+static void draw_text_chat_plain(const char *s, int x, int y, int color) {
+    const char *msg = s;
+    if (!s) return;
+    /* Chat lines often look like "<Player> message".  Java's Bidi renderer does
+       not let the player-name prefix get swallowed into the RTL message.  Keep
+       the sender prefix LTR, then Bidi-render only the actual message part. */
+    if (s[0] == '<') {
+        const char *gt = strstr(s, "> ");
+        if (gt && gt - s < 80) {
+            char prefix[96];
+            int pn = (int)(gt + 2 - s);
+            if (pn >= (int)sizeof(prefix)) pn = (int)sizeof(prefix) - 1;
+            memcpy(prefix, s, (size_t)pn);
+            prefix[pn] = 0;
+            draw_text_ltr_context(prefix, x, y, color);
+            x += text_width_ltr_context(prefix);
+            msg = gt + 2;
+        }
+    } else if (s[0] == '>' && s[1] == ' ') {
+        draw_text_ltr_context("> ", x, y, color);
+        x += text_width_ltr_context("> " );
+        msg = s + 2;
+    }
+    if (font_utf8_contains_rtl_script(msg)) draw_text_force_bidi(msg, x, y, color);
+    else draw_text_ltr_context(msg, x, y, color);
+}
+
+static int text_width_chat_plain(const char *s) {
+    const char *msg = s;
+    int w = 0;
+    if (!s) return 0;
+    if (s[0] == '<') {
+        const char *gt = strstr(s, "> ");
+        if (gt && gt - s < 80) {
+            char prefix[96];
+            int pn = (int)(gt + 2 - s);
+            if (pn >= (int)sizeof(prefix)) pn = (int)sizeof(prefix) - 1;
+            memcpy(prefix, s, (size_t)pn);
+            prefix[pn] = 0;
+            w += text_width_ltr_context(prefix);
+            msg = gt + 2;
+        }
+    } else if (s[0] == '>' && s[1] == ' ') {
+        w += text_width_ltr_context("> " );
+        msg = s + 2;
+    }
+    if (font_utf8_contains_rtl_script(msg)) w += text_width_prepared(msg, 1);
+    else w += text_width_ltr_context(msg);
+    return w;
+}
+
 
 static void draw_centered_text(const char *s, int cx, int y, int color) {
     draw_text(s, cx - text_width(s) / 2, y, color);

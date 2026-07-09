@@ -552,8 +552,8 @@ static void draw_text_mcpe_colored(const char *text, int x, int y, int argb) {
         if (section) {
             if (seg_n > 0) {
                 seg[seg_n] = 0;
-                draw_text(seg, cur_x, y, alpha | rgb);
-                cur_x += text_width(seg);
+                draw_text_chat_plain(seg, cur_x, y, alpha | rgb);
+                cur_x += text_width_chat_plain(seg);
                 seg_n = 0;
             }
             int c = mcpe_chat_color_rgb(code);
@@ -566,7 +566,7 @@ static void draw_text_mcpe_colored(const char *text, int x, int y, int argb) {
     }
     if (seg_n > 0) {
         seg[seg_n] = 0;
-        draw_text(seg, cur_x, y, alpha | rgb);
+        draw_text_chat_plain(seg, cur_x, y, alpha | rgb);
     }
 }
 
