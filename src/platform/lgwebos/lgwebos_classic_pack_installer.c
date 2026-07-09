@@ -128,6 +128,55 @@ static int lgwebos_download_file(const char *url, const char *path, char *err, s
     return 1;
 }
 
+
+static int pex_platform_http_download_to_file(const char *url, const char *path, unsigned int expect_size, int legacy_mode);
+#include "../../assets/legacy_asset_manager_shared.c"
+static int lgwebos_legacy_curl_progress(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    (void)clientp; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    return legacy_assets_is_cancelled() ? 1 : 0;
+}
+
+static int pex_platform_http_download_to_file(const char *url, const char *path, unsigned int expect_size, int legacy_mode) {
+    CURL *curl = NULL;
+    FILE *f = NULL;
+    CURLcode rc;
+    long http_code = 0;
+    unsigned long long got;
+    (void)legacy_mode;
+    if (legacy_assets_is_cancelled()) return 0;
+    pxc_mkdirs_for_file(path);
+    DeleteFileA(path);
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    curl = curl_easy_init();
+    if (!curl) return 0;
+    f = fopen(path, "wb");
+    if (!f) { curl_easy_cleanup(curl); return 0; }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "PEXCRAFT/1.0 LGwebOS");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, lgwebos_curl_write_file);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, f);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, lgwebos_legacy_curl_progress);
+    rc = curl_easy_perform(curl);
+    fflush(f);
+    fclose(f);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(curl);
+    if (legacy_assets_is_cancelled() || rc != CURLE_OK || http_code < 200 || http_code >= 300) {
+        DeleteFileA(path);
+        return 0;
+    }
+    got = file_size_bytes(path);
+    if (got == 0 || (expect_size && got != (unsigned long long)expect_size)) {
+        DeleteFileA(path);
+        return 0;
+    }
+    return 1;
+}
+
 static int lgwebos_install_resources_blocking(void) {
     char pack_dir[MAX_PATHBUF];
     char err[MAX_LABEL];

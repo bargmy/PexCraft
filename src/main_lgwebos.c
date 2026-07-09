@@ -3,6 +3,7 @@
    Win32, gameplay, world, UI, and save code stay untouched. */
 #define PEX_PLATFORM_LGWEBOS 1
 #define PEX_PLATFORM_SDL2 1
+#define PEX_HAS_LEGACY_ASSET_MANAGER 1
 #include "platform/lgwebos/lgwebos_compat.h"
 #include "common/common.h"
 
@@ -106,6 +107,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"
+static void rebuild_screen(void);
 #include "platform/lgwebos/lgwebos_classic_pack_installer.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"

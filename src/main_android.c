@@ -4,6 +4,7 @@
    controls, and the shared gamepad abstraction for optional controllers. */
 #define PEX_PLATFORM_ANDROID 1
 #define PEX_PLATFORM_SDL2 1
+#define PEX_HAS_LEGACY_ASSET_MANAGER 1
 #include "platform/android/android_compat.h"
 #include "common/common.h"
 
@@ -107,6 +108,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"
+static void rebuild_screen(void);
 #include "platform/android/android_classic_pack_installer.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"

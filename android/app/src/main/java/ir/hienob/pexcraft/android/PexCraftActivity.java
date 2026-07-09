@@ -74,6 +74,44 @@ public class PexCraftActivity extends SDLActivity {
         classicDownloadStatus = "Canceling...";
     }
 
+
+    public boolean downloadFileBlocking(final String url, final String outPath) {
+        HttpURLConnection conn = null;
+        File outFile = new File(outPath);
+        File parent = outFile.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            Log.w(TAG, "Could not create download directory: " + parent);
+            return false;
+        }
+        try {
+            if (outFile.exists() && !outFile.delete()) {
+                Log.w(TAG, "Could not delete old download: " + outFile);
+            }
+            conn = openClassicConnection(url);
+            conn.setRequestMethod("GET");
+            conn.connect();
+            int response = conn.getResponseCode();
+            if (response < 200 || response >= 300) {
+                Log.w(TAG, "HTTP " + response + " while downloading " + url);
+                return false;
+            }
+            byte[] buf = new byte[32 * 1024];
+            try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(outFile)) {
+                int n;
+                while ((n = in.read(buf)) >= 0) {
+                    if (n > 0) out.write(buf, 0, n);
+                }
+            }
+            return outFile.length() > 0;
+        } catch (Throwable t) {
+            Log.e(TAG, "File download failed: " + url, t);
+            if (outFile.exists() && !outFile.delete()) Log.w(TAG, "Could not delete failed download: " + outFile);
+            return false;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     public int getClassicPackDownloadState() { return classicDownloadState; }
     public int getClassicPackDownloadProgress() { return classicDownloadProgress; }
     public String getClassicPackDownloadStatus() { return classicDownloadStatus == null ? "" : classicDownloadStatus; }

@@ -139,6 +139,30 @@ static void android_call_string_copy(const char *method, char *out, size_t cap) 
     (*env)->DeleteLocalRef(env, activity);
 }
 
+static int pex_platform_http_download_to_file(const char *url, const char *path, unsigned int expect_size, int legacy_mode);
+#include "../../assets/legacy_asset_manager_shared.c"
+static int pex_platform_http_download_to_file(const char *url, const char *path, unsigned int expect_size, int legacy_mode) {
+    unsigned long long got;
+    (void)legacy_mode;
+    if (legacy_assets_is_cancelled()) return 0;
+    DeleteFileA(path);
+    if (!android_call_bool_string_string("downloadFileBlocking", url, path)) {
+        DeleteFileA(path);
+        return 0;
+    }
+    if (legacy_assets_is_cancelled()) {
+        DeleteFileA(path);
+        return 0;
+    }
+    got = file_size_bytes(path);
+    if (got == 0 || (expect_size && got != (unsigned long long)expect_size)) {
+        DeleteFileA(path);
+        return 0;
+    }
+    return 1;
+}
+
+
 static void pack_install_start_size_fetch(void) {
     LONG old = InterlockedCompareExchange(&g_classic_download_size_state, CLASSIC_SIZE_FETCHING, CLASSIC_SIZE_UNKNOWN);
     if (old != CLASSIC_SIZE_UNKNOWN) return;
