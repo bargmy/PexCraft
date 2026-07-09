@@ -52,6 +52,7 @@ static void set_screen(ScreenId s) {
     g_gamepad_menu_index = 0;
     g_gamepad_virtual_cursor_active = 0;
     if (s == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) pack_install_start_size_fetch();
+    if (s == SCREEN_ASSETS) legacy_assets_start_index_fetch();
     set_mouse_grabbed(s == SCREEN_INGAME);
     pex_ui_text_input_end();
     clear_buttons();
@@ -786,7 +787,8 @@ static void rebuild_screen(void) {
             int nav_y = g_gui_h / 6 + 100;
             add_button_full(300, g_gui_w / 2 - 100, nav_y,      200, 20, tr("Video Settings..."), BUTTON_NORMAL);
             add_button_full(100, g_gui_w / 2 - 100, nav_y + 24, 200, 20, tr("Controls..."), BUTTON_NORMAL);
-            add_button_full(302, g_gui_w / 2 - 100, nav_y + 48, 200, 20, tr("Language"), BUTTON_NORMAL);
+            add_button_full(302, g_gui_w / 2 - 100, nav_y + 48, 98, 20, tr("Language"), BUTTON_NORMAL);
+            add_button_full(305, g_gui_w / 2 + 2,   nav_y + 48, 98, 20, "Assets", BUTTON_NORMAL);
 #if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
             add_button_full(304, g_gui_w / 2 - 100, nav_y + 72, 200, 20, "Remote...", BUTTON_NORMAL);
 #endif
@@ -812,6 +814,38 @@ static void rebuild_screen(void) {
         }
         add_button_full(122, g_gui_w / 2 - 100, g_gui_h / 6 + 120 - 6, 200, 20, "Info...", BUTTON_NORMAL);
         add_button_full(199, g_gui_w / 2 - 100, g_gui_h / 6 + 168, 200, 20, tr("Done"), BUTTON_NORMAL);
+    } else if (g_screen == SCREEN_ASSETS) {
+        int idx_state = legacy_assets_index_state();
+        int downloading = legacy_assets_is_downloading();
+        int y = g_gui_h / 6 + 66;
+        if (idx_state == CLASSIC_SIZE_ERROR) {
+            add_button_full(300, g_gui_w / 2 - 100, y, 200, 20, "Retry fetch", BUTTON_NORMAL);
+        } else if (idx_state == CLASSIC_SIZE_READY) {
+            int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
+            if (!downloading && legacy_assets_any_missing()) {
+                add_button_full(6000, g_gui_w / 2 - 100, y, 200, 20, "Download ALL missing", BUTTON_NORMAL);
+                y += 24;
+            }
+            for (int i = 0; i < (int)ARRAY_COUNT(cats); ++i) {
+                int cat = cats[i];
+                if (downloading) {
+                    if (legacy_assets_download_mask() & cat) {
+                        char label[MAX_LABEL];
+                        Button *bb;
+                        legacy_asset_button_label(cat, label, sizeof(label));
+                        bb = add_button_full(6100 + i, g_gui_w / 2 - 140, y, 280, 20, label, BUTTON_NORMAL);
+                        bb->enabled = 0;
+                        y += 22;
+                    }
+                } else if (legacy_asset_group_missing(cat)) {
+                    char label[MAX_LABEL];
+                    legacy_asset_button_label(cat, label, sizeof(label));
+                    add_button_full(6100 + i, g_gui_w / 2 - 140, y, 280, 20, label, BUTTON_NORMAL);
+                    y += 22;
+                }
+            }
+        }
+        add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, downloading ? "Cancel" : tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 24, 200, 20, tr("Back"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_LANGUAGE) {
@@ -1067,6 +1101,22 @@ static void on_button(Button *b) {
         else if (b->id == 302) { g_language_return_screen = SCREEN_OPTIONS; set_screen(SCREEN_LANGUAGE); }
         else if (b->id == 303) { pex_name_screen_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_SET_NAME); }
         else if (b->id == 304) { pex_tv_remote_map_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_TV_REMOTE_MAP); }
+        else if (b->id == 305) set_screen(SCREEN_ASSETS);
+    } else if (g_screen == SCREEN_ASSETS) {
+        int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
+        if (b->id == 200) {
+            if (legacy_assets_is_downloading()) legacy_assets_request_cancel();
+            set_screen(SCREEN_OPTIONS);
+        } else if (b->id == 300) {
+            legacy_assets_refresh_index();
+            rebuild_screen();
+        } else if (b->id == 6000) {
+            legacy_assets_start_download(LEGACY_ASSET_ALL);
+            rebuild_screen();
+        } else if (b->id >= 6100 && b->id < 6100 + (int)ARRAY_COUNT(cats)) {
+            legacy_assets_start_download(cats[b->id - 6100]);
+            rebuild_screen();
+        }
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         if (b->id < 100) {
             if (b->kind == BUTTON_NORMAL) {
@@ -1903,6 +1953,7 @@ static void handle_keydown(WPARAM vk) {
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
+        else if (g_screen == SCREEN_ASSETS) { if (legacy_assets_is_downloading()) legacy_assets_request_cancel(); set_screen(SCREEN_OPTIONS); }
         else if (g_screen == SCREEN_SET_NAME) { if (!g_name_screen_first_run) set_screen(g_name_return_screen); }
         else if (g_screen == SCREEN_TV_REMOTE_MAP) { if (!g_opts.tv_remote_mapped) pex_tv_remote_apply_defaults(); if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen); else set_screen(pex_startup_screen()); }
         else if (g_screen == SCREEN_VIRTUAL_KEYBOARD) pex_virtual_keyboard_cancel();

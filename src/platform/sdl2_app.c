@@ -282,6 +282,7 @@ static void main_loop(void) {
                 profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
             if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
+            legacy_assets_tick();
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
@@ -339,12 +340,9 @@ static int sdl2_release_audio_missing_mask(void) {
 }
 
 static int sdl2_release_resources_missing_actual(void) {
-    /* SDL2 launcher gate: use actual files/markers only, not the saved
-       "ignore" or "download disabled" options. If anything is missing,
-       show the native selector before entering the game. */
-    if (!sdl2_release_textures_installed()) return 1;
-    if (sdl2_release_audio_missing_mask() != 0) return 1;
-    return 0;
+    /* Startup only installs the classic 1.2.5 client.jar texture pack.
+       legacy.json assets are managed later from Options -> Assets. */
+    return !sdl2_release_textures_installed();
 }
 
 static void sdl2_release_check_line(char *out, size_t cap, const char *name, int selected, int installed) {
@@ -494,128 +492,48 @@ static int sdl2_native_release_resources_run_download(void) {
 }
 
 static void sdl2_native_release_resources_prompt(void) {
-    int textures_installed = sdl2_release_textures_installed();
-    int missing_audio = sdl2_release_audio_missing_mask();
-    int textures = textures_installed ? 0 : 1;
-    int audio_mask = missing_audio;
-    int running = 1;
-
+    int buttonid = -1;
+    SDL_MessageBoxButtonData buttons[2] = {
+        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 100, "Download classic textures" },
+        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 101, "Play without textures" }
+    };
+    SDL_MessageBoxColorScheme colors = {{
+        { 245, 245, 245 }, { 32, 32, 36 }, { 64, 64, 70 }, { 255, 255, 255 }, { 40, 40, 46 }
+    }};
+    SDL_MessageBoxData data;
+    char size_line[MAX_LABEL];
     g_sdl2_native_resource_prompt_handled = 1;
-    if (!textures && !audio_mask) {
-        textures = textures_installed ? 0 : 1;
-        audio_mask = missing_audio;
+    if (sdl2_release_textures_installed()) return;
+    g_opts.download_classic_textures = 1;
+    g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
+    pack_install_start_size_fetch();
+    format_download_size(size_line, sizeof(size_line));
+    memset(&data, 0, sizeof(data));
+    data.flags = SDL_MESSAGEBOX_INFORMATION;
+    data.window = NULL;
+    data.title = APP_TITLE " - Classic Textures";
+    data.message = "PexCraft needs the Minecraft 1.2.5 client.jar textures for the Release pack.\n\n"
+                   "Startup only downloads/extracts the client.jar texture assets.\n"
+                   "Sounds, music, languages, and other legacy.json assets are in Options -> Assets.\n\n"
+                   "Press Download classic textures to install the jar texture pack.";
+    data.numbuttons = 2;
+    data.buttons = buttons;
+    data.colorScheme = &colors;
+    if (SDL_ShowMessageBox(&data, &buttonid) != 0) {
+        fprintf(stderr, "PexCraft: classic texture popup could not be displayed; refusing to continue silently.\n");
+        SDL_Quit();
+        exit(4);
     }
-
-    while (running) {
-        char text[2048];
-        int buttonid = -1;
-        SDL_MessageBoxButtonData buttons[9];
-        int nb = 0;
-        int all_missing_selected;
-        int any_missing;
-        textures_installed = sdl2_release_textures_installed();
-        missing_audio = sdl2_release_audio_missing_mask();
-        textures = textures_installed ? 0 : (textures ? 1 : 0);
-        audio_mask &= missing_audio;
-        any_missing = (!textures_installed) || missing_audio;
-        all_missing_selected = (textures_installed || textures) && ((audio_mask & missing_audio) == missing_audio);
-
-        buttons[nb++] = (SDL_MessageBoxButtonData){ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 100, "Download selected" };
-        buttons[nb++] = (SDL_MessageBoxButtonData){ SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 101, "Play without selected" };
-        if (any_missing) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 102, "Select All Missing" };
-        if (!textures_installed) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 103, "Textures" };
-        if (missing_audio & CLASSIC_AUDIO_MOBS) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 104, "Mob sounds" };
-        if (missing_audio & CLASSIC_AUDIO_WORLD_UI) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 105, "UI/Block" };
-        if (missing_audio & CLASSIC_AUDIO_RECORDS) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 106, "Discs" };
-        if (missing_audio & CLASSIC_AUDIO_MENU_MUSIC) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 107, "Menu music" };
-        if (missing_audio & CLASSIC_AUDIO_GAME_MUSIC) buttons[nb++] = (SDL_MessageBoxButtonData){ 0, 108, "In-game music" };
-
-        {
-            SDL_MessageBoxColorScheme colors = {{
-                { 245, 245, 245 },
-                { 32, 32, 36 },
-                { 64, 64, 70 },
-                { 255, 255, 255 },
-                { 40, 40, 46 }
-            }};
-            SDL_MessageBoxData data;
-            memset(&data, 0, sizeof(data));
-            sdl2_release_resource_selection_text(text, sizeof(text), textures, audio_mask);
-            data.flags = SDL_MESSAGEBOX_INFORMATION;
-            data.window = NULL;
-            data.title = APP_TITLE " - Release Resources";
-            data.message = text;
-            data.numbuttons = nb;
-            data.buttons = buttons;
-            data.colorScheme = &colors;
-            if (SDL_ShowMessageBox(&data, &buttonid) != 0) {
-                /* Never silently continue if the full checklist dialog fails.
-                   Some SDL backends dislike many native buttons, so retry with
-                   a minimal native dialog. If even that cannot be shown, stop
-                   startup rather than launching past a missing-resource prompt. */
-                SDL_MessageBoxButtonData fb[2] = {
-                    { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 100, "Download all missing" },
-                    { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 101, "Play without selected" }
-                };
-                SDL_MessageBoxData fbdata;
-                memset(&fbdata, 0, sizeof(fbdata));
-                fbdata.flags = SDL_MESSAGEBOX_WARNING;
-                fbdata.window = NULL;
-                fbdata.title = APP_TITLE " - Release Resources";
-                fbdata.message = text;
-                fbdata.numbuttons = 2;
-                fbdata.buttons = fb;
-                fbdata.colorScheme = &colors;
-                if (SDL_ShowMessageBox(&fbdata, &buttonid) != 0) {
-                    fprintf(stderr, "PexCraft: Release resource popup could not be displayed; refusing to continue silently.\n");
-                    SDL_Quit();
-                    exit(4);
-                }
-                if (buttonid == 100) {
-                    textures = textures_installed ? 0 : 1;
-                    audio_mask = missing_audio;
-                }
-            }
-        }
-
-        switch (buttonid) {
-            case 100:
-                textures = textures_installed ? 0 : textures;
-                audio_mask &= missing_audio;
-                if (!textures && !audio_mask) {
-                    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, APP_TITLE " - Resources", "Nothing missing is selected. Choose missing resources or press Play without selected.", NULL);
-                    break;
-                }
-                sdl2_apply_release_resource_selection(textures, audio_mask);
-                sdl2_native_release_resources_run_download();
-                running = 0;
-                break;
-            case 101:
-            case -1:
-                /* Do not permanently suppress the native resource selector.
-                   "Play without selected" is only for this launch; if resources
-                   are still missing, the native popup appears again next time. */
-                running = 0;
-                break;
-            case 102:
-                if (all_missing_selected) { textures = 0; audio_mask = 0; }
-                else { textures = textures_installed ? 0 : 1; audio_mask = missing_audio; }
-                break;
-            case 103: if (!textures_installed) textures = !textures; break;
-            case 104: if (missing_audio & CLASSIC_AUDIO_MOBS) audio_mask ^= CLASSIC_AUDIO_MOBS; break;
-            case 105: if (missing_audio & CLASSIC_AUDIO_WORLD_UI) audio_mask ^= CLASSIC_AUDIO_WORLD_UI; break;
-            case 106: if (missing_audio & CLASSIC_AUDIO_RECORDS) audio_mask ^= CLASSIC_AUDIO_RECORDS; break;
-            case 107: if (missing_audio & CLASSIC_AUDIO_MENU_MUSIC) audio_mask ^= CLASSIC_AUDIO_MENU_MUSIC; break;
-            case 108: if (missing_audio & CLASSIC_AUDIO_GAME_MUSIC) audio_mask ^= CLASSIC_AUDIO_GAME_MUSIC; break;
-            default:
-                running = 0;
-                break;
-        }
-        if (running) {
-            InterlockedExchange(&g_classic_download_size_state, CLASSIC_SIZE_UNKNOWN);
-        }
+    if (buttonid == 100) {
+        g_opts.download_classic_textures = 1;
+        g_opts.download_classic_sounds = 0;
+        g_opts.classic_audio_mask = 0;
+        save_options();
+        sdl2_native_release_resources_run_download();
     }
 }
+
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
@@ -680,7 +598,7 @@ int main(int argc, char **argv) {
     /* SDL2 uses the native pre-game selector. Never fall back to the in-game
        download prompt, because that UI depends on textures/fonts that may be
        missing. */
-    if (!g_sdl2_native_resource_prompt_handled && !strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);
+    if (!g_sdl2_native_resource_prompt_handled && !strcmp(g_opts.skin, CLASSIC_PACK_NAME) && g_opts.download_classic_textures && (!pack_is_installed() || pack_missing_required_textures())) set_screen(SCREEN_CLASSIC_PACK_WARNING);
     else set_screen(pex_startup_screen());
     InitializeCriticalSection(&g_save_cs);
     main_loop();

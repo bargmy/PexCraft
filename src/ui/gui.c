@@ -1414,14 +1414,16 @@ static void draw_pack_download_prompt(void) {
     pack_install_start_size_fetch();
     classic_resource_missing_summary(summary, sizeof(summary));
     draw_default_bg();
-    draw_centered_text("Release Resources Download", g_gui_w / 2, g_gui_h / 4 - 60 + 14, 16777215);
+    draw_centered_text("Classic Texture Download", g_gui_w / 2, g_gui_h / 4 - 60 + 14, 16777215);
     draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 35, 16777215);
+#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
     draw_text("Choose exactly which official Release assets to download.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 49, 10526880);
     draw_text("Nothing downloads until you press Download selected.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 60, 10526880);
-#if PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED
     draw_text("Audio uses Mojang legacy.json and is saved by category.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 71, 10526880);
 #else
-    draw_text("Sound downloads are disabled on this platform build.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 71, 10526880);
+    draw_text("Startup only installs the Minecraft 1.2.5 client.jar textures.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 49, 10526880);
+    draw_text("Sounds, music, languages, and other legacy.json files are in Options -> Assets.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 60, 10526880);
+    draw_text("Nothing downloads until you press Download.", g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 71, 10526880);
 #endif
     format_download_size(size_line, sizeof(size_line));
     draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 88, 10526880);

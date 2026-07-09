@@ -33,9 +33,11 @@ static void set_default_options(void) {
 #else
     g_opts.ignore_classic_resources_warning = 0;
     g_opts.download_classic_textures = 1;
-    g_opts.download_classic_sounds = 1;
-    g_opts.classic_audio_mask = CLASSIC_AUDIO_ALL;
-    g_opts.ignore_classic_sounds_warning = 0;
+    /* legacy.json audio/language assets are managed from Options -> Assets,
+       not from the startup classic texture downloader. */
+    g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
+    g_opts.ignore_classic_sounds_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "Default");
 #endif
     g_opts.skin_path[0] = 0;
@@ -173,7 +175,11 @@ static void load_options(void) {
     if (g_opts.fov > 110.0f) g_opts.fov = 110.0f;
     if (g_opts.renderer_backend < 0 || g_opts.renderer_backend >= RENDERER_COUNT) g_opts.renderer_backend = RENDERER_OPENGL;
     g_opts.classic_audio_mask &= CLASSIC_AUDIO_ALL;
-    if (g_opts.download_classic_sounds && g_opts.classic_audio_mask == 0) g_opts.download_classic_sounds = 0;
+    /* Old options.txt files may request startup audio downloads.  That path moved
+       to the Assets screen, so do not show legacy.json prompts at startup. */
+    g_opts.download_classic_sounds = 0;
+    g_opts.classic_audio_mask = 0;
+    g_opts.ignore_classic_sounds_warning = 1;
 #ifdef PEX_PLATFORM_PSP
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_opts.ignore_classic_resources_warning = 1;

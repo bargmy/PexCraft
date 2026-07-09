@@ -77,6 +77,7 @@ static void draw_current_screen(float partial) {
         case SCREEN_TITLE: draw_title_screen(partial); break;
         case SCREEN_OPTIONS: draw_options_screen(); break;
         case SCREEN_OPTIONS_MORE: draw_options_more_screen(); break;
+        case SCREEN_ASSETS: draw_assets_screen(); break;
         case SCREEN_LANGUAGE: draw_language_screen(); break;
         case SCREEN_SET_NAME: draw_set_name_screen(); break;
         case SCREEN_TV_REMOTE_MAP: draw_tv_remote_map_screen(); break;

@@ -677,6 +677,56 @@ static void draw_language_screen(void) {
     draw_all_buttons();
 }
 
+
+static void draw_assets_screen(void) {
+    draw_default_bg();
+    draw_centered_text("Assets", g_gui_w / 2, 20, 16777215);
+    draw_centered_text("legacy.json resources", g_gui_w / 2, 34, 8421504);
+
+    int idx_state = legacy_assets_index_state();
+    int downloading = legacy_assets_is_downloading();
+    int y = 54;
+
+    if (idx_state == CLASSIC_SIZE_FETCHING) {
+        draw_centered_text("Fetching legacy.json asset index...", g_gui_w / 2, y + 20, 14737632);
+    } else if (idx_state == CLASSIC_SIZE_ERROR) {
+        draw_centered_text("Could not fetch legacy.json", g_gui_w / 2, y + 10, 0xFF5555);
+        { char err[MAX_LABEL]; legacy_assets_index_error_line(err, sizeof(err)); draw_centered_text(err, g_gui_w / 2, y + 22, 8421504); }
+    } else if (idx_state == CLASSIC_SIZE_READY) {
+        int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
+        if (downloading) {
+            char line[MAX_LABEL];
+            legacy_assets_progress_line(line, sizeof(line));
+            { char st[MAX_LABEL]; legacy_assets_status_line(st, sizeof(st)); draw_centered_text(st, g_gui_w / 2, y, 0xFFFF55); }
+            draw_centered_text(line, g_gui_w / 2, y + 12, 14737632);
+            {
+                int p = legacy_assets_progress_percent();
+                int bx = g_gui_w / 2 - 100;
+                int by = y + 28;
+                draw_rect(bx, by, bx + 200, by + 4, 8421504);
+                draw_rect(bx, by, bx + (200 * p) / 100, by + 4, 8454016);
+            }
+            y += 46;
+        } else if (!legacy_assets_any_missing()) {
+            draw_centered_text("All legacy asset groups are installed.", g_gui_w / 2, y, 0x55FF55);
+            y += 18;
+        } else {
+            draw_centered_text("Only missing groups have download buttons.", g_gui_w / 2, y, 8421504);
+            y += 18;
+        }
+        for (int i = 0; i < (int)ARRAY_COUNT(cats); ++i) {
+            char line[256];
+            int color;
+            legacy_asset_group_summary(cats[i], line, sizeof(line));
+            color = legacy_asset_group_missing(cats[i]) ? 14737632 : 0x55FF55;
+            draw_centered_text(line, g_gui_w / 2, y + i * 11, color);
+        }
+    } else {
+        draw_centered_text("Asset index not loaded yet.", g_gui_w / 2, y + 20, 8421504);
+    }
+    draw_all_buttons();
+}
+
 static void draw_options_screen(void) {
     draw_default_bg();
     draw_centered_text(tr("Options"), g_gui_w / 2, 20, 16777215);

@@ -92,7 +92,7 @@
 #define CLASSIC_PACK_URL "https://piston-data.mojang.com/v1/objects/4a2fac7504182a97dcbcd7560c6392d7c8139928/client.jar"
 #define CLASSIC_SOUNDS_INDEX_URL "https://launchermeta.mojang.com/v1/packages/770572e819335b6c0a053f8378ad88eda189fc14/legacy.json"
 #define CLASSIC_SOUND_OBJECT_URL_PREFIX "https://resources.download.minecraft.net"
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP) || defined(PEX_PLATFORM_SDL2)
 #define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 0
 #else
 #define PEX_CLASSIC_SOUND_DOWNLOAD_SUPPORTED 1
@@ -331,6 +331,7 @@ typedef enum ScreenId {
     SCREEN_TITLE,
     SCREEN_OPTIONS,
     SCREEN_OPTIONS_MORE,
+    SCREEN_ASSETS,
     SCREEN_LANGUAGE,
     SCREEN_SET_NAME,
     SCREEN_TV_REMOTE_MAP,
@@ -2403,6 +2404,61 @@ static void pex_sound_shutdown(void);
 static const char *pex_block_step_sound_key(int id);
 static const char *pex_block_dig_sound_key(int id);
 static int classic_resources_need_update(void);
+
+
+#ifndef CLASSIC_SIZE_UNKNOWN
+#define CLASSIC_SIZE_UNKNOWN 0
+#define CLASSIC_SIZE_FETCHING 1
+#define CLASSIC_SIZE_READY 2
+#define CLASSIC_SIZE_ERROR 3
+#endif
+
+#ifndef LEGACY_ASSET_LANG
+#define LEGACY_ASSET_LANG       0x0020
+#define LEGACY_ASSET_OTHER      0x0040
+#define LEGACY_ASSET_ALL        (CLASSIC_AUDIO_ALL | LEGACY_ASSET_LANG | LEGACY_ASSET_OTHER)
+#define LEGACY_ASSET_THREADS    24
+#endif
+
+static void legacy_assets_start_index_fetch(void);
+static void legacy_assets_refresh_index(void);
+static int legacy_assets_index_ready(void);
+static int legacy_assets_index_state(void);
+static int legacy_assets_download_mask(void);
+static void legacy_assets_index_error_line(char *out, size_t cap);
+static void legacy_assets_status_line(char *out, size_t cap);
+static int legacy_assets_progress_percent(void);
+static int legacy_assets_any_missing(void);
+static int legacy_asset_group_missing(int category);
+static void legacy_asset_group_summary(int category, char *out, size_t cap);
+static void legacy_asset_button_label(int category, char *out, size_t cap);
+static void legacy_assets_start_download(int mask);
+static int legacy_assets_is_downloading(void);
+static void legacy_assets_request_cancel(void);
+static void legacy_assets_tick(void);
+static void legacy_assets_progress_line(char *out, size_t cap);
+
+#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_LGWEBOS)
+/* Legacy asset manager stubs for platforms without runtime HTTP asset UI. */
+static void legacy_assets_start_index_fetch(void) {}
+static void legacy_assets_refresh_index(void) {}
+static int legacy_assets_index_ready(void) { return 0; }
+static int legacy_assets_index_state(void) { return CLASSIC_SIZE_ERROR; }
+static int legacy_assets_download_mask(void) { return 0; }
+static void legacy_assets_index_error_line(char *out, size_t cap) { if (out && cap) snprintf(out, cap, "Asset downloads unavailable"); }
+static void legacy_assets_status_line(char *out, size_t cap) { if (out && cap) snprintf(out, cap, "Asset downloads unavailable"); }
+static int legacy_assets_progress_percent(void) { return 0; }
+static int legacy_assets_any_missing(void) { return 0; }
+static int legacy_asset_group_missing(int category) { (void)category; return 0; }
+static void legacy_asset_group_summary(int category, char *out, size_t cap) { (void)category; if (out && cap) snprintf(out, cap, "Legacy asset downloads are not available on this platform."); }
+static void legacy_asset_button_label(int category, char *out, size_t cap) { (void)category; if (out && cap) snprintf(out, cap, "Unavailable"); }
+static void legacy_assets_start_download(int mask) { (void)mask; }
+static int legacy_assets_is_downloading(void) { return 0; }
+static void legacy_assets_request_cancel(void) {}
+static void legacy_assets_tick(void) {}
+static void legacy_assets_progress_line(char *out, size_t cap) { if (out && cap) out[0] = '\0'; }
+#endif
+
 static int should_show_pack_download_prompt(void);
 static void classic_resource_missing_summary(char *out, size_t cap);
 static void pack_install_start(void);

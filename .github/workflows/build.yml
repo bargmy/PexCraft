@@ -408,7 +408,6 @@ jobs:
             pkg-config \
             libsdl2-dev \
             libsdl2-image-dev \
-            libcurl4-openssl-dev \
             zlib1g-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev \
