@@ -466,11 +466,10 @@ static volatile int g_stream_remap_in_progress = 0;
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
-    /* Do not relight from the gameplay/render path.  Player block edits already
-       run the Java-style immediate local update in flat_update_edit_light_now();
-       any larger repair region is for the lighting worker.  This removes the last
-       synchronous relight preview that could sneak into the main thread during
-       edits or redstone/liquid side effects. */
+    /* Do not relight from the gameplay/render path.  Player block edits now
+       seed only tiny visual light around the changed block; exact propagation is
+       for the lighting worker.  This keeps placement geometry responsive even
+       when sky/block light needs a wider repair. */
     if (g_flat_persistent_edit_depth == 0) flat_lighting_worker_wake();
 }
 static int flat_persistent_edit_active(void) { return g_flat_persistent_edit_depth > 0; }
@@ -1579,6 +1578,101 @@ static void flat_update_light_now(int kind, int x, int y, int z) {
     free(queue);
 }
 
+static void flat_mark_visual_light_changed(int x, int y, int z) {
+    if (!flat_in_bounds(x, y, z)) return;
+    int lcx = flat_local_chunk_x(x);
+    int lcz = flat_local_chunk_z(z);
+    int sy = flat_section_y_for_world(y);
+    if (!flat_local_chunk_valid(lcx, lcz) || !flat_section_index_valid(sy)) return;
+
+    /* This is intentionally edit-priority, not generic dirty.  A visual light
+       seed exists only to make the just-edited area render now with sane
+       brightness; the full light worker will mark exact sections later. */
+    flat_bump_light_version(lcx, lcz);
+    flat_mark_edit_section_dirty(lcx, lcz, sy);
+}
+
+static void flat_set_preview_light_kind(int kind, int x, int y, int z, int value, int only_raise) {
+    if (value < 0) value = 0;
+    if (value > 15) value = 15;
+    if (!flat_in_bounds(x, y, z)) return;
+    int yi = flat_y_index(y);
+    int zi = flat_z_index(z);
+    int xi = flat_index(x);
+    unsigned char *dst = (kind == FLAT_JAVA_LIGHT_KIND_SKY) ?
+        &g_flat_sky_light[yi][zi][xi] :
+        &g_flat_block_light[yi][zi][xi];
+    int old = *dst & 15;
+    if (only_raise && old >= value) return;
+    if (old == value) return;
+    *dst = (unsigned char)(value & 15);
+    flat_mark_visual_light_changed(x, y, z);
+}
+
+static void flat_seed_edit_visual_block_light(int x, int y, int z, int old_light, int new_light) {
+    if (new_light > 0) {
+        /* New torches/lava/glowstone must visibly glow on the first rebuilt mesh.
+           Seed only a tiny bubble; the real 15-block propagation happens in the
+           lighting worker.  Raising only avoids dark flashes from stale data. */
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dz = -2; dz <= 2; ++dz) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    int dist = abs(dx) + abs(dy) + abs(dz);
+                    if (dist > 2) continue;
+                    int v = new_light - dist;
+                    if (v <= 0) continue;
+                    flat_set_preview_light_kind(FLAT_JAVA_LIGHT_KIND_BLOCK, x + dx, y + dy, z + dz, v, 1);
+                }
+            }
+        }
+    } else if (old_light > 0) {
+        /* Removing a light source should not keep the source cell itself bright,
+           but do not synchronously darken the whole radius.  Slow darkening looks
+           acceptable; blocking placement for it does not. */
+        flat_set_preview_light_kind(FLAT_JAVA_LIGHT_KIND_BLOCK, x, y, z, 0, 0);
+    }
+}
+
+static int flat_estimate_neighbor_sky_light(int x, int y, int z) {
+    int best = flat_current_dimension_has_sky() ? 15 : 0;
+    int v;
+    v = flat_saved_sky_light(x, y + 1, z); if (v > best) best = v;
+    v = flat_saved_sky_light(x + 1, y, z); if (v > best) best = v;
+    v = flat_saved_sky_light(x - 1, y, z); if (v > best) best = v;
+    v = flat_saved_sky_light(x, y, z + 1); if (v > best) best = v;
+    v = flat_saved_sky_light(x, y, z - 1); if (v > best) best = v;
+    if (best < 0) best = 0;
+    if (best > 15) best = 15;
+    return best;
+}
+
+static void flat_seed_edit_visual_sky_light(int x, int y, int z, int old_opacity, int new_opacity) {
+    if (!flat_current_dimension_has_sky()) return;
+    if (old_opacity == new_opacity) return;
+
+    /* Do not run the full Java sky flood here.  Keep the edited mesh from going
+       black by seeding the cells that its faces/AO sample, then let the worker
+       do the exact column/sideways propagation. */
+    int open_sky = flat_estimate_neighbor_sky_light(x, y, z);
+    int self_sky = flat_sky_light_after_block(open_sky, flat_get_block(x, y, z));
+    flat_set_preview_light_kind(FLAT_JAVA_LIGHT_KIND_SKY, x, y, z, self_sky, 0);
+
+    static const int ox[6] = {0, 0, 0, 0, -1, 1};
+    static const int oy[6] = {-1, 1, 0, 0, 0, 0};
+    static const int oz[6] = {0, 0, -1, 1, 0, 0};
+    for (int i = 0; i < 6; ++i) {
+        int nx = x + ox[i], ny = y + oy[i], nz = z + oz[i];
+        if (!flat_in_bounds(nx, ny, nz)) continue;
+        int v = flat_estimate_neighbor_sky_light(nx, ny, nz);
+        int id = flat_get_block(nx, ny, nz);
+        v = flat_sky_light_after_block(v, id);
+        /* Brightening is urgent; darkening can settle later.  When placing an
+           opaque block, only force the edited cell darker and leave neighboring
+           cells at their old value if that is brighter. */
+        flat_set_preview_light_kind(FLAT_JAVA_LIGHT_KIND_SKY, nx, ny, nz, v, new_opacity >= old_opacity);
+    }
+}
+
 static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_id) {
     if (g_stream_remap_in_progress) return 0;
     if (!flat_persistent_edit_active()) return 0;
@@ -1589,10 +1683,17 @@ static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_i
     int new_opacity = flat_light_opacity_for_id(new_id);
     if (old_light == new_light && old_opacity == new_opacity) return 1;
 
-    if (old_opacity != new_opacity) {
-        flat_update_light_now(FLAT_JAVA_LIGHT_KIND_SKY, x, y, z);
-    }
-    flat_update_light_now(FLAT_JAVA_LIGHT_KIND_BLOCK, x, y, z);
+    /* Fast visual-first edit path:
+       - geometry has already been dirtied before this function is called;
+       - seed a tiny, safe light preview so the rebuilt mesh looks sane;
+       - queue exact lighting to the dedicated worker.
+       This deliberately avoids flat_update_light_now() on the gameplay thread. */
+    flat_seed_edit_visual_sky_light(x, y, z, old_opacity, new_opacity);
+    flat_seed_edit_visual_block_light(x, y, z, old_light, new_light);
+
+    int radius = (old_light > 0 || new_light > 0) ? 15 : 4;
+    if (old_opacity != new_opacity && (old_light > 0 || new_light > 0)) radius = 15;
+    flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     return 1;
 }
 
@@ -1669,7 +1770,7 @@ static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1) {
             if (z1 > r->z1) r->z1 = z1;
             flat_light_dirty_recompute_bounds_unlocked();
             LeaveCriticalSection(&g_flat_light_dirty_cs);
-            flat_lighting_worker_wake();
+            if (!flat_persistent_edit_active()) flat_lighting_worker_wake();
             return;
         }
     }
@@ -1700,7 +1801,7 @@ static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1) {
 
     flat_light_dirty_recompute_bounds_unlocked();
     LeaveCriticalSection(&g_flat_light_dirty_cs);
-    flat_lighting_worker_wake();
+    if (!flat_persistent_edit_active()) flat_lighting_worker_wake();
 }
 
 static void flat_mark_light_dirty_around_block(int x, int y, int z) {
@@ -1715,9 +1816,9 @@ static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, in
     int new_opacity = flat_light_opacity_for_id(new_id);
 
     if (old_light > 0 || new_light > 0 || old_opacity != new_opacity) {
-        /* Player edits must light immediately like Java World.setBlock() ->
-           updateAllLightTypes().  Do not leave torch/block updates waiting for
-           the background lighting worker; that made placed torches visibly lag. */
+        /* Player edits must render immediately, but full Java light propagation
+           must not block the gameplay thread.  flat_update_edit_light_now() now
+           seeds a tiny no-black visual preview and queues exact lighting. */
         if (flat_update_edit_light_now(x, y, z, old_id, new_id)) return;
 
         /* Non-player/batched updates still use the worker path so fluids/falling
@@ -9228,6 +9329,10 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
                 else g_prof_light_worker_avg_ms = g_prof_light_worker_avg_ms * 0.90 + light_ms * 0.10;
                 g_prof_light_worker_samples++;
             }
+            /* Multiple edit/repair regions can be pending after rapid placement.
+               Yield between exact-light regions so the render/game thread wins
+               scheduling even on two-core machines. */
+            if (flat_lighting_pending_dirty()) Sleep(0);
             if (!before_pending || !flat_lighting_pending_dirty()) break;
         }
         EnterCriticalSection(&g_flat_lighting_worker_cs);
@@ -9258,7 +9363,7 @@ static void flat_lighting_worker_ensure(void) {
     if (g_flat_lighting_worker_event) {
         g_flat_lighting_worker_thread = CreateThread(NULL, 0x200000, flat_lighting_worker_proc, NULL, 0, NULL);
         if (g_flat_lighting_worker_thread) {
-            SetThreadPriority(g_flat_lighting_worker_thread, THREAD_PRIORITY_NORMAL);
+            SetThreadPriority(g_flat_lighting_worker_thread, THREAD_PRIORITY_BELOW_NORMAL);
             pex_logf("lighting worker started");
         }
     }
