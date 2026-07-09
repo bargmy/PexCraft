@@ -1967,6 +1967,8 @@ static int handle_local_chat_command(const char *text) {
     return 0;
 }
 
+static void pex_utf8_backspace(char *s);
+
 static void handle_keydown(WPARAM vk) {
     if (g_screen == SCREEN_VIRTUAL_KEYBOARD) {
         if (vk == VK_LEFT) { pex_virtual_keyboard_move(-1, 0); return; }
