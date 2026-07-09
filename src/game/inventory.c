@@ -444,10 +444,6 @@ static void flat_mark_light_sections_dirty_near_block(int x, int y, int z);
 static void flat_mark_generated_section(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty(int cx, int cz, int sy);
 static void flat_mark_edit_section_dirty(int cx, int cz, int sy);
-/* Defined later by render/world_view.c in the same single-translation-unit build.
-   Used only for player edits so the changed section is rebuilt before the next
-   draw, not one render/update queue turn later. */
-static void rebuild_flat_section_list(int sy, int cx, int cz);
 static int flat_section_has_blocks(int lcx, int lcz, int sy);
 static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
 static int flat_current_dimension_has_sky(void);
@@ -2523,47 +2519,6 @@ static void flat_mark_chunks_dirty_near(int x, int z) {
 }
 
 
-/* Player-edit mesh fast path.
-
-   The renderer already has an edit-priority queue, but that queue is consumed in
-   draw_flat_test_world().  Depending on tick/draw order, the stale section mesh
-   can survive until the next frame, which is exactly the visible placement/break
-   delay the Loggy snapshots still show after the lighting fixes.
-
-   For actual local player modifications, rebuild the exact touched section(s)
-   immediately on the main thread as soon as the block/meta write dirties them.
-   This is deliberately NOT used for lighting propagation, streaming, liquids,
-   mobs, or worldgen.  Those remain async/normal-budget. */
-static int g_flat_player_edit_sync_mesh_depth = 0;
-static int g_flat_player_edit_sync_mesh_budget = 0;
-
-static void flat_begin_player_edit_sync_mesh(int budget) {
-    if (budget < 1) budget = 1;
-    g_flat_player_edit_sync_mesh_depth++;
-    if (g_flat_player_edit_sync_mesh_budget < budget) g_flat_player_edit_sync_mesh_budget = budget;
-}
-
-static void flat_end_player_edit_sync_mesh(void) {
-    if (g_flat_player_edit_sync_mesh_depth > 0) g_flat_player_edit_sync_mesh_depth--;
-    if (g_flat_player_edit_sync_mesh_depth == 0) g_flat_player_edit_sync_mesh_budget = 0;
-}
-
-static void flat_try_sync_player_edit_section_mesh(int cx, int cz, int sy) {
-    if (g_flat_player_edit_sync_mesh_depth <= 0 || g_flat_player_edit_sync_mesh_budget <= 0) return;
-    if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
-    if (!g_flat_world_chunk_generated[cz][cx]) return;
-    if (!flat_chunk_light_ready(cx, cz)) return;
-    if (!tex_terrain.id) return;
-
-    /* Cancel any in-flight async build for this section by bumping the version
-       was already done in flat_mark_section_dirty()->flat_note_section_mesh_changed().
-       The stale worker result will be rejected at install. */
-    g_flat_section_mesh_building[sy][cz][cx] = 0;
-    rebuild_flat_section_list(sy, cx, cz);
-    g_flat_player_edit_sync_mesh_budget--;
-    if (g_loggy_enabled) g_loggy_mesh_edit_priority_sync++;
-}
-
 #define FLAT_EDIT_PRIORITY_QUEUE_MAX 96
 static int g_flat_edit_priority_count = 0;
 static unsigned char g_flat_edit_priority_sy[FLAT_EDIT_PRIORITY_QUEUE_MAX];
@@ -2620,8 +2575,14 @@ static int flat_take_edit_priority_section(int *sy, int *cx, int *cz) {
 
 static void flat_mark_edit_section_dirty(int cx, int cz, int sy) {
     flat_mark_section_dirty(cx, cz, sy);
+    if (flat_local_chunk_valid(cx, cz) && flat_section_index_valid(sy)) {
+        /* Edits must not wait behind a stale in-flight worker build of the same
+           section.  The version bump from flat_mark_section_dirty() makes the
+           old result disposable; clearing the building flag lets the priority
+           worker pool snapshot the newest block data immediately. */
+        g_flat_section_mesh_building[sy][cz][cx] = 0;
+    }
     flat_note_edit_priority_section(cx, cz, sy);
-    flat_try_sync_player_edit_section_mesh(cx, cz, sy);
 }
 
 static void flat_mark_section_dirty(int cx, int cz, int sy) {
@@ -6393,7 +6354,6 @@ static void break_target_block(void) {
     int id = flat_get_block(g_break_x, g_break_y, g_break_z);
     int break_meta = flat_get_meta(g_break_x, g_break_y, g_break_z);
     if (id == 0 || (id == BLOCK_BEDROCK && !player_is_creative())) return;
-    flat_begin_player_edit_sync_mesh(8);
     player_add_exhaustion(0.025f);
     pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
 
@@ -6407,7 +6367,6 @@ static void break_target_block(void) {
             redstone_update_near(g_break_x, g_break_y, g_break_z);
         }
         restart_hand_swing();
-        flat_end_player_edit_sync_mesh();
         return;
     }
 
@@ -6420,7 +6379,6 @@ static void break_target_block(void) {
         flat_set_block(g_break_x, g_break_y, g_break_z, 0);
         pex_net_send_block_action(PEX_BLOCK_BREAK, g_break_x, g_break_y, g_break_z, g_break_face, 0);
         restart_hand_swing();
-        flat_end_player_edit_sync_mesh();
         return;
     }
 
@@ -6463,7 +6421,6 @@ static void break_target_block(void) {
             (id == BLOCK_WEB || id == BLOCK_LEAVES || id == BLOCK_TALL_GRASS || id == BLOCK_VINE)) damage_held_item(held, 1);
     }
     restart_hand_swing();
-    flat_end_player_edit_sync_mesh();
 }
 
 static void update_breaking(void) {
@@ -8414,8 +8371,7 @@ static void ingame_right_click(void) {
         pz < g_flat_world_origin_z || pz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return;
 
     if (held->id == ITEM_DOOR_WOOD || held->id == ITEM_DOOR_IRON) {
-        flat_begin_player_edit_sync_mesh(8);
-        if (!place_door_from_item(held->id, px, py, pz)) { flat_end_player_edit_sync_mesh(); return; }
+        if (!place_door_from_item(held->id, px, py, pz)) return;
         redstone_update_near(px, py, pz);
         if (g_mp_connected) {
             pex_net_send_player_action(PEX_ACTION_PLACE, px, py, pz, hit.face, held->id);
@@ -8425,7 +8381,6 @@ static void ingame_right_click(void) {
         if (!g_mp_connected) g_save_dirty = 1;
         pex_sound_play_at(pex_block_step_sound_key(held->id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
         restart_hand_swing();
-        flat_end_player_edit_sync_mesh();
         return;
     }
 
@@ -8456,7 +8411,6 @@ static void ingame_right_click(void) {
     if (place_id == BLOCK_REEDS && !reeds_can_stay_at(px, py, pz)) return;
     if (place_id == BLOCK_CROPS && flat_get_block(px, py - 1, pz) != BLOCK_FARMLAND) return;
 
-    flat_begin_player_edit_sync_mesh(8);
     if (!g_mp_connected) flat_begin_persistent_edit();
     flat_set_block(px, py, pz, place_id);
     if (place_id == BLOCK_CHEST) chest_on_block_placed(px, py, pz);
@@ -8471,7 +8425,6 @@ static void ingame_right_click(void) {
     if (place_id == BLOCK_SIGN_POST) flat_set_meta_raw(px, py, pz, door_direction_from_yaw() & 3);
     if (place_id == BLOCK_WOOD_STAIRS || place_id == BLOCK_COBBLE_STAIRS) flat_set_meta_raw(px, py, pz, stair_direction_from_yaw());
     if (!g_mp_connected) flat_end_persistent_edit();
-    flat_end_player_edit_sync_mesh();
     if (place_id == BLOCK_REDSTONE_WIRE || place_id == BLOCK_STONE_BUTTON || place_id == BLOCK_LEVER ||
         place_id == BLOCK_REDSTONE_TORCH_OFF || place_id == BLOCK_REDSTONE_TORCH_ON ||
         block_is_pressure_plate(place_id) || block_is_door_id(place_id)) {
