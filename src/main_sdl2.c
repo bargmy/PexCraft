@@ -44,6 +44,13 @@ static void d3d11_discard_mesh(PexD3D11Mesh *mesh) { if (mesh) memset(mesh, 0, s
 static int d3d11_adopt_mesh(PexMeshHandle *slot, PexD3D11Mesh *built) { (void)slot; (void)built; return 0; }
 static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot = 0; }
 
+/* classic_pack_installer_sdl2.c ticks the Assets screen and may request a
+   GUI rebuild before language.c/screen_state_input.c are included in this
+   unity build.  Keep this declaration static so it matches the real
+   rebuild_screen() definition below instead of creating an implicit external
+   declaration on GCC. */
+static void rebuild_screen(void);
+
 #include "platform/sdl2_filesystem.c"
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
