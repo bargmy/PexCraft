@@ -1161,17 +1161,18 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
             if (changed_chunks[lcz][lcx]) {
                 g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
-                flat_bump_light_version(lcx, lcz);
+                /* STRICT RENDER STATE:
+                   Background light repair is allowed to update saved light arrays,
+                   but it must not invalidate already-rendered section meshes.  The
+                   old path bumped the chunk light version and dirtied every changed
+                   light section, so a settled chunk could rebuild repeatedly and
+                   accept/reject async results in a loop, causing dark patches and
+                   lag.  Geometry edits explicitly dirty meshes; light repair alone
+                   only updates the saved light cache for future explicit rebuilds. */
             }
         }
     }
-    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
-        for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
-            for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
-                if (changed_sections[sy][lcz][lcx]) flat_mark_section_dirty(lcx, lcz, sy);
-            }
-        }
-    }
+    (void)changed_sections;
     int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
     int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
     pex_logf_trace("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
@@ -1438,14 +1439,12 @@ static void flat_mark_light_cell_changed(int x, int y, int z) {
     int lcz = fz / FLAT_RENDER_CHUNK;
     if (flat_local_chunk_valid(lcx, lcz)) {
         g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
-        flat_bump_light_version(lcx, lcz);
     }
-    /* Light changes must not enter the edit-priority mesh queue.  Only the
-       actual block edit needs instant/synchronous renderer priority; propagated
-       light can rebuild normally in the visible-section pass.  Using
-       flat_mark_sections_dirty_near_block() here was the source of Loggy lines
-       like edit_priority sync=29 after one click. */
-    flat_mark_light_sections_dirty_near_block(x, y, z);
+    /* STRICT RENDER STATE:
+       A changed light cell updates the saved light cache only.  It must not bump
+       the render light epoch and must not dirty section meshes.  Otherwise a
+       background flood-fill can repeatedly rebuild an already-rendered chunk and
+       install stale/different-light snapshots out of order. */
 }
 
 static void flat_set_light_value_kind(int kind, int x, int y, int z, int value) {
@@ -2705,19 +2704,27 @@ static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sect
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     int old_ready = g_flat_chunk_light_ready[lcz][lcx];
     g_flat_chunk_light_ready[lcz][lcx] = ready ? 1 : 0;
-    if (dirty_sections || old_ready != g_flat_chunk_light_ready[lcz][lcx]) {
+
+    /* STRICT RENDER STATE:
+       Publishing light-ready is a lighting-cache state change, not a render-cache
+       invalidation.  Once a generated section has a valid mesh, do not dirty it
+       again just because the light worker finished or corrected saved light.
+       Sections rebuild only when explicit block/stream/remap code marks them
+       dirty, or when their first mesh payload is missing. */
+    if (old_ready != g_flat_chunk_light_ready[lcz][lcx]) {
         flat_bump_light_version(lcx, lcz);
     }
     if (!dirty_sections) return;
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
-        if (flat_section_has_blocks(lcx, lcz, sy)) {
+        if (!flat_section_has_blocks(lcx, lcz, sy)) {
+            g_flat_section_mesh_building[sy][lcz][lcx] = 0;
+            g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
+        } else if (!g_flat_section_valid[sy][lcz][lcx]) {
             flat_mark_section_dirty(lcx, lcz, sy);
         } else {
-            g_flat_section_mesh_building[sy][lcz][lcx] = 0;
             g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
         }
     }
-    g_flat_renderer_sort_dirty = 1;
 }
 
 static void flat_mark_generated_section(int lcx, int lcz, int sy) {

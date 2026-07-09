@@ -2052,10 +2052,14 @@ static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
 }
 
 static int flat_gl_cpu_mesh_ready(int sy, int cz, int cx, int pass) {
+    /* STRICT RENDER STATE:
+       A mesh that was already built and installed remains ready until geometry
+       version/origin changes or the payload is actually missing.  Do not treat
+       background light-version drift as missing payload; that caused automatic
+       rebuild loops and dark patch flicker. */
     return flat_gl_cpu_mesh_drawable(sy, cz, cx, pass) &&
            g_flat_section_gl_cpu_mesh[sy][cz][cx][pass].version == g_flat_section_mesh_version[sy][cz][cx] &&
-           flat_chunk_light_ready(cx, cz) &&
-           g_flat_section_mesh_light_version[sy][cz][cx] == g_flat_chunk_light_version[cz][cx];
+           flat_chunk_light_ready(cx, cz);
 }
 
 static void flat_gl_cpu_mesh_refresh_lightmap(FlatGLCpuMesh *m) {
@@ -6674,8 +6678,9 @@ static void async_section_mesh_install_ready(int max_uploads) {
         if (r.origin_x == g_flat_world_origin_x && r.origin_z == g_flat_world_origin_z &&
             r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS &&
             g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version &&
-            flat_chunk_light_ready(r.cx, r.cz) &&
-            g_flat_chunk_light_version[r.cz][r.cx] == r.light_version) {
+            flat_chunk_light_ready(r.cx, r.cz)) {
+            /* Accept the mesh for the geometry version it was built for.  Light
+               version is intentionally not part of strict render validity. */
             valid = 1;
         }
         if (valid) {
@@ -6700,14 +6705,25 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 g_flat_section_valid[r.sy][r.cz][r.cx] = 1;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][0] = r.skip0;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][1] = r.skip1;
-                g_flat_section_mesh_light_version[r.sy][r.cz][r.cx] = r.light_version;
+                /* Mark this section settled for the current chunk light epoch.
+                   The baked vertex colors come from the job snapshot, but strict
+                   mode must not let later light-worker epochs automatically
+                   invalidate this installed mesh. */
+                g_flat_section_mesh_light_version[r.sy][r.cz][r.cx] = g_flat_chunk_light_version[r.cz][r.cx];
                 pex_logf_trace("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
             } else {
                 g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
             }
         } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS) {
-            g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
-            g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
+            /* STRICT RENDER STATE:
+               A stale async result must never make an already-good section dirty.
+               If a newer geometry version exists, that newer edit/remap already owns
+               the dirty/building state.  Only clear/retry when the result still
+               matches the current version and there is no valid mesh to keep. */
+            if (g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version) {
+                g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
+                if (!g_flat_section_valid[r.sy][r.cz][r.cx]) g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
+            }
             if (g_loggy_enabled) g_loggy_mesh_stale_results++;
             pex_logf_trace("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
         }
@@ -7004,10 +7020,12 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         if (!flat_chunk_light_ready(cx, cz)) continue;
         int needs = 0;
-        int light_stale = (g_flat_section_mesh_light_version[sy][cz][cx] != g_flat_chunk_light_version[cz][cx]);
+        /* STRICT RENDER STATE: do not rebuild valid meshes solely because the
+           background light epoch changed.  Only explicit dirty/invalid/missing
+           payload states can request a mesh. */
 
         if (async_mesh) {
-            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx] || light_stale) {
+            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
                 needs = 1;
             } else if (direct) {
                 if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) needs = 1;
@@ -7017,7 +7035,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                 else if (flat_separate_liquid_pass_enabled() && !g_flat_section_skip_pass[sy][cz][cx][1] && !flat_gl_cpu_mesh_ready(sy, cz, cx, 1)) needs = 1;
             }
         } else if (direct) {
-            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx] || light_stale) {
+            if (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]) {
                 needs = 1;
             } else if (!g_flat_section_skip_pass[sy][cz][cx][0] && !g_flat_section_direct_mesh[sy][cz][cx][0]) {
                 needs = 1;
@@ -7027,8 +7045,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         } else {
             if (g_flat_section_lists[sy][cz][cx][0] == 0 ||
                 g_flat_section_lists[sy][cz][cx][1] == 0 ||
-                g_flat_section_dirty[sy][cz][cx] ||
-                light_stale) {
+                g_flat_section_dirty[sy][cz][cx]) {
                 needs = 1;
             }
         }
@@ -7052,8 +7069,7 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
 static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx) {
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
     if (g_flat_world_chunk_generated[cz][cx] && !flat_chunk_light_ready(cx, cz)) return 0;
-    if (g_flat_world_chunk_generated[cz][cx] &&
-        g_flat_section_mesh_light_version[sy][cz][cx] != g_flat_chunk_light_version[cz][cx]) return 1;
+    /* Strict mode: light-version drift alone is not a rebuild request. */
     if (g_flat_section_skip_pass[sy][cz][cx][0] &&
         (!flat_separate_liquid_pass_enabled() || g_flat_section_skip_pass[sy][cz][cx][1]) &&
         !g_flat_section_dirty[sy][cz][cx]) return 0;
