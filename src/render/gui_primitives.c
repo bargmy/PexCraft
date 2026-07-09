@@ -321,6 +321,18 @@ static int font_utf8_put(char *out, size_t cap, size_t *n, unsigned int cp) {
     return 1;
 }
 
+
+static const char *g_font_language_override = NULL;
+
+static const char *font_effective_language_code(void) {
+    return (g_font_language_override && g_font_language_override[0]) ? g_font_language_override : pex_current_language_code();
+}
+
+static int font_language_is_arabic_script(void) {
+    const char *lang = font_effective_language_code();
+    return cfont_lang_eq(lang, "ar_SA") || cfont_lang_eq(lang, "fa_IR");
+}
+
 static int font_codepoint_is_rtl(unsigned int cp) {
     return (cp >= 0x0590u && cp <= 0x08FFu) ||
            (cp >= 0xFB1Du && cp <= 0xFDFFu) ||
@@ -343,6 +355,153 @@ static unsigned int font_bidi_mirror(unsigned int cp) {
         case '<': return '>'; case '>': return '<';
         default: return cp;
     }
+}
+
+
+static int font_bidi_reorder_utf8(const char *src, char *dst, size_t cap);
+
+typedef struct FontArabicForm {
+    unsigned int base, isolated, final, initial, medial;
+    unsigned char joins_left, joins_right;
+} FontArabicForm;
+
+static const FontArabicForm font_arabic_forms[] = {
+    {0x0621,0xFE80,0,0,0,0,0},
+    {0x0622,0xFE81,0xFE82,0,0,0,1}, {0x0623,0xFE83,0xFE84,0,0,0,1},
+    {0x0624,0xFE85,0xFE86,0,0,0,1}, {0x0625,0xFE87,0xFE88,0,0,0,1},
+    {0x0626,0xFE89,0xFE8A,0xFE8B,0xFE8C,1,1}, {0x0627,0xFE8D,0xFE8E,0,0,0,1},
+    {0x0628,0xFE8F,0xFE90,0xFE91,0xFE92,1,1}, {0x0629,0xFE93,0xFE94,0,0,0,1},
+    {0x062A,0xFE95,0xFE96,0xFE97,0xFE98,1,1}, {0x062B,0xFE99,0xFE9A,0xFE9B,0xFE9C,1,1},
+    {0x062C,0xFE9D,0xFE9E,0xFE9F,0xFEA0,1,1}, {0x062D,0xFEA1,0xFEA2,0xFEA3,0xFEA4,1,1},
+    {0x062E,0xFEA5,0xFEA6,0xFEA7,0xFEA8,1,1}, {0x062F,0xFEA9,0xFEAA,0,0,0,1},
+    {0x0630,0xFEAB,0xFEAC,0,0,0,1}, {0x0631,0xFEAD,0xFEAE,0,0,0,1},
+    {0x0632,0xFEAF,0xFEB0,0,0,0,1}, {0x0633,0xFEB1,0xFEB2,0xFEB3,0xFEB4,1,1},
+    {0x0634,0xFEB5,0xFEB6,0xFEB7,0xFEB8,1,1}, {0x0635,0xFEB9,0xFEBA,0xFEBB,0xFEBC,1,1},
+    {0x0636,0xFEBD,0xFEBE,0xFEBF,0xFEC0,1,1}, {0x0637,0xFEC1,0xFEC2,0xFEC3,0xFEC4,1,1},
+    {0x0638,0xFEC5,0xFEC6,0xFEC7,0xFEC8,1,1}, {0x0639,0xFEC9,0xFECA,0xFECB,0xFECC,1,1},
+    {0x063A,0xFECD,0xFECE,0xFECF,0xFED0,1,1}, {0x0641,0xFED1,0xFED2,0xFED3,0xFED4,1,1},
+    {0x0642,0xFED5,0xFED6,0xFED7,0xFED8,1,1}, {0x0643,0xFED9,0xFEDA,0xFEDB,0xFEDC,1,1},
+    {0x0644,0xFEDD,0xFEDE,0xFEDF,0xFEE0,1,1}, {0x0645,0xFEE1,0xFEE2,0xFEE3,0xFEE4,1,1},
+    {0x0646,0xFEE5,0xFEE6,0xFEE7,0xFEE8,1,1}, {0x0647,0xFEE9,0xFEEA,0xFEEB,0xFEEC,1,1},
+    {0x0648,0xFEED,0xFEEE,0,0,0,1}, {0x0649,0xFEEF,0xFEF0,0,0,0,1},
+    {0x064A,0xFEF1,0xFEF2,0xFEF3,0xFEF4,1,1},
+    {0x0679,0xFB66,0xFB67,0xFB68,0xFB69,1,1}, {0x067E,0xFB56,0xFB57,0xFB58,0xFB59,1,1},
+    {0x0686,0xFB7A,0xFB7B,0xFB7C,0xFB7D,1,1}, {0x0688,0xFB88,0xFB89,0,0,0,1},
+    {0x0691,0xFB8C,0xFB8D,0,0,0,1}, {0x0698,0xFB8A,0xFB8B,0,0,0,1},
+    {0x06A9,0xFB8E,0xFB8F,0xFB90,0xFB91,1,1}, {0x06AF,0xFB92,0xFB93,0xFB94,0xFB95,1,1},
+    {0x06BA,0xFB9E,0xFB9F,0,0,0,1}, {0x06BE,0xFBAA,0xFBAB,0xFBAC,0xFBAD,1,1},
+    {0x06C0,0xFBA4,0xFBA5,0,0,0,1}, {0x06C1,0xFBA6,0xFBA7,0xFBA8,0xFBA9,1,1},
+    {0x06D2,0xFBAE,0xFBAF,0,0,0,1}, {0x06CC,0xFBFC,0xFBFD,0xFBFE,0xFBFF,1,1},
+};
+
+static const FontArabicForm *font_arabic_find_form(unsigned int cp) {
+    for (int i = 0; i < ARRAY_COUNT(font_arabic_forms); ++i) {
+        if (font_arabic_forms[i].base == cp) return &font_arabic_forms[i];
+    }
+    return NULL;
+}
+
+static int font_arabic_is_mark(unsigned int cp) {
+    return (cp >= 0x0610u && cp <= 0x061Au) || (cp >= 0x064Bu && cp <= 0x065Fu) ||
+           cp == 0x0670u || (cp >= 0x06D6u && cp <= 0x06EDu);
+}
+
+static int font_utf8_contains_arabic(const char *src) {
+    const unsigned char *p = (const unsigned char *)src;
+    while (p && *p) {
+        unsigned int cp = font_utf8_next(&p);
+        if ((cp >= 0x0600u && cp <= 0x06FFu) || (cp >= 0x0750u && cp <= 0x077Fu) || (cp >= 0x08A0u && cp <= 0x08FFu)) return 1;
+    }
+    return 0;
+}
+
+static int font_arabic_prev_join_left(const unsigned int *cps, int n, int idx) {
+    for (int i = idx - 1; i >= 0; --i) {
+        const FontArabicForm *f;
+        if (font_arabic_is_mark(cps[i])) continue;
+        f = font_arabic_find_form(cps[i]);
+        return f && f->joins_left;
+    }
+    return 0;
+}
+
+static int font_arabic_next_join_right(const unsigned int *cps, int n, int idx) {
+    for (int i = idx + 1; i < n; ++i) {
+        const FontArabicForm *f;
+        if (font_arabic_is_mark(cps[i])) continue;
+        f = font_arabic_find_form(cps[i]);
+        return f && f->joins_right;
+    }
+    return 0;
+}
+
+static int font_arabic_lam_alef(unsigned int alef, int connected_to_prev) {
+    switch (alef) {
+        case 0x0622: return connected_to_prev ? 0xFEF6 : 0xFEF5;
+        case 0x0623: return connected_to_prev ? 0xFEF8 : 0xFEF7;
+        case 0x0625: return connected_to_prev ? 0xFEFA : 0xFEF9;
+        case 0x0627: return connected_to_prev ? 0xFEFC : 0xFEFB;
+        default: return 0;
+    }
+}
+
+static int font_arabic_shape_utf8(const char *src, char *dst, size_t cap) {
+    enum { MAX_CPS = 2048 };
+    unsigned int cps[MAX_CPS];
+    int n = 0, changed = 0;
+    size_t outn = 0;
+    const unsigned char *p = (const unsigned char *)src;
+    if (!src || !dst || cap == 0) return 0;
+    while (*p && n < MAX_CPS) cps[n++] = font_utf8_next(&p);
+    dst[0] = 0;
+    for (int i = 0; i < n; ++i) {
+        unsigned int cp = cps[i];
+        const FontArabicForm *f = font_arabic_find_form(cp);
+        unsigned int out = cp;
+        if (cp == 0x0644u) {
+            int j = i + 1;
+            while (j < n && font_arabic_is_mark(cps[j])) ++j;
+            if (j < n) {
+                int prev_conn = font_arabic_prev_join_left(cps, n, i) && font_arabic_find_form(cp)->joins_right;
+                int lig = font_arabic_lam_alef(cps[j], prev_conn);
+                if (lig) {
+                    out = (unsigned int)lig;
+                    i = j;
+                    changed = 1;
+                    if (!font_utf8_put(dst, cap, &outn, out)) break;
+                    continue;
+                }
+            }
+        }
+        if (f) {
+            int prev_conn = font_arabic_prev_join_left(cps, n, i) && f->joins_right;
+            int next_conn = f->joins_left && font_arabic_next_join_right(cps, n, i);
+            if (prev_conn && next_conn && f->medial) out = f->medial;
+            else if (prev_conn && f->final) out = f->final;
+            else if (next_conn && f->initial) out = f->initial;
+            else out = f->isolated ? f->isolated : cp;
+            if (out != cp) changed = 1;
+        }
+        if (!font_utf8_put(dst, cap, &outn, out)) break;
+    }
+    return changed;
+}
+
+static const char *font_prepare_text_for_render(const char *src, int force_bidi, char *buf, size_t cap) {
+    char shaped[4096];
+    const char *cur = src;
+    int did_shape = 0;
+    if (!src) return "";
+    if ((font_language_is_arabic_script() || font_utf8_contains_arabic(src)) && font_arabic_shape_utf8(src, shaped, sizeof(shaped))) {
+        cur = shaped;
+        did_shape = 1;
+    }
+    if ((force_bidi || pex_current_language_is_bidi() || font_language_is_arabic_script()) && font_bidi_reorder_utf8(cur, buf, cap)) return buf;
+    if (did_shape) {
+        snprintf(buf, cap, "%s", shaped);
+        return buf;
+    }
+    return src;
 }
 
 static int font_bidi_reorder_utf8(const char *src, char *dst, size_t cap) {
@@ -469,6 +628,7 @@ static int font_codepoint_is_directional_control(unsigned int cp) {
 
 static void font_unload_unicode_pages(void) {
     for (int i = 0; i < 256; ++i) free_texture(&tex_font_glyph[i]);
+    cfont_reset_cache();
     memset(font_glyph_widths, 0, sizeof(font_glyph_widths));
     font_glyph_widths_loaded = 0;
     font_allowed_count = -1;
@@ -504,18 +664,28 @@ static Texture *font_load_glyph_page(unsigned int page) {
     return tex_font_glyph[page].id ? &tex_font_glyph[page] : NULL;
 }
 
-static int font_unicode_width(unsigned int cp) {
-    unsigned char b;
+static int font_width_from_glyph_size_byte(unsigned char b) {
     int left, right;
-    if (cp == 32u) return 4;
-    if (cp >= 65536u || !font_load_glyph_widths()) return 0;
-    b = font_glyph_widths[cp];
     if (!b) return 0;
     left = b >> 4;
     right = b & 15;
     if (right > 7) { right = 15; left = 0; }
     ++right;
     return (right - left) / 2 + 1;
+}
+
+static int font_unicode_width(unsigned int cp) {
+    unsigned char b;
+    int family;
+    if (cp == 32u) return 4;
+    if (cp >= 65536u) return 0;
+    family = cfont_family_for_codepoint(font_effective_language_code(), cp);
+    if (family != CFONT_NONE) {
+        b = cfont_width_byte(family, cp);
+        if (b) return font_width_from_glyph_size_byte(b);
+    }
+    if (!font_load_glyph_widths()) return 0;
+    return font_width_from_glyph_size_byte(font_glyph_widths[cp]);
 }
 
 static int font_codepoint_width(unsigned int cp, int unicode_flag) {
@@ -570,12 +740,15 @@ static void init_font_widths(void) {
     init_font_color_codes();
 }
 
-static int text_width(const char *s) {
+static int text_width_prepared(const char *s, int force_bidi) {
+    char prep_buf[4096];
     int w = 0;
     int unicode_flag = pex_current_language_is_unicode();
     int bold = 0;
-    const unsigned char *p = (const unsigned char*)s;
+    const unsigned char *p;
     if (!s) return 0;
+    s = font_prepare_text_for_render(s, force_bidi, prep_buf, sizeof(prep_buf));
+    p = (const unsigned char*)s;
     while (*p) {
         unsigned int cp = font_utf8_next(&p);
         int cw;
@@ -594,6 +767,10 @@ static int text_width(const char *s) {
         }
     }
     return w;
+}
+
+static int text_width(const char *s) {
+    return text_width_prepared(s, 0);
 }
 
 static int shadow_color(int color) {
@@ -636,13 +813,22 @@ static float draw_default_glyph_java(int glyph, float x, float y, int color, int
 static float draw_unicode_glyph_java(unsigned int cp, float x, float y, int color, int italic) {
     unsigned char b;
     int left, right;
+    int family;
     float src_x, src_y, src_w, skew;
-    Texture *page_tex;
-    if (cp >= 65536u || !font_load_glyph_widths()) return 0.0f;
-    b = font_glyph_widths[cp];
-    if (!b) return 0.0f;
-    page_tex = font_load_glyph_page(cp / 256u);
-    if (!page_tex) return 0.0f;
+    Texture *page_tex = NULL;
+    if (cp >= 65536u) return 0.0f;
+    family = cfont_family_for_codepoint(font_effective_language_code(), cp);
+    if (family != CFONT_NONE) {
+        b = cfont_width_byte(family, cp);
+        if (b) page_tex = cfont_page_texture(family, cp / 256u);
+    } else b = 0;
+    if (!page_tex) {
+        if (!font_load_glyph_widths()) return 0.0f;
+        b = font_glyph_widths[cp];
+        if (!b) return 0.0f;
+        page_tex = font_load_glyph_page(cp / 256u);
+    }
+    if (!b || !page_tex) return 0.0f;
     left = b >> 4;
     right = b & 15;
     if (right > 7) { right = 15; left = 0; }
@@ -651,8 +837,7 @@ static float draw_unicode_glyph_java(unsigned int cp, float x, float y, int colo
     src_w = (float)(right + 1 - left) - 0.02f;
     if (src_w <= 0.0f) return 0.0f;
     skew = italic ? 1.0f : 0.0f;
-    /* Java func_50111_a draws 16px-high Unicode glyph cells at 8px GUI height,
-       with 256x256 logical glyph-page coordinates and fractional quad width. */
+    /* Same Java 1.2.5 Unicode page sampling as FontRenderer.func_50111_a. */
     draw_font_quad(page_tex,
                    x - skew, y, x + src_w / 2.0f + skew, y + 7.99f,
                    src_x / 256.0f, src_y / 256.0f,
@@ -673,7 +858,7 @@ static int font_format_index(unsigned int cp) {
 }
 
 static void draw_text_raw_impl(const char *s, int x, int y, int color, int force_bidi, int shadow_pass) {
-    char bidi_buf[4096];
+    char render_buf[4096];
     int unicode_flag = pex_current_language_is_unicode();
     float cx = (float)x;
     int base_color = color;
@@ -681,7 +866,7 @@ static void draw_text_raw_impl(const char *s, int x, int y, int color, int force
     int obfuscated = 0, bold = 0, strike = 0, underline = 0, italic = 0;
     const unsigned char *p;
     if (!s) return;
-    if ((force_bidi || pex_current_language_is_bidi()) && font_bidi_reorder_utf8(s, bidi_buf, sizeof(bidi_buf))) s = bidi_buf;
+    s = font_prepare_text_for_render(s, force_bidi, render_buf, sizeof(render_buf));
     if (g_loggy_enabled) {
         const unsigned char *lp = (const unsigned char*)s;
         g_loggy_gui_text_calls++;
@@ -760,7 +945,14 @@ static void draw_centered_text(const char *s, int cx, int y, int color) {
 }
 
 static void draw_centered_text_force_bidi(const char *s, int cx, int y, int color) {
-    draw_text_force_bidi(s, cx - text_width(s) / 2, y, color);
+    draw_text_force_bidi(s, cx - text_width_prepared(s, 1) / 2, y, color);
+}
+
+static void draw_centered_text_force_bidi_lang(const char *s, const char *lang, int cx, int y, int color) {
+    const char *old = g_font_language_override;
+    g_font_language_override = lang;
+    draw_text_force_bidi(s, cx - text_width_prepared(s, 1) / 2, y, color);
+    g_font_language_override = old;
 }
 
 static void button_label(Button *b, const char *fmt, ...) {

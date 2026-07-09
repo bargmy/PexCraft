@@ -251,7 +251,7 @@ static int pex_language_load_lang_file_into_table(const char *code) {
 
 static void pex_language_refresh_flags(const char *code) {
     g_lang_unicode = 0;
-    g_lang_bidi = (pex_lang_str_eq(code, "ar_SA") || pex_lang_str_eq(code, "he_IL"));
+    g_lang_bidi = (pex_lang_str_eq(code, "ar_SA") || pex_lang_str_eq(code, "fa_IR") || pex_lang_str_eq(code, "he_IL"));
     for (int i = 0; i < g_lang_table_count; ++i) {
         if (pex_lang_utf8_has_java_unicode(g_lang_table[i].value)) { g_lang_unicode = 1; break; }
     }
