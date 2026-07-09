@@ -331,6 +331,12 @@ typedef enum ScreenId {
     SCREEN_TITLE,
     SCREEN_OPTIONS,
     SCREEN_OPTIONS_MORE,
+    SCREEN_HPTIBINE,
+    SCREEN_HPTIBINE_DETAILS,
+    SCREEN_HPTIBINE_QUALITY,
+    SCREEN_HPTIBINE_ANIMATIONS,
+    SCREEN_HPTIBINE_PERFORMANCE,
+    SCREEN_HPTIBINE_OTHER,
     SCREEN_ASSETS,
     SCREEN_LANGUAGE,
     SCREEN_SET_NAME,
@@ -444,6 +450,104 @@ static const char *pex_tv_remote_action_label(int action) {
     }
 }
 
+
+typedef enum HptiBineOptionId {
+    HPTI_GRAPHICS = 0,
+    HPTI_RENDER_DISTANCE_FINE,
+    HPTI_AO_LEVEL,
+    HPTI_FRAMERATE_LIMIT,
+    HPTI_ANAGLYPH,
+    HPTI_VIEW_BOBBING,
+    HPTI_GUI_SCALE,
+    HPTI_ADVANCED_OPENGL,
+    HPTI_GAMMA,
+    HPTI_RENDER_CLOUDS,
+    HPTI_FOG_FANCY,
+    HPTI_FOG_START,
+
+    HPTI_CLOUDS,
+    HPTI_CLOUD_HEIGHT,
+    HPTI_TREES,
+    HPTI_GRASS,
+    HPTI_WATER,
+    HPTI_RAIN,
+    HPTI_SKY,
+    HPTI_STARS,
+    HPTI_SUN_MOON,
+    HPTI_SHOW_CAPES,
+    HPTI_DEPTH_FOG,
+
+    HPTI_MIPMAP_LEVEL,
+    HPTI_MIPMAP_TYPE,
+    HPTI_CLEAR_WATER,
+    HPTI_RANDOM_MOBS,
+    HPTI_BETTER_GRASS,
+    HPTI_BETTER_SNOW,
+    HPTI_CUSTOM_FONTS,
+    HPTI_CUSTOM_COLORS,
+    HPTI_SWAMP_COLORS,
+    HPTI_SMOOTH_BIOMES,
+    HPTI_CONNECTED_TEXTURES,
+    HPTI_NATURAL_TEXTURES,
+    HPTI_AA_LEVEL,
+    HPTI_AF_LEVEL,
+
+    HPTI_ANIMATED_WATER,
+    HPTI_ANIMATED_LAVA,
+    HPTI_ANIMATED_FIRE,
+    HPTI_ANIMATED_PORTAL,
+    HPTI_ANIMATED_REDSTONE,
+    HPTI_ANIMATED_EXPLOSION,
+    HPTI_ANIMATED_FLAME,
+    HPTI_ANIMATED_SMOKE,
+    HPTI_VOID_PARTICLES,
+    HPTI_WATER_PARTICLES,
+    HPTI_RAIN_SPLASH,
+    HPTI_PORTAL_PARTICLES,
+    HPTI_PARTICLES,
+    HPTI_DRIPPING_WATER_LAVA,
+    HPTI_ANIMATED_TERRAIN,
+    HPTI_ANIMATED_ITEMS,
+    HPTI_ANIMATED_TEXTURES,
+
+    HPTI_SMOOTH_FPS,
+    HPTI_SMOOTH_INPUT,
+    HPTI_LOAD_FAR,
+    HPTI_PRELOADED_CHUNKS,
+    HPTI_CHUNK_UPDATES,
+    HPTI_CHUNK_UPDATES_DYNAMIC,
+
+    HPTI_FAST_DEBUG_INFO,
+    HPTI_PROFILER,
+    HPTI_WEATHER,
+    HPTI_TIME,
+    HPTI_FULLSCREEN_MODE,
+    HPTI_AUTOSAVE_TICKS,
+
+    HPTI_COUNT
+} HptiBineOptionId;
+
+#define HPTI_BUTTON_BASE 5000
+#define HPTI_NAV_DETAILS 5101
+#define HPTI_NAV_QUALITY 5102
+#define HPTI_NAV_ANIMATIONS 5111
+#define HPTI_NAV_PERFORMANCE 5112
+#define HPTI_NAV_TEXPACKS 5121
+#define HPTI_NAV_OTHER 5122
+
+typedef enum HptiBineMode {
+    HPTI_DEFAULT = 0,
+    HPTI_FAST = 1,
+    HPTI_FANCY = 2,
+    HPTI_OFF = 3
+} HptiBineMode;
+
+typedef enum HptiBineAnimationMode {
+    HPTI_ANIM_ON = 0,
+    HPTI_ANIM_DYNAMIC = 1,
+    HPTI_ANIM_OFF = 2
+} HptiBineAnimationMode;
+
 typedef enum OptionId {
     OPT_MUSIC = 0,
     OPT_SOUND,
@@ -497,6 +601,45 @@ typedef struct Options {
     int fullscreen;
     int show_fps;
     int renderer_backend; /* RendererBackend saved to options.txt; restart required after changing */
+    /* HptiBine (OptiFine HD C6-inspired) graphics settings.  Unsupported
+       features stay present in the UI as disabled/gray entries, but the stored
+       values mirror OptiFine names so old optionsof.txt files can be imported. */
+    int hpti_fog_type;
+    float hpti_fog_start;
+    float hpti_ao_level;
+    int hpti_clouds;
+    float hpti_cloud_height;
+    int hpti_trees;
+    int hpti_grass;
+    int hpti_water;
+    int hpti_rain;
+    int hpti_sky;
+    int hpti_stars;
+    int hpti_sun_moon;
+    int hpti_depth_fog;
+    int hpti_animated_water;
+    int hpti_animated_lava;
+    int hpti_animated_fire;
+    int hpti_animated_portal;
+    int hpti_animated_redstone;
+    int hpti_animated_explosion;
+    int hpti_animated_flame;
+    int hpti_animated_smoke;
+    int hpti_void_particles;
+    int hpti_water_particles;
+    int hpti_rain_splash;
+    int hpti_portal_particles;
+    int hpti_dripping_water_lava;
+    int hpti_animated_terrain;
+    int hpti_animated_items;
+    int hpti_animated_textures;
+    int hpti_particles;
+    int hpti_chunk_updates;
+    int hpti_chunk_updates_dynamic;
+    int hpti_fast_debug_info;
+    int hpti_profiler;
+    int hpti_weather;
+
     int ignore_classic_resources_warning;
     int download_classic_textures;
     int download_classic_sounds;

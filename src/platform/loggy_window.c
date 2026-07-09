@@ -21,6 +21,12 @@ static const char *loggy_screen_name(ScreenId s) {
         case SCREEN_TITLE: return "TITLE";
         case SCREEN_OPTIONS: return "OPTIONS";
         case SCREEN_OPTIONS_MORE: return "OPTIONS_MORE";
+        case SCREEN_HPTIBINE: return "HPTIBINE";
+        case SCREEN_HPTIBINE_DETAILS: return "HPTIBINE_DETAILS";
+        case SCREEN_HPTIBINE_QUALITY: return "HPTIBINE_QUALITY";
+        case SCREEN_HPTIBINE_ANIMATIONS: return "HPTIBINE_ANIMATIONS";
+        case SCREEN_HPTIBINE_PERFORMANCE: return "HPTIBINE_PERFORMANCE";
+        case SCREEN_HPTIBINE_OTHER: return "HPTIBINE_OTHER";
         case SCREEN_ASSETS: return "ASSETS";
         case SCREEN_LANGUAGE: return "LANGUAGE";
         case SCREEN_SET_NAME: return "SET_NAME";

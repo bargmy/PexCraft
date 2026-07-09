@@ -721,6 +721,13 @@ static void draw_options_more_screen(void) {
     draw_all_buttons();
 }
 
+static void draw_hptibine_screen(void) {
+    draw_default_bg();
+    draw_centered_text(hptibine_screen_title(g_screen), g_gui_w / 2, 20, 16777215);
+    draw_centered_text("HptiBine HD C6 for PexCraft", g_gui_w / 2, g_gui_h - 12, 8421504);
+    draw_all_buttons();
+}
+
 static void draw_skin_preview_model(int cx, int cy) {
     if (!tex_steve.id) return;
     glPushMatrix();

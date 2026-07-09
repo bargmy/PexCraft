@@ -708,7 +708,7 @@ static int block_item_tile_for_id(int id) {
         case BLOCK_IRON_ORE: return 33;
         case BLOCK_COAL_ORE: return 34;
         case BLOCK_LOG: return 20;
-        case BLOCK_LEAVES: return g_opts.fancy_graphics ? 52 : 53;
+        case BLOCK_LEAVES: return hptibine_fancy_trees_enabled() ? 52 : 53;
         case BLOCK_SPONGE: return 48;
         case BLOCK_GLASS: return 49;
         case BLOCK_LAPIS_ORE: return 160;

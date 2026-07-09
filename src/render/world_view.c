@@ -371,19 +371,21 @@ static void draw_sky_only(void) {
         draw_sky_plane(16.0f);
         glColor4f(0.015f, 0.015f, 0.015f, 1.0f);
         draw_lower_sky_plane(-16.0f);
-        sky_generate_stars_once();
-        glDisable(GL_FOG);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glColor4f(0.5f, 0.5f, 0.8f, 0.7f);
-        glBegin(GL_QUADS);
-        for (int i = 0; i < g_sky_star_count; ++i) {
-            for (int v = 0; v < 4; ++v) {
-                glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+        if (g_opts.hpti_stars) {
+            sky_generate_stars_once();
+            glDisable(GL_FOG);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glColor4f(0.5f, 0.5f, 0.8f, 0.7f);
+            glBegin(GL_QUADS);
+            for (int i = 0; i < g_sky_star_count; ++i) {
+                for (int v = 0; v < 4; ++v) {
+                    glVertex3f(g_sky_stars[i].v[v][0], g_sky_stars[i].v[v][1], g_sky_stars[i].v[v][2]);
+                }
             }
+            glEnd();
+            glDisable(GL_BLEND);
         }
-        glEnd();
-        glDisable(GL_BLEND);
         glEnable(GL_TEXTURE_2D);
         glDepthMask(GL_TRUE);
         return;
@@ -406,13 +408,15 @@ static void draw_sky_only(void) {
     sky_color_at_time(g_frame_partial, &sr, &sg, &sb);
 
     glDisable(GL_TEXTURE_2D);
-    glColor4f(sr, sg, sb, 1.0f);
-    draw_sky_plane(16.0f);
+    if (g_opts.hpti_sky) {
+        glColor4f(sr, sg, sb, 1.0f);
+        draw_sky_plane(16.0f);
+    }
     glDisable(GL_FOG);
     glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    draw_sunrise_sunset_fan(g_frame_partial);
+    if (g_opts.hpti_sky) draw_sunrise_sunset_fan(g_frame_partial);
 
     glEnable(GL_TEXTURE_2D);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
@@ -424,6 +428,7 @@ static void draw_sky_only(void) {
         glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
         glRotatef(world_sun_angle(g_frame_partial) * 360.0f, 1.0f, 0.0f, 0.0f);
 
+        if (g_opts.hpti_sun_moon) {
         if (tex_sun.id) {
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, tex_sun.id);
@@ -476,11 +481,12 @@ static void draw_sky_only(void) {
                 glEnd();
             }
         }
+        }
 
         glDisable(GL_TEXTURE_2D);
         {
             float star = sky_star_brightness(g_frame_partial) * rain_alpha;
-            if (star > 0.0f) {
+            if (g_opts.hpti_stars && star > 0.0f) {
                 sky_generate_stars_once();
                 glColor4f(star, star, star, star);
                 glBegin(GL_QUADS);
@@ -507,15 +513,17 @@ static void draw_sky_only(void) {
             draw_black_horizon_box(eye_minus_sea);
         }
 
-        if (1) { /* WorldProviderSurface::isSkyColored() equivalent. */
-            glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
-        } else {
-            glColor4f(sr, sg, sb, 1.0f);
+        if (g_opts.hpti_sky) {
+            if (1) { /* WorldProviderSurface::isSkyColored() equivalent. */
+                glColor4f(sr * 0.2f + 0.04f, sg * 0.2f + 0.04f, sb * 0.6f + 0.1f, 1.0f);
+            } else {
+                glColor4f(sr, sg, sb, 1.0f);
+            }
+            glPushMatrix();
+            glTranslatef(0.0f, -(eye_minus_sea - 16.0f), 0.0f);
+            draw_lower_sky_plane(-16.0f);
+            glPopMatrix();
         }
-        glPushMatrix();
-        glTranslatef(0.0f, -(eye_minus_sea - 16.0f), 0.0f);
-        draw_lower_sky_plane(-16.0f);
-        glPopMatrix();
     }
     glEnable(GL_TEXTURE_2D);
     glDepthMask(GL_TRUE);
@@ -879,7 +887,9 @@ static void draw_source_fancy_clouds(float partial) {
 }
 
 static void draw_source_clouds(void) {
-    if (g_opts.fancy_graphics) draw_source_fancy_clouds(g_frame_partial);
+    int mode = hptibine_cloud_mode();
+    if (mode == HPTI_OFF) return;
+    if (mode == HPTI_FANCY) draw_source_fancy_clouds(g_frame_partial);
     else draw_source_fast_clouds(g_frame_partial);
 }
 
@@ -1113,6 +1123,7 @@ static void pex_portal_build_frames(void) {
 }
 
 static void update_portal_texture_animation(void) {
+    if (!hptibine_animate_portal_texture()) return;
     if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return;
     int tx = (PEX_PORTAL_TILE & 15) * 16;
     int ty = (PEX_PORTAL_TILE >> 4) * 16;
@@ -1298,18 +1309,25 @@ static void pex_upload_animated_terrain_tile(int tile, const unsigned char src[1
 }
 
 static void update_liquid_texture_animation(void) {
+    int do_water = hptibine_animate_water_texture();
+    int do_lava = hptibine_animate_lava_texture();
+    if (!do_water && !do_lava) return;
     if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return;
     if (g_liquid_uploaded_tick == g_ingame_ticks && g_liquid_uploaded_rgba == tex_terrain.rgba &&
         g_liquid_uploaded_w == tex_terrain.w && g_liquid_uploaded_h == tex_terrain.h) return;
     unsigned char tilebuf[16 * 16 * 4];
-    pex_liquid_fx_water_tick(&g_water_still_fx, 0, tilebuf);
-    pex_upload_animated_terrain_tile(205, tilebuf);
-    pex_liquid_fx_water_tick(&g_water_flow_fx, 1, tilebuf);
-    pex_upload_animated_terrain_tile(206, tilebuf);
-    pex_liquid_fx_lava_tick(&g_lava_still_fx, 0, tilebuf);
-    pex_upload_animated_terrain_tile(237, tilebuf);
-    pex_liquid_fx_lava_tick(&g_lava_flow_fx, 1, tilebuf);
-    pex_upload_animated_terrain_tile(238, tilebuf);
+    if (do_water) {
+        pex_liquid_fx_water_tick(&g_water_still_fx, 0, tilebuf);
+        pex_upload_animated_terrain_tile(205, tilebuf);
+        pex_liquid_fx_water_tick(&g_water_flow_fx, 1, tilebuf);
+        pex_upload_animated_terrain_tile(206, tilebuf);
+    }
+    if (do_lava) {
+        pex_liquid_fx_lava_tick(&g_lava_still_fx, 0, tilebuf);
+        pex_upload_animated_terrain_tile(237, tilebuf);
+        pex_liquid_fx_lava_tick(&g_lava_flow_fx, 1, tilebuf);
+        pex_upload_animated_terrain_tile(238, tilebuf);
+    }
     g_liquid_uploaded_tick = g_ingame_ticks;
     g_liquid_uploaded_rgba = tex_terrain.rgba;
     g_liquid_uploaded_w = tex_terrain.w;
@@ -1857,11 +1875,11 @@ static int flat_fancy_cutout_terrain_enabled(void) {
 }
 
 static int flat_fancy_leaf_texture_enabled(void) {
-    return g_opts.fancy_graphics;
+    return hptibine_fancy_trees_enabled();
 }
 
 static int flat_fancy_grass_overlay_enabled(void) {
-    return g_opts.fancy_graphics;
+    return hptibine_fancy_grass_enabled();
 }
 
 static int flat_display_lists_supported(void) {
@@ -2386,6 +2404,7 @@ static float frand01(void) {
 static void add_dig_particle(float x, float y, float z, float mx, float my, float mz,
                              int tile, int block_id, int tint_x, int tint_z,
                              float motion_scale, float size_scale) {
+    if (!hptibine_particle_allowed()) return;
     DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
     memset(p, 0, sizeof(*p));
     p->active = 1;
@@ -2461,6 +2480,7 @@ static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block
 
 
 static void add_bubble_particle(float x, float y, float z, float mx, float my, float mz) {
+    if (!hptibine_water_particles_enabled()) return;
     DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
     memset(p, 0, sizeof(*p));
     p->active = 1;
@@ -2480,6 +2500,7 @@ static void add_bubble_particle(float x, float y, float z, float mx, float my, f
 }
 
 static void add_splash_particle(float x, float y, float z, float mx, float my, float mz) {
+    if (!hptibine_water_particles_enabled()) return;
     DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
     memset(p, 0, sizeof(*p));
     p->active = 1;
@@ -2504,6 +2525,7 @@ static void add_splash_particle(float x, float y, float z, float mx, float my, f
 }
 
 static void add_portal_particle(float x, float y, float z, float mx, float my, float mz) {
+    if (!hptibine_portal_particles_enabled()) return;
     DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
     memset(p, 0, sizeof(*p));
     p->active = 1;
@@ -3918,7 +3940,7 @@ static uint32_t world_ao_mix_brightness(uint32_t a, uint32_t b, uint32_t c, uint
 }
 
 static int smooth_block_lighting_enabled(int id) {
-    return g_opts.fancy_graphics &&
+    return hptibine_smooth_lighting_enabled() &&
            !g_force_fullbright_item_model &&
            flat_block_light_value_for_id(id) == 0;
 }
@@ -7075,8 +7097,12 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
                       (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) <= 12;
     drain_edit_priority_meshes(streaming, recent_edit);
     flat_self_heal_visible_sections(refs, count);
-    int rebuilds_left = recent_edit ? 6 : 4;
-    if (streaming && !recent_edit) rebuilds_left = direct ? 1 : 2;
+    int hpti_updates = hptibine_chunk_updates();
+    int rebuilds_left = (recent_edit && hptibine_dynamic_chunk_updates_enabled()) ? hpti_updates + 2 : hpti_updates;
+    if (streaming && !recent_edit) {
+        int stream_budget = direct ? 1 : 2;
+        if (rebuilds_left > stream_budget) rebuilds_left = stream_budget;
+    }
     double deadline = now_seconds() + (recent_edit ? 0.0060 : (streaming ? 0.0015 : 0.0030));
 
 #if defined(PEX_PLATFORM_PSP)

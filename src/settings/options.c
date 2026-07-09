@@ -7,6 +7,10 @@ static char *trim(char *s) {
     return s;
 }
 
+static void hptibine_set_defaults(void);
+static float get_option_float(OptionId opt);
+static void set_option_float(OptionId opt, float v);
+
 static void set_default_options(void) {
     g_opts.music = 1.0f;
     g_opts.sound = 1.0f;
@@ -50,6 +54,7 @@ static void set_default_options(void) {
     snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
     pex_set_language_code(g_opts.language);
     for (int i = 0; i < 10; i++) g_opts.keys[i] = default_keys[i];
+    hptibine_set_defaults();
 }
 
 static float parse_float_java(const char *s) {
@@ -91,6 +96,538 @@ static const char *renderer_backend_label(int backend) {
 #endif
 }
 
+
+typedef enum HptiBineCategory {
+    HPTI_CAT_MAIN = 0,
+    HPTI_CAT_DETAILS,
+    HPTI_CAT_QUALITY,
+    HPTI_CAT_ANIMATIONS,
+    HPTI_CAT_PERFORMANCE,
+    HPTI_CAT_OTHER
+} HptiBineCategory;
+
+typedef enum HptiBineOptionKind {
+    HPTI_KIND_BUTTON = 0,
+    HPTI_KIND_SLIDER = 1
+} HptiBineOptionKind;
+
+typedef struct HptiBineOptionDef {
+    HptiBineOptionId id;
+    const char *label;
+    HptiBineCategory category;
+    HptiBineOptionKind kind;
+    int implemented;
+} HptiBineOptionDef;
+
+static const HptiBineOptionDef hptibine_defs[] = {
+    { HPTI_GRAPHICS, "Graphics", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 1 },
+    { HPTI_RENDER_DISTANCE_FINE, "Render Distance", HPTI_CAT_MAIN, HPTI_KIND_SLIDER, 1 },
+    { HPTI_AO_LEVEL, "Smooth Lighting", HPTI_CAT_MAIN, HPTI_KIND_SLIDER, 1 },
+    { HPTI_FRAMERATE_LIMIT, "Max FPS", HPTI_CAT_MAIN, HPTI_KIND_SLIDER, 1 },
+    { HPTI_ANAGLYPH, "3D Anaglyph", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
+    { HPTI_VIEW_BOBBING, "View Bobbing", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 1 },
+    { HPTI_GUI_SCALE, "GUI Scale", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ADVANCED_OPENGL, "Advanced OpenGL", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
+    { HPTI_GAMMA, "Brightness", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
+    { HPTI_RENDER_CLOUDS, "Render Clouds", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 1 },
+    { HPTI_FOG_FANCY, "Fog", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
+    { HPTI_FOG_START, "Fog Start", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
+
+    { HPTI_CLOUDS, "Clouds", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_CLOUD_HEIGHT, "Cloud Height", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_TREES, "Trees", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_GRASS, "Grass", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_WATER, "Water", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_RAIN, "Rain & Snow", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_SKY, "Sky", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_STARS, "Stars", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_SUN_MOON, "Sun & Moon", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_SHOW_CAPES, "Show Capes", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_DEPTH_FOG, "Depth Fog", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+
+    { HPTI_MIPMAP_LEVEL, "Mipmap Level", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_MIPMAP_TYPE, "Mipmap Type", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_CLEAR_WATER, "Clear Water", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_RANDOM_MOBS, "Random Mobs", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_BETTER_GRASS, "Better Grass", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_BETTER_SNOW, "Better Snow", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_CUSTOM_FONTS, "Custom Fonts", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_CUSTOM_COLORS, "Custom Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_SWAMP_COLORS, "Swamp Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_SMOOTH_BIOMES, "Smooth Biomes", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_CONNECTED_TEXTURES, "Connected Textures", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_NATURAL_TEXTURES, "Natural Textures", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_AA_LEVEL, "Antialiasing", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_AF_LEVEL, "Anisotropic Filtering", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+
+    { HPTI_ANIMATED_WATER, "Water Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_ANIMATED_LAVA, "Lava Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_ANIMATED_FIRE, "Fire Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ANIMATED_PORTAL, "Portal Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_ANIMATED_REDSTONE, "Redstone Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ANIMATED_EXPLOSION, "Explosion Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ANIMATED_FLAME, "Flame Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ANIMATED_SMOKE, "Smoke Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_VOID_PARTICLES, "Void Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_WATER_PARTICLES, "Water Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_RAIN_SPLASH, "Rain Splash", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_PORTAL_PARTICLES, "Portal Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_PARTICLES, "Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_DRIPPING_WATER_LAVA, "Dripping Water/Lava", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ANIMATED_TERRAIN, "Terrain Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { HPTI_ANIMATED_ITEMS, "Items Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
+    { HPTI_ANIMATED_TEXTURES, "Textures Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+
+    { HPTI_SMOOTH_FPS, "Smooth FPS", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
+    { HPTI_SMOOTH_INPUT, "Smooth Input", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
+    { HPTI_LOAD_FAR, "Load Far", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
+    { HPTI_PRELOADED_CHUNKS, "Preloaded Chunks", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
+    { HPTI_CHUNK_UPDATES, "Chunk Updates", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 1 },
+    { HPTI_CHUNK_UPDATES_DYNAMIC, "Dynamic Updates", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 1 },
+
+    { HPTI_FAST_DEBUG_INFO, "Fast Debug Info", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
+    { HPTI_PROFILER, "Debug Profiler", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
+    { HPTI_WEATHER, "Weather", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
+    { HPTI_TIME, "Time", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
+    { HPTI_FULLSCREEN_MODE, "Fullscreen", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
+    { HPTI_AUTOSAVE_TICKS, "Autosave", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 }
+};
+
+static const HptiBineOptionDef *hptibine_find_def(HptiBineOptionId id) {
+    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_defs); ++i) if (hptibine_defs[i].id == id) return &hptibine_defs[i];
+    return NULL;
+}
+
+static int hptibine_screen_category(ScreenId screen) {
+    if (screen == SCREEN_HPTIBINE) return HPTI_CAT_MAIN;
+    if (screen == SCREEN_HPTIBINE_DETAILS) return HPTI_CAT_DETAILS;
+    if (screen == SCREEN_HPTIBINE_QUALITY) return HPTI_CAT_QUALITY;
+    if (screen == SCREEN_HPTIBINE_ANIMATIONS) return HPTI_CAT_ANIMATIONS;
+    if (screen == SCREEN_HPTIBINE_PERFORMANCE) return HPTI_CAT_PERFORMANCE;
+    if (screen == SCREEN_HPTIBINE_OTHER) return HPTI_CAT_OTHER;
+    return -1;
+}
+
+static const char *hptibine_screen_title(ScreenId screen) {
+    if (screen == SCREEN_HPTIBINE_DETAILS) return "HptiBine Detail Settings";
+    if (screen == SCREEN_HPTIBINE_QUALITY) return "HptiBine Quality Settings";
+    if (screen == SCREEN_HPTIBINE_ANIMATIONS) return "HptiBine Animation Settings";
+    if (screen == SCREEN_HPTIBINE_PERFORMANCE) return "HptiBine Performance Settings";
+    if (screen == SCREEN_HPTIBINE_OTHER) return "HptiBine Other Settings";
+    return "HptiBine";
+}
+
+static int hptibine_option_count_for_screen(ScreenId screen) {
+    int cat = hptibine_screen_category(screen);
+    int count = 0;
+    if (cat < 0) return 0;
+    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_defs); ++i) if ((int)hptibine_defs[i].category == cat) count++;
+    return count;
+}
+
+static HptiBineOptionId hptibine_option_at(ScreenId screen, int index) {
+    int cat = hptibine_screen_category(screen);
+    int count = 0;
+    if (cat < 0) return HPTI_GRAPHICS;
+    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_defs); ++i) {
+        if ((int)hptibine_defs[i].category != cat) continue;
+        if (count == index) return hptibine_defs[i].id;
+        count++;
+    }
+    return HPTI_GRAPHICS;
+}
+
+static int hptibine_option_enabled(HptiBineOptionId id) {
+    const HptiBineOptionDef *d = hptibine_find_def(id);
+    return d ? d->implemented : 0;
+}
+
+static int hptibine_option_is_slider(HptiBineOptionId id) {
+    const HptiBineOptionDef *d = hptibine_find_def(id);
+    return d && d->implemented && d->kind == HPTI_KIND_SLIDER;
+}
+
+static const char *hptibine_mode_default_fast_fancy_off(int v) {
+    if (v == HPTI_FAST) return "Fast";
+    if (v == HPTI_FANCY) return "Fancy";
+    if (v == HPTI_OFF) return "OFF";
+    return "Default";
+}
+
+static const char *hptibine_mode_default_fast_fancy(int v) {
+    if (v == HPTI_FAST) return "Fast";
+    if (v == HPTI_FANCY) return "Fancy";
+    return "Default";
+}
+
+static const char *hptibine_on_off(int v) { return v ? "ON" : "OFF"; }
+
+static const char *hptibine_anim_mode_label(int v) {
+    if (v == HPTI_ANIM_DYNAMIC) return "Dynamic";
+    if (v == HPTI_ANIM_OFF) return "OFF";
+    return "ON";
+}
+
+static int hptibine_parse_bool(const char *v) {
+    return v && (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes") || !strcmp(v, "on") || !strcmp(v, "ON"));
+}
+
+static void hptibine_set_defaults(void) {
+    g_opts.hpti_fog_type = 1;
+    g_opts.hpti_fog_start = 0.8f;
+    g_opts.hpti_ao_level = 1.0f;
+    g_opts.hpti_clouds = HPTI_DEFAULT;
+    g_opts.hpti_cloud_height = 0.0f;
+    g_opts.hpti_trees = HPTI_DEFAULT;
+    g_opts.hpti_grass = HPTI_DEFAULT;
+    g_opts.hpti_water = HPTI_DEFAULT;
+    g_opts.hpti_rain = HPTI_DEFAULT;
+    g_opts.hpti_sky = 1;
+    g_opts.hpti_stars = 1;
+    g_opts.hpti_sun_moon = 1;
+    g_opts.hpti_depth_fog = 1;
+    g_opts.hpti_animated_water = HPTI_ANIM_ON;
+    g_opts.hpti_animated_lava = HPTI_ANIM_ON;
+    g_opts.hpti_animated_fire = 1;
+    g_opts.hpti_animated_portal = 1;
+    g_opts.hpti_animated_redstone = 1;
+    g_opts.hpti_animated_explosion = 1;
+    g_opts.hpti_animated_flame = 1;
+    g_opts.hpti_animated_smoke = 1;
+    g_opts.hpti_void_particles = 1;
+    g_opts.hpti_water_particles = 1;
+    g_opts.hpti_rain_splash = 1;
+    g_opts.hpti_portal_particles = 1;
+    g_opts.hpti_dripping_water_lava = 1;
+    g_opts.hpti_animated_terrain = 1;
+    g_opts.hpti_animated_items = 1;
+    g_opts.hpti_animated_textures = 1;
+    g_opts.hpti_particles = 0;
+    g_opts.hpti_chunk_updates = 1;
+    g_opts.hpti_chunk_updates_dynamic = 0;
+    g_opts.hpti_fast_debug_info = 0;
+    g_opts.hpti_profiler = 0;
+    g_opts.hpti_weather = 1;
+}
+
+static void hptibine_clamp_options(void) {
+    if (g_opts.hpti_fog_type < 1 || g_opts.hpti_fog_type > 3) g_opts.hpti_fog_type = 1;
+    if (g_opts.hpti_fog_start < 0.2f) g_opts.hpti_fog_start = 0.2f;
+    if (g_opts.hpti_fog_start > 0.8f) g_opts.hpti_fog_start = 0.8f;
+    if (g_opts.hpti_ao_level < 0.0f) g_opts.hpti_ao_level = 0.0f;
+    if (g_opts.hpti_ao_level > 1.0f) g_opts.hpti_ao_level = 1.0f;
+    if (g_opts.hpti_clouds < 0 || g_opts.hpti_clouds > 3) g_opts.hpti_clouds = 0;
+    if (g_opts.hpti_cloud_height < 0.0f) g_opts.hpti_cloud_height = 0.0f;
+    if (g_opts.hpti_cloud_height > 1.0f) g_opts.hpti_cloud_height = 1.0f;
+    if (g_opts.hpti_trees < 0 || g_opts.hpti_trees > 2) g_opts.hpti_trees = 0;
+    if (g_opts.hpti_grass < 0 || g_opts.hpti_grass > 2) g_opts.hpti_grass = 0;
+    if (g_opts.hpti_water < 0 || g_opts.hpti_water > 2) g_opts.hpti_water = 0;
+    if (g_opts.hpti_rain < 0 || g_opts.hpti_rain > 3) g_opts.hpti_rain = 0;
+    if (g_opts.hpti_animated_water < 0 || g_opts.hpti_animated_water > 2) g_opts.hpti_animated_water = 0;
+    if (g_opts.hpti_animated_lava < 0 || g_opts.hpti_animated_lava > 2) g_opts.hpti_animated_lava = 0;
+    if (g_opts.hpti_particles < 0 || g_opts.hpti_particles > 2) g_opts.hpti_particles = 0;
+    if (g_opts.hpti_chunk_updates < 1) g_opts.hpti_chunk_updates = 1;
+    if (g_opts.hpti_chunk_updates > 5) g_opts.hpti_chunk_updates = 5;
+}
+
+static void hptibine_load_file_named(const char *name) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    (void)name;
+#else
+    char path[MAX_PATHBUF];
+    path_join(path, sizeof(path), g_mc_dir, name);
+    FILE *f = fopen(path, "r");
+    if (f) {
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char *p = strchr(line, ':');
+        if (!p) continue;
+        *p++ = 0;
+        char *k = trim(line);
+        char *v = trim(p);
+        if (!strcmp(k, "ofFogType")) g_opts.hpti_fog_type = atoi(v);
+        else if (!strcmp(k, "ofFogStart")) g_opts.hpti_fog_start = parse_float_java(v);
+        else if (!strcmp(k, "ofAoLevel")) g_opts.hpti_ao_level = parse_float_java(v);
+        else if (!strcmp(k, "ofClouds")) g_opts.hpti_clouds = atoi(v);
+        else if (!strcmp(k, "ofCloudsHeight")) g_opts.hpti_cloud_height = parse_float_java(v);
+        else if (!strcmp(k, "ofTrees")) g_opts.hpti_trees = atoi(v);
+        else if (!strcmp(k, "ofGrass")) g_opts.hpti_grass = atoi(v);
+        else if (!strcmp(k, "ofWater")) g_opts.hpti_water = atoi(v);
+        else if (!strcmp(k, "ofRain")) g_opts.hpti_rain = atoi(v);
+        else if (!strcmp(k, "ofSky")) g_opts.hpti_sky = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofStars")) g_opts.hpti_stars = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofSunMoon")) g_opts.hpti_sun_moon = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofDepthFog")) g_opts.hpti_depth_fog = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedWater")) g_opts.hpti_animated_water = atoi(v);
+        else if (!strcmp(k, "ofAnimatedLava")) g_opts.hpti_animated_lava = atoi(v);
+        else if (!strcmp(k, "ofAnimatedFire")) g_opts.hpti_animated_fire = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedPortal")) g_opts.hpti_animated_portal = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedRedstone")) g_opts.hpti_animated_redstone = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedExplosion")) g_opts.hpti_animated_explosion = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedFlame")) g_opts.hpti_animated_flame = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedSmoke")) g_opts.hpti_animated_smoke = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofVoidParticles")) g_opts.hpti_void_particles = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofWaterParticles")) g_opts.hpti_water_particles = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofRainSplash")) g_opts.hpti_rain_splash = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofPortalParticles")) g_opts.hpti_portal_particles = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofDrippingWaterLava")) g_opts.hpti_dripping_water_lava = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedTerrain")) g_opts.hpti_animated_terrain = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedItems")) g_opts.hpti_animated_items = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofAnimatedTextures")) g_opts.hpti_animated_textures = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofChunkUpdates")) g_opts.hpti_chunk_updates = atoi(v);
+        else if (!strcmp(k, "ofChunkUpdatesDynamic")) g_opts.hpti_chunk_updates_dynamic = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofFastDebugInfo")) g_opts.hpti_fast_debug_info = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofProfiler")) g_opts.hpti_profiler = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofWeather")) g_opts.hpti_weather = hptibine_parse_bool(v);
+        else if (!strcmp(k, "particles") || !strcmp(k, "particleSetting")) g_opts.hpti_particles = atoi(v);
+    }
+    fclose(f);
+    hptibine_clamp_options();
+    }
+#endif
+}
+
+static void load_hptibine_options(void) {
+    hptibine_load_file_named("optionsof.txt");
+    hptibine_load_file_named("optionshptibine.txt");
+}
+
+static void save_hptibine_options(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
+    return;
+#else
+    hptibine_clamp_options();
+    char path[MAX_PATHBUF];
+    path_join(path, sizeof(path), g_mc_dir, "optionshptibine.txt");
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "# HptiBine settings (OptiFine_1.2.5_HD_C6-compatible keys)\n");
+    fprintf(f, "ofFogType:%d\n", g_opts.hpti_fog_type);
+    fprintf(f, "ofFogStart:%g\n", g_opts.hpti_fog_start);
+    fprintf(f, "ofAoLevel:%g\n", g_opts.hpti_ao_level);
+    fprintf(f, "ofClouds:%d\n", g_opts.hpti_clouds);
+    fprintf(f, "ofCloudsHeight:%g\n", g_opts.hpti_cloud_height);
+    fprintf(f, "ofTrees:%d\n", g_opts.hpti_trees);
+    fprintf(f, "ofGrass:%d\n", g_opts.hpti_grass);
+    fprintf(f, "ofWater:%d\n", g_opts.hpti_water);
+    fprintf(f, "ofRain:%d\n", g_opts.hpti_rain);
+    fprintf(f, "ofSky:%s\n", g_opts.hpti_sky ? "true" : "false");
+    fprintf(f, "ofStars:%s\n", g_opts.hpti_stars ? "true" : "false");
+    fprintf(f, "ofSunMoon:%s\n", g_opts.hpti_sun_moon ? "true" : "false");
+    fprintf(f, "ofDepthFog:%s\n", g_opts.hpti_depth_fog ? "true" : "false");
+    fprintf(f, "ofAnimatedWater:%d\n", g_opts.hpti_animated_water);
+    fprintf(f, "ofAnimatedLava:%d\n", g_opts.hpti_animated_lava);
+    fprintf(f, "ofAnimatedFire:%s\n", g_opts.hpti_animated_fire ? "true" : "false");
+    fprintf(f, "ofAnimatedPortal:%s\n", g_opts.hpti_animated_portal ? "true" : "false");
+    fprintf(f, "ofAnimatedRedstone:%s\n", g_opts.hpti_animated_redstone ? "true" : "false");
+    fprintf(f, "ofAnimatedExplosion:%s\n", g_opts.hpti_animated_explosion ? "true" : "false");
+    fprintf(f, "ofAnimatedFlame:%s\n", g_opts.hpti_animated_flame ? "true" : "false");
+    fprintf(f, "ofAnimatedSmoke:%s\n", g_opts.hpti_animated_smoke ? "true" : "false");
+    fprintf(f, "ofVoidParticles:%s\n", g_opts.hpti_void_particles ? "true" : "false");
+    fprintf(f, "ofWaterParticles:%s\n", g_opts.hpti_water_particles ? "true" : "false");
+    fprintf(f, "ofRainSplash:%s\n", g_opts.hpti_rain_splash ? "true" : "false");
+    fprintf(f, "ofPortalParticles:%s\n", g_opts.hpti_portal_particles ? "true" : "false");
+    fprintf(f, "ofDrippingWaterLava:%s\n", g_opts.hpti_dripping_water_lava ? "true" : "false");
+    fprintf(f, "ofAnimatedTerrain:%s\n", g_opts.hpti_animated_terrain ? "true" : "false");
+    fprintf(f, "ofAnimatedItems:%s\n", g_opts.hpti_animated_items ? "true" : "false");
+    fprintf(f, "ofAnimatedTextures:%s\n", g_opts.hpti_animated_textures ? "true" : "false");
+    fprintf(f, "particles:%d\n", g_opts.hpti_particles);
+    fprintf(f, "ofChunkUpdates:%d\n", g_opts.hpti_chunk_updates);
+    fprintf(f, "ofChunkUpdatesDynamic:%s\n", g_opts.hpti_chunk_updates_dynamic ? "true" : "false");
+    fprintf(f, "ofFastDebugInfo:%s\n", g_opts.hpti_fast_debug_info ? "true" : "false");
+    fprintf(f, "ofProfiler:%s\n", g_opts.hpti_profiler ? "true" : "false");
+    fprintf(f, "ofWeather:%s\n", g_opts.hpti_weather ? "true" : "false");
+    fclose(f);
+#endif
+}
+
+static int hptibine_cloud_mode(void) {
+    if (g_opts.hpti_clouds == HPTI_FAST || g_opts.hpti_clouds == HPTI_FANCY || g_opts.hpti_clouds == HPTI_OFF) return g_opts.hpti_clouds;
+    return g_opts.fancy_graphics ? HPTI_FANCY : HPTI_FAST;
+}
+
+static int hptibine_fancy_trees_enabled(void) {
+    if (g_opts.hpti_trees == HPTI_FAST) return 0;
+    if (g_opts.hpti_trees == HPTI_FANCY) return 1;
+    return g_opts.fancy_graphics;
+}
+
+static int hptibine_fancy_grass_enabled(void) {
+    if (g_opts.hpti_grass == HPTI_FAST) return 0;
+    if (g_opts.hpti_grass == HPTI_FANCY) return 1;
+    return g_opts.fancy_graphics;
+}
+
+static int hptibine_smooth_lighting_enabled(void) {
+    return g_opts.hpti_ao_level > 0.0001f;
+}
+
+static int hptibine_textures_animated(void) {
+    return g_opts.hpti_animated_textures && g_opts.hpti_animated_terrain;
+}
+
+static int hptibine_animate_water_texture(void) {
+    return hptibine_textures_animated() && g_opts.hpti_animated_water != HPTI_ANIM_OFF;
+}
+
+static int hptibine_animate_lava_texture(void) {
+    return hptibine_textures_animated() && g_opts.hpti_animated_lava != HPTI_ANIM_OFF;
+}
+
+static int hptibine_animate_portal_texture(void) {
+    return hptibine_textures_animated() && g_opts.hpti_animated_portal;
+}
+
+static int hptibine_particle_allowed(void) {
+    if (g_opts.hpti_particles <= 0) return 1;
+    if (g_opts.hpti_particles == 1) return (rand() & 1) == 0;
+    return (rand() & 3) == 0;
+}
+
+static int hptibine_water_particles_enabled(void) { return g_opts.hpti_water_particles && hptibine_particle_allowed(); }
+static int hptibine_portal_particles_enabled(void) { return g_opts.hpti_portal_particles && hptibine_particle_allowed(); }
+static int hptibine_chunk_updates(void) { hptibine_clamp_options(); return g_opts.hpti_chunk_updates; }
+static int hptibine_dynamic_chunk_updates_enabled(void) { return g_opts.hpti_chunk_updates_dynamic; }
+
+static float get_hptibine_option_float(HptiBineOptionId opt) {
+    if (opt == HPTI_RENDER_DISTANCE_FINE) {
+        int c = g_opts.render_distance;
+        if (c < 2) c = 2;
+        if (c > 32) c = 32;
+        return (float)(c - 2) / 30.0f;
+    }
+    if (opt == HPTI_AO_LEVEL) return g_opts.hpti_ao_level;
+    if (opt == HPTI_FRAMERATE_LIMIT) return get_option_float(OPT_LIMIT_FRAMERATE);
+    return 0.0f;
+}
+
+static void set_hptibine_option_float(HptiBineOptionId opt, float v) {
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    if (opt == HPTI_RENDER_DISTANCE_FINE) set_option_float(OPT_RENDER_DISTANCE, v);
+    else if (opt == HPTI_AO_LEVEL) {
+        g_opts.hpti_ao_level = v;
+        flat_mark_all_chunks_dirty();
+        save_options();
+    } else if (opt == HPTI_FRAMERATE_LIMIT) set_option_float(OPT_LIMIT_FRAMERATE, v);
+}
+
+static void hptibine_render_distance_label(char *out, size_t cap) {
+    int blocks = g_opts.render_distance * 16;
+    const char *name = "Tiny";
+    int base = 32;
+    if (blocks >= 64) { name = "Short"; base = 64; }
+    if (blocks >= 128) { name = "Normal"; base = 128; }
+    if (blocks >= 256) { name = "Far"; base = 256; }
+    if (blocks >= 512) { name = "Extreme"; base = 512; }
+    int diff = blocks - base;
+    if (diff == 0) snprintf(out, cap, "Render Distance: %s", name);
+    else snprintf(out, cap, "Render Distance: %s +%d", name, diff);
+}
+
+static void get_hptibine_option_label(HptiBineOptionId opt, char *out, size_t cap) {
+    const HptiBineOptionDef *d = hptibine_find_def(opt);
+    const char *name = d ? d->label : "HptiBine";
+    if (!d || !d->implemented) { snprintf(out, cap, "%s: N/A", name); return; }
+    switch (opt) {
+        case HPTI_GRAPHICS: snprintf(out, cap, "%s: %s", name, g_opts.fancy_graphics ? "Fancy" : "Fast"); break;
+        case HPTI_RENDER_DISTANCE_FINE: hptibine_render_distance_label(out, cap); break;
+        case HPTI_AO_LEVEL:
+            if (g_opts.hpti_ao_level <= 0.0f) snprintf(out, cap, "%s: OFF", name);
+            else snprintf(out, cap, "%s: %d%%", name, (int)(g_opts.hpti_ao_level * 100.0f + 0.5f));
+            break;
+        case HPTI_FRAMERATE_LIMIT:
+            if (g_opts.max_fps <= 0) snprintf(out, cap, "%s: Unlimited", name);
+            else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
+            break;
+        case HPTI_ANAGLYPH: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.anaglyph)); break;
+        case HPTI_VIEW_BOBBING: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.view_bobbing)); break;
+        case HPTI_RENDER_CLOUDS: snprintf(out, cap, "%s: %s", name, hptibine_cloud_mode() == HPTI_OFF ? "OFF" : "ON"); break;
+        case HPTI_CLOUDS: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy_off(g_opts.hpti_clouds)); break;
+        case HPTI_TREES: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy(g_opts.hpti_trees)); break;
+        case HPTI_GRASS: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy(g_opts.hpti_grass)); break;
+        case HPTI_SKY: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_sky)); break;
+        case HPTI_STARS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_stars)); break;
+        case HPTI_SUN_MOON: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_sun_moon)); break;
+        case HPTI_ANIMATED_WATER: snprintf(out, cap, "%s: %s", name, hptibine_anim_mode_label(g_opts.hpti_animated_water)); break;
+        case HPTI_ANIMATED_LAVA: snprintf(out, cap, "%s: %s", name, hptibine_anim_mode_label(g_opts.hpti_animated_lava)); break;
+        case HPTI_ANIMATED_PORTAL: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_animated_portal)); break;
+        case HPTI_WATER_PARTICLES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_water_particles)); break;
+        case HPTI_PORTAL_PARTICLES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_portal_particles)); break;
+        case HPTI_PARTICLES:
+            snprintf(out, cap, "%s: %s", name, g_opts.hpti_particles == 2 ? "Minimal" : (g_opts.hpti_particles == 1 ? "Decreased" : "All"));
+            break;
+        case HPTI_ANIMATED_TERRAIN: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_animated_terrain)); break;
+        case HPTI_ANIMATED_TEXTURES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_animated_textures)); break;
+        case HPTI_CHUNK_UPDATES: snprintf(out, cap, "%s: %d", name, g_opts.hpti_chunk_updates); break;
+        case HPTI_CHUNK_UPDATES_DYNAMIC: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_chunk_updates_dynamic)); break;
+        default: snprintf(out, cap, "%s: N/A", name); break;
+    }
+}
+
+static void bump_hptibine_option(HptiBineOptionId opt, int delta) {
+    (void)delta;
+    if (!hptibine_option_enabled(opt)) return;
+    switch (opt) {
+        case HPTI_GRAPHICS:
+            g_opts.fancy_graphics = !g_opts.fancy_graphics;
+            flat_mark_all_chunks_dirty();
+            break;
+        case HPTI_ANAGLYPH:
+            g_opts.anaglyph = !g_opts.anaglyph;
+            apply_vsync_setting();
+            break;
+        case HPTI_VIEW_BOBBING:
+            g_opts.view_bobbing = !g_opts.view_bobbing;
+            break;
+        case HPTI_RENDER_CLOUDS:
+            g_opts.hpti_clouds = (hptibine_cloud_mode() == HPTI_OFF) ? HPTI_DEFAULT : HPTI_OFF;
+            break;
+        case HPTI_CLOUDS:
+            g_opts.hpti_clouds = (g_opts.hpti_clouds + 1) & 3;
+            break;
+        case HPTI_TREES:
+            g_opts.hpti_trees++;
+            if (g_opts.hpti_trees > 2) g_opts.hpti_trees = 0;
+            flat_mark_all_chunks_dirty();
+            break;
+        case HPTI_GRASS:
+            g_opts.hpti_grass++;
+            if (g_opts.hpti_grass > 2) g_opts.hpti_grass = 0;
+            flat_mark_all_chunks_dirty();
+            break;
+        case HPTI_SKY: g_opts.hpti_sky = !g_opts.hpti_sky; break;
+        case HPTI_STARS: g_opts.hpti_stars = !g_opts.hpti_stars; break;
+        case HPTI_SUN_MOON: g_opts.hpti_sun_moon = !g_opts.hpti_sun_moon; break;
+        case HPTI_ANIMATED_WATER:
+            g_opts.hpti_animated_water++;
+            if (g_opts.hpti_animated_water > 2) g_opts.hpti_animated_water = 0;
+            break;
+        case HPTI_ANIMATED_LAVA:
+            g_opts.hpti_animated_lava++;
+            if (g_opts.hpti_animated_lava > 2) g_opts.hpti_animated_lava = 0;
+            break;
+        case HPTI_ANIMATED_PORTAL: g_opts.hpti_animated_portal = !g_opts.hpti_animated_portal; break;
+        case HPTI_WATER_PARTICLES: g_opts.hpti_water_particles = !g_opts.hpti_water_particles; break;
+        case HPTI_PORTAL_PARTICLES: g_opts.hpti_portal_particles = !g_opts.hpti_portal_particles; break;
+        case HPTI_PARTICLES:
+            g_opts.hpti_particles = (g_opts.hpti_particles + 1) % 3;
+            break;
+        case HPTI_ANIMATED_TERRAIN: g_opts.hpti_animated_terrain = !g_opts.hpti_animated_terrain; break;
+        case HPTI_ANIMATED_TEXTURES: g_opts.hpti_animated_textures = !g_opts.hpti_animated_textures; break;
+        case HPTI_CHUNK_UPDATES:
+            g_opts.hpti_chunk_updates++;
+            if (g_opts.hpti_chunk_updates > 5) g_opts.hpti_chunk_updates = 1;
+            break;
+        case HPTI_CHUNK_UPDATES_DYNAMIC:
+            g_opts.hpti_chunk_updates_dynamic = !g_opts.hpti_chunk_updates_dynamic;
+            break;
+        default: break;
+    }
+    hptibine_clamp_options();
+    save_options();
+}
+
 static void load_options(void) {
     set_default_options();
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
@@ -108,7 +645,7 @@ static void load_options(void) {
     char path[MAX_PATHBUF];
     path_join(path, sizeof(path), g_mc_dir, "options.txt");
     FILE *f = fopen(path, "r");
-    if (!f) return;
+    if (f) {
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         char *p = strchr(line, ':');
@@ -166,6 +703,8 @@ static void load_options(void) {
         }
     }
     fclose(f);
+    }
+    load_hptibine_options();
     if (g_opts.render_distance < 2) g_opts.render_distance = 8;
     if (g_opts.render_distance > 32) g_opts.render_distance = 32;
     if (g_opts.max_fps < 0) g_opts.max_fps = 0;
@@ -213,7 +752,7 @@ static void save_options(void) {
     char path[MAX_PATHBUF];
     path_join(path, sizeof(path), g_mc_dir, "options.txt");
     FILE *f = fopen(path, "w");
-    if (!f) return;
+    if (f) {
     fprintf(f, "music:%g\n", g_opts.music);
     fprintf(f, "sound:%g\n", g_opts.sound);
     fprintf(f, "invertYMouse:%s\n", g_opts.invert_mouse ? "true" : "false");
@@ -250,6 +789,8 @@ static void save_options(void) {
     const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};
     for (int i = 0; i < 10; i++) fprintf(f, "key_%s:%d\n", orig[i], vk_to_lwjgl(g_opts.keys[i]));
     fclose(f);
+    }
+    save_hptibine_options();
 }
 
 static float get_option_float(OptionId opt) {
