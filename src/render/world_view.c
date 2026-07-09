@@ -6564,6 +6564,7 @@ static int async_section_mesh_pending(void) {
 static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     if (!flat_async_section_mesh_enabled()) return 0;
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
+    if (flat_light_commit_busy()) return 2;
     if (!g_flat_world_chunk_generated[cz][cx] || !flat_chunk_light_ready(cx, cz)) return 2;
     if (g_flat_section_mesh_building[sy][cz][cx]) {
         if (g_flat_section_building_mesh_version[sy][cz][cx] == g_flat_section_mesh_version[sy][cz][cx] &&
@@ -6621,8 +6622,11 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     }
     profile_add_time(PROF_MESH_SUBMIT_SNAPSHOT, snapshot_start);
 
+    if (flat_light_commit_busy()) return 2;
+
     EnterCriticalSection(&g_async_section_mesh_cs);
     if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx] &&
+        g_flat_world_origin_x == job.origin_x && g_flat_world_origin_z == job.origin_z &&
         g_flat_section_mesh_version[sy][cz][cx] == job.version &&
         g_flat_chunk_light_version[cz][cx] == job.light_version &&
         flat_chunk_light_ready(cx, cz)) {

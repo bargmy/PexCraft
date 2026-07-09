@@ -465,6 +465,20 @@ static void flat_lighting_worker_wake(void);
 static void flat_lighting_worker_shutdown(void);
 static int flat_lighting_pending_dirty(void);
 static volatile int g_stream_remap_in_progress = 0;
+/* The light worker computes into private buffers, then briefly commits the
+   finished result to the live light arrays.  Mesh jobs must not snapshot during
+   that copy; if they do, their light version will also be rejected on install,
+   but this flag prevents most mixed-light snapshots from being queued at all. */
+static volatile int g_flat_light_commit_in_progress = 0;
+static CRITICAL_SECTION g_flat_light_commit_cs;
+static int g_flat_light_commit_cs_initialized = 0;
+static int g_stream_suffocation_grace_until_tick = 0;
+static void flat_light_commit_lock_ensure(void) {
+    if (g_flat_light_commit_cs_initialized) return;
+    InitializeCriticalSection(&g_flat_light_commit_cs);
+    g_flat_light_commit_cs_initialized = 1;
+}
+static int flat_light_commit_busy(void) { return g_flat_light_commit_in_progress ? 1 : 0; }
 static void flat_begin_persistent_edit(void) { g_flat_persistent_edit_depth++; }
 static void flat_end_persistent_edit(void) {
     if (g_flat_persistent_edit_depth > 0) g_flat_persistent_edit_depth--;
@@ -1051,6 +1065,19 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     if (rz1 < rz0) { int t = rz0; rz0 = rz1; rz1 = t; }
     if (margin < 0) margin = 0;
     if (margin > 16) margin = 16;
+
+    /* Inner commit rectangle: only this area is allowed to publish changed light
+       and dirty render sections.  The surrounding margin is a private influence
+       buffer used to import boundary light, so a repair does not repaint a huge
+       expanded rectangle or create delayed black/white patches. */
+    int cx0 = rx0, cx1 = rx1;
+    int cz0 = rz0, cz1 = rz1;
+    if (cx0 < g_flat_world_origin_x) cx0 = g_flat_world_origin_x;
+    if (cz0 < g_flat_world_origin_z) cz0 = g_flat_world_origin_z;
+    if (cx1 >= g_flat_world_origin_x + FLAT_WORLD_SIZE) cx1 = g_flat_world_origin_x + FLAT_WORLD_SIZE - 1;
+    if (cz1 >= g_flat_world_origin_z + FLAT_WORLD_SIZE) cz1 = g_flat_world_origin_z + FLAT_WORLD_SIZE - 1;
+    if (cx1 < cx0 || cz1 < cz0) return;
+
     int x0 = rx0 - margin, x1 = rx1 + margin;
     int z0 = rz0 - margin, z1 = rz1 + margin;
     if (x0 < g_flat_world_origin_x) x0 = g_flat_world_origin_x;
@@ -1059,6 +1086,14 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     if (z1 >= g_flat_world_origin_z + FLAT_WORLD_SIZE) z1 = g_flat_world_origin_z + FLAT_WORLD_SIZE - 1;
     int y0 = FLAT_WORLD_Y_MIN, y1 = FLAT_WORLD_Y_MAX;
     if (x1 < x0 || z1 < z0) return;
+
+    int origin_x_stamp = g_flat_world_origin_x;
+    int origin_z_stamp = g_flat_world_origin_z;
+    unsigned int terrain_stamp[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    unsigned int light_stamp[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    memcpy(terrain_stamp, g_flat_section_mesh_version, sizeof(terrain_stamp));
+    memcpy(light_stamp, g_flat_chunk_light_version, sizeof(light_stamp));
+
     int w = x1 - x0 + 1;
     int h = y1 - y0 + 1;
     int d = z1 - z0 + 1;
@@ -1078,7 +1113,8 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     memset(changed_chunks, 0, sizeof(changed_chunks));
     int changed_section_count = 0;
 
-    int tail = 0;
+    /* Exact direct sunlight math.  Open-sky air remains 15; water/leaves reduce by
+       their Java light opacity; full opaque blocks stop direct sky. */
     for (int z = z0; z <= z1; ++z) {
         for (int x = x0; x <= x1; ++x) {
             int light = has_sky ? 15 : 0;
@@ -1086,10 +1122,33 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
                 int bid = flat_get_block(x, y, z);
                 light = flat_sky_light_after_block(light, bid);
-                sky[idx] = (unsigned char)light;
+                sky[idx] = (unsigned char)(light & 15);
             }
         }
     }
+
+    /* Boundary import.  A region-local solve without border light is mathematically
+       wrong: light entering from neighboring chunks gets cut off, which is exactly
+       how repaired areas became a little too dark.  Import the saved boundary into
+       the private buffer, then propagate inward. */
+    int tail = 0;
+    for (int z = z0; z <= z1; ++z) {
+        for (int x = x0; x <= x1; ++x) {
+            int on_xz_boundary = (x == x0 || x == x1 || z == z0 || z == z1);
+            for (int y = y0; y <= y1; ++y) {
+                int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
+                int bid = flat_get_block(x, y, z);
+                int opaque_stop = (flat_light_opacity_for_id(bid) >= 255 && flat_block_light_value_for_id(bid) <= 0);
+                if (on_xz_boundary && !opaque_stop) {
+                    int sv = flat_saved_sky_light(x, y, z);
+                    if (sv > (sky[idx] & 15)) sky[idx] = (unsigned char)(sv & 15);
+                    int bv = flat_saved_block_light(x, y, z);
+                    if (bv > (block[idx] & 15)) block[idx] = (unsigned char)(bv & 15);
+                }
+            }
+        }
+    }
+
     if (propagate_sky && has_sky) {
         tail = 0;
         for (int z = z0; z <= z1; ++z) {
@@ -1099,7 +1158,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
                     int v = sky[idx] & 15;
                     if (v <= 1) continue;
                     int bid = flat_get_block(x, y, z);
-                    if (flat_light_opacity_for_id(bid) >= 255) continue;
+                    if (flat_light_opacity_for_id(bid) >= 255 && flat_block_light_value_for_id(bid) <= 0) continue;
                     flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
                 }
             }
@@ -1114,17 +1173,86 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
                 int v = flat_block_light_value_for_id(flat_get_block(x, y, z));
                 if (v <= 0) continue;
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
-                block[idx] = (unsigned char)v;
+                if (v > (block[idx] & 15)) block[idx] = (unsigned char)(v & 15);
                 flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
+            }
+        }
+    }
+    /* Also enqueue imported boundary block light after sources were seeded. */
+    for (int z = z0; z <= z1; ++z) {
+        for (int x = x0; x <= x1; ++x) {
+            if (!(x == x0 || x == x1 || z == z0 || z == z1)) continue;
+            for (int y = y0; y <= y1; ++y) {
+                int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
+                if ((block[idx] & 15) > 1) flat_light_enqueue(q, &tail, cap, x, y, z, x0, y0, z0);
             }
         }
     }
     if (tail > 0) flat_propagate_light_region(block, x0, y0, z0, x1, y1, z1, q, 0, tail);
 
-    for (int z = z0; z <= z1; ++z) {
+    /* If terrain/remap changed while the worker was solving, do not publish a
+       buffer computed from old blocks.  Requeue the inner area and let a fresh job
+       recompute it from the new terrain state. */
+    int stale_terrain = 0;
+    if (origin_x_stamp != g_flat_world_origin_x || origin_z_stamp != g_flat_world_origin_z) stale_terrain = 1;
+    int lcx0 = flat_local_chunk_x(cx0), lcx1 = flat_local_chunk_x(cx1);
+    int lcz0 = flat_local_chunk_z(cz0), lcz1 = flat_local_chunk_z(cz1);
+    for (int lcz = lcz0; !stale_terrain && lcz <= lcz1; ++lcz) {
+        for (int lcx = lcx0; !stale_terrain && lcx <= lcx1; ++lcx) {
+            if (!flat_local_chunk_valid(lcx, lcz)) { stale_terrain = 1; break; }
+            for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+                if (terrain_stamp[sy][lcz][lcx] != g_flat_section_mesh_version[sy][lcz][lcx]) {
+                    stale_terrain = 1;
+                    break;
+                }
+            }
+        }
+    }
+    int stale_light = 0;
+    int calc_lcx0 = flat_local_chunk_x(x0), calc_lcx1 = flat_local_chunk_x(x1);
+    int calc_lcz0 = flat_local_chunk_z(z0), calc_lcz1 = flat_local_chunk_z(z1);
+    for (int lcz = calc_lcz0; !stale_light && lcz <= calc_lcz1; ++lcz) {
+        for (int lcx = calc_lcx0; !stale_light && lcx <= calc_lcx1; ++lcx) {
+            if (!flat_local_chunk_valid(lcx, lcz)) { stale_light = 1; break; }
+            if (light_stamp[lcz][lcx] != g_flat_chunk_light_version[lcz][lcx]) stale_light = 1;
+        }
+    }
+    if (stale_terrain || stale_light) {
+        free(sky); free(block); free(q);
+        flat_mark_light_dirty_region(cx0, cz0, cx1, cz1);
+        pex_logf_trace("lighting region discarded stale %s x=%d..%d z=%d..%d", stale_terrain ? "terrain" : "light", cx0, cx1, cz0, cz1);
+        return;
+    }
+
+    flat_light_commit_lock_ensure();
+    EnterCriticalSection(&g_flat_light_commit_cs);
+    int stale_commit = 0;
+    if (origin_x_stamp != g_flat_world_origin_x || origin_z_stamp != g_flat_world_origin_z) stale_commit = 1;
+    for (int lcz = lcz0; !stale_commit && lcz <= lcz1; ++lcz) {
+        for (int lcx = lcx0; !stale_commit && lcx <= lcx1; ++lcx) {
+            if (!flat_local_chunk_valid(lcx, lcz)) { stale_commit = 1; break; }
+            for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+                if (terrain_stamp[sy][lcz][lcx] != g_flat_section_mesh_version[sy][lcz][lcx]) { stale_commit = 1; break; }
+            }
+        }
+    }
+    for (int lcz = calc_lcz0; !stale_commit && lcz <= calc_lcz1; ++lcz) {
+        for (int lcx = calc_lcx0; !stale_commit && lcx <= calc_lcx1; ++lcx) {
+            if (!flat_local_chunk_valid(lcx, lcz) || light_stamp[lcz][lcx] != g_flat_chunk_light_version[lcz][lcx]) stale_commit = 1;
+        }
+    }
+    if (stale_commit) {
+        LeaveCriticalSection(&g_flat_light_commit_cs);
+        free(sky); free(block); free(q);
+        flat_mark_light_dirty_region(cx0, cz0, cx1, cz1);
+        pex_logf_trace("lighting region discarded stale before commit x=%d..%d z=%d..%d", cx0, cx1, cz0, cz1);
+        return;
+    }
+    g_flat_light_commit_in_progress = 1;
+    for (int z = cz0; z <= cz1; ++z) {
         int fz = flat_z_index(z);
         int lcz = fz / FLAT_RENDER_CHUNK;
-        for (int x = x0; x <= x1; ++x) {
+        for (int x = cx0; x <= cx1; ++x) {
             int fx = flat_index(x);
             int lcx = fx / FLAT_RENDER_CHUNK;
             for (int y = y0; y <= y1; ++y) {
@@ -1141,10 +1269,6 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
                             changed_section_count++;
                         }
                         changed_chunks[lcz][lcx] = 1;
-                        /* Java markBlockNeedsUpdate2(x,y,z) -> markBlocksForUpdate
-                           (x-1..x+1, y-1..y+1, z-1..z+1).  Because renderers are
-                           16^3, this only adds neighbor sections when the changed
-                           light cell is on a 16-block boundary. */
                         if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0 && flat_local_chunk_valid(lcx - 1, lcz) && !changed_sections[lsy][lcz][lcx - 1]) { changed_sections[lsy][lcz][lcx - 1] = 1; changed_section_count++; }
                         if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1 && flat_local_chunk_valid(lcx + 1, lcz) && !changed_sections[lsy][lcz][lcx + 1]) { changed_sections[lsy][lcz][lcx + 1] = 1; changed_section_count++; }
                         if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0 && flat_local_chunk_valid(lcx, lcz - 1) && !changed_sections[lsy][lcz - 1][lcx]) { changed_sections[lsy][lcz - 1][lcx] = 1; changed_section_count++; }
@@ -1158,6 +1282,9 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
             }
         }
     }
+    g_flat_light_commit_in_progress = 0;
+    LeaveCriticalSection(&g_flat_light_commit_cs);
+
     for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
             if (changed_chunks[lcz][lcx] && g_flat_world_chunk_generated[lcz][lcx]) {
@@ -1170,9 +1297,6 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
             for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
                 if (!changed_sections[sy][lcz][lcx]) continue;
-                /* A validated lighting commit causes exactly one async repaint
-                   request for the affected section.  It does not bump terrain_rev
-                   and does not remove the old mesh, so chunks do not flash black. */
                 if (flat_section_has_blocks(lcx, lcz, sy)) {
                     flat_mark_section_light_dirty(lcx, lcz, sy);
                 } else {
@@ -1185,18 +1309,16 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
             }
         }
     }
-    int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
-    int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
-    pex_logf_trace("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
+    pex_logf_trace("lighting region committed inner x=%d..%d z=%d..%d calc=%d..%d,%d..%d sky_spread=%d changed_sections=%d", cx0, cx1, cz0, cz1, x0, x1, z0, z1, propagate_sky, changed_section_count);
     (void)changed_section_count;
     free(sky); free(block); free(q);
 }
 
 static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
-    /* The caller already widens light-source/opacity edits to the Java 15-block
-       influence radius.  Do not add another 16-block compute margin here: that
-       was the main reason one block break expanded into a ~63x63xheight rebuild. */
-    flat_relight_region(rx0, rz0, rx1, rz1, 0, 1);
+    /* Compute with a 16-block influence margin, but flat_relight_region() now commits
+       only the requested inner rectangle.  This keeps the math correct at region
+       edges without repainting the whole expanded area. */
+    flat_relight_region(rx0, rz0, rx1, rz1, 16, 1);
 }
 
 #ifndef FLAT_CHUNK_BLOCK_COUNT
@@ -1212,6 +1334,9 @@ static void flat_relight_fast_surface_chunk(int cx, int cz) {
     if (z0 < g_flat_world_origin_z) z0 = g_flat_world_origin_z;
     if (x1 >= g_flat_world_origin_x + FLAT_WORLD_SIZE) x1 = g_flat_world_origin_x + FLAT_WORLD_SIZE - 1;
     if (z1 >= g_flat_world_origin_z + FLAT_WORLD_SIZE) z1 = g_flat_world_origin_z + FLAT_WORLD_SIZE - 1;
+    flat_light_commit_lock_ensure();
+    EnterCriticalSection(&g_flat_light_commit_cs);
+    g_flat_light_commit_in_progress = 1;
     for (int z = z0; z <= z1; ++z) {
         int fz = flat_z_index(z);
         for (int x = x0; x <= x1; ++x) {
@@ -1226,6 +1351,8 @@ static void flat_relight_fast_surface_chunk(int cx, int cz) {
             }
         }
     }
+    g_flat_light_commit_in_progress = 0;
+    LeaveCriticalSection(&g_flat_light_commit_cs);
     int lcx = stream_local_chunk_x(cx);
     int lcz = stream_local_chunk_z(cz);
     if (flat_local_chunk_valid(lcx, lcz)) {
@@ -1366,25 +1493,25 @@ static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
     int x0 = g_flat_world_origin_x + lcx * FLAT_RENDER_CHUNK;
     int z0 = g_flat_world_origin_z + lcz * FLAT_RENDER_CHUNK;
 
-    /* A shifted/loaded active window can leave block arrays and saved skylight
-       arrays out of sync.  This is gameplay-visible because mob spawning uses
-       the same saved sky light the renderer samples.  Compare a sparse set of
-       generated columns against the same top-down skylight model used by chunk
-       lighting and rebuild when open/transparent cells are materially too dark. */
+    /* Exact direct-sun validator.  The old validator tolerated "a little dark"
+       sunlight, so repaired chunks could remain visibly wrong forever.  Direct sky
+       is deterministic: if a non-opaque open column cell should receive 15/14/etc,
+       saved sky may be brighter because of lateral light, but it must never be
+       below the direct-column value. */
     for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz += 2) {
         int wz = z0 + lz;
         int fz = flat_z_index(wz);
         for (int lx = 0; lx < FLAT_RENDER_CHUNK; lx += 2) {
             int wx = x0 + lx;
             int fx = flat_index(wx);
-            int expected = 15;
+            int direct = 15;
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int yi = flat_y_index(y);
                 int id = g_flat_blocks[yi][fz][fx];
+                int expected_here = flat_sky_light_after_block(direct, id);
                 int have = g_flat_sky_light[yi][fz][fx] & 15;
-                int expected_here = flat_sky_light_after_block(expected, id);
-                if (expected_here >= 12 && have + 2 < expected_here && flat_light_opacity_for_id(id) < 255) return 1;
-                expected = expected_here;
+                if (flat_light_opacity_for_id(id) < 255 && have < expected_here) return 1;
+                direct = expected_here;
             }
         }
     }
@@ -1703,11 +1830,10 @@ static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_i
     flat_seed_edit_visual_sky_light(x, y, z, old_opacity, new_opacity);
     flat_seed_edit_visual_block_light(x, y, z, old_light, new_light);
 
-    /* Normal opacity edits need a small local light repair so breaking/placing
-       does not leave a visible black column.  Keep it bounded: light sources use
-       their real 15-block influence radius, ordinary opaque edits use a 9x9
-       region, and mesh priority is handled only by the block geometry edit. */
-    int radius = (old_light > 0 || new_light > 0) ? 15 : 4;
+    /* Exact skylight/block-light repair is async and buffered now.  Use the full
+       15-block influence radius for both emitters and opacity changes so pure
+       sunlight and cave-edge light match the real math instead of a 9x9 preview. */
+    int radius = 15;
     flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     return 1;
 }
@@ -1836,9 +1962,8 @@ static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, in
            seeds a tiny no-black visual preview and queues exact lighting. */
         if (flat_update_edit_light_now(x, y, z, old_id, new_id)) return;
 
-        /* Non-player/batched updates still use the worker path, but do not turn
-           a harmless opacity-only block update into a 31x31xheight relight. */
-        int radius = (old_light > 0 || new_light > 0) ? 15 : 4;
+        /* Non-player/batched updates use the same exact async repair radius. */
+        int radius = 15;
         flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     } else {
         /* Same light value and same opacity cannot change sky/block light.  The
@@ -8862,11 +8987,17 @@ static int flat_player_suffocation_block(void) {
         {g_player_x, g_player_y - 0.80f, g_player_z}
     };
 
+    if (g_stream_remap_in_progress || g_ingame_ticks < g_stream_suffocation_grace_until_tick) return 0;
+    if (stream_generation_near_player_pending(1)) return 0;
+
     for (int i = 0; i < 4; i++) {
         int bx = (int)floorf(samples[i][0]);
         int by = (int)floorf(samples[i][1]);
         int bz = (int)floorf(samples[i][2]);
-        int id = flat_get_block(bx, by, bz);
+        (void)by;
+        if (!flat_in_bounds(bx, FLAT_WORLD_Y_MIN, bz)) return 0;
+        if (!flat_chunk_generated_at_block(bx, bz)) return 0;
+        int id = flat_get_block(bx, (int)floorf(samples[i][1]), bz);
         if (flat_solid_for_spawn(id) && id != BLOCK_GLASS && id != BLOCK_LEAVES) return id;
     }
     return 0;
@@ -9423,7 +9554,13 @@ static int g_flat_lighting_worker_initialized = 0;
 static int g_flat_lighting_worker_stop = 0;
 static int g_flat_lighting_worker_busy = 0;
 static HANDLE g_flat_lighting_worker_event = NULL;
-static HANDLE g_flat_lighting_worker_thread = NULL;
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#define FLAT_LIGHTING_WORKER_COUNT 0
+#else
+#define FLAT_LIGHTING_WORKER_COUNT 2
+#endif
+static HANDLE g_flat_lighting_worker_threads[FLAT_LIGHTING_WORKER_COUNT > 0 ? FLAT_LIGHTING_WORKER_COUNT : 1];
+static int g_flat_lighting_worker_thread_count = 0;
 
 static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
     (void)unused;
@@ -9434,7 +9571,7 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
             int stop = 0;
             EnterCriticalSection(&g_flat_lighting_worker_cs);
             stop = g_flat_lighting_worker_stop;
-            if (!stop) g_flat_lighting_worker_busy = 1;
+            if (!stop) g_flat_lighting_worker_busy++;
             LeaveCriticalSection(&g_flat_lighting_worker_cs);
             if (stop) break;
 
@@ -9462,7 +9599,7 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
             if (!before_pending || !flat_lighting_pending_dirty()) break;
         }
         EnterCriticalSection(&g_flat_lighting_worker_cs);
-        if (!g_flat_lighting_worker_stop) g_flat_lighting_worker_busy = 0;
+        if (!g_flat_lighting_worker_stop && g_flat_lighting_worker_busy > 0) g_flat_lighting_worker_busy--;
         LeaveCriticalSection(&g_flat_lighting_worker_cs);
 
         EnterCriticalSection(&g_flat_lighting_worker_cs);
@@ -9471,7 +9608,7 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
         if (stop) break;
     }
     EnterCriticalSection(&g_flat_lighting_worker_cs);
-    g_flat_lighting_worker_busy = 0;
+    if (g_flat_lighting_worker_busy > 0) g_flat_lighting_worker_busy--;
     LeaveCriticalSection(&g_flat_lighting_worker_cs);
     return 0;
 }
@@ -9486,12 +9623,16 @@ static void flat_lighting_worker_ensure(void) {
     g_flat_lighting_worker_stop = 0;
     g_flat_lighting_worker_busy = 0;
     g_flat_lighting_worker_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    g_flat_lighting_worker_thread_count = 0;
     if (g_flat_lighting_worker_event) {
-        g_flat_lighting_worker_thread = CreateThread(NULL, 0x200000, flat_lighting_worker_proc, NULL, 0, NULL);
-        if (g_flat_lighting_worker_thread) {
-            SetThreadPriority(g_flat_lighting_worker_thread, THREAD_PRIORITY_BELOW_NORMAL);
-            pex_logf("lighting worker started");
+        for (int i = 0; i < FLAT_LIGHTING_WORKER_COUNT; ++i) {
+            g_flat_lighting_worker_threads[i] = CreateThread(NULL, 0x200000, flat_lighting_worker_proc, NULL, 0, NULL);
+            if (g_flat_lighting_worker_threads[i]) {
+                SetThreadPriority(g_flat_lighting_worker_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
+                g_flat_lighting_worker_thread_count++;
+            }
         }
+        if (g_flat_lighting_worker_thread_count > 0) pex_logf("lighting workers started count=%d", g_flat_lighting_worker_thread_count);
     }
     g_flat_lighting_worker_initialized = 1;
 #endif
@@ -9502,7 +9643,9 @@ static void flat_lighting_worker_wake(void) {
     return;
 #else
     flat_lighting_worker_ensure();
-    if (g_flat_lighting_worker_event && g_flat_lighting_worker_thread) SetEvent(g_flat_lighting_worker_event);
+    if (g_flat_lighting_worker_event && g_flat_lighting_worker_thread_count > 0) {
+        for (int i = 0; i < g_flat_lighting_worker_thread_count; ++i) SetEvent(g_flat_lighting_worker_event);
+    }
 #endif
 }
 
@@ -9514,17 +9657,26 @@ static void flat_lighting_worker_shutdown(void) {
     EnterCriticalSection(&g_flat_lighting_worker_cs);
     g_flat_lighting_worker_stop = 1;
     LeaveCriticalSection(&g_flat_lighting_worker_cs);
-    if (g_flat_lighting_worker_event) SetEvent(g_flat_lighting_worker_event);
-    if (g_flat_lighting_worker_thread) {
-        WaitForSingleObject(g_flat_lighting_worker_thread, INFINITE);
-        CloseHandle(g_flat_lighting_worker_thread);
-        g_flat_lighting_worker_thread = NULL;
+    if (g_flat_lighting_worker_event) {
+        for (int i = 0; i < g_flat_lighting_worker_thread_count; ++i) SetEvent(g_flat_lighting_worker_event);
     }
+    for (int i = 0; i < g_flat_lighting_worker_thread_count; ++i) {
+        if (g_flat_lighting_worker_threads[i]) {
+            WaitForSingleObject(g_flat_lighting_worker_threads[i], INFINITE);
+            CloseHandle(g_flat_lighting_worker_threads[i]);
+            g_flat_lighting_worker_threads[i] = NULL;
+        }
+    }
+    g_flat_lighting_worker_thread_count = 0;
     if (g_flat_lighting_worker_event) {
         CloseHandle(g_flat_lighting_worker_event);
         g_flat_lighting_worker_event = NULL;
     }
     DeleteCriticalSection(&g_flat_lighting_worker_cs);
+    if (g_flat_light_commit_cs_initialized) {
+        DeleteCriticalSection(&g_flat_light_commit_cs);
+        g_flat_light_commit_cs_initialized = 0;
+    }
     g_flat_lighting_worker_initialized = 0;
     g_flat_lighting_worker_stop = 0;
     g_flat_lighting_worker_busy = 0;
@@ -10848,7 +11000,7 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
                 flat_run_initial_light_settle();
             }
             flat_lighting_worker_wake();
-            if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
+            if (g_flat_lighting_worker_thread_count <= 0) flat_flush_pending_lighting();
         } else if (world_stream_service_screen_active() && !g_mp_connected) {
             /* Keep desktop gameplay streaming off the main tick.  This deliberately
                includes chat/inventory/container/death/pause screens: the world is
@@ -10858,7 +11010,7 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
             stream_worker_sample = 1;
             update_infinite_world_streaming();
             flat_lighting_worker_wake();
-            if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
+            if (g_flat_lighting_worker_thread_count <= 0) flat_flush_pending_lighting();
         }
         if (stream_worker_sample) {
             double stream_ms = (now_seconds() - stream_worker_start) * 1000.0;
@@ -11020,6 +11172,7 @@ static void update_infinite_world_streaming(void) {
     int old_origin_z = g_flat_world_origin_z;
 
     g_stream_remap_in_progress = 1;
+    g_stream_suffocation_grace_until_tick = g_ingame_ticks + 20;
     g_flat_world_origin_x = new_origin_x;
     g_flat_world_origin_z = new_origin_z;
     stream_remap_render_chunks(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
@@ -11031,6 +11184,7 @@ static void update_infinite_world_streaming(void) {
        strips as air for the async generator to fill. */
     stream_remap_block_storage(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
     g_stream_remap_in_progress = 0;
+    if (g_stream_suffocation_grace_until_tick < g_ingame_ticks + 20) g_stream_suffocation_grace_until_tick = g_ingame_ticks + 20;
     flat_lighting_worker_wake();
 
     stream_queue_missing_chunks(old_origin_x, old_origin_z);
