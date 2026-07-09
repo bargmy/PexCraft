@@ -9,6 +9,7 @@ static void apply_portal_camera_effect(float partial);
 static void update_portal_texture_animation(void);
 static void update_liquid_texture_animation(void);
 static void draw_portal_overlay(void);
+static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx);
 
 typedef struct PexSkyJavaRandom {
     uint64_t seed;
@@ -6909,6 +6910,47 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
     if (g_loggy_enabled) g_loggy_mesh_self_heal_refs += probes_done;
     profile_add_time(PROF_MESH_SELF_HEAL, self_heal_start);
 }
+
+static void drain_edit_priority_meshes(int streaming, int recent_edit) {
+    /* This is the missing Java RenderGlobal-style priority path.  A block edit
+       already dirtied the exact 16^3 section; do not wait for the generic
+       visible-section scan to stumble over it after streaming dirtied hundreds
+       of other sections. */
+    if (!recent_edit && g_flat_edit_priority_count <= 0) return;
+
+    int max_edits = recent_edit ? 4 : 1;
+    double deadline = now_seconds() + (recent_edit ? 0.0040 : 0.00050);
+    while (max_edits-- > 0 && now_seconds() < deadline) {
+        int sy = 0, cx = 0, cz = 0;
+        if (!flat_take_edit_priority_section(&sy, &cx, &cz)) break;
+        if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) continue;
+        if (!g_flat_world_chunk_generated[cz][cx] || !flat_chunk_light_ready(cx, cz)) continue;
+        if (!flat_section_needs_mesh_rebuild(sy, cz, cx)) continue;
+
+        float wx = (float)(g_flat_world_origin_x + cx * FLAT_RENDER_CHUNK + 8);
+        float wz = (float)(g_flat_world_origin_z + cz * FLAT_RENDER_CHUNK + 8);
+        float dx = wx - g_player_x;
+        float dz = wz - g_player_z;
+        int very_near = (dx * dx + dz * dz) <= (48.0f * 48.0f);
+
+        if (very_near) {
+            rebuild_flat_section_list(sy, cx, cz);
+            if (g_loggy_enabled) g_loggy_mesh_edit_priority_sync++;
+        } else if (flat_async_section_mesh_enabled()) {
+            (void)async_mesh_submit_priority(sy, cx, cz);
+            if (g_loggy_enabled) g_loggy_mesh_edit_priority_async++;
+        } else if (!streaming) {
+            rebuild_flat_section_list(sy, cx, cz);
+            if (g_loggy_enabled) g_loggy_mesh_edit_priority_sync++;
+        } else {
+            /* Still dirty; the normal scan will pick it up. */
+            flat_note_edit_priority_section(cx, cz, sy);
+            break;
+        }
+    }
+    g_loggy_mesh_edit_priority_left = g_flat_edit_priority_count;
+}
+
 static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int count) {
     flat_gl_cpu_mesh_check_origin();
     int direct = flat_direct_backend() ? 1 : 0;
@@ -6926,9 +6968,10 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         g_prof_mesh_results_last = 0;
     }
 
-    flat_self_heal_visible_sections(refs, count);
     int recent_edit = (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) >= 0 &&
                       (g_ingame_ticks - g_flat_recent_block_mesh_dirty_tick) <= 12;
+    drain_edit_priority_meshes(streaming, recent_edit);
+    flat_self_heal_visible_sections(refs, count);
     int rebuilds_left = recent_edit ? 6 : 4;
     if (streaming && !recent_edit) rebuilds_left = direct ? 1 : 2;
     double deadline = now_seconds() + (recent_edit ? 0.0060 : (streaming ? 0.0015 : 0.0030));

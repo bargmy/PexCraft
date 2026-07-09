@@ -416,6 +416,10 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "  self_heal_probes=%d self_heal_missing=%d skylight_sub=%d light_dirty=%d light_ready=%d\n",
                   g_loggy_mesh_self_heal_refs, g_loggy_mesh_self_heal_missing,
                   g_prof_skylight_subtracted_last, light_dirty, g_flat_light_dirty_cs_initialized ? 1 : 0);
+    loggy_appendf(&out, &left, "  edit_priority queued=%d drained=%d sync=%d async=%d left=%d\n",
+                  g_loggy_mesh_edit_priority_queued, g_loggy_mesh_edit_priority_drained,
+                  g_loggy_mesh_edit_priority_sync, g_loggy_mesh_edit_priority_async,
+                  g_loggy_mesh_edit_priority_left);
 
     loggy_appendf(&out, &left, "\nSTREAM / WORLD WINDOW:\n");
     loggy_appendf(&out, &left, "  origin=%d,%d player_chunk=%d,%d local_chunk=%d,%d generated_center=%d,%d remap=%d\n",
@@ -436,8 +440,11 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "\nTHREADS / WORKERS:\n");
     loggy_appendf(&out, &left, "  main role=%d async_tick last=%.3f avg=%.3f samples=%d\n",
                   g_pex_profile_thread_role, g_prof_async_tick_last_ms, g_prof_async_tick_avg_ms, g_prof_async_tick_samples);
-    loggy_appendf(&out, &left, "  stream_worker last=%.3f avg=%.3f samples=%d workers=%d\n",
-                  g_prof_stream_worker_last_ms, g_prof_stream_worker_avg_ms, g_prof_stream_worker_samples, stream_workers);
+    loggy_appendf(&out, &left, "  stream_worker last=%.3f avg=%.3f samples=%d workers=%d last_chunk=%d,%d terrain=%.3f delta=%.3f light=%.3f pushwait=%.3f\n",
+                  g_prof_stream_worker_last_ms, g_prof_stream_worker_avg_ms, g_prof_stream_worker_samples, stream_workers,
+                  g_prof_stream_worker_last_cx, g_prof_stream_worker_last_cz,
+                  g_prof_stream_worker_terrain_ms, g_prof_stream_worker_delta_ms,
+                  g_prof_stream_worker_light_ms, g_prof_stream_worker_push_wait_ms);
     loggy_appendf(&out, &left, "  mesh_worker last=%.3f avg=%.3f samples=%d busy=%d upload_last=%.3f upload_avg=%.3f upload_samples=%d upload_busy=%d\n",
                   g_prof_mesh_worker_last_ms, g_prof_mesh_worker_avg_ms, g_prof_mesh_worker_samples, mesh_busy,
                   g_prof_mesh_upload_worker_last_ms, g_prof_mesh_upload_worker_avg_ms, g_prof_mesh_upload_worker_samples, mesh_upload_busy);

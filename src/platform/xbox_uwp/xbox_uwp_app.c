@@ -27,7 +27,7 @@ static void pex_xbox_uwp_tick_frame(void) {
         if (g_screen == SCREEN_GENERATING) worldgen_tick();
         if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
         if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
-            g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+            g_screen == SCREEN_INVENTORY || g_screen == SCREEN_CREATIVE || g_screen == SCREEN_WORKBENCH ||
             g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
             g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) {
             ingame_tick_async_queue();

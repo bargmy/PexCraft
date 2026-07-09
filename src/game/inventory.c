@@ -442,6 +442,7 @@ static void flat_mark_chunks_dirty_near(int x, int z);
 static void flat_mark_sections_dirty_near_block(int x, int y, int z);
 static void flat_mark_generated_section(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty(int cx, int cz, int sy);
+static void flat_mark_edit_section_dirty(int cx, int cz, int sy);
 static int flat_section_has_blocks(int lcx, int lcz, int sy);
 static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
 static int flat_current_dimension_has_sky(void);
@@ -487,6 +488,7 @@ static void stream_queue_chunk_safety(int base_cx, int base_cz, int pcx, int pcz
 static int stream_queue_visible_chunks(void);
 static void process_stream_generation_queue(void);
 static int stream_generation_active(void);
+static int stream_generation_near_player_pending(int radius);
 static int psp_player_terrain_ready_or_hold(void);
 static void wake_neighbor_liquids(int x, int y, int z);
 static void fluid_check_for_harden(int x, int y, int z);
@@ -2261,6 +2263,66 @@ static void flat_mark_chunks_dirty_near(int x, int z) {
     g_flat_renderer_sort_dirty = 1;
 }
 
+
+#define FLAT_EDIT_PRIORITY_QUEUE_MAX 96
+static int g_flat_edit_priority_count = 0;
+static unsigned char g_flat_edit_priority_sy[FLAT_EDIT_PRIORITY_QUEUE_MAX];
+static unsigned char g_flat_edit_priority_cx[FLAT_EDIT_PRIORITY_QUEUE_MAX];
+static unsigned char g_flat_edit_priority_cz[FLAT_EDIT_PRIORITY_QUEUE_MAX];
+
+static void flat_note_edit_priority_section(int cx, int cz, int sy) {
+    if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
+    /* Only near-world edits need urgent visible feedback.  Background stream
+       chunk dirties must not enter this queue or they will bury the player's
+       own block placement behind terrain filling. */
+    float wx = (float)(g_flat_world_origin_x + cx * FLAT_RENDER_CHUNK + 8);
+    float wz = (float)(g_flat_world_origin_z + cz * FLAT_RENDER_CHUNK + 8);
+    float dx = wx - g_player_x;
+    float dz = wz - g_player_z;
+    if ((dx * dx + dz * dz) > (96.0f * 96.0f)) return;
+
+    for (int i = 0; i < g_flat_edit_priority_count; ++i) {
+        if (g_flat_edit_priority_sy[i] == (unsigned char)sy &&
+            g_flat_edit_priority_cx[i] == (unsigned char)cx &&
+            g_flat_edit_priority_cz[i] == (unsigned char)cz) return;
+    }
+    if (g_flat_edit_priority_count >= FLAT_EDIT_PRIORITY_QUEUE_MAX) {
+        /* Drop the oldest entry.  If an old edit still needs a mesh, the normal
+           dirty-section scan will catch it; the newest edit is what must feel
+           instant under the cursor. */
+        memmove(g_flat_edit_priority_sy, g_flat_edit_priority_sy + 1, FLAT_EDIT_PRIORITY_QUEUE_MAX - 1);
+        memmove(g_flat_edit_priority_cx, g_flat_edit_priority_cx + 1, FLAT_EDIT_PRIORITY_QUEUE_MAX - 1);
+        memmove(g_flat_edit_priority_cz, g_flat_edit_priority_cz + 1, FLAT_EDIT_PRIORITY_QUEUE_MAX - 1);
+        g_flat_edit_priority_count = FLAT_EDIT_PRIORITY_QUEUE_MAX - 1;
+    }
+    g_flat_edit_priority_sy[g_flat_edit_priority_count] = (unsigned char)sy;
+    g_flat_edit_priority_cx[g_flat_edit_priority_count] = (unsigned char)cx;
+    g_flat_edit_priority_cz[g_flat_edit_priority_count] = (unsigned char)cz;
+    g_flat_edit_priority_count++;
+    if (g_loggy_enabled) g_loggy_mesh_edit_priority_queued++;
+}
+
+static int flat_take_edit_priority_section(int *sy, int *cx, int *cz) {
+    if (g_flat_edit_priority_count <= 0) return 0;
+    if (sy) *sy = g_flat_edit_priority_sy[0];
+    if (cx) *cx = g_flat_edit_priority_cx[0];
+    if (cz) *cz = g_flat_edit_priority_cz[0];
+    if (g_flat_edit_priority_count > 1) {
+        memmove(g_flat_edit_priority_sy, g_flat_edit_priority_sy + 1, (size_t)(g_flat_edit_priority_count - 1));
+        memmove(g_flat_edit_priority_cx, g_flat_edit_priority_cx + 1, (size_t)(g_flat_edit_priority_count - 1));
+        memmove(g_flat_edit_priority_cz, g_flat_edit_priority_cz + 1, (size_t)(g_flat_edit_priority_count - 1));
+    }
+    g_flat_edit_priority_count--;
+    g_loggy_mesh_edit_priority_left = g_flat_edit_priority_count;
+    if (g_loggy_enabled) g_loggy_mesh_edit_priority_drained++;
+    return 1;
+}
+
+static void flat_mark_edit_section_dirty(int cx, int cz, int sy) {
+    flat_mark_section_dirty(cx, cz, sy);
+    flat_note_edit_priority_section(cx, cz, sy);
+}
+
 static void flat_mark_section_dirty(int cx, int cz, int sy) {
     if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
     g_flat_section_dirty[sy][cz][cx] = 1;
@@ -2287,13 +2349,13 @@ static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
        shared boundary.  The previous implementation dirtied the full 3x3x3
        neighborhood for every edit/liquid/falling-block update, causing 27
        sections to be rebuilt for many single-block changes. */
-    flat_mark_section_dirty(cx0, cz0, sy0);
-    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0 - 1, cz0, sy0);
-    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0 + 1, cz0, sy0);
-    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0, cz0 - 1, sy0);
-    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0, cz0 + 1, sy0);
-    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_section_dirty(cx0, cz0, sy0 - 1);
-    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_section_dirty(cx0, cz0, sy0 + 1);
+    flat_mark_edit_section_dirty(cx0, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_edit_section_dirty(cx0 - 1, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_edit_section_dirty(cx0 + 1, cz0, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_edit_section_dirty(cx0, cz0 - 1, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_edit_section_dirty(cx0, cz0 + 1, sy0);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_edit_section_dirty(cx0, cz0, sy0 - 1);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_edit_section_dirty(cx0, cz0, sy0 + 1);
 }
 
 static int flat_section_has_blocks(int lcx, int lcz, int sy) {
@@ -8773,7 +8835,11 @@ static void apply_player_fluid_velocity(int is_water) {
 }
 
 static void update_liquids(void) {
-    if (stream_generation_active()) return;
+    /* Do not freeze liquid/block simulation just because far render-distance
+       chunks are streaming in the background.  Only pause if terrain in the
+       player's immediate neighborhood is still pending, where simulation would
+       read missing/air chunks. */
+    if (stream_generation_near_player_pending(2)) return;
 
 #if defined(PEX_PLATFORM_PSP)
     /* Real Beta terrain can contain many water/lava blocks.  A full 33x33x128
@@ -9215,6 +9281,7 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
         r.sky = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
         r.blocklight = (unsigned char*)malloc(FLAT_CHUNK_BLOCK_COUNT);
 
+        double terrain_ms = 0.0, delta_ms = 0.0, light_ms = 0.0;
         if (r.buf && r.meta && r.sky && r.blocklight) {
             TerrainProvider *reuse = NULL;
             if (job.type == 1 && job.dimension == PEX_DIM_OVERWORLD) {
@@ -9235,9 +9302,21 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
                 }
                 reuse = worker_tp_valid ? worker_tp : NULL;
             }
+            double t0 = now_seconds();
             flat_generate_chunk_base_with_meta(job.cx, job.cz, r.buf, r.meta, job.type, job.seed, reuse, job.dimension);
+            double t1 = now_seconds();
             flat_load_chunk_delta_for_dimension_dir(job.world_dir, job.dimension, job.cx, job.cz, r.buf, r.meta);
+            double t2 = now_seconds();
             flat_compute_chunk_light(r.buf, r.sky, r.blocklight, job.dimension);
+            double t3 = now_seconds();
+            terrain_ms = (t1 - t0) * 1000.0;
+            delta_ms = (t2 - t1) * 1000.0;
+            light_ms = (t3 - t2) * 1000.0;
+            g_prof_stream_worker_terrain_ms = terrain_ms;
+            g_prof_stream_worker_delta_ms = delta_ms;
+            g_prof_stream_worker_light_ms = light_ms;
+            g_prof_stream_worker_last_cx = job.cx;
+            g_prof_stream_worker_last_cz = job.cz;
         } else {
             stream_async_free_result_payload(&r);
         }
@@ -9249,9 +9328,11 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
             stream_async_free_result_payload(&r);
             continue;
         }
+        double push_t0 = now_seconds();
         if (!stream_async_push_result(&r)) {
             stream_async_free_result_payload(&r);
         }
+        g_prof_stream_worker_push_wait_ms = (now_seconds() - push_t0) * 1000.0;
     }
 
     if (worker_tp_valid && worker_tp) {
@@ -9413,6 +9494,25 @@ static int stream_generation_active(void) {
     int batching = g_stream_initial_batch_running ? 1 : 0;
     g_prof_stream_pending_last = queued + async + batching;
     return queued > 0 || async || batching;
+}
+
+static int stream_generation_near_player_pending(int radius) {
+    if (radius < 0) radius = 0;
+    if (!stream_generation_active()) return 0;
+    if (g_stream_initial_batch_running || g_stream_generation_keep_completed) return 1;
+
+    int pcx = floor_div16((int)floorf(g_player_x));
+    int pcz = floor_div16((int)floorf(g_player_z));
+    int begin = g_stream_gen_queue_index;
+    if (begin < 0) begin = 0;
+    for (int i = begin; i < g_stream_gen_queue_count; ++i) {
+        int dx = g_stream_gen_queue_cx[i] - pcx;
+        int dz = g_stream_gen_queue_cz[i] - pcz;
+        if (dx < 0) dx = -dx;
+        if (dz < 0) dz = -dz;
+        if (dx <= radius && dz <= radius) return 1;
+    }
+    return 0;
 }
 
 static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int origin_z) {
@@ -9882,10 +9982,22 @@ static void stream_reprioritize_queue(void) {
     }
 }
 
-static int stream_queue_visible_chunks_internal(int clear_existing) {
+enum {
+    /* Do not flood the runtime stream queue with the entire render distance.
+       A high render distance can expose hundreds of missing chunks; each Beta
+       chunk can cost 100ms+ to generate.  Keeping all of them in one global
+       "active" queue made gameplay systems think the world was busy for many
+       seconds.  Queue nearby chunks first, then extend the background radius in
+       small batches as workers drain it. */
+    STREAM_RUNTIME_QUEUE_TARGET = 48,
+    STREAM_RUNTIME_APPEND_BUDGET = 12
+};
+
+static int stream_queue_visible_chunks_internal(int clear_existing, int max_add) {
     if (clear_existing) stream_generation_queue_clear();
 
     int before_total = g_stream_gen_queue_count;
+    int added = 0;
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
     int pcx = stream_local_chunk_x(floor_div16((int)floorf(g_player_x)));
@@ -9897,6 +10009,9 @@ static int stream_queue_visible_chunks_internal(int clear_existing) {
 
     int radius = stream_render_radius();
     stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, radius);
+    added = g_stream_gen_queue_count - before_total;
+    if (max_add > 0 && added >= max_add) goto done;
+
     for (int ring = 0; ring <= radius; ring++) {
         for (int dz = -ring; dz <= ring; dz++) {
             for (int dx = -ring; dx <= ring; dx++) {
@@ -9905,22 +10020,27 @@ static int stream_queue_visible_chunks_internal(int clear_existing) {
                 int lcz = pcz + dz;
                 if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) continue;
                 if (g_flat_world_chunk_generated[lcz][lcx]) continue;
+                int before = g_stream_gen_queue_count;
                 stream_queue_add_chunk(base_cx + lcx, base_cz + lcz);
+                if (g_stream_gen_queue_count > before) {
+                    added++;
+                    if (max_add > 0 && added >= max_add) goto done;
+                }
             }
         }
-        /* Queue every missing visible ring now that chunk generation, full
-           light propagation, and section meshing have independent workers. */
     }
+
+done:
     if (g_stream_gen_queue_count > before_total) stream_reprioritize_queue();
     return g_stream_gen_queue_count > g_stream_gen_queue_index;
 }
 
 static int stream_queue_visible_chunks(void) {
-    return stream_queue_visible_chunks_internal(1);
+    return stream_queue_visible_chunks_internal(1, STREAM_RUNTIME_QUEUE_TARGET);
 }
 
 static int stream_append_visible_chunks(void) {
-    return stream_queue_visible_chunks_internal(0);
+    return stream_queue_visible_chunks_internal(0, STREAM_RUNTIME_APPEND_BUDGET);
 }
 
 static void stream_queue_missing_chunks(int old_origin_x, int old_origin_z) {
@@ -10243,6 +10363,23 @@ static int g_world_stream_service_stop = 0;
 static int g_world_stream_service_busy = 0;
 static HANDLE g_world_stream_service_thread = NULL;
 
+static int world_stream_service_screen_active(void) {
+    switch (g_screen) {
+        case SCREEN_INGAME:
+        case SCREEN_CHAT:
+        case SCREEN_INVENTORY:
+        case SCREEN_CREATIVE:
+        case SCREEN_WORKBENCH:
+        case SCREEN_FURNACE:
+        case SCREEN_CHEST:
+        case SCREEN_DEATH:
+        case SCREEN_PAUSE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
     (void)unused;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_STREAM;
@@ -10269,8 +10406,12 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
             }
             flat_lighting_worker_wake();
             if (!g_flat_lighting_worker_thread) flat_flush_pending_lighting();
-        } else if (g_screen == SCREEN_INGAME && !g_mp_connected) {
-            /* Keep desktop gameplay streaming off the main tick. */
+        } else if (world_stream_service_screen_active() && !g_mp_connected) {
+            /* Keep desktop gameplay streaming off the main tick.  This deliberately
+               includes chat/inventory/container/death/pause screens: the world is
+               still rendered behind them, and the async tick loop may still run for
+               chat/inventory.  Freezing the service on those screens was the root
+               cause of logs with results/backlog stuck while FPS looked fine. */
             stream_worker_sample = 1;
             update_infinite_world_streaming();
             flat_lighting_worker_wake();
@@ -10367,16 +10508,22 @@ static void update_infinite_world_streaming(void) {
        main/render thread. */
     int active_before = stream_generation_active();
     if (active_before) {
-        stream_append_visible_chunks();
+        int backlog = g_stream_gen_queue_count - g_stream_gen_queue_index;
+        if (backlog < 0) backlog = 0;
+        /* Keep the workers fed, but never grow a many-hundred-chunk backlog.
+           Far chunks are background work; they must not keep gameplay in a
+           perpetual "streaming active" state. */
+        if (backlog < STREAM_RUNTIME_QUEUE_TARGET / 2) stream_append_visible_chunks();
         process_stream_generation_queue();
     } else {
         process_stream_generation_queue();
     }
     if (stream_generation_active()) return;
 
-    /* After the fast spawn-area load, fill the requested render-distance area
-       in the background.  This keeps the loading screen short while still
-       honoring high render distance as terrain becomes available. */
+    /* After the fast spawn-area load, fill the requested render-distance area in
+       small batches.  The old code queued the whole render radius at once, which
+       produced logs like total=312/remaining=202 and made world systems feel
+       delayed even though the frame time was low. */
     if (stream_queue_visible_chunks()) {
         process_stream_generation_queue();
         return;

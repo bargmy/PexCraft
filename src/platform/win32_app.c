@@ -406,7 +406,7 @@ static void main_loop(void) {
                 profile_add_time(PROF_TICK_PACK_INSTALL, t_pack);
             }
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
-                g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH ||
+                g_screen == SCREEN_INVENTORY || g_screen == SCREEN_CREATIVE || g_screen == SCREEN_WORKBENCH ||
                 g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST ||
                 g_screen == SCREEN_DEATH || (g_mp_connected && g_screen == SCREEN_PAUSE)) {
                 double t_ingame_enqueue = profile_begin();

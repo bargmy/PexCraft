@@ -16,6 +16,47 @@ typedef struct LoggyWindowState {
 
 static LoggyWindowState g_loggy;
 
+static const char *loggy_screen_name(ScreenId s) {
+    switch (s) {
+        case SCREEN_TITLE: return "TITLE";
+        case SCREEN_OPTIONS: return "OPTIONS";
+        case SCREEN_OPTIONS_MORE: return "OPTIONS_MORE";
+        case SCREEN_ASSETS: return "ASSETS";
+        case SCREEN_LANGUAGE: return "LANGUAGE";
+        case SCREEN_SET_NAME: return "SET_NAME";
+        case SCREEN_TV_REMOTE_MAP: return "TV_REMOTE_MAP";
+        case SCREEN_SYSTEM_INFO: return "SYSTEM_INFO";
+        case SCREEN_SKINS: return "SKINS";
+        case SCREEN_CONTROLS: return "CONTROLS";
+        case SCREEN_WORLD_SELECT: return "WORLD_SELECT";
+        case SCREEN_CREATE_WORLD: return "CREATE_WORLD";
+        case SCREEN_WORLD_TYPE: return "WORLD_TYPE";
+        case SCREEN_WORLD_DELETE: return "WORLD_DELETE";
+        case SCREEN_RENAME_WORLD: return "RENAME_WORLD";
+        case SCREEN_CONFIRM_DELETE: return "CONFIRM_DELETE";
+        case SCREEN_MULTIPLAYER: return "MULTIPLAYER";
+        case SCREEN_CONNECTING: return "CONNECTING";
+        case SCREEN_TEXPACK: return "TEXPACK";
+        case SCREEN_TEXPACK_INSTALL: return "TEXPACK_INSTALL";
+        case SCREEN_GENERATING: return "GENERATING";
+        case SCREEN_INGAME: return "INGAME";
+        case SCREEN_PAUSE: return "PAUSE";
+        case SCREEN_INVENTORY: return "INVENTORY";
+        case SCREEN_CREATIVE: return "CREATIVE";
+        case SCREEN_WORKBENCH: return "WORKBENCH";
+        case SCREEN_FURNACE: return "FURNACE";
+        case SCREEN_CHEST: return "CHEST";
+        case SCREEN_DEATH: return "DEATH";
+        case SCREEN_CHAT: return "CHAT";
+        case SCREEN_VIRTUAL_KEYBOARD: return "VIRTUAL_KEYBOARD";
+        case SCREEN_NOTICE: return "NOTICE";
+        case SCREEN_RENDERER_RESTART_PROMPT: return "RENDERER_RESTART";
+        case SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT: return "CLASSIC_PACK_PROMPT";
+        case SCREEN_CLASSIC_PACK_WARNING: return "CLASSIC_PACK_WARNING";
+        default: return "UNKNOWN";
+    }
+}
+
 static void loggy_appendf(char **cursor, size_t *left, const char *fmt, ...) {
     if (!cursor || !*cursor || !left || *left <= 1 || !fmt) return;
     va_list ap;
@@ -156,8 +197,8 @@ static void loggy_build_text(void) {
 
     loggy_appendf(&out, &left, "PEXCRAFT LOGGY DIAGNOSTIC WINDOW\n");
     loggy_appendf(&out, &left, "COPY BUTTON TOP RIGHT. MOUSE WHEEL OR DRAG BAR TO SCROLL.\n");
-    loggy_appendf(&out, &left, "FRAME=%d SCREEN=%d FPS=%d/%d/%d FRAME=%.2fMS RENDER=%.2fMS SLEEP=%.2fMS BACKEND=%d WINDOW=%dx%d GUI=%dx%d SCALE=%d\n\n",
-                  g_loggy_frame_no, g_screen, g_debug_fps, g_debug_min_fps, g_debug_max_fps,
+    loggy_appendf(&out, &left, "FRAME=%d SCREEN=%d(%s) FPS=%d/%d/%d FRAME=%.2fMS RENDER=%.2fMS SLEEP=%.2fMS BACKEND=%d WINDOW=%dx%d GUI=%dx%d SCALE=%d\n\n",
+                  g_loggy_frame_no, g_screen, loggy_screen_name(g_screen), g_debug_fps, g_debug_min_fps, g_debug_max_fps,
                   g_prof_display_frame_ms, g_render_ms_last, g_sleep_ms_last, g_runtime_renderer_backend,
                   g_win_w, g_win_h, g_gui_w, g_gui_h, g_gui_scale);
 
@@ -186,6 +227,10 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "  self_heal_probes=%d self_heal_missing=%d skylight_sub=%d light_dirty=%d light_ready=%d\n",
                   g_loggy_mesh_self_heal_refs, g_loggy_mesh_self_heal_missing,
                   g_prof_skylight_subtracted_last, light_dirty, g_flat_light_dirty_cs_initialized ? 1 : 0);
+    loggy_appendf(&out, &left, "  edit_priority queued=%d drained=%d sync=%d async=%d left=%d\n",
+                  g_loggy_mesh_edit_priority_queued, g_loggy_mesh_edit_priority_drained,
+                  g_loggy_mesh_edit_priority_sync, g_loggy_mesh_edit_priority_async,
+                  g_loggy_mesh_edit_priority_left);
 
     loggy_appendf(&out, &left, "\nSTREAM / WORLD WINDOW:\n");
     loggy_appendf(&out, &left, "  origin=%d,%d player_chunk=%d,%d local_chunk=%d,%d generated_center=%d,%d remap=%d\n",
@@ -206,8 +251,11 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "\nTHREADS / WORKERS:\n");
     loggy_appendf(&out, &left, "  main role=%d async_tick last=%.3f avg=%.3f samples=%d\n",
                   g_pex_profile_thread_role, g_prof_async_tick_last_ms, g_prof_async_tick_avg_ms, g_prof_async_tick_samples);
-    loggy_appendf(&out, &left, "  stream_worker last=%.3f avg=%.3f samples=%d workers=%d\n",
-                  g_prof_stream_worker_last_ms, g_prof_stream_worker_avg_ms, g_prof_stream_worker_samples, stream_workers);
+    loggy_appendf(&out, &left, "  stream_worker last=%.3f avg=%.3f samples=%d workers=%d last_chunk=%d,%d terrain=%.3f delta=%.3f light=%.3f pushwait=%.3f\n",
+                  g_prof_stream_worker_last_ms, g_prof_stream_worker_avg_ms, g_prof_stream_worker_samples, stream_workers,
+                  g_prof_stream_worker_last_cx, g_prof_stream_worker_last_cz,
+                  g_prof_stream_worker_terrain_ms, g_prof_stream_worker_delta_ms,
+                  g_prof_stream_worker_light_ms, g_prof_stream_worker_push_wait_ms);
     loggy_appendf(&out, &left, "  mesh_worker last=%.3f avg=%.3f samples=%d busy=%d upload_last=%.3f upload_avg=%.3f upload_samples=%d upload_busy=%d\n",
                   g_prof_mesh_worker_last_ms, g_prof_mesh_worker_avg_ms, g_prof_mesh_worker_samples, mesh_busy,
                   g_prof_mesh_upload_worker_last_ms, g_prof_mesh_upload_worker_avg_ms, g_prof_mesh_upload_worker_samples, mesh_upload_busy);

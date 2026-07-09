@@ -77,6 +77,14 @@ static void set_screen(ScreenId s) {
     g_gamepad_virtual_cursor_active = 0;
     if (s == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT) pack_install_start_size_fetch();
     if (s == SCREEN_ASSETS) legacy_assets_start_index_fetch();
+    /* A world can remain visible/active under chat, inventory, containers, death,
+       and pause.  The streaming service must not be tied only to the raw INGAME
+       screen, otherwise opening chat/loggy/pause freezes chunk result installs and
+       leaves a huge stale queue behind the world. */
+    if (!g_mp_connected && g_loaded_world_dir[0] &&
+        (pex_screen_keeps_world_music(s) || s == SCREEN_PAUSE)) {
+        world_stream_service_ensure();
+    }
     set_mouse_grabbed(s == SCREEN_INGAME);
     pex_ui_text_input_end();
     clear_buttons();
