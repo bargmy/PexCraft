@@ -2,6 +2,7 @@
    This keeps the old Windows Win32/D3D path intact and builds a separate
    SDL2 + OpenGL compatibility-profile client for Linux. */
 #define PEX_PLATFORM_SDL2 1
+#define PEX_HAS_LEGACY_ASSET_MANAGER 1
 #include "common/common.h"
 
 static int init_gl(SDL_Window *window);

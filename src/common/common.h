@@ -2471,8 +2471,8 @@ static void legacy_assets_request_cancel(void);
 static void legacy_assets_tick(void);
 static void legacy_assets_progress_line(char *out, size_t cap);
 
-#if !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_LGWEBOS)
-/* Legacy asset manager stubs for platforms without runtime HTTP asset UI. */
+#if !defined(PEX_HAS_LEGACY_ASSET_MANAGER)
+/* Legacy asset manager stubs for platforms without the desktop SDL2 runtime HTTP asset UI. */
 static void legacy_assets_start_index_fetch(void) {}
 static void legacy_assets_refresh_index(void) {}
 static int legacy_assets_index_ready(void) { return 0; }

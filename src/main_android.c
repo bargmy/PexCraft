@@ -130,6 +130,8 @@ static void steve_set_tint(float r, float g, float b);
 
 #include "game/inventory.c"
 #include "game/mobs.c"
+#include "game/block_logic.c"
+#include "game/dimension_logic.c"
 
 /* MCPE protocol_81 implementation must be included before multiplayer_client.c
    because this project builds as one translation unit per platform. */
