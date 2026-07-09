@@ -106,7 +106,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"
-#include "assets/classic_pack_installer_sdl2.c"
+#include "platform/lgwebos/lgwebos_classic_pack_installer.c"
 #include "worldgen/level.c"
 #include "game/world_session.c"
 #include "i18n/language.c"

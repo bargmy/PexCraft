@@ -440,7 +440,7 @@ static int load_mcrw(Texture *t, const char *filename, int repeat) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 static int ensure_wic(void) { return 1; }
 static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
-#elif defined(PEX_PLATFORM_ANDROID)
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
 static int ensure_wic(void) { return 1; }
 
 static unsigned char *android_decode_png_rgba(const char *path, int *out_w, int *out_h) {
@@ -496,9 +496,6 @@ static int load_png_texture(Texture *t, const char *path, int repeat) {
     log_msg("Loaded PNG texture: %s (%dx%d)", path, w, h);
     return upload_rgba_texture(t, w, h, rgba, repeat);
 }
-#elif defined(PEX_PLATFORM_ANDROID_TV)
-static int ensure_wic(void) { return 1; }
-static int load_png_texture(Texture *t, const char *path, int repeat) { (void)t; (void)path; (void)repeat; return 0; }
 #elif defined(PEX_PLATFORM_SDL2)
 static int ensure_wic(void) { return 1; }
 

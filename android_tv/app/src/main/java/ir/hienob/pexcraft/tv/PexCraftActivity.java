@@ -37,6 +37,7 @@ public class PexCraftActivity extends SDLActivity {
     private static volatile String classicDownloadError = "";
     private static volatile int classicSizeState = CLASSIC_SIZE_UNKNOWN;
     private static volatile int classicSizeBytes = 0;
+    private static volatile boolean classicCancelRequested = false;
 
 
     public native boolean nativeOnTvKey(int keyCode, boolean down);
@@ -60,6 +61,7 @@ public class PexCraftActivity extends SDLActivity {
             classicDownloadProgress = 0;
             classicDownloadStatus = "Downloading client.jar...";
             classicDownloadError = "";
+            classicCancelRequested = false;
         }
 
         Thread th = new Thread(new Runnable() {
@@ -70,6 +72,11 @@ public class PexCraftActivity extends SDLActivity {
         th.setDaemon(true);
         th.start();
         return true;
+    }
+
+    public void cancelClassicPackDownload() {
+        classicCancelRequested = true;
+        classicDownloadStatus = "Canceling...";
     }
 
     public int getClassicPackDownloadState() { return classicDownloadState; }
@@ -189,6 +196,11 @@ public class PexCraftActivity extends SDLActivity {
             try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(outFile)) {
                 int n;
                 while ((n = in.read(buf)) >= 0) {
+                    if (classicCancelRequested) {
+                        if (!outFile.delete()) Log.w(TAG, "Could not delete canceled classic jar: " + outFile);
+                        failClassicDownload("Canceled");
+                        return;
+                    }
                     if (n == 0) continue;
                     out.write(buf, 0, n);
                     downloaded += n;

@@ -85,6 +85,22 @@ static void android_call_void_string(const char *method, const char *a) {
     (*env)->DeleteLocalRef(env, activity);
 }
 
+static void android_call_void_noargs(const char *method) {
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject activity = SDL_AndroidGetActivity();
+    if (!env || !activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID mid = cls ? (*env)->GetMethodID(env, cls, method, "()V") : NULL;
+    if (mid) {
+        (*env)->CallVoidMethod(env, activity, mid);
+        android_clear_jni_exception(env);
+    } else {
+        android_clear_jni_exception(env);
+    }
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+}
+
 static int android_call_int(const char *method) {
     JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
     jobject activity = SDL_AndroidGetActivity();
@@ -175,6 +191,25 @@ static void classic_start_extract_thread(void) {
     pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Extracting textures...");
     g_classic_install_thread = CreateThread(NULL, 0, classic_extract_worker, NULL, 0, NULL);
     if (!g_classic_install_thread) pack_install_fail("Could not start extractor thread");
+}
+
+static void pack_install_request_cancel(void) {
+    LONG state = InterlockedCompareExchange(&g_classic_install_state, 0, 0);
+    android_call_void_noargs("cancelClassicPackDownload");
+    if (g_classic_install_thread && state == CLASSIC_INSTALL_EXTRACTING) {
+        /* ZIP extraction cannot be interrupted safely; keep the progress screen until it finishes. */
+        pack_install_set_state(CLASSIC_INSTALL_EXTRACTING, 90, "Finishing extraction...");
+        return;
+    }
+    if (g_classic_install_thread) {
+        WaitForSingleObject(g_classic_install_thread, 0);
+        CloseHandle(g_classic_install_thread);
+        g_classic_install_thread = NULL;
+    }
+    DeleteFileA(g_classic_downloaded_jar_path);
+    g_classic_install_error[0] = 0;
+    pack_install_set_state(CLASSIC_INSTALL_IDLE, 0, "Canceled");
+    set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
 }
 
 static void pack_install_start(void) {

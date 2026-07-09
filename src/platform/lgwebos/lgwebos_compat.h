@@ -117,6 +117,17 @@ typedef void GLvoid;
 #ifndef GL_EXP
 #define GL_EXP 0x0800
 #endif
+#ifndef GL_EXP2
+#define GL_EXP2 0x0801
+#endif
+
+/* OpenGL ES 2 has no fixed-function normal call.  The GLES compatibility
+   renderers in this tree do not consume normals, so desktop GL normal updates
+   become no-ops on TV/Android targets. */
+static inline void pex_gles2_glNormal3f_noop(float x, float y, float z) { (void)x; (void)y; (void)z; }
+#ifndef glNormal3f
+#define glNormal3f pex_gles2_glNormal3f_noop
+#endif
 
 /* Minimal Win32-shaped compatibility types used by the old code. */
 typedef uint8_t BYTE;

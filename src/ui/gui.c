@@ -1393,21 +1393,132 @@ static void draw_generating_screen(void) {
 }
 
 
+
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+static unsigned char pex_boot_glyph_row(char ch, int row) {
+    static const unsigned char digits[10][7] = {
+        {14,17,19,21,25,17,14},{4,12,4,4,4,4,14},{14,17,1,2,4,8,31},{30,1,1,14,1,1,30},{2,6,10,18,31,2,2},
+        {31,16,30,1,1,17,14},{6,8,16,30,17,17,14},{31,1,2,4,8,8,8},{14,17,17,14,17,17,14},{14,17,17,15,1,2,12}
+    };
+    static const unsigned char letters[26][7] = {
+        {14,17,17,31,17,17,17},{30,17,17,30,17,17,30},{14,17,16,16,16,17,14},{30,17,17,17,17,17,30},{31,16,16,30,16,16,31},
+        {31,16,16,30,16,16,16},{14,17,16,23,17,17,15},{17,17,17,31,17,17,17},{14,4,4,4,4,4,14},{7,2,2,2,18,18,12},
+        {17,18,20,24,20,18,17},{16,16,16,16,16,16,31},{17,27,21,21,17,17,17},{17,25,21,19,17,17,17},{14,17,17,17,17,17,14},
+        {30,17,17,30,16,16,16},{14,17,17,17,21,18,13},{30,17,17,30,20,18,17},{15,16,16,14,1,1,30},{31,4,4,4,4,4,4},
+        {17,17,17,17,17,17,14},{17,17,17,17,17,10,4},{17,17,17,21,21,21,10},{17,17,10,4,10,17,17},{17,17,10,4,4,4,4},{31,1,2,4,8,16,31}
+    };
+    if (row < 0 || row >= 7) return 0;
+    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+    if (ch >= '0' && ch <= '9') return digits[ch - '0'][row];
+    if (ch >= 'A' && ch <= 'Z') return letters[ch - 'A'][row];
+    switch (ch) {
+        case ' ': return 0;
+        case '.': { static const unsigned char g[7] = {0,0,0,0,0,12,12}; return g[row]; }
+        case ',': { static const unsigned char g[7] = {0,0,0,0,0,12,8}; return g[row]; }
+        case ':': { static const unsigned char g[7] = {0,12,12,0,12,12,0}; return g[row]; }
+        case ';': { static const unsigned char g[7] = {0,12,12,0,12,4,8}; return g[row]; }
+        case '!': { static const unsigned char g[7] = {4,4,4,4,4,0,4}; return g[row]; }
+        case '?': { static const unsigned char g[7] = {14,17,1,2,4,0,4}; return g[row]; }
+        case '-': { static const unsigned char g[7] = {0,0,0,31,0,0,0}; return g[row]; }
+        case '_': { static const unsigned char g[7] = {0,0,0,0,0,0,31}; return g[row]; }
+        case '/': { static const unsigned char g[7] = {1,1,2,4,8,16,16}; return g[row]; }
+        case '\\': { static const unsigned char g[7] = {16,16,8,4,2,1,1}; return g[row]; }
+        case '(' : { static const unsigned char g[7] = {2,4,8,8,8,4,2}; return g[row]; }
+        case ')' : { static const unsigned char g[7] = {8,4,2,2,2,4,8}; return g[row]; }
+        case '[' : { static const unsigned char g[7] = {14,8,8,8,8,8,14}; return g[row]; }
+        case ']' : { static const unsigned char g[7] = {14,2,2,2,2,2,14}; return g[row]; }
+        case '%' : { static const unsigned char g[7] = {17,18,2,4,8,9,17}; return g[row]; }
+        case '+' : { static const unsigned char g[7] = {0,4,4,31,4,4,0}; return g[row]; }
+        case '=' : { static const unsigned char g[7] = {0,0,31,0,31,0,0}; return g[row]; }
+        case '\'' : { static const unsigned char g[7] = {4,4,8,0,0,0,0}; return g[row]; }
+        case '"' : { static const unsigned char g[7] = {10,10,0,0,0,0,0}; return g[row]; }
+        case '*' : { static const unsigned char g[7] = {0,21,14,31,14,21,0}; return g[row]; }
+        default: { static const unsigned char g[7] = {31,17,5,2,4,0,4}; return g[row]; }
+    }
+}
+
+static int pex_boot_text_width(const char *s, int scale) {
+    int n = 0;
+    if (scale <= 0) scale = 1;
+    while (s && *s) { n += 6 * scale; ++s; }
+    return n > 0 ? n - scale : 0;
+}
+
+static void pex_boot_draw_text(const char *s, int x, int y, int color, int scale) {
+    if (!s) return;
+    if (scale <= 0) scale = 1;
+    for (; *s; ++s) {
+        unsigned char ch = (unsigned char)*s;
+        for (int row = 0; row < 7; ++row) {
+            unsigned char bits = pex_boot_glyph_row((char)ch, row);
+            for (int col = 0; col < 5; ++col) {
+                if (bits & (1u << (4 - col))) draw_rect(x + col * scale, y + row * scale, x + (col + 1) * scale, y + (row + 1) * scale, color);
+            }
+        }
+        x += 6 * scale;
+    }
+}
+
+static void pex_boot_draw_centered_text(const char *s, int cx, int y, int color, int scale) {
+    pex_boot_draw_text(s, cx - pex_boot_text_width(s, scale) / 2, y, color, scale);
+}
+
+static void pex_boot_draw_button(Button *b) {
+    if (!b || !b->visible || b->kind == BUTTON_HITBOX) return;
+    int hover = button_hover(b, g_mouse_x, g_mouse_y);
+    int bg = !b->enabled ? 0x404040 : (hover ? 0x606060 : 0x505050);
+    int border = !b->enabled ? 0x707070 : (hover ? 0xFFFFA0 : 0xB0B0B0);
+    int col = !b->enabled ? 0x909090 : 0xFFFFFF;
+    draw_rect(b->x, b->y, b->x + b->w, b->y + b->h, bg);
+    draw_rect(b->x, b->y, b->x + b->w, b->y + 1, border);
+    draw_rect(b->x, b->y + b->h - 1, b->x + b->w, b->y + b->h, border);
+    draw_rect(b->x, b->y, b->x + 1, b->y + b->h, border);
+    draw_rect(b->x + b->w - 1, b->y, b->x + b->w, b->y + b->h, border);
+    pex_boot_draw_centered_text(b->label, b->x + b->w / 2, b->y + (b->h - 7) / 2, col, 1);
+}
+
+static void pex_boot_draw_all_buttons(void) {
+    for (int i = 0; i < g_button_count; ++i) pex_boot_draw_button(&g_buttons[i]);
+}
+
+static void pex_boot_draw_background(void) {
+    draw_rect(0, 0, g_gui_w, g_gui_h, 0x202020);
+    draw_rect(8, 8, g_gui_w - 8, g_gui_h - 8, 0x303030);
+}
+#endif
+
 static void draw_texturepack_install_screen(void) {
-    draw_tiled_background_tint(0x404040, 0);
-    int bar_w = 100;
-    int bar_h = 2;
+    int bar_w = 180;
+    int bar_h = 10;
     int x = g_gui_w / 2 - bar_w / 2;
-    int y = g_gui_h / 2 + 16;
+    int y = g_gui_h / 2 + 10;
     int p = (int)InterlockedCompareExchange(&g_classic_install_progress, 0, 0);
     char status[MAX_LABEL];
     lstrcpynA(status, g_classic_install_status[0] ? g_classic_install_status : "Downloading resources...", sizeof(status));
     if (p < 0) p = 0;
     if (p > 100) p = 100;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    pex_boot_draw_background();
+    pex_boot_draw_centered_text("PexCraft Resources", g_gui_w / 2, g_gui_h / 2 - 48, 0xFFFFFF, 2);
+    pex_boot_draw_centered_text("Downloading Release resources", g_gui_w / 2, g_gui_h / 2 - 20, 0xD0D0D0, 1);
+    pex_boot_draw_centered_text(status, g_gui_w / 2, g_gui_h / 2 - 5, 0xFFFFFF, 1);
+    draw_rect(x - 1, y - 1, x + bar_w + 1, y + bar_h + 1, 0xB0B0B0);
+    draw_rect(x, y, x + bar_w, y + bar_h, 0x202020);
+    draw_rect(x, y, x + (bar_w * p) / 100, y + bar_h, 0x70D070);
+    { char pct[16]; snprintf(pct, sizeof(pct), "%d%%", p); pex_boot_draw_centered_text(pct, g_gui_w / 2, y + 16, 0xD0D0D0, 1); }
+    pex_boot_draw_all_buttons();
+#else
+    draw_tiled_background_tint(0x404040, 0);
+    bar_w = 100;
+    bar_h = 2;
+    x = g_gui_w / 2 - bar_w / 2;
+    y = g_gui_h / 2 + 16;
     draw_rect(x, y, x + bar_w, y + bar_h, 8421504);
     draw_rect(x, y, x + p, y + bar_h, 8454016);
     draw_centered_text("Downloading Release resources", g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
     draw_centered_text(status, g_gui_w / 2, g_gui_h / 2 + 8, 16777215);
+    draw_all_buttons();
+#endif
 }
 
 static void draw_notice(void) {
@@ -1435,6 +1546,17 @@ static void draw_pack_download_prompt(void) {
     char summary[MAX_LABEL];
     pack_install_start_size_fetch();
     classic_resource_missing_summary(summary, sizeof(summary));
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    pex_boot_draw_background();
+    pex_boot_draw_centered_text("PexCraft Resources", g_gui_w / 2, g_gui_h / 4 - 36, 0xFFFFFF, 2);
+    pex_boot_draw_text("PexCraft requires Minecraft 1.2.5", g_gui_w / 2 - 145, g_gui_h / 4 - 8, 0xFFFFFF, 1);
+    pex_boot_draw_text("client.jar to obtain default assets.", g_gui_w / 2 - 145, g_gui_h / 4 + 5, 0xFFFFFF, 1);
+    pex_boot_draw_text(summary, g_gui_w / 2 - 145, g_gui_h / 4 + 24, 0xD0D0D0, 1);
+    pex_boot_draw_text("Nothing downloads until you press Download.", g_gui_w / 2 - 145, g_gui_h / 4 + 39, 0xD0D0D0, 1);
+    format_download_size(size_line, sizeof(size_line));
+    pex_boot_draw_text(size_line, g_gui_w / 2 - 145, g_gui_h / 4 + 58, 0xD0D0D0, 1);
+    pex_boot_draw_all_buttons();
+#else
     draw_default_bg();
     draw_centered_text("Classic Texture Download", g_gui_w / 2, g_gui_h / 4 - 60 + 14, 16777215);
     draw_text(summary, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 35, 16777215);
@@ -1450,6 +1572,7 @@ static void draw_pack_download_prompt(void) {
     format_download_size(size_line, sizeof(size_line));
     draw_text(size_line, g_gui_w / 2 - 155, g_gui_h / 4 - 60 + 88, 10526880);
     draw_all_buttons();
+#endif
 }
 
 static void draw_classic_pack_warning(void) {
