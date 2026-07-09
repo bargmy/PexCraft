@@ -1090,9 +1090,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     int origin_x_stamp = g_flat_world_origin_x;
     int origin_z_stamp = g_flat_world_origin_z;
     unsigned int terrain_stamp[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    unsigned int light_stamp[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     memcpy(terrain_stamp, g_flat_section_mesh_version, sizeof(terrain_stamp));
-    memcpy(light_stamp, g_flat_chunk_light_version, sizeof(light_stamp));
 
     int w = x1 - x0 + 1;
     int h = y1 - y0 + 1;
@@ -1208,19 +1206,12 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
             }
         }
     }
-    int stale_light = 0;
     int calc_lcx0 = flat_local_chunk_x(x0), calc_lcx1 = flat_local_chunk_x(x1);
     int calc_lcz0 = flat_local_chunk_z(z0), calc_lcz1 = flat_local_chunk_z(z1);
-    for (int lcz = calc_lcz0; !stale_light && lcz <= calc_lcz1; ++lcz) {
-        for (int lcx = calc_lcx0; !stale_light && lcx <= calc_lcx1; ++lcx) {
-            if (!flat_local_chunk_valid(lcx, lcz)) { stale_light = 1; break; }
-            if (light_stamp[lcz][lcx] != g_flat_chunk_light_version[lcz][lcx]) stale_light = 1;
-        }
-    }
-    if (stale_terrain || stale_light) {
+    if (stale_terrain) {
         free(sky); free(block); free(q);
         flat_mark_light_dirty_region(cx0, cz0, cx1, cz1);
-        pex_logf_trace("lighting region discarded stale %s x=%d..%d z=%d..%d", stale_terrain ? "terrain" : "light", cx0, cx1, cz0, cz1);
+        pex_logf_trace("lighting region discarded stale terrain x=%d..%d z=%d..%d", cx0, cx1, cz0, cz1);
         return;
     }
 
@@ -1238,7 +1229,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     }
     for (int lcz = calc_lcz0; !stale_commit && lcz <= calc_lcz1; ++lcz) {
         for (int lcx = calc_lcx0; !stale_commit && lcx <= calc_lcx1; ++lcx) {
-            if (!flat_local_chunk_valid(lcx, lcz) || light_stamp[lcz][lcx] != g_flat_chunk_light_version[lcz][lcx]) stale_commit = 1;
+            if (!flat_local_chunk_valid(lcx, lcz)) stale_commit = 1;
         }
     }
     if (stale_commit) {
@@ -1315,10 +1306,13 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
 }
 
 static void flat_recalculate_lighting_region(int rx0, int rz0, int rx1, int rz1) {
-    /* Compute with a 16-block influence margin, but flat_relight_region() now commits
-       only the requested inner rectangle.  This keeps the math correct at region
-       edges without repainting the whole expanded area. */
-    flat_relight_region(rx0, rz0, rx1, rz1, 16, 1);
+    /* Latency bound: dirty regions are already expanded to their real influence
+       radius by the caller (torches use radius 15; ordinary opacity edits use a
+       tiny column/neighbor repair).  Adding another 16-block margin makes one
+       click become a ~1M-cell solve and produced the observed light_worker
+       900-1200ms spikes.  Keep only a 1-cell import border so boundary light can
+       enter the private solve without exploding the work size. */
+    flat_relight_region(rx0, rz0, rx1, rz1, 1, 1);
 }
 
 #ifndef FLAT_CHUNK_BLOCK_COUNT
@@ -1830,10 +1824,11 @@ static int flat_update_edit_light_now(int x, int y, int z, int old_id, int new_i
     flat_seed_edit_visual_sky_light(x, y, z, old_opacity, new_opacity);
     flat_seed_edit_visual_block_light(x, y, z, old_light, new_light);
 
-    /* Exact skylight/block-light repair is async and buffered now.  Use the full
-       15-block influence radius for both emitters and opacity changes so pure
-       sunlight and cave-edge light match the real math instead of a 9x9 preview. */
-    int radius = 15;
+    /* Exact repair stays async, but ordinary opaque/transparent edits must not
+       queue a 31x31 full-height solve.  Direct sunlight is column-local; the
+       immediate visual seed already handles the clicked area.  Only real light
+       emitters/removals require the 15-block influence radius. */
+    int radius = (old_light > 0 || new_light > 0) ? 15 : 1;
     flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     return 1;
 }
@@ -1962,8 +1957,11 @@ static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, in
            seeds a tiny no-black visual preview and queues exact lighting. */
         if (flat_update_edit_light_now(x, y, z, old_id, new_id)) return;
 
-        /* Non-player/batched updates use the same exact async repair radius. */
-        int radius = 15;
+        /* Non-player/batched updates use the same bounded rule: emitters need
+           radius 15; simple opacity edits repair only the edited column plus
+           immediate neighbors.  Huge exact sweeps are reserved for explicit
+           validation/self-heal, not every block click. */
+        int radius = (old_light > 0 || new_light > 0) ? 15 : 1;
         flat_mark_light_dirty_region(x - radius, z - radius, x + radius, z + radius);
     } else {
         /* Same light value and same opacity cannot change sky/block light.  The
@@ -1975,24 +1973,18 @@ static void flat_mark_light_dirty_for_change(int x, int y, int z, int old_id, in
 }
 
 static void flat_preview_pending_lighting(void) {
-    int dirty = 0, x0 = 0, z0 = 0, x1 = 0, z1 = 0;
-    flat_light_dirty_lock();
-    EnterCriticalSection(&g_flat_light_dirty_cs);
-    dirty = g_flat_light_dirty > 0 ? 1 : 0;
-    if (dirty) {
-        x0 = g_flat_light_dirty_regions[0].x0;
-        z0 = g_flat_light_dirty_regions[0].z0;
-        x1 = g_flat_light_dirty_regions[0].x1;
-        z1 = g_flat_light_dirty_regions[0].z1;
-    }
-    LeaveCriticalSection(&g_flat_light_dirty_cs);
-    if (!dirty) return;
-    int cx = (x0 + x1) / 2;
-    int cz = (z0 + z1) / 2;
-    /* Small, synchronous visual preview only.  This is intentionally much
-       smaller than the full 15-block light update; it avoids gameplay hitches
-       while making the edited area update before the async/full pass completes. */
-    flat_relight_region(cx - 3, cz - 3, cx + 3, cz + 3, 0, 1);
+    /* No synchronous relight preview.  Even a 7x7 full-height repair can be
+       visible on low-end systems when called from render/tick paths.  Player
+       edits already seed tiny per-cell visual light; the exact repair is handled
+       by the lighting workers. */
+}
+
+static int flat_light_dirty_push_unlocked(int x0, int z0, int x1, int z1) {
+    if (x1 < x0 || z1 < z0) return 1;
+    if (g_flat_light_dirty >= FLAT_LIGHT_DIRTY_QUEUE_MAX) return 0;
+    FlatLightDirtyRegion *r = &g_flat_light_dirty_regions[g_flat_light_dirty++];
+    r->x0 = x0; r->z0 = z0; r->x1 = x1; r->z1 = z1;
+    return 1;
 }
 
 static int flat_take_pending_light_region(int *x0, int *z0, int *x1, int *z1) {
@@ -2003,15 +1995,29 @@ static int flat_take_pending_light_region(int *x0, int *z0, int *x1, int *z1) {
         LeaveCriticalSection(&g_flat_light_dirty_cs);
         return 0;
     }
-    *x0 = g_flat_light_dirty_regions[0].x0;
-    *z0 = g_flat_light_dirty_regions[0].z0;
-    *x1 = g_flat_light_dirty_regions[0].x1;
-    *z1 = g_flat_light_dirty_regions[0].z1;
+
+    FlatLightDirtyRegion r = g_flat_light_dirty_regions[0];
     if (g_flat_light_dirty > 1) {
         memmove(g_flat_light_dirty_regions, g_flat_light_dirty_regions + 1,
                 (size_t)(g_flat_light_dirty - 1) * sizeof(g_flat_light_dirty_regions[0]));
     }
     g_flat_light_dirty--;
+
+    /* Hard latency cap: one worker pass may only solve a small X/Z tile.  A
+       31x31 emitter repair is automatically split into several jobs, and a bad
+       self-heal/runtime merge can no longer turn into one 900ms+ full-height
+       lighting pass. */
+    const int max_span = 16;
+    *x0 = r.x0;
+    *z0 = r.z0;
+    *x1 = r.x1 < r.x0 + max_span - 1 ? r.x1 : r.x0 + max_span - 1;
+    *z1 = r.z1 < r.z0 + max_span - 1 ? r.z1 : r.z0 + max_span - 1;
+
+    /* Requeue the right strip and lower strip.  They remain independent tiles so
+       the worker yields between them and render/input wins scheduling. */
+    if (*x1 < r.x1) flat_light_dirty_push_unlocked(*x1 + 1, r.z0, r.x1, *z1);
+    if (*z1 < r.z1) flat_light_dirty_push_unlocked(r.x0, *z1 + 1, r.x1, r.z1);
+
     flat_light_dirty_recompute_bounds_unlocked();
     LeaveCriticalSection(&g_flat_light_dirty_cs);
     return 1;

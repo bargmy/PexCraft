@@ -6605,18 +6605,49 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
         g_loggy_mesh_submit_calls++;
         g_loggy_mesh_submit_snapshot_cells += ASYNC_SECTION_MESH_W * ASYNC_SECTION_MESH_H * ASYNC_SECTION_MESH_D;
     }
+    /* Fast main-thread snapshot.  The old path called flat_get_* five times for
+       every one of 5832 cells.  That showed up as Mesh submit snapshot=4ms+ and
+       made an "async" rebuild still stall rendering.  Snapshot directly from the
+       fixed flat arrays when the cell is inside the current world window; fall
+       back to Java default sky / zero blocks for missing border chunks. */
+    int default_sky = flat_java_default_sky_light();
     for (int iy = 0; iy < ASYNC_SECTION_MESH_H; iy++) {
         int wy = sy0 + iy;
+        int y_ok = (wy >= FLAT_WORLD_Y_MIN && wy <= FLAT_WORLD_Y_MAX);
+        int yi = y_ok ? flat_y_index(wy) : 0;
         for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
             int wz = sz0 + iz;
+            int fz = wz - job.origin_z;
+            int z_ok = (fz >= 0 && fz < FLAT_WORLD_SIZE);
             for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
                 int wx = sx0 + ix;
+                int fx = wx - job.origin_x;
                 int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
-                job.blocks[idx] = (unsigned char)flat_get_block(wx, wy, wz);
-                job.meta[idx] = (unsigned char)flat_get_meta(wx, wy, wz);
-                job.levels[idx] = (unsigned char)flat_get_level(wx, wy, wz);
-                job.sky_light[idx] = (unsigned char)flat_get_sky_light(wx, wy, wz);
-                job.block_light[idx] = (unsigned char)flat_get_block_light(wx, wy, wz);
+                unsigned char b = 0, m = 0, lv = 0, skyv = 0, blv = 0;
+                if (y_ok && z_ok && fx >= 0 && fx < FLAT_WORLD_SIZE) {
+                    int lcx = fx / FLAT_RENDER_CHUNK;
+                    int lcz = fz / FLAT_RENDER_CHUNK;
+                    int chunk_ok = flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx];
+                    if (chunk_ok) {
+                        b = g_flat_blocks[yi][fz][fx];
+                        m = g_flat_meta[yi][fz][fx];
+                        lv = g_flat_levels[yi][fz][fx];
+                        int lsy = (wy - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
+                        int storage_ok = flat_section_index_valid(lsy) &&
+                            ((g_flat_chunk_section_non_empty_mask[lcz][lcx] & (unsigned short)(1u << lsy)) != 0);
+                        skyv = storage_ok ? (unsigned char)(g_flat_sky_light[yi][fz][fx] & 15) : (unsigned char)default_sky;
+                        blv = storage_ok ? (unsigned char)(g_flat_block_light[yi][fz][fx] & 15) : 0;
+                    } else {
+                        skyv = (unsigned char)default_sky;
+                    }
+                } else {
+                    skyv = (wy > FLAT_WORLD_Y_MAX) ? (unsigned char)default_sky : 0;
+                }
+                job.blocks[idx] = b;
+                job.meta[idx] = m;
+                job.levels[idx] = lv;
+                job.sky_light[idx] = skyv;
+                job.block_light[idx] = blv;
             }
         }
     }
