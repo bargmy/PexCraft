@@ -297,7 +297,8 @@ jobs:
           PY
           cat toolchains/llvm-mingw.env >> "$GITHUB_ENV"
           . toolchains/llvm-mingw.env
-          curl -L "$LLVM_MINGW_URL" -o toolchains/llvm-mingw.tar.xz
+          curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors "$LLVM_MINGW_URL" -o toolchains/llvm-mingw.tar.xz
+          tar -tf toolchains/llvm-mingw.tar.xz >/dev/null
           tar -C toolchains -xf toolchains/llvm-mingw.tar.xz
           mv toolchains/llvm-mingw-* toolchains/llvm-mingw
           echo "$PWD/toolchains/llvm-mingw/bin" >> "$GITHUB_PATH"
@@ -324,18 +325,29 @@ jobs:
           set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
           EOF
 
-          curl -L https://zlib.net/zlib-1.3.1.tar.gz -o deps/zlib.tar.gz
+          download_tarball() {
+            local url="$1"
+            local out="$2"
+            curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors "$url" -o "$out"
+            tar -tzf "$out" >/dev/null
+          }
+
+          download_tarball https://codeload.github.com/madler/zlib/tar.gz/refs/tags/v1.3.1 deps/zlib.tar.gz
           tar -C deps -xf deps/zlib.tar.gz
-          make -C deps/zlib-1.3.1 -f win32/Makefile.gcc \
+          ZLIB_SRC="$(find deps -maxdepth 1 -type d -name 'zlib-*' | head -n 1)"
+          test -n "$ZLIB_SRC"
+          make -C "$ZLIB_SRC" -f win32/Makefile.gcc \
             PREFIX=armv7-w64-mingw32- \
             BINARY_PATH="$SYSROOT/bin" \
             INCLUDE_PATH="$SYSROOT/include" \
             LIBRARY_PATH="$SYSROOT/lib" \
             install 2>&1 | tee logs/build-zlib-arm32.log
 
-          curl -L https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz -o deps/libogg.tar.gz
+          download_tarball https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz deps/libogg.tar.gz
           tar -C deps -xf deps/libogg.tar.gz
-          cmake -S deps/libogg-1.3.5 -B build/libogg-arm32 \
+          OGG_SRC="$(find deps -maxdepth 1 -type d -name 'libogg-*' | head -n 1)"
+          test -n "$OGG_SRC"
+          cmake -S "$OGG_SRC" -B build/libogg-arm32 \
             -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/build/armv7-w64-mingw32.cmake" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -344,9 +356,11 @@ jobs:
             -DINSTALL_DOCS=OFF
           cmake --build build/libogg-arm32 --target install 2>&1 | tee logs/build-libogg-arm32.log
 
-          curl -L https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz -o deps/libvorbis.tar.gz
+          download_tarball https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz deps/libvorbis.tar.gz
           tar -C deps -xf deps/libvorbis.tar.gz
-          cmake -S deps/libvorbis-1.3.7 -B build/libvorbis-arm32 \
+          VORBIS_SRC="$(find deps -maxdepth 1 -type d -name 'libvorbis-*' | head -n 1)"
+          test -n "$VORBIS_SRC"
+          cmake -S "$VORBIS_SRC" -B build/libvorbis-arm32 \
             -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/build/armv7-w64-mingw32.cmake" \
             -DCMAKE_BUILD_TYPE=Release \
