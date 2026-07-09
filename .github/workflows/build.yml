@@ -218,6 +218,224 @@ jobs:
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 
+
+  windows_arm32:
+    needs: notify_build_start
+    name: Windows arm32 LLVM/MinGW - ${{ github.event.head_commit.message || github.ref_name }}
+    if: >-
+      ${{
+        contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(win-only)') ||
+        (
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(linux-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(androidtv-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(wii-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(psp-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(console-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(lg-only)') &&
+          !contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(xbox-only)')
+        )
+      }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.ref_name }}"
+          safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-80)"
+          [ -n "$safe" ] || safe="commit"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ca-certificates \
+            cmake \
+            curl \
+            ninja-build \
+            python3 \
+            tar \
+            xz-utils \
+            zip
+
+      - name: Download llvm-mingw ARM32 toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchains
+          python3 - <<'PY' > toolchains/llvm-mingw.env
+          import json, urllib.request
+          api = 'https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest'
+          with urllib.request.urlopen(api) as r:
+              release = json.load(r)
+          assets = release.get('assets', [])
+          candidates = []
+          for asset in assets:
+              name = asset.get('name', '')
+              url = asset.get('browser_download_url', '')
+              if name.endswith('.tar.xz') and 'ucrt' in name and 'ubuntu' in name and 'x86_64' in name:
+                  candidates.append((name, url))
+          if not candidates:
+              raise SystemExit('No linux-hosted llvm-mingw ucrt x86_64 tar.xz asset found in latest release')
+          candidates.sort()
+          name, url = candidates[-1]
+          print(f'LLVM_MINGW_ASSET={name}')
+          print(f'LLVM_MINGW_URL={url}')
+          PY
+          cat toolchains/llvm-mingw.env >> "$GITHUB_ENV"
+          . toolchains/llvm-mingw.env
+          curl -L "$LLVM_MINGW_URL" -o toolchains/llvm-mingw.tar.xz
+          tar -C toolchains -xf toolchains/llvm-mingw.tar.xz
+          mv toolchains/llvm-mingw-* toolchains/llvm-mingw
+          echo "$PWD/toolchains/llvm-mingw/bin" >> "$GITHUB_PATH"
+          echo "LLVM_MINGW_ROOT=$PWD/toolchains/llvm-mingw" >> "$GITHUB_ENV"
+          echo "WIN_ARM32_SYSROOT=$PWD/toolchains/llvm-mingw/armv7-w64-mingw32" >> "$GITHUB_ENV"
+
+      - name: Build Windows ARM32 third-party audio libs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$LLVM_MINGW_ROOT/bin:$PATH"
+          export SYSROOT="$WIN_ARM32_SYSROOT"
+          mkdir -p deps logs build
+
+          cat > build/armv7-w64-mingw32.cmake <<EOF
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR ARM)
+          set(CMAKE_C_COMPILER armv7-w64-mingw32-clang)
+          set(CMAKE_RC_COMPILER armv7-w64-mingw32-windres)
+          set(CMAKE_FIND_ROOT_PATH $SYSROOT)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+          EOF
+
+          curl -L https://zlib.net/zlib-1.3.1.tar.gz -o deps/zlib.tar.gz
+          tar -C deps -xf deps/zlib.tar.gz
+          make -C deps/zlib-1.3.1 -f win32/Makefile.gcc \
+            PREFIX=armv7-w64-mingw32- \
+            BINARY_PATH="$SYSROOT/bin" \
+            INCLUDE_PATH="$SYSROOT/include" \
+            LIBRARY_PATH="$SYSROOT/lib" \
+            install 2>&1 | tee logs/build-zlib-arm32.log
+
+          curl -L https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz -o deps/libogg.tar.gz
+          tar -C deps -xf deps/libogg.tar.gz
+          cmake -S deps/libogg-1.3.5 -B build/libogg-arm32 \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/build/armv7-w64-mingw32.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$SYSROOT" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DINSTALL_DOCS=OFF
+          cmake --build build/libogg-arm32 --target install 2>&1 | tee logs/build-libogg-arm32.log
+
+          curl -L https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz -o deps/libvorbis.tar.gz
+          tar -C deps -xf deps/libvorbis.tar.gz
+          cmake -S deps/libvorbis-1.3.7 -B build/libvorbis-arm32 \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/build/armv7-w64-mingw32.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$SYSROOT" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DOGG_INCLUDE_DIR="$SYSROOT/include" \
+            -DOGG_LIBRARY="$SYSROOT/lib/libogg.a"
+          cmake --build build/libvorbis-arm32 --target install 2>&1 | tee logs/build-libvorbis-arm32.log
+
+      - name: Build Windows arm32 client
+        shell: bash
+        run: |
+          set +e
+          mkdir -p build logs dist
+          export PATH="$LLVM_MINGW_ROOT/bin:$PATH"
+          export SYSROOT="$WIN_ARM32_SYSROOT"
+
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     Windows arm32 LLVM/MinGW / armv7-w64-mingw32"
+            echo "Toolchain:   $LLVM_MINGW_ASSET"
+            echo
+            armv7-w64-mingw32-clang --version
+            armv7-w64-mingw32-clang -print-target-triple || true
+
+            make -f Makefile.win_arm32 \
+              WIN_ARM32_CC=armv7-w64-mingw32-clang \
+              TARGET=build/pexcraft-win-arm32.exe \
+              CFLAGS="-std=c99 -O2 -Wall -Wextra -DPEX_TARGET_WINDOWS_ARM32=1 -I$SYSROOT/include" \
+              LDFLAGS="-mwindows -static -L$SYSROOT/lib"
+
+            status=$?
+            echo "$status" > build/windows-arm32-build-status.txt
+
+            if [ "$status" -eq 0 ]; then
+              { llvm-objdump -p build/pexcraft-win-arm32.exe || armv7-w64-mingw32-objdump -p build/pexcraft-win-arm32.exe; } \
+                | sed -n 's/^[[:space:]]*DLL Name: //p' \
+                | sort -u > build/imported-dlls.txt || true
+              echo "WIN_ARM32_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "WIN_ARM32_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+
+            exit "$status"
+          } 2>&1 | tee logs/build-windows-arm32.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package Windows arm32 zip
+        if: env.WIN_ARM32_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          artifact_prefix="pexcraft-windows-arm32"
+          package_dir="dist/$artifact_prefix"
+          mkdir -p "$package_dir"
+          cp -f build/pexcraft-win-arm32.exe "$package_dir/"
+          cp -R assets "$package_dir/assets" || true
+          cp -R logs "$package_dir/logs" || true
+          cp -f build/imported-dlls.txt "$package_dir/" || true
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     Windows arm32 LLVM/MinGW
+          Toolchain:   $LLVM_MINGW_ASSET
+          EOF
+          zip_path="dist/$artifact_prefix.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload Windows arm32 build to Telegram
+        if: env.WIN_ARM32_BUILD_OK == '1' && github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: ${{ env.ZIP_PATH }}
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: Windows arm32 LLVM/MinGW
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py
+
+      - name: Mark failed build in summary
+        if: always() && env.WIN_ARM32_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Windows arm32 LLVM/MinGW failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
+
   windows_arm64:
     needs: notify_build_start
     name: Windows arm64 Clang/MinGW - ${{ github.event.head_commit.message || github.ref_name }}
@@ -696,7 +914,7 @@ jobs:
 
   android:
     needs: notify_build_start
-    name: Android arm64 APK - ${{ github.event.head_commit.message || github.ref_name }}
+    name: Android universal APK - ${{ github.event.head_commit.message || github.ref_name }}
     if: >-
       ${{
         contains(github.event.head_commit.message || github.event.pull_request.title || github.ref_name, '(android-only)') ||
