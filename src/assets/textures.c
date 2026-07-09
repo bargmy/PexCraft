@@ -1292,7 +1292,8 @@ static void apply_texture_pack_index(int index) {
         normalize_terrain_liquid_tiles();
         try_pack_texture(e, &tex_gui, "gui\\gui.png", 0);
         try_pack_texture(e, &tex_bg, "gui\\background.png", 1);
-        try_pack_texture(e, &tex_font, "font\\default.png", 0);
+        if (hptibine_custom_fonts_enabled())
+            try_pack_texture(e, &tex_font, "font\\default.png", 0);
         try_pack_texture(e, &tex_pack, "pack.png", 0);
         try_pack_texture(e, &tex_icons, "gui\\icons.png", 0);
         try_pack_texture(e, &tex_inventory, "gui\\inventory.png", 0);
@@ -1363,9 +1364,10 @@ static void apply_texture_pack_index(int index) {
         /* Java RenderGlobal.renderSky uses additive alpha for sun/moon sprites. */
         try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
         try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
-        try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
-        try_pack_texture(e, &tex_foliagecolor, "misc\\foliagecolor.png", 0);
-        try_pack_texture(e, &tex_particles, "particles.png", 0);
+        if (hptibine_custom_colors_enabled()) {
+            try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
+            try_pack_texture(e, &tex_foliagecolor, "misc\\foliagecolor.png", 0);
+        }
 #endif
     }
     if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0);

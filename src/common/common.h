@@ -548,6 +548,11 @@ typedef enum HptiBineAnimationMode {
     HPTI_ANIM_OFF = 2
 } HptiBineAnimationMode;
 
+/* Unity-build helpers defined in settings/options.c and used by earlier
+   included modules such as textures.c. */
+static int hptibine_custom_fonts_enabled(void);
+static int hptibine_custom_colors_enabled(void);
+
 typedef enum OptionId {
     OPT_MUSIC = 0,
     OPT_SOUND,
@@ -639,6 +644,8 @@ typedef struct Options {
     int hpti_fast_debug_info;
     int hpti_profiler;
     int hpti_weather;
+    int hpti_custom_fonts;
+    int hpti_custom_colors;
 
     int ignore_classic_resources_warning;
     int download_classic_textures;

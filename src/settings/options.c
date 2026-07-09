@@ -129,15 +129,13 @@ static const HptiBineOptionDef hptibine_defs[] = {
     { HPTI_GUI_SCALE, "GUI Scale", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
     { HPTI_ADVANCED_OPENGL, "Advanced OpenGL", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
     { HPTI_GAMMA, "Brightness", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_RENDER_CLOUDS, "Render Clouds", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_FOG_FANCY, "Fog", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+        { HPTI_FOG_FANCY, "Fog", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
     { HPTI_FOG_START, "Fog Start", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
 
     { HPTI_CLOUDS, "Clouds", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
     { HPTI_CLOUD_HEIGHT, "Cloud Height", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
     { HPTI_TREES, "Trees", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_GRASS, "Grass", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_WATER, "Water", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+        { HPTI_WATER, "Water", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
     { HPTI_RAIN, "Rain & Snow", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
     { HPTI_SKY, "Sky", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
     { HPTI_STARS, "Stars", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
@@ -149,10 +147,10 @@ static const HptiBineOptionDef hptibine_defs[] = {
     { HPTI_MIPMAP_TYPE, "Mipmap Type", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
     { HPTI_CLEAR_WATER, "Clear Water", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
     { HPTI_RANDOM_MOBS, "Random Mobs", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_BETTER_GRASS, "Better Grass", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_BETTER_GRASS, "Better Grass", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
     { HPTI_BETTER_SNOW, "Better Snow", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_CUSTOM_FONTS, "Custom Fonts", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_CUSTOM_COLORS, "Custom Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { HPTI_CUSTOM_FONTS, "Custom Fonts", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
+    { HPTI_CUSTOM_COLORS, "Custom Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
     { HPTI_SWAMP_COLORS, "Swamp Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
     { HPTI_SMOOTH_BIOMES, "Smooth Biomes", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
     { HPTI_CONNECTED_TEXTURES, "Connected Textures", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
@@ -308,6 +306,8 @@ static void hptibine_set_defaults(void) {
     g_opts.hpti_fast_debug_info = 0;
     g_opts.hpti_profiler = 0;
     g_opts.hpti_weather = 1;
+    g_opts.hpti_custom_fonts = 1;
+    g_opts.hpti_custom_colors = 1;
 }
 
 static void hptibine_clamp_options(void) {
@@ -326,6 +326,8 @@ static void hptibine_clamp_options(void) {
     if (g_opts.hpti_animated_water < 0 || g_opts.hpti_animated_water > 2) g_opts.hpti_animated_water = 0;
     if (g_opts.hpti_animated_lava < 0 || g_opts.hpti_animated_lava > 2) g_opts.hpti_animated_lava = 0;
     if (g_opts.hpti_particles < 0 || g_opts.hpti_particles > 2) g_opts.hpti_particles = 0;
+    if (g_opts.hpti_custom_fonts < 0 || g_opts.hpti_custom_fonts > 1) g_opts.hpti_custom_fonts = 1;
+    if (g_opts.hpti_custom_colors < 0 || g_opts.hpti_custom_colors > 1) g_opts.hpti_custom_colors = 1;
     if (g_opts.hpti_chunk_updates < 1) g_opts.hpti_chunk_updates = 1;
     if (g_opts.hpti_chunk_updates > 5) g_opts.hpti_chunk_updates = 5;
 }
@@ -351,7 +353,7 @@ static void hptibine_load_file_named(const char *name) {
         else if (!strcmp(k, "ofClouds")) g_opts.hpti_clouds = atoi(v);
         else if (!strcmp(k, "ofCloudsHeight")) g_opts.hpti_cloud_height = parse_float_java(v);
         else if (!strcmp(k, "ofTrees")) g_opts.hpti_trees = atoi(v);
-        else if (!strcmp(k, "ofGrass")) g_opts.hpti_grass = atoi(v);
+        else if (!strcmp(k, "ofGrass") || !strcmp(k, "ofBetterGrass")) g_opts.hpti_grass = atoi(v);
         else if (!strcmp(k, "ofWater")) g_opts.hpti_water = atoi(v);
         else if (!strcmp(k, "ofRain")) g_opts.hpti_rain = atoi(v);
         else if (!strcmp(k, "ofSky")) g_opts.hpti_sky = hptibine_parse_bool(v);
@@ -379,6 +381,8 @@ static void hptibine_load_file_named(const char *name) {
         else if (!strcmp(k, "ofFastDebugInfo")) g_opts.hpti_fast_debug_info = hptibine_parse_bool(v);
         else if (!strcmp(k, "ofProfiler")) g_opts.hpti_profiler = hptibine_parse_bool(v);
         else if (!strcmp(k, "ofWeather")) g_opts.hpti_weather = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofCustomFonts")) g_opts.hpti_custom_fonts = hptibine_parse_bool(v);
+        else if (!strcmp(k, "ofCustomColors")) g_opts.hpti_custom_colors = hptibine_parse_bool(v);
         else if (!strcmp(k, "particles") || !strcmp(k, "particleSetting")) g_opts.hpti_particles = atoi(v);
     }
     fclose(f);
@@ -409,6 +413,7 @@ static void save_hptibine_options(void) {
     fprintf(f, "ofCloudsHeight:%g\n", g_opts.hpti_cloud_height);
     fprintf(f, "ofTrees:%d\n", g_opts.hpti_trees);
     fprintf(f, "ofGrass:%d\n", g_opts.hpti_grass);
+    fprintf(f, "ofBetterGrass:%d\n", g_opts.hpti_grass);
     fprintf(f, "ofWater:%d\n", g_opts.hpti_water);
     fprintf(f, "ofRain:%d\n", g_opts.hpti_rain);
     fprintf(f, "ofSky:%s\n", g_opts.hpti_sky ? "true" : "false");
@@ -437,6 +442,8 @@ static void save_hptibine_options(void) {
     fprintf(f, "ofFastDebugInfo:%s\n", g_opts.hpti_fast_debug_info ? "true" : "false");
     fprintf(f, "ofProfiler:%s\n", g_opts.hpti_profiler ? "true" : "false");
     fprintf(f, "ofWeather:%s\n", g_opts.hpti_weather ? "true" : "false");
+    fprintf(f, "ofCustomFonts:%s\n", g_opts.hpti_custom_fonts ? "true" : "false");
+    fprintf(f, "ofCustomColors:%s\n", g_opts.hpti_custom_colors ? "true" : "false");
     fclose(f);
 #endif
 }
@@ -457,6 +464,9 @@ static int hptibine_fancy_grass_enabled(void) {
     if (g_opts.hpti_grass == HPTI_FANCY) return 1;
     return g_opts.fancy_graphics;
 }
+
+static int hptibine_custom_fonts_enabled(void) { return g_opts.hpti_custom_fonts; }
+static int hptibine_custom_colors_enabled(void) { return g_opts.hpti_custom_colors; }
 
 static int hptibine_smooth_lighting_enabled(void) {
     return g_opts.hpti_ao_level > 0.0001f;
@@ -545,7 +555,10 @@ static void get_hptibine_option_label(HptiBineOptionId opt, char *out, size_t ca
         case HPTI_RENDER_CLOUDS: snprintf(out, cap, "%s: %s", name, hptibine_cloud_mode() == HPTI_OFF ? "OFF" : "ON"); break;
         case HPTI_CLOUDS: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy_off(g_opts.hpti_clouds)); break;
         case HPTI_TREES: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy(g_opts.hpti_trees)); break;
-        case HPTI_GRASS: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy(g_opts.hpti_grass)); break;
+        case HPTI_GRASS:
+        case HPTI_BETTER_GRASS: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy(g_opts.hpti_grass)); break;
+        case HPTI_CUSTOM_FONTS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_custom_fonts)); break;
+        case HPTI_CUSTOM_COLORS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_custom_colors)); break;
         case HPTI_SKY: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_sky)); break;
         case HPTI_STARS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_stars)); break;
         case HPTI_SUN_MOON: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_sun_moon)); break;
@@ -592,6 +605,7 @@ static void bump_hptibine_option(HptiBineOptionId opt, int delta) {
             flat_mark_all_chunks_dirty();
             break;
         case HPTI_GRASS:
+        case HPTI_BETTER_GRASS:
             g_opts.hpti_grass++;
             if (g_opts.hpti_grass > 2) g_opts.hpti_grass = 0;
             flat_mark_all_chunks_dirty();
@@ -615,6 +629,15 @@ static void bump_hptibine_option(HptiBineOptionId opt, int delta) {
             break;
         case HPTI_ANIMATED_TERRAIN: g_opts.hpti_animated_terrain = !g_opts.hpti_animated_terrain; break;
         case HPTI_ANIMATED_TEXTURES: g_opts.hpti_animated_textures = !g_opts.hpti_animated_textures; break;
+        case HPTI_CUSTOM_FONTS:
+            g_opts.hpti_custom_fonts = !g_opts.hpti_custom_fonts;
+            apply_texture_pack_index(g_selected_texpack);
+            break;
+        case HPTI_CUSTOM_COLORS:
+            g_opts.hpti_custom_colors = !g_opts.hpti_custom_colors;
+            apply_texture_pack_index(g_selected_texpack);
+            flat_mark_all_chunks_dirty();
+            break;
         case HPTI_CHUNK_UPDATES:
             g_opts.hpti_chunk_updates++;
             if (g_opts.hpti_chunk_updates > 5) g_opts.hpti_chunk_updates = 1;
