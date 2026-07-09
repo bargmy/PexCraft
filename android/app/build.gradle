@@ -5,6 +5,7 @@ plugins {
 android {
     namespace 'ir.hienob.pexcraft.android'
     compileSdk 35
+    ndkVersion '27.2.12479018'
 
     defaultConfig {
         applicationId 'ir.hienob.pexcraft.android'

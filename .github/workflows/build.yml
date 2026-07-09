@@ -979,16 +979,36 @@ jobs:
 
       - name: Install Android build packages
         shell: bash
+        env:
+          PEXCRAFT_NDK_VERSION: 27.2.12479018
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y curl unzip python3
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "cmake;3.22.1" \
-            "ndk;27.2.12479018"
+
+          # AGP has previously tried to auto-install its default NDK and left a
+          # corrupt partial directory/cache behind. Remove both the unwanted
+          # default NDK and the NDK we actually use before the explicit install.
+          rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" ~/.android/cache || true
+
+          for attempt in 1 2 3; do
+            if sdkmanager --install \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0" \
+              "cmake;3.22.1" \
+              "ndk;$PEXCRAFT_NDK_VERSION"; then
+              break
+            fi
+            rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" ~/.android/cache || true
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+
+          test -x "$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" >> "$GITHUB_ENV"
 
       - name: Prepare SDL2 Android dependency
         shell: bash
@@ -1151,16 +1171,36 @@ jobs:
 
       - name: Install Android build packages
         shell: bash
+        env:
+          PEXCRAFT_NDK_VERSION: 27.2.12479018
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y curl unzip python3
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "cmake;3.22.1" \
-            "ndk;27.2.12479018"
+
+          # AGP has previously tried to auto-install its default NDK and left a
+          # corrupt partial directory/cache behind. Remove both the unwanted
+          # default NDK and the NDK we actually use before the explicit install.
+          rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" ~/.android/cache || true
+
+          for attempt in 1 2 3; do
+            if sdkmanager --install \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0" \
+              "cmake;3.22.1" \
+              "ndk;$PEXCRAFT_NDK_VERSION"; then
+              break
+            fi
+            rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" ~/.android/cache || true
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+
+          test -x "$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$PEXCRAFT_NDK_VERSION" >> "$GITHUB_ENV"
 
       - name: Prepare SDL2 Android dependency
         shell: bash
