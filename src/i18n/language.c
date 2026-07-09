@@ -312,6 +312,14 @@ static const char *tr_key_default(const char *key, const char *fallback) {
     return fallback ? fallback : key;
 }
 
+static const char *tr_key2_default(const char *primary, const char *secondary, const char *fallback) {
+    const char *v;
+    if (!primary) return tr_key_default(secondary, fallback);
+    v = tr_key_default(primary, NULL);
+    if (v && !pex_lang_str_eq(v, primary)) return v;
+    return tr_key_default(secondary, fallback);
+}
+
 static const char *tr_key(const char *key) {
     return tr_key_default(key, key);
 }
@@ -336,7 +344,7 @@ static const PexLangAlias pex_lang_aliases[] = {
     {"Texture Packs", "texturePack.title"},
     {"Open texture pack folder", "texturePack.openFolder"},
     {"Create New World", "selectWorld.create"},
-    {"Play Selected World", "selectWorld.play"},
+    {"Play Selected World", "selectWorld.select"},
     {"Rename", "selectWorld.rename"},
     {"Delete", "selectWorld.delete"},
     {"Connect", "selectServer.select"},
@@ -369,7 +377,7 @@ static const PexLangAlias pex_lang_aliases[] = {
     {"Delete World", "selectWorld.deleteQuestion"},
     {"No worlds found", "selectWorld.empty"},
     {"Create New World", "selectWorld.create"},
-    {"Play Selected World", "selectWorld.play"},
+    {"Play Selected World", "selectWorld.select"},
     {"Back to title screen", "menu.returnToMenu"},
     {"Game over!", "deathScreen.title"},
     {"Score: &e0", "deathScreen.score"},

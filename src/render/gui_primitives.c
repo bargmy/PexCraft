@@ -691,16 +691,22 @@ static int font_unicode_width(unsigned int cp) {
 
 static int font_codepoint_width(unsigned int cp, int unicode_flag) {
     int glyph;
+    (void)unicode_flag;
     if (cp == 0xA7u) return -1;
     if (font_codepoint_is_directional_control(cp)) return 0;
     if (cp == 32u) return 4;
     glyph = font_default_glyph_index(cp);
-    if (glyph >= 0 && !unicode_flag) return font_widths[glyph];
+    /* Keep Java's default8/font.txt glyphs as the first choice whenever a
+       character exists there.  The previous cfont pass treated the selected
+       language's unicodeFlag as "draw every character through unicode/custom
+       pages".  That made English fallback strings, French/Czech/Vietnamese
+       Latin text, and UI tags such as (CZ)/(VN) render with the wrong custom
+       font or with bad spacing. */
+    if (glyph >= 0) return font_widths[glyph];
     if (cp < 65536u) {
         int w = font_unicode_width(cp);
         if (w > 0) return w;
     }
-    if (glyph >= 0) return font_widths[glyph];
     return 0;
 }
 
@@ -901,18 +907,17 @@ static void draw_text_raw_impl(const char *s, int x, int y, int color, int force
         glyph = font_default_glyph_index(cp);
         adv_i = font_codepoint_width(cp, unicode_flag);
         if (adv_i <= 0) continue;
-        if (obfuscated && glyph >= 0 && !unicode_flag) {
+        if (obfuscated && glyph >= 0) {
             /* Deterministic, cheap stand-in for Java's per-frame Random width-matched obfuscation. */
             int start = glyph;
             do { glyph = 32 + ((glyph * 1103515245u + 12345u) % 224u); }
             while (font_widths[glyph] != font_widths[start]);
         }
-        if (glyph >= 0 && !unicode_flag) adv = draw_default_glyph_java(glyph, cx, (float)y, cur_color, italic);
+        if (glyph >= 0) adv = draw_default_glyph_java(glyph, cx, (float)y, cur_color, italic);
         else adv = draw_unicode_glyph_java(cp, cx, (float)y, cur_color, italic);
-        if (adv <= 0.0f && glyph >= 0) adv = draw_default_glyph_java(glyph, cx, (float)y, cur_color, italic);
         if (adv <= 0.0f) adv = (float)adv_i;
         if (bold) {
-            if (glyph >= 0 && !unicode_flag) (void)draw_default_glyph_java(glyph, cx + 1.0f, (float)y, cur_color, italic);
+            if (glyph >= 0) (void)draw_default_glyph_java(glyph, cx + 1.0f, (float)y, cur_color, italic);
             else (void)draw_unicode_glyph_java(cp, cx + 1.0f, (float)y, cur_color, italic);
             adv += 1.0f;
         }

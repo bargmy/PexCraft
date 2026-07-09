@@ -871,7 +871,7 @@ static void rebuild_screen(void) {
             add_button_full(3, g_gui_w / 2 - 75, 172, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
         }
     } else if (g_screen == SCREEN_RENAME_WORLD) {
-        Button *rename = add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 6 + 96, 150, 20, tr_key_default("selectWorld.renameButton", "Rename"), BUTTON_NORMAL);
+        Button *rename = add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 6 + 96, 150, 20, tr_key2_default("selectWorld.rename", "selectWorld.renameButton", "Rename"), BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 6 + 96, 150, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         rename->enabled = g_rename_world_text[0] != 0;
     } else if (g_screen == SCREEN_WORLD_TYPE) {
@@ -890,9 +890,9 @@ static void rebuild_screen(void) {
             if (h > 0) add_button_full(WORLD_ROW_BUTTON_BASE + g_world_save_scroll + i, g_gui_w / 2 - 110, y, 220, h, "", BUTTON_HITBOX);
         }
         if (g_screen == SCREEN_WORLD_SELECT) {
-            Button *select = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, tr_key_default("selectWorld.play", "Play Selected World"), BUTTON_NORMAL);
-            Button *rename = add_button_full(12, g_gui_w / 2 - 154, g_gui_h - 28, 70, 20, tr_key_default("selectWorld.renameButton", "Rename"), BUTTON_NORMAL);
-            Button *delete = add_button_full(5, g_gui_w / 2 - 74, g_gui_h - 28, 70, 20, tr_key_default("selectWorld.deleteButton", "Delete"), BUTTON_NORMAL);
+            Button *select = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, tr_key2_default("selectWorld.select", "selectWorld.play", "Play Selected World"), BUTTON_NORMAL);
+            Button *rename = add_button_full(12, g_gui_w / 2 - 154, g_gui_h - 28, 70, 20, tr_key2_default("selectWorld.rename", "selectWorld.renameButton", "Rename"), BUTTON_NORMAL);
+            Button *delete = add_button_full(5, g_gui_w / 2 - 74, g_gui_h - 28, 70, 20, tr_key2_default("selectWorld.delete", "selectWorld.deleteButton", "Delete"), BUTTON_NORMAL);
             add_button_full(11, g_gui_w / 2 + 4, g_gui_h - 52, 150, 20, tr_key_default("selectWorld.create", "Create New World"), BUTTON_NORMAL);
             add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 28, 150, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
             int has_world = g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count;
@@ -900,7 +900,7 @@ static void rebuild_screen(void) {
             rename->enabled = has_world;
             delete->enabled = has_world;
         } else {
-            Button *delete = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, tr_key_default("selectWorld.deleteButton", "Delete"), BUTTON_NORMAL);
+            Button *delete = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 150, 20, tr_key2_default("selectWorld.delete", "selectWorld.deleteButton", "Delete"), BUTTON_NORMAL);
             add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 52, 150, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
             delete->enabled = g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count;
         }
