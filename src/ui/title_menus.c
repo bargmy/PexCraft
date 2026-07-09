@@ -973,9 +973,9 @@ static void draw_connecting_screen(void) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
 
-    const char *top = "Locating server";
-    if (g_mp_expected_chunks > 0 || g_mp_chunks_received > 0 || pct >= 65) top = "Building terrain";
-    if (g_mp_world_ready || pct >= 100) top = "Done!";
+    const char *top = tr_key_default("connect.connecting", "Locating server");
+    if (g_mp_expected_chunks > 0 || g_mp_chunks_received > 0 || pct >= 65) top = tr_key_default("downloadTerrain", "Downloading terrain");
+    if (g_mp_world_ready || pct >= 100) top = tr_key_default("gui.done", "Done!");
 
     int cx = g_gui_w / 2;
     int cy = g_gui_h / 2;

@@ -1175,7 +1175,7 @@ static const char *spawn_egg_entity_name(int damage) {
 }
 
 static const char *item_stack_display_name(const ItemStack *st) {
-    static char name[64];
+    static char name[160];
     if (stack_empty(st)) return "";
     if (st->id == ITEM_DYE_POWDER) return dye_damage_name(st->damage);
     if (st->id == ITEM_POTION) return pex_potion_display_name(st);
@@ -1189,67 +1189,67 @@ static const char *item_stack_display_name(const ItemStack *st) {
             snprintf(name, sizeof(name), "%s %s", tr_key_default("item.monsterPlacer.name", "Spawn"), entity);
             return name;
         }
-        return "Spawn";
+        return tr_key_default("item.monsterPlacer.name", "Spawn");
     }
     if (st->id == BLOCK_WOOL) return wool_damage_name(st->damage);
     if (st->id == BLOCK_PLANKS) {
         switch (st->damage & 3) {
-            case 1: return "Spruce Wood Planks";
-            case 2: return "Birch Wood Planks";
-            case 3: return "Jungle Wood Planks";
-            default: return "Wooden Planks";
+            case 1: return tr_key_default("tile.wood.spruce.name", "Spruce Wood Planks");
+            case 2: return tr_key_default("tile.wood.birch.name", "Birch Wood Planks");
+            case 3: return tr_key_default("tile.wood.jungle.name", "Jungle Wood Planks");
+            default: return tr_key_default("tile.wood.name", "Wooden Planks");
         }
     }
     if (st->id == BLOCK_LOG) {
         switch (st->damage & 3) {
-            case 1: return "Pine Wood";
-            case 2: return "Birch Wood";
-            case 3: return "Jungle Wood";
-            default: return "Wood";
+            case 1: return tr_key_default("tile.log.spruce.name", "Pine Wood");
+            case 2: return tr_key_default("tile.log.birch.name", "Birch Wood");
+            case 3: return tr_key_default("tile.log.jungle.name", "Jungle Wood");
+            default: return tr_key_default("tile.log.name", "Wood");
         }
     }
     if (st->id == BLOCK_LEAVES) {
         switch (st->damage & 3) {
-            case 1: return "Pine Leaves";
-            case 2: return "Birch Leaves";
-            case 3: return "Jungle Leaves";
-            default: return "Leaves";
+            case 1: return tr_key_default("tile.leaves.spruce.name", "Pine Leaves");
+            case 2: return tr_key_default("tile.leaves.birch.name", "Birch Leaves");
+            case 3: return tr_key_default("tile.leaves.jungle.name", "Jungle Leaves");
+            default: return tr_key_default("tile.leaves.name", "Leaves");
         }
     }
     if (st->id == BLOCK_SAPLING) {
         switch (st->damage & 3) {
-            case 1: return "Pine Sapling";
-            case 2: return "Birch Sapling";
-            case 3: return "Jungle Sapling";
-            default: return "Sapling";
+            case 1: return tr_key_default("tile.sapling.spruce.name", "Pine Sapling");
+            case 2: return tr_key_default("tile.sapling.birch.name", "Birch Sapling");
+            case 3: return tr_key_default("tile.sapling.jungle.name", "Jungle Sapling");
+            default: return tr_key_default("tile.sapling.name", "Sapling");
         }
     }
     if (st->id == BLOCK_SLAB || st->id == BLOCK_DOUBLE_SLAB) {
         switch (st->damage & 7) {
-            case 1: return "Sandstone Slab";
-            case 2: return "Wooden Slab";
-            case 3: return "Cobblestone Slab";
-            case 4: return "Brick Slab";
-            case 5: return "Stone Brick Slab";
-            default: return "Stone Slab";
+            case 1: return tr_key_default("tile.stoneSlab.sand.name", "Sandstone Slab");
+            case 2: return tr_key_default("tile.stoneSlab.wood.name", "Wooden Slab");
+            case 3: return tr_key_default("tile.stoneSlab.cobble.name", "Cobblestone Slab");
+            case 4: return tr_key_default("tile.stoneSlab.brick.name", "Brick Slab");
+            case 5: return tr_key_default("tile.stoneSlab.smoothStoneBrick.name", "Stone Brick Slab");
+            default: return tr_key_default("tile.stoneSlab.stone.name", "Stone Slab");
         }
     }
     if (st->id == BLOCK_STONE_BRICK) {
         switch (st->damage & 3) {
-            case 1: return "Mossy Stone Bricks";
-            case 2: return "Cracked Stone Bricks";
-            case 3: return "Chiseled Stone Bricks";
-            default: return "Stone Bricks";
+            case 1: return tr_key_default("tile.stonebricksmooth.mossy.name", "Mossy Stone Bricks");
+            case 2: return tr_key_default("tile.stonebricksmooth.cracked.name", "Cracked Stone Bricks");
+            case 3: return tr_key_default("tile.stonebricksmooth.chiseled.name", "Chiseled Stone Bricks");
+            default: return tr_key_default("tile.stonebricksmooth.default.name", "Stone Bricks");
         }
     }
     if (st->id == BLOCK_SANDSTONE) {
         switch (st->damage & 3) {
-            case 1: return "Chiseled Sandstone";
-            case 2: return "Smooth Sandstone";
-            default: return "Sandstone";
+            case 1: return tr_key_default("tile.sandStone.chiseled.name", "Chiseled Sandstone");
+            case 2: return tr_key_default("tile.sandStone.smooth.name", "Smooth Sandstone");
+            default: return tr_key_default("tile.sandStone.default.name", "Sandstone");
         }
     }
-    if (st->id == BLOCK_TALL_GRASS) return (st->damage == 2) ? "Fern" : "Grass";
+    if (st->id == BLOCK_TALL_GRASS) return (st->damage == 2) ? tr_key_default("tile.tallgrass.fern.name", "Fern") : tr_key_default("tile.tallgrass.grass.name", "Grass");
     return tr(item_display_name(st->id));
 }
 

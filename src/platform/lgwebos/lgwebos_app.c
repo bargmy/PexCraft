@@ -116,12 +116,7 @@ static int sdl2_vk_from_key(SDL_Keycode key) {
 
 static void sdl2_handle_text_input(const SDL_TextInputEvent *txt) {
     if (!txt || !txt->text[0]) return;
-    const unsigned char *p = (const unsigned char*)txt->text;
-    /* The existing UI is byte/ASCII-oriented. Feed printable ASCII chars. */
-    while (*p) {
-        if (*p >= 32 && *p < 127) handle_char((WPARAM)*p);
-        ++p;
-    }
+    handle_text_input_utf8(txt->text);
 }
 
 static void sdl2_handle_event(SDL_Event *e) {

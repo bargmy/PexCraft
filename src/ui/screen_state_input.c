@@ -8,6 +8,8 @@ static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h);
 static void pex_ui_text_input_begin_for_current_field(void);
 static void create_world_update_folder(void);
 static int handle_local_chat_command(const char *text);
+static void handle_char(WPARAM ch);
+static void handle_text_input_utf8(const char *text);
 static void pex_virtual_keyboard_prepare(ScreenId return_screen);
 static int pex_virtual_keyboard_enabled(void);
 
@@ -20,6 +22,27 @@ static int g_release_title_state_initialized = 0;
 static int g_world_last_click_index = -1;
 static double g_world_last_click_time = 0.0;
 
+static int pex_screen_keeps_world_music(ScreenId s) {
+    switch (s) {
+        case SCREEN_INGAME:
+        case SCREEN_PAUSE:
+        case SCREEN_INVENTORY:
+        case SCREEN_CREATIVE:
+        case SCREEN_WORKBENCH:
+        case SCREEN_FURNACE:
+        case SCREEN_CHEST:
+        case SCREEN_CHAT:
+        case SCREEN_DEATH:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int pex_screen_is_world_loading(ScreenId s) {
+    return s == SCREEN_GENERATING || s == SCREEN_CONNECTING;
+}
+
 static void set_screen(ScreenId s) {
     ScreenId old_screen = g_screen;
     if (old_screen != s) pex_logf("screen change %d -> %d", (int)old_screen, (int)s);
@@ -27,16 +50,16 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
     if (s == SCREEN_TITLE) {
-        if (old_screen == SCREEN_INGAME || old_screen == SCREEN_GENERATING || old_screen == SCREEN_CONNECTING) pex_menu_music_stop();
+        if (pex_screen_keeps_world_music(old_screen) || pex_screen_is_world_loading(old_screen)) pex_menu_music_stop();
         if (!g_release_title_state_initialized || old_screen != SCREEN_TITLE) {
             release_title_state_enter();
             g_release_title_state_initialized = 1;
         }
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
         g_menu_music_started = 0;
-    } else if (s == SCREEN_GENERATING || s == SCREEN_CONNECTING || s == SCREEN_INGAME) {
-        /* Menu music is a title-screen-only sound.  Stop it as soon as a local
-           world load, multiplayer join, or gameplay entry starts. */
+    } else if (s == SCREEN_GENERATING || s == SCREEN_CONNECTING || (s == SCREEN_INGAME && !pex_screen_keeps_world_music(old_screen))) {
+        /* Stop title music when entering/loading a world, but do not restart the
+           current in-game track when closing pause, chat, inventory, or containers. */
         pex_menu_music_stop();
         pex_game_music_reset_delay(40);
     }
@@ -1975,8 +1998,7 @@ static void handle_keydown(WPARAM vk) {
             return;
         }
         if (vk == VK_BACK) {
-            size_t len = strlen(g_chat_input);
-            if (len > 0) g_chat_input[len - 1] = 0;
+            pex_utf8_backspace(g_chat_input);
             return;
         }
         return;
@@ -2103,6 +2125,77 @@ static void handle_keydown(WPARAM vk) {
                 for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { on_button(&g_buttons[i]); break; }
             }
         }
+    }
+}
+
+
+static const unsigned char *pex_utf8_next_ptr(const unsigned char *p) {
+    if (!p || !*p) return p;
+    if (*p < 0x80u) return p + 1;
+    if ((*p & 0xE0u) == 0xC0u && p[1]) return p + 2;
+    if ((*p & 0xF0u) == 0xE0u && p[1] && p[2]) return p + 3;
+    if ((*p & 0xF8u) == 0xF0u && p[1] && p[2] && p[3]) return p + 4;
+    return p + 1;
+}
+
+static unsigned int pex_utf8_peek_cp(const unsigned char *p) {
+    if (!p || !*p) return 0;
+    if (*p < 0x80u) return *p;
+    if ((*p & 0xE0u) == 0xC0u && p[1]) return ((*p & 0x1Fu) << 6) | (p[1] & 0x3Fu);
+    if ((*p & 0xF0u) == 0xE0u && p[1] && p[2]) return ((*p & 0x0Fu) << 12) | ((p[1] & 0x3Fu) << 6) | (p[2] & 0x3Fu);
+    if ((*p & 0xF8u) == 0xF0u && p[1] && p[2] && p[3]) return ((*p & 0x07u) << 18) | ((p[1] & 0x3Fu) << 12) | ((p[2] & 0x3Fu) << 6) | (p[3] & 0x3Fu);
+    return 0xFFFDu;
+}
+
+static int pex_utf8_cp_printable_for_chat(unsigned int cp) {
+    if (cp == 0 || cp == 0x7Fu) return 0;
+    if (cp < 32u) return 0;
+    return 1;
+}
+
+static void pex_utf8_backspace(char *s) {
+    size_t len;
+    if (!s) return;
+    len = strlen(s);
+    if (len == 0) return;
+    do { s[--len] = 0; } while (len > 0 && (((unsigned char)s[len] & 0xC0u) == 0x80u));
+}
+
+static void pex_chat_append_utf8_text(const char *text) {
+    const unsigned char *p;
+    size_t len;
+    if (!text || !*text) return;
+    p = (const unsigned char *)text;
+    if (g_suppress_next_chat_char) {
+        p = pex_utf8_next_ptr(p);
+        g_suppress_next_chat_char = 0;
+    }
+    len = strlen(g_chat_input);
+    while (*p && len + 1 < sizeof(g_chat_input)) {
+        const unsigned char *q = pex_utf8_next_ptr(p);
+        unsigned int cp = pex_utf8_peek_cp(p);
+        size_t bytes = (size_t)(q - p);
+        if (bytes == 0) break;
+        if (pex_utf8_cp_printable_for_chat(cp) && len + bytes < sizeof(g_chat_input)) {
+            memcpy(g_chat_input + len, p, bytes);
+            len += bytes;
+            g_chat_input[len] = 0;
+        }
+        p = q;
+    }
+}
+
+static void handle_text_input_utf8(const char *text) {
+    if (!text || !*text) return;
+    if (g_screen == SCREEN_CHAT) {
+        pex_chat_append_utf8_text(text);
+        return;
+    }
+    /* Non-chat legacy edit boxes are still intentionally ASCII/command-safe. */
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        if (*p >= 32 && *p < 127) handle_char((WPARAM)*p);
+        p++;
     }
 }
 

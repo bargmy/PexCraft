@@ -323,8 +323,8 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
             else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
         } else if (opt == OPT_FOV) {
             int fov = (int)(g_opts.fov + 0.5f);
-            if (fov <= 70) snprintf(out, cap, "%s: Minimum", name);
-            else if (fov >= 110) snprintf(out, cap, "%s: Quake Pro", name);
+            if (fov <= 70) snprintf(out, cap, "%s: %s", name, tr_key_default("options.fov.min", "Minimum"));
+            else if (fov >= 110) snprintf(out, cap, "%s: %s", name, tr_key_default("options.fov.max", "Quake Pro"));
             else snprintf(out, cap, "%s: %d", name, fov);
         } else {
             if (v <= 0.0f) snprintf(out, cap, "%s: %s", name, tr("OFF"));

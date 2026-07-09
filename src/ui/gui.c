@@ -1355,6 +1355,27 @@ static void draw_world_type_screen(void) {
     draw_all_buttons();
 }
 
+static const char *worldgen_translated_line(const char *src, char *out, size_t cap) {
+    if (!src || !*src) return "";
+    if (!strcmp(src, "Generating level")) return tr_key_default("menu.generatingLevel", "Generating level");
+    if (!strcmp(src, "Generating RAM world")) return tr_key_default("menu.generatingLevel", "Generating level");
+    if (!strcmp(src, "Loading level")) return tr_key_default("menu.loadingLevel", "Loading level");
+    if (!strcmp(src, "Building terrain")) return tr_key_default("menu.generatingTerrain", "Building terrain");
+    if (!strcmp(src, "Reading level")) return tr_key_default("menu.loadingLevel", "Loading level");
+    if (!strcmp(src, "Loading chunks")) return tr_key_default("menu.loadingLevel", "Loading level");
+    if (!strcmp(src, "Lighting terrain")) return tr_key_default("menu.generatingTerrain", "Building terrain");
+    if (!strcmp(src, "Entering world")) return tr_key_default("menu.loadingLevel", "Loading level");
+    if (!strncmp(src, "Building terrain ", 17)) {
+        snprintf(out, cap, "%s%s", tr_key_default("menu.generatingTerrain", "Building terrain"), src + 16);
+        return out;
+    }
+    if (!strncmp(src, "Preparing chunks ", 17)) {
+        snprintf(out, cap, "%s%s", tr_key_default("menu.preparingSpawn", "Preparing chunks"), src + 16);
+        return out;
+    }
+    return tr(src);
+}
+
 static void draw_generating_screen(void) {
     draw_tiled_background_tint(0x404040, 0);
     int bar_w = 100;
@@ -1362,12 +1383,13 @@ static void draw_generating_screen(void) {
     int x = g_gui_w / 2 - bar_w / 2;
     int y = g_gui_h / 2 + 16;
     int p = g_worldgen.progress;
+    char title[128], status[128];
     if (p < 0) p = 0;
     if (p > 100) p = 100;
     draw_rect(x, y, x + bar_w, y + bar_h, 8421504);
     draw_rect(x, y, x + p, y + bar_h, 8454016);
-    draw_centered_text(g_worldgen.title, g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
-    draw_centered_text(g_worldgen.status, g_gui_w / 2, g_gui_h / 2 + 8, 16777215);
+    draw_centered_text(worldgen_translated_line(g_worldgen.title, title, sizeof(title)), g_gui_w / 2, g_gui_h / 2 - 20, 16777215);
+    draw_centered_text(worldgen_translated_line(g_worldgen.status, status, sizeof(status)), g_gui_w / 2, g_gui_h / 2 + 8, 16777215);
 }
 
 
