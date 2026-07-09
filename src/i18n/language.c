@@ -189,6 +189,36 @@ static void pex_language_add_bootstrap_en(void) {
     g_lang_index = 0;
 }
 
+static const char *pex_language_builtin_native_name(const char *code) {
+    static const PexLanguageInfo names[] = {
+        {"af_ZA", "Afrikaans"}, {"ar_SA", "العربية"}, {"bg_BG", "Български"}, {"ca_ES", "Català"},
+        {"cs_CZ", "Čeština"}, {"cy_GB", "Cymraeg"}, {"da_DK", "Dansk"}, {"de_DE", "Deutsch"},
+        {"el_GR", "Ελληνικά"}, {"en_AU", "English (Australia)"}, {"en_CA", "English (Canada)"},
+        {"en_GB", "English (UK)"}, {"en_PT", "Pirate Speak"}, {"en_US", "English (US)"},
+        {"eo_UY", "Esperanto"}, {"es_AR", "Español (Argentina)"}, {"es_ES", "Español (España)"},
+        {"es_MX", "Español (México)"}, {"es_UY", "Español (Uruguay)"}, {"es_VE", "Español (Venezuela)"},
+        {"et_EE", "Eesti"}, {"eu_ES", "Euskara"}, {"fa_IR", "فارسی"}, {"fi_FI", "Suomi"},
+        {"fil_PH", "Filipino"}, {"fr_CA", "Français (Canada)"}, {"fr_FR", "Français"}, {"ga_IE", "Gaeilge"},
+        {"gl_ES", "Galego"}, {"he_IL", "עברית"}, {"hi_IN", "हिन्दी"}, {"hr_HR", "Hrvatski"},
+        {"hu_HU", "Magyar"}, {"hy_AM", "Հայերեն"}, {"id_ID", "Bahasa Indonesia"}, {"is_IS", "Íslenska"},
+        {"it_IT", "Italiano"}, {"ja_JP", "日本語"}, {"ka_GE", "ქართული"}, {"ko_KR", "한국어"},
+        {"kw_GB", "Kernewek"}, {"la_LA", "Latina"}, {"lb_LU", "Lëtzebuergesch"}, {"lt_LT", "Lietuvių"},
+        {"lv_LV", "Latviešu"}, {"ms_MY", "Bahasa Melayu"}, {"mt_MT", "Malti"}, {"nl_NL", "Nederlands"},
+        {"nn_NO", "Norsk nynorsk"}, {"no_NO", "Norsk bokmål"}, {"oc_FR", "Occitan"}, {"pl_PL", "Polski"},
+        {"pt_BR", "Português (Brasil)"}, {"pt_PT", "Português (Portugal)"}, {"qya_AA", "Quenya"},
+        {"ro_RO", "Română"}, {"ru_RU", "Русский"}, {"sk_SK", "Slovenčina"}, {"sl_SI", "Slovenščina"},
+        {"sr_SP", "Српски"}, {"sv_SE", "Svenska"}, {"th_TH", "ไทย"}, {"tlh_AA", "tlhIngan Hol"},
+        {"tr_TR", "Türkçe"}, {"uk_UA", "Українська"}, {"vi_VN", "Tiếng Việt"},
+        {"zh_CN", "简体中文"}, {"zh_TW", "繁體中文"}
+    };
+    if (!code) return NULL;
+    for (int i = 0; i < (int)ARRAY_COUNT(names); ++i) {
+        if (pex_lang_str_eq(names[i].code, code)) return names[i].name;
+    }
+    return NULL;
+}
+
+
 static int pex_language_load_list_from_disk(void) {
     char path[MAX_PATHBUF];
     FILE *f;
@@ -209,8 +239,9 @@ static int pex_language_load_list_from_disk(void) {
         if (!pex_lang_split_java_equals(s, &s, &eq)) continue;
         if (!*s || !*eq) continue;
         if (g_pex_lang_count >= PEX_LANG_MAX_LANGUAGES) break;
+        const char *native_name = pex_language_builtin_native_name(s);
         snprintf(g_pex_langs[g_pex_lang_count].code, sizeof(g_pex_langs[g_pex_lang_count].code), "%s", s);
-        snprintf(g_pex_langs[g_pex_lang_count].name, sizeof(g_pex_langs[g_pex_lang_count].name), "%s", eq);
+        snprintf(g_pex_langs[g_pex_lang_count].name, sizeof(g_pex_langs[g_pex_lang_count].name), "%s", native_name ? native_name : eq);
         ++g_pex_lang_count;
     }
     fclose(f);
@@ -303,11 +334,36 @@ static int pex_current_language_is_unicode(void) { return g_lang_unicode; }
 static int pex_current_language_is_bidi(void) { return g_lang_bidi; }
 static int pex_language_runtime_files_available(void) { return pex_language_files_installed(); }
 
-static const char *tr_key_default(const char *key, const char *fallback) {
-    if (!key) return fallback ? fallback : "";
-    if (!g_lang_list_loaded) pex_set_language_code(g_opts.language[0] ? g_opts.language : "en_US");
+static const char *pex_lang_lookup_loaded_key(const char *key) {
+    if (!key || !*key) return NULL;
     for (int i = 0; i < g_lang_table_count; ++i) {
         if (pex_lang_str_eq(g_lang_table[i].key, key)) return g_lang_table[i].value;
+    }
+    return NULL;
+}
+
+typedef struct PexLangKeyAlias { const char *primary; const char *secondary; } PexLangKeyAlias;
+static const PexLangKeyAlias pex_lang_key_aliases[] = {
+    /* legacy.json language files are from the newer legacy asset index.  Many
+       translations renamed texture-pack keys to resource-pack keys; the 1.2.5
+       UI still asks for texturePack.*, so bridge those names instead of
+       falling back to English. */
+    {"texturePack.title", "resourcePack.title"},
+    {"texturePack.openFolder", "resourcePack.openFolder"},
+    {"texturePack.folderInfo", "resourcePack.folderInfo"}
+};
+
+static const char *tr_key_default(const char *key, const char *fallback) {
+    const char *v;
+    if (!key) return fallback ? fallback : "";
+    if (!g_lang_list_loaded) pex_set_language_code(g_opts.language[0] ? g_opts.language : "en_US");
+    v = pex_lang_lookup_loaded_key(key);
+    if (v) return v;
+    for (int i = 0; i < (int)ARRAY_COUNT(pex_lang_key_aliases); ++i) {
+        if (pex_lang_str_eq(pex_lang_key_aliases[i].primary, key)) {
+            v = pex_lang_lookup_loaded_key(pex_lang_key_aliases[i].secondary);
+            if (v) return v;
+        }
     }
     return fallback ? fallback : key;
 }
@@ -465,8 +521,8 @@ static void language_ensure_selected_visible(void) {
 
 static void language_drag_scroll(int delta_y) {
     if (delta_y == 0) return;
-    /* Java GuiSlot content drag: amountScrolled -= mouseYDelta * scrollMultiplier. */
-    g_language_scroll -= delta_y;
+    /* Dragging the visible scrollbar/list downward should move downward in the list. */
+    g_language_scroll += delta_y;
     language_clamp_scroll();
     rebuild_screen();
 }

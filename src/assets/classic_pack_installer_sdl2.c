@@ -294,11 +294,11 @@ static const char *legacy_category_name(int category) {
     switch (category) {
         case LEGACY_ASSET_LANG: return "Languages";
         case CLASSIC_AUDIO_MOBS: return "Mob sounds";
-        case CLASSIC_AUDIO_WORLD_UI: return "UI / block / world sounds";
+        case CLASSIC_AUDIO_WORLD_UI: return "World sounds";
         case CLASSIC_AUDIO_RECORDS: return "Music discs";
-        case CLASSIC_AUDIO_MENU_MUSIC: return "Main menu music";
-        case CLASSIC_AUDIO_GAME_MUSIC: return "In-game music";
-        case LEGACY_ASSET_OTHER: return "Other legacy metadata";
+        case CLASSIC_AUDIO_MENU_MUSIC: return "Menu music";
+        case CLASSIC_AUDIO_GAME_MUSIC: return "Game music";
+        case LEGACY_ASSET_OTHER: return "Other";
         default: return "Assets";
     }
 }
@@ -428,22 +428,26 @@ static void legacy_assets_clear_cache(void) {
 }
 
 static void pex_write_legacy_languages_txt(void) {
+    /* legacy.json contains lang/*.lang objects, but no lang/languages.txt.
+       Generate the Java-style list with the same user-facing native names that
+       Minecraft shows in GuiLanguage.  Do not use English names here: this file
+       is the language selection UI. */
     static const char *pairs[] = {
-        "af_ZA=Afrikaans", "ar_SA=Arabic", "bg_BG=Bulgarian", "ca_ES=Catalan", "cs_CZ=Czech",
-        "cy_GB=Welsh", "da_DK=Danish", "de_DE=German", "el_GR=Greek", "en_AU=English (Australia)",
+        "af_ZA=Afrikaans", "ar_SA=العربية", "bg_BG=Български", "ca_ES=Català", "cs_CZ=Čeština",
+        "cy_GB=Cymraeg", "da_DK=Dansk", "de_DE=Deutsch", "el_GR=Ελληνικά", "en_AU=English (Australia)",
         "en_CA=English (Canada)", "en_GB=English (UK)", "en_PT=Pirate Speak", "en_US=English (US)",
-        "eo_UY=Esperanto", "es_AR=Spanish (Argentina)", "es_ES=Spanish (Spain)", "es_MX=Spanish (Mexico)",
-        "es_UY=Spanish (Uruguay)", "es_VE=Spanish (Venezuela)", "et_EE=Estonian", "eu_ES=Basque",
-        "fa_IR=Persian", "fi_FI=Finnish", "fil_PH=Filipino", "fr_CA=French (Canada)", "fr_FR=French",
-        "ga_IE=Irish", "gl_ES=Galician", "he_IL=Hebrew", "hi_IN=Hindi", "hr_HR=Croatian",
-        "hu_HU=Hungarian", "hy_AM=Armenian", "id_ID=Indonesian", "is_IS=Icelandic", "it_IT=Italian",
-        "ja_JP=Japanese", "ka_GE=Georgian", "ko_KR=Korean", "kw_GB=Cornish", "la_LA=Latin",
-        "lb_LU=Luxembourgish", "lt_LT=Lithuanian", "lv_LV=Latvian", "ms_MY=Malay", "mt_MT=Maltese",
-        "nl_NL=Dutch", "nn_NO=Norwegian Nynorsk", "no_NO=Norwegian", "oc_FR=Occitan", "pl_PL=Polish",
-        "pt_BR=Portuguese (Brazil)", "pt_PT=Portuguese", "qya_AA=Quenya", "ro_RO=Romanian", "ru_RU=Russian",
-        "sk_SK=Slovak", "sl_SI=Slovenian", "sr_SP=Serbian", "sv_SE=Swedish", "th_TH=Thai",
-        "tlh_AA=Klingon", "tr_TR=Turkish", "uk_UA=Ukrainian", "vi_VN=Vietnamese", "zh_CN=Chinese (Simplified)",
-        "zh_TW=Chinese (Traditional)"
+        "eo_UY=Esperanto", "es_AR=Español (Argentina)", "es_ES=Español (España)", "es_MX=Español (México)",
+        "es_UY=Español (Uruguay)", "es_VE=Español (Venezuela)", "et_EE=Eesti", "eu_ES=Euskara",
+        "fa_IR=فارسی", "fi_FI=Suomi", "fil_PH=Filipino", "fr_CA=Français (Canada)", "fr_FR=Français",
+        "ga_IE=Gaeilge", "gl_ES=Galego", "he_IL=עברית", "hi_IN=हिन्दी", "hr_HR=Hrvatski",
+        "hu_HU=Magyar", "hy_AM=Հայերեն", "id_ID=Bahasa Indonesia", "is_IS=Íslenska", "it_IT=Italiano",
+        "ja_JP=日本語", "ka_GE=ქართული", "ko_KR=한국어", "kw_GB=Kernewek", "la_LA=Latina",
+        "lb_LU=Lëtzebuergesch", "lt_LT=Lietuvių", "lv_LV=Latviešu", "ms_MY=Bahasa Melayu", "mt_MT=Malti",
+        "nl_NL=Nederlands", "nn_NO=Norsk nynorsk", "no_NO=Norsk bokmål", "oc_FR=Occitan", "pl_PL=Polski",
+        "pt_BR=Português (Brasil)", "pt_PT=Português (Portugal)", "qya_AA=Quenya", "ro_RO=Română", "ru_RU=Русский",
+        "sk_SK=Slovenčina", "sl_SI=Slovenščina", "sr_SP=Српски", "sv_SE=Svenska", "th_TH=ไทย",
+        "tlh_AA=tlhIngan Hol", "tr_TR=Türkçe", "uk_UA=Українська", "vi_VN=Tiếng Việt", "zh_CN=简体中文",
+        "zh_TW=繁體中文"
     };
     char pack[MAX_PATHBUF], path[MAX_PATHBUF];
     FILE *f;
@@ -583,17 +587,48 @@ static void legacy_asset_group_summary(int category, char *out, size_t cap) {
     else snprintf(out, cap, "%s: %d/%d missing, %s left / %s", legacy_category_name(category), g_legacy_missing_count[slot], g_legacy_total_count[slot], miss, total);
 }
 
+static void legacy_asset_group_current_bytes(int category, unsigned long long *out_done, unsigned long long *out_total, unsigned long long *out_left) {
+    unsigned long long done = 0, total = 0, left = 0;
+    for (int i = 0; i < g_legacy_asset_count; ++i) {
+        ClassicAsset *a = &g_legacy_assets[i];
+        if (!(a->category & category)) continue;
+        total += (unsigned long long)a->size;
+        if (file_size_bytes(a->out_path) == (unsigned long long)a->size) done += (unsigned long long)a->size;
+        else left += (unsigned long long)a->size;
+    }
+    if (out_done) *out_done = done;
+    if (out_total) *out_total = total;
+    if (out_left) *out_left = left;
+}
+
+static int legacy_asset_group_progress_percent(int category) {
+    unsigned long long done = 0, total = 0, left = 0;
+    legacy_asset_group_current_bytes(category, &done, &total, &left);
+    if (total == 0) return 0;
+    if (left == 0) return 100;
+    return (int)((done * 100ULL) / total);
+}
+
 static void legacy_asset_button_label(int category, char *out, size_t cap) {
     int state = InterlockedCompareExchange(&g_legacy_download_state, 0, 0);
     int active = InterlockedCompareExchange(&g_legacy_download_mask, 0, 0) & category;
     int slot = legacy_category_slot(category);
     char miss[64];
-    if (slot >= 0 && slot < 7) pex_format_size(g_legacy_missing_bytes[slot], miss, sizeof(miss));
-    else snprintf(miss, sizeof(miss), "?");
+    if (!out || cap == 0) return;
     if ((state == CLASSIC_INSTALL_DOWNLOADING || state == CLASSIC_INSTALL_EXTRACTING) && active) {
-        int p = (int)InterlockedCompareExchange(&g_legacy_download_progress, 0, 0);
-        snprintf(out, cap, "%s: %d%%", legacy_category_name(category), p);
+        unsigned long long done = 0, total = 0, left = 0;
+        char done_s[32], total_s[32], left_s[32];
+        int p;
+        legacy_asset_group_current_bytes(category, &done, &total, &left);
+        p = total ? (int)((done * 100ULL) / total) : (int)InterlockedCompareExchange(&g_legacy_download_progress, 0, 0);
+        pex_format_size(done, done_s, sizeof(done_s));
+        pex_format_size(total, total_s, sizeof(total_s));
+        pex_format_size(left, left_s, sizeof(left_s));
+        /* Keep all live download information on the asset button itself. */
+        snprintf(out, cap, "%s %d%% %s/%s L:%s", legacy_category_name(category), p, done_s, total_s, left_s);
     } else {
+        if (slot >= 0 && slot < 7) pex_format_size(g_legacy_missing_bytes[slot], miss, sizeof(miss));
+        else snprintf(miss, sizeof(miss), "?");
         snprintf(out, cap, "%s (%s)", legacy_category_name(category), miss);
     }
 }
@@ -681,9 +716,21 @@ static DWORD WINAPI legacy_assets_download_master(LPVOID arg) {
         legacy_download_fail(InterlockedCompareExchange(&ctx.failed, 0, 0) == 2 ? "Canceled" : "Could not download legacy assets");
         return 0;
     }
-    if (mask & LEGACY_ASSET_LANG) { pex_write_legacy_languages_txt(); pex_set_language_code(g_opts.language); }
+    if (mask & LEGACY_ASSET_LANG) {
+        pex_write_legacy_languages_txt();
+        /* Make newly downloaded legacy languages visible immediately; otherwise
+           the language list can stay cached until the next client launch. */
+        pex_language_refresh_available();
+        pex_set_language_code(g_opts.language);
+    }
     legacy_assets_recompute_status();
     pex_sound_rescan();
+    if (mask & CLASSIC_AUDIO_MENU_MUSIC) {
+        /* Menu music checks files directly; kick it once so newly downloaded
+           menu tracks can start without restarting the client. */
+        pex_menu_music_stop();
+        pex_menu_music_start_once();
+    }
     legacy_download_set_state(CLASSIC_INSTALL_DONE, 100, "Done");
     return 0;
 }

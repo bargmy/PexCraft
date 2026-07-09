@@ -737,7 +737,7 @@ static void rename_selected_world_save(void) {
 static void world_save_drag_scroll(int delta_y) {
     if (g_screen != SCREEN_WORLD_SELECT && g_screen != SCREEN_WORLD_DELETE) return;
     if (delta_y == 0) return;
-    g_world_drag_scroll_pixels -= delta_y;
+    g_world_drag_scroll_pixels += delta_y;
     int rows = 0;
     while (g_world_drag_scroll_pixels >= 36) {
         rows++;
@@ -817,35 +817,44 @@ static void rebuild_screen(void) {
     } else if (g_screen == SCREEN_ASSETS) {
         int idx_state = legacy_assets_index_state();
         int downloading = legacy_assets_is_downloading();
-        int y = g_gui_h / 6 + 66;
+        int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
+        int grid_w = g_gui_w - 40;
+        int gap = 6;
+        int button_h = 26;
+        int start_x, button_w;
+        int y0 = 58;
+        int shown = 0;
+        if (grid_w > 390) grid_w = 390;
+        if (grid_w < 300) grid_w = 300;
+        button_w = (grid_w - gap * 2) / 3;
+        start_x = g_gui_w / 2 - grid_w / 2;
         if (idx_state == CLASSIC_SIZE_ERROR) {
-            add_button_full(300, g_gui_w / 2 - 100, y, 200, 20, "Retry fetch", BUTTON_NORMAL);
+            add_button_full(300, g_gui_w / 2 - 100, y0, 200, 20, "Retry fetch", BUTTON_NORMAL);
         } else if (idx_state == CLASSIC_SIZE_READY) {
-            int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
-            if (!downloading && legacy_assets_any_missing()) {
-                add_button_full(6000, g_gui_w / 2 - 100, y, 200, 20, "Download ALL missing", BUTTON_NORMAL);
-                y += 24;
-            }
             for (int i = 0; i < (int)ARRAY_COUNT(cats); ++i) {
                 int cat = cats[i];
-                if (downloading) {
-                    if (legacy_assets_download_mask() & cat) {
-                        char label[MAX_LABEL];
-                        Button *bb;
-                        legacy_asset_button_label(cat, label, sizeof(label));
-                        bb = add_button_full(6100 + i, g_gui_w / 2 - 140, y, 280, 20, label, BUTTON_NORMAL);
-                        bb->enabled = 0;
-                        y += 22;
-                    }
-                } else if (legacy_asset_group_missing(cat)) {
+                int show = 0;
+                if (downloading) show = (legacy_assets_download_mask() & cat) != 0;
+                else show = legacy_asset_group_missing(cat);
+                if (show) {
                     char label[MAX_LABEL];
+                    int col = shown % 3;
+                    int row = shown / 3;
+                    Button *bb;
                     legacy_asset_button_label(cat, label, sizeof(label));
-                    add_button_full(6100 + i, g_gui_w / 2 - 140, y, 280, 20, label, BUTTON_NORMAL);
-                    y += 22;
+                    bb = add_button_full(6100 + i, start_x + col * (button_w + gap), y0 + row * (button_h + 8), button_w, button_h, label, BUTTON_NORMAL);
+                    if (bb && downloading) bb->enabled = 0;
+                    shown++;
                 }
             }
         }
-        add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, downloading ? "Cancel" : tr("Done"), BUTTON_NORMAL);
+        {
+            int bottom_y = g_gui_h - 28;
+            Button *done = add_button_full(200, g_gui_w / 2 - 103, bottom_y, 100, 20, downloading ? "Cancel" : tr("Done"), BUTTON_NORMAL);
+            Button *all = add_button_full(6000, g_gui_w / 2 + 3, bottom_y, 100, 20, "Download all", BUTTON_NORMAL);
+            (void)done;
+            if (all && (idx_state != CLASSIC_SIZE_READY || downloading || !legacy_assets_any_missing())) all->enabled = 0;
+        }
     } else if (g_screen == SCREEN_SYSTEM_INFO) {
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 24, 200, 20, tr("Back"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_LANGUAGE) {
@@ -1395,7 +1404,7 @@ static void texpack_mouse_down(int mx, int my) {
 
 static void texpack_mouse_drag(int my) {
     if (g_texpack_drag_anchor >= 0) {
-        g_texpack_scroll -= (my - g_texpack_drag_anchor);
+        g_texpack_scroll += (my - g_texpack_drag_anchor);
         g_texpack_drag_anchor = my;
         clamp_texpack_scroll();
     }

@@ -1029,6 +1029,19 @@ static void draw_button(Button *b) {
         return;
     }
     int col;
+    if (g_screen == SCREEN_ASSETS && b->id >= 6100 && b->id < 6107) {
+        int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
+        int cat = cats[b->id - 6100];
+        legacy_asset_button_label(cat, b->label, sizeof(b->label));
+        if (legacy_assets_is_downloading() && (legacy_assets_download_mask() & cat)) {
+            int p = legacy_asset_group_progress_percent(cat);
+            int px0 = b->x + 3;
+            int py0 = b->y + b->h - 5;
+            int px1 = b->x + b->w - 3;
+            draw_rect(px0, py0, px1, py0 + 2, 0xFF555555);
+            draw_rect(px0, py0, px0 + ((px1 - px0) * p) / 100, py0 + 2, 0xFF55FF55);
+        }
+    }
     if (!b->enabled) col = -6250336;
     else if (hover) col = 16777120;
     else col = 14737632;

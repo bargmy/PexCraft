@@ -2370,6 +2370,7 @@ static const char *tr(const char *en);
 static const char *tr_key(const char *key);
 static const char *tr_key_default(const char *key, const char *fallback);
 static void pex_set_language_code(const char *code);
+static void pex_language_refresh_available(void);
 static int pex_language_count(void);
 static const char *pex_language_code_at(int idx);
 static const char *pex_language_name_at(int idx);
@@ -2432,6 +2433,7 @@ static int legacy_assets_any_missing(void);
 static int legacy_asset_group_missing(int category);
 static void legacy_asset_group_summary(int category, char *out, size_t cap);
 static void legacy_asset_button_label(int category, char *out, size_t cap);
+static int legacy_asset_group_progress_percent(int category);
 static void legacy_assets_start_download(int mask);
 static int legacy_assets_is_downloading(void);
 static void legacy_assets_request_cancel(void);
@@ -2452,6 +2454,7 @@ static int legacy_assets_any_missing(void) { return 0; }
 static int legacy_asset_group_missing(int category) { (void)category; return 0; }
 static void legacy_asset_group_summary(int category, char *out, size_t cap) { (void)category; if (out && cap) snprintf(out, cap, "Legacy asset downloads are not available on this platform."); }
 static void legacy_asset_button_label(int category, char *out, size_t cap) { (void)category; if (out && cap) snprintf(out, cap, "Unavailable"); }
+static int legacy_asset_group_progress_percent(int category) { (void)category; return 0; }
 static void legacy_assets_start_download(int mask) { (void)mask; }
 static int legacy_assets_is_downloading(void) { return 0; }
 static void legacy_assets_request_cancel(void) {}
