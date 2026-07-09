@@ -7,6 +7,7 @@ static void pex_ui_text_input_end(void);
 static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h);
 static void pex_ui_text_input_begin_for_current_field(void);
 static void create_world_update_folder(void);
+static void scan_world_saves(void);
 static int handle_local_chat_command(const char *text);
 static void handle_char(WPARAM ch);
 static void handle_text_input_utf8(const char *text);
@@ -67,6 +68,10 @@ static void set_screen(ScreenId s) {
         g_selected_world_index = -1;
         g_world_save_scroll = 0;
         g_world_drag_scroll_pixels = 0;
+        /* Scan once on screen entry.  Do not rescan on every rebuild/scroll tick:
+           reading every level.dat + dir_size() during scrollbar dragging was the
+           worlds-screen hitch. */
+        scan_world_saves();
     }
     if (s == SCREEN_LANGUAGE && old_screen != SCREEN_LANGUAGE) language_ensure_selected_visible();
     if (s == SCREEN_SET_NAME && old_screen != SCREEN_SET_NAME && !g_name_edit_text[0])
@@ -771,8 +776,12 @@ static void world_save_mouse_down(int mx, int my) {
 }
 
 static void world_save_mouse_up(void) {
+    int was_dragging_bar = g_world_drag_mode ? 1 : 0;
     g_world_drag_mode = 0;
     g_world_drag_scroll_pixels = 0;
+    if ((g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) && was_dragging_bar) {
+        rebuild_screen();
+    }
 }
 
 static void world_save_drag_scroll(int delta_y) {
@@ -790,7 +799,10 @@ static void world_save_drag_scroll(int delta_y) {
         if (max_scroll < 0) max_scroll = 0;
         if (view_h - thumb_h > 0) g_world_save_scroll = g_world_drag_start_scroll + (g_mouse_y - g_world_drag_start_y) * max_scroll / (view_h - thumb_h);
         clamp_world_save_scroll();
-        rebuild_screen();
+        /* Do not rebuild while the thumb is moving.  draw_world_slot_rows()
+           reads g_world_save_scroll directly, and the row hitboxes are not needed
+           until the scrollbar is released.  Rebuilding here caused repeated
+           world rescans and visible lag. */
         return;
     }
     g_world_drag_scroll_pixels -= delta_y;
@@ -977,7 +989,6 @@ static void rebuild_screen(void) {
         /* Legacy screen id kept for old callers; new worlds use SCREEN_CREATE_WORLD. */
         add_button_full(2, g_gui_w / 2 - 100, g_gui_h / 4 + 108, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
-        scan_world_saves();
         int visible_rows = world_save_visible_rows();
         if (visible_rows > g_world_save_count - g_world_save_scroll) visible_rows = g_world_save_count - g_world_save_scroll;
         if (visible_rows < 0) visible_rows = 0;

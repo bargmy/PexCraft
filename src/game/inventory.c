@@ -2269,6 +2269,45 @@ static void flat_mark_section_dirty(int cx, int cz, int sy) {
     g_flat_renderer_sort_dirty = 1;
 }
 
+#define FLAT_URGENT_EDIT_MESH_MAX 16
+static int g_flat_urgent_edit_mesh_count = 0;
+static unsigned char g_flat_urgent_edit_mesh_sy[FLAT_URGENT_EDIT_MESH_MAX];
+static unsigned char g_flat_urgent_edit_mesh_cx[FLAT_URGENT_EDIT_MESH_MAX];
+static unsigned char g_flat_urgent_edit_mesh_cz[FLAT_URGENT_EDIT_MESH_MAX];
+
+static void flat_note_urgent_edit_mesh(int sy, int cx, int cz) {
+    if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
+    for (int i = 0; i < g_flat_urgent_edit_mesh_count; ++i) {
+        if (g_flat_urgent_edit_mesh_sy[i] == (unsigned char)sy &&
+            g_flat_urgent_edit_mesh_cx[i] == (unsigned char)cx &&
+            g_flat_urgent_edit_mesh_cz[i] == (unsigned char)cz) return;
+    }
+    if (g_flat_urgent_edit_mesh_count >= FLAT_URGENT_EDIT_MESH_MAX) {
+        memmove(g_flat_urgent_edit_mesh_sy, g_flat_urgent_edit_mesh_sy + 1, (FLAT_URGENT_EDIT_MESH_MAX - 1) * sizeof(g_flat_urgent_edit_mesh_sy[0]));
+        memmove(g_flat_urgent_edit_mesh_cx, g_flat_urgent_edit_mesh_cx + 1, (FLAT_URGENT_EDIT_MESH_MAX - 1) * sizeof(g_flat_urgent_edit_mesh_cx[0]));
+        memmove(g_flat_urgent_edit_mesh_cz, g_flat_urgent_edit_mesh_cz + 1, (FLAT_URGENT_EDIT_MESH_MAX - 1) * sizeof(g_flat_urgent_edit_mesh_cz[0]));
+        g_flat_urgent_edit_mesh_count = FLAT_URGENT_EDIT_MESH_MAX - 1;
+    }
+    g_flat_urgent_edit_mesh_sy[g_flat_urgent_edit_mesh_count] = (unsigned char)sy;
+    g_flat_urgent_edit_mesh_cx[g_flat_urgent_edit_mesh_count] = (unsigned char)cx;
+    g_flat_urgent_edit_mesh_cz[g_flat_urgent_edit_mesh_count] = (unsigned char)cz;
+    g_flat_urgent_edit_mesh_count++;
+}
+
+static int flat_pop_urgent_edit_mesh(int *sy, int *cx, int *cz) {
+    if (g_flat_urgent_edit_mesh_count <= 0) return 0;
+    if (sy) *sy = g_flat_urgent_edit_mesh_sy[0];
+    if (cx) *cx = g_flat_urgent_edit_mesh_cx[0];
+    if (cz) *cz = g_flat_urgent_edit_mesh_cz[0];
+    g_flat_urgent_edit_mesh_count--;
+    if (g_flat_urgent_edit_mesh_count > 0) {
+        memmove(g_flat_urgent_edit_mesh_sy, g_flat_urgent_edit_mesh_sy + 1, (size_t)g_flat_urgent_edit_mesh_count * sizeof(g_flat_urgent_edit_mesh_sy[0]));
+        memmove(g_flat_urgent_edit_mesh_cx, g_flat_urgent_edit_mesh_cx + 1, (size_t)g_flat_urgent_edit_mesh_count * sizeof(g_flat_urgent_edit_mesh_cx[0]));
+        memmove(g_flat_urgent_edit_mesh_cz, g_flat_urgent_edit_mesh_cz + 1, (size_t)g_flat_urgent_edit_mesh_count * sizeof(g_flat_urgent_edit_mesh_cz[0]));
+    }
+    return 1;
+}
+
 static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return;
     /* A player/block edit should be visible quickly.  Java adds the touched
@@ -2287,6 +2326,7 @@ static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
        shared boundary.  The previous implementation dirtied the full 3x3x3
        neighborhood for every edit/liquid/falling-block update, causing 27
        sections to be rebuilt for many single-block changes. */
+    flat_note_urgent_edit_mesh(sy0, cx0, cz0);
     flat_mark_section_dirty(cx0, cz0, sy0);
     if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0 - 1, cz0, sy0);
     if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0 + 1, cz0, sy0);
@@ -10220,8 +10260,12 @@ static void flat_run_initial_light_settle(void) {
            for asynchronous edge/neighbor repair, but do not block the loading
            screen or terrain visibility on that repair. */
         g_stream_initial_light_settle_progress = 30;
-        flat_mark_light_dirty_region(rx0, rz0, rx1, rz1);
-        flat_lighting_worker_wake();
+        /* Do not enqueue a full-window relight here.  That merged hundreds of
+           chunks into one giant dirty region, produced 1-2 second background
+           lighting jobs, then dirtied huge numbers of meshes after the world was
+           already playable.  Generated chunks already carry their own light; any
+           later real block/light edits mark the exact affected area. */
+        (void)rx0; (void)rz0; (void)rx1; (void)rz1;
         g_stream_initial_light_settle_progress = 90;
         for (int lcz = min_lcz; lcz <= max_lcz; ++lcz) {
             for (int lcx = min_lcx; lcx <= max_lcx; ++lcx) {

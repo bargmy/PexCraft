@@ -823,10 +823,16 @@ static void draw_world_slot_rows(void) {
 
         char file_line[128];
         snprintf(file_line, sizeof(file_line), "%s (%s)", e->dir_name, date);
-        const char *mode_line = "Survival Mode";
-        if (e->requires_conversion) mode_line = "Must be converted!";
-        else if (e->hardcore) mode_line = "Hardcore Mode!";
-        else if (e->game_mode == 1) mode_line = "Creative Mode";
+        char mode_line[128];
+        if (e->requires_conversion) {
+            snprintf(mode_line, sizeof(mode_line), "%s", tr_key_default("selectWorld.conversion", "Must be converted!"));
+        } else if (e->hardcore) {
+            snprintf(mode_line, sizeof(mode_line), "%s %s", tr_key_default("selectWorld.gameMode", "Game Mode"), tr_key_default("gameMode.hardcore", "Hardcore Mode!"));
+        } else {
+            snprintf(mode_line, sizeof(mode_line), "%s %s",
+                     tr_key_default("selectWorld.gameMode", "Game Mode"),
+                     e->game_mode == 1 ? tr_key_default("gameMode.creative", "Creative Mode") : tr_key_default("gameMode.survival", "Survival Mode"));
+        }
         draw_text(e->display_name[0] ? e->display_name : e->dir_name, left + 2, row_y + 1, 16777215);
         draw_text(file_line, left + 2, row_y + 12, 8421504);
         draw_text(mode_line, left + 2, row_y + 22, e->hardcore ? 16733525 : 8421504);

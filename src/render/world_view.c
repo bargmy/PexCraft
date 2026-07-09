@@ -6947,6 +6947,19 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     }
 #endif
 
+    if (recent_edit) {
+        int urgent_budget = 4;
+        int usy = 0, ucx = 0, ucz = 0;
+        while (urgent_budget-- > 0 && rebuilds_left > 0 && flat_pop_urgent_edit_mesh(&usy, &ucx, &ucz)) {
+            if (!flat_local_chunk_valid(ucx, ucz) || !flat_section_index_valid(usy)) continue;
+            if (!g_flat_world_chunk_generated[ucz][ucx] || !flat_chunk_light_ready(ucx, ucz)) continue;
+            if (g_flat_section_mesh_building[usy][ucz][ucx]) g_flat_section_mesh_building[usy][ucz][ucx] = 0;
+            pex_logf_trace("chunk mesh urgent edit rebuild sy=%d local=%d,%d", usy, ucx, ucz);
+            rebuild_flat_section_list(usy, ucx, ucz);
+            rebuilds_left--;
+        }
+    }
+
     for (int i = 0; i < count && rebuilds_left > 0; i++) {
         if (now_seconds() > deadline) break;
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
