@@ -444,6 +444,7 @@ static void flat_mark_light_sections_dirty_near_block(int x, int y, int z);
 static void flat_mark_generated_section(int lcx, int lcz, int sy);
 static void flat_mark_section_dirty(int cx, int cz, int sy);
 static void flat_mark_edit_section_dirty(int cx, int cz, int sy);
+static void flat_mark_section_light_dirty(int cx, int cz, int sy);
 static int flat_section_has_blocks(int lcx, int lcz, int sy);
 static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
 static int flat_current_dimension_has_sky(void);
@@ -1159,20 +1160,31 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     }
     for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
         for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
-            if (changed_chunks[lcz][lcx]) {
-                g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
-                /* STRICT RENDER STATE:
-                   Background light repair is allowed to update saved light arrays,
-                   but it must not invalidate already-rendered section meshes.  The
-                   old path bumped the chunk light version and dirtied every changed
-                   light section, so a settled chunk could rebuild repeatedly and
-                   accept/reject async results in a loop, causing dark patches and
-                   lag.  Geometry edits explicitly dirty meshes; light repair alone
-                   only updates the saved light cache for future explicit rebuilds. */
+            if (changed_chunks[lcz][lcx] && g_flat_world_chunk_generated[lcz][lcx]) {
+                g_flat_chunk_light_ready[lcz][lcx] = 1;
+                flat_bump_light_version(lcx, lcz);
             }
         }
     }
-    (void)changed_sections;
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
+            for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
+                if (!changed_sections[sy][lcz][lcx]) continue;
+                /* A validated lighting commit causes exactly one async repaint
+                   request for the affected section.  It does not bump terrain_rev
+                   and does not remove the old mesh, so chunks do not flash black. */
+                if (flat_section_has_blocks(lcx, lcz, sy)) {
+                    flat_mark_section_light_dirty(lcx, lcz, sy);
+                } else {
+                    g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
+                    g_flat_section_dirty[sy][lcz][lcx] = 0;
+                    g_flat_section_valid[sy][lcz][lcx] = 1;
+                    g_flat_section_skip_pass[sy][lcz][lcx][0] = 1;
+                    g_flat_section_skip_pass[sy][lcz][lcx][1] = 1;
+                }
+            }
+        }
+    }
     int cx0 = floor_div16(x0), cx1 = floor_div16(x1);
     int cz0 = floor_div16(z0), cz1 = floor_div16(z1);
     pex_logf_trace("lighting region recalculated x=%d..%d z=%d..%d chunks=%d..%d,%d..%d sky_spread=%d changed_sections=%d", x0, x1, z0, z1, cx0, cx1, cz0, cz1, propagate_sky, changed_section_count);
@@ -1589,7 +1601,7 @@ static void flat_mark_visual_light_changed(int x, int y, int z) {
     /* Preview light is purely visual.  Dirty the affected section, but do not
        put it into the edit-priority queue; the real edited block section is
        already queued by flat_set_block_raw(). */
-    flat_mark_section_dirty(lcx, lcz, sy);
+    flat_mark_section_light_dirty(lcx, lcz, sy);
 }
 
 static void flat_set_preview_light_kind(int kind, int x, int y, int z, int value, int only_raise) {
@@ -2475,6 +2487,8 @@ static void flat_note_section_mesh_changed(int sy, int cz, int cx) {
     g_flat_section_mesh_version[sy][cz][cx]++;
     if (g_flat_section_mesh_version[sy][cz][cx] == 0) g_flat_section_mesh_version[sy][cz][cx] = 1;
     g_flat_section_mesh_building[sy][cz][cx] = 0;
+    g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+    g_flat_section_building_light_version[sy][cz][cx] = 0;
 }
 
 static void flat_mark_all_chunks_dirty(void) {
@@ -2580,6 +2594,8 @@ static void flat_mark_edit_section_dirty(int cx, int cz, int sy) {
            old result disposable; clearing the building flag lets the priority
            worker pool snapshot the newest block data immediately. */
         g_flat_section_mesh_building[sy][cz][cx] = 0;
+        g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+        g_flat_section_building_light_version[sy][cz][cx] = 0;
     }
     flat_note_edit_priority_section(cx, cz, sy);
 }
@@ -2592,6 +2608,24 @@ static void flat_mark_section_dirty(int cx, int cz, int sy) {
     g_flat_renderer_sort_dirty = 1;
 }
 
+static void flat_mark_section_light_dirty(int cx, int cz, int sy) {
+    if (!flat_local_chunk_valid(cx, cz) || !flat_section_index_valid(sy)) return;
+    if (!g_flat_world_chunk_generated[cz][cx]) return;
+    /* Lighting repaint only: never bump terrain revision and never uninstall the
+       current mesh.  The old mesh stays drawable until an async mesh for the
+       new light revision is accepted. */
+    g_flat_section_dirty[sy][cz][cx] = 1;
+    if (g_flat_section_mesh_building[sy][cz][cx] &&
+        (g_flat_section_building_mesh_version[sy][cz][cx] != g_flat_section_mesh_version[sy][cz][cx] ||
+         g_flat_section_building_light_version[sy][cz][cx] != g_flat_chunk_light_version[cz][cx])) {
+        g_flat_section_mesh_building[sy][cz][cx] = 0;
+        g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+        g_flat_section_building_light_version[sy][cz][cx] = 0;
+    }
+    g_flat_world_chunk_dirty[cz][cx] = 1;
+    g_flat_renderer_sort_dirty = 1;
+}
+
 static void flat_mark_light_sections_dirty_near_block(int x, int y, int z) {
     if (!flat_in_bounds(x, y, z)) return;
     int fx = flat_index(x);
@@ -2600,13 +2634,13 @@ static void flat_mark_light_sections_dirty_near_block(int x, int y, int z) {
     int cz0 = fz / FLAT_RENDER_CHUNK;
     int sy0 = (y - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
 
-    flat_mark_section_dirty(cx0, cz0, sy0);
-    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0 - 1, cz0, sy0);
-    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0 + 1, cz0, sy0);
-    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_dirty(cx0, cz0 - 1, sy0);
-    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_dirty(cx0, cz0 + 1, sy0);
-    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_section_dirty(cx0, cz0, sy0 - 1);
-    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_section_dirty(cx0, cz0, sy0 + 1);
+    flat_mark_section_light_dirty(cx0, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_light_dirty(cx0 - 1, cz0, sy0);
+    if ((fx & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_light_dirty(cx0 + 1, cz0, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == 0) flat_mark_section_light_dirty(cx0, cz0 - 1, sy0);
+    if ((fz & (FLAT_RENDER_CHUNK - 1)) == FLAT_RENDER_CHUNK - 1) flat_mark_section_light_dirty(cx0, cz0 + 1, sy0);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0) flat_mark_section_light_dirty(cx0, cz0, sy0 - 1);
+    if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1) flat_mark_section_light_dirty(cx0, cz0, sy0 + 1);
 }
 
 static void flat_mark_sections_dirty_near_block(int x, int y, int z) {
@@ -2692,37 +2726,43 @@ static void flat_bump_light_version(int lcx, int lcz) {
 
 static int flat_chunk_light_ready(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return 0;
-    /* Java has no separate final-light-ready gate for terrain rendering: a
-       generated chunk is renderable, and missing/stale light falls back to the
-       EnumSkyBlock defaults until light updates dirty/rebuild renderers.  Keep
-       g_flat_chunk_light_ready as an internal repair-state/version trigger, but
-       do not let it hide generated terrain. */
-    return g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
+    /* Strict renderer rule: generated terrain is not drawable until a light
+       buffer was explicitly published for that chunk.  Drawing terrain before
+       this is what produced black/ghost chunk patches. */
+    return (g_flat_world_chunk_generated[lcz][lcx] && g_flat_chunk_light_ready[lcz][lcx]) ? 1 : 0;
 }
 
 static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
     int old_ready = g_flat_chunk_light_ready[lcz][lcx];
-    g_flat_chunk_light_ready[lcz][lcx] = ready ? 1 : 0;
+    int new_ready = ready ? 1 : 0;
+    g_flat_chunk_light_ready[lcz][lcx] = new_ready;
 
-    /* STRICT RENDER STATE:
-       Publishing light-ready is a lighting-cache state change, not a render-cache
-       invalidation.  Once a generated section has a valid mesh, do not dirty it
-       again just because the light worker finished or corrected saved light.
-       Sections rebuild only when explicit block/stream/remap code marks them
-       dirty, or when their first mesh payload is missing. */
-    if (old_ready != g_flat_chunk_light_ready[lcz][lcx]) {
+    /* Strict light ownership: a light revision changes only on explicit publish.
+       That makes lighting self-heal possible without random renderer churn. */
+    if (old_ready != new_ready || (new_ready && dirty_sections)) {
         flat_bump_light_version(lcx, lcz);
     }
+
     if (!dirty_sections) return;
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
         if (!flat_section_has_blocks(lcx, lcz, sy)) {
             g_flat_section_mesh_building[sy][lcz][lcx] = 0;
+            g_flat_section_building_mesh_version[sy][lcz][lcx] = 0;
+            g_flat_section_building_light_version[sy][lcz][lcx] = 0;
             g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
+            continue;
+        }
+        if (!new_ready) {
+            g_flat_section_dirty[sy][lcz][lcx] = 1;
+            g_flat_section_valid[sy][lcz][lcx] = 0;
+            g_flat_section_mesh_building[sy][lcz][lcx] = 0;
+            g_flat_section_building_mesh_version[sy][lcz][lcx] = 0;
+            g_flat_section_building_light_version[sy][lcz][lcx] = 0;
         } else if (!g_flat_section_valid[sy][lcz][lcx]) {
-            flat_mark_section_dirty(lcx, lcz, sy);
+            flat_mark_generated_section(lcx, lcz, sy);
         } else {
-            g_flat_section_mesh_light_version[sy][lcz][lcx] = g_flat_chunk_light_version[lcz][lcx];
+            flat_mark_section_light_dirty(lcx, lcz, sy);
         }
     }
 }
@@ -3290,6 +3330,8 @@ static void flat_prepare_initial_generation(void) {
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
+    memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
+    memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
     for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
@@ -3507,6 +3549,8 @@ static void flat_generate_origin_blocks(void) {
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
+    memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
+    memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_generation_queue_clear();
 
@@ -3647,6 +3691,8 @@ static void flat_generate_traceplace_area(int center_wcx, int center_wcz, int ra
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
+    memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
+    memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
     memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
     stream_reset_initial_batch();
     stream_generation_queue_clear();
@@ -10014,6 +10060,8 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     memset(g_flat_section_direct_mesh, 0, sizeof(g_flat_section_direct_mesh));
     memset(g_flat_section_dirty, 0, sizeof(g_flat_section_dirty));
     memset(g_flat_section_mesh_building, 0, sizeof(g_flat_section_mesh_building));
+    memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
+    memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
     memset(g_flat_section_valid, 0, sizeof(g_flat_section_valid));
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {

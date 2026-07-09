@@ -1764,8 +1764,14 @@ static GLuint g_flat_section_lists[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][F
 static unsigned int g_flat_section_direct_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
 static int g_flat_section_dirty[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_section_valid[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+/* Strict state identity.  mesh_version is the terrain revision and changes only
+   for block/stream/remap geometry.  chunk_light_version is the light revision
+   and changes only after an explicit validated light commit.  build stamps make
+   the async queue one-job-per-section-per-version instead of a rebuild loop. */
 static unsigned int g_flat_section_mesh_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static unsigned int g_flat_section_mesh_light_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned int g_flat_section_building_mesh_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned int g_flat_section_building_light_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_section_mesh_building[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_section_skip_pass[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
 /* Minecraft stores a 16x16x16 renderer on top of section-aware chunk storage.

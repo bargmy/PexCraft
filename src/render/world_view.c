@@ -6035,6 +6035,8 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     flat_direct_free_builder(&mb1);
 
     g_flat_section_mesh_building[sy][cz][cx] = 0;
+    g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+    g_flat_section_building_light_version[sy][cz][cx] = 0;
     g_flat_section_dirty[sy][cz][cx] = 0;
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
@@ -6171,6 +6173,8 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
     glEndList();
 
     g_flat_section_mesh_building[sy][cz][cx] = 0;
+    g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+    g_flat_section_building_light_version[sy][cz][cx] = 0;
     g_flat_section_dirty[sy][cz][cx] = 0;
     g_flat_section_valid[sy][cz][cx] = 1;
     g_flat_section_skip_pass[sy][cz][cx][0] = !has0;
@@ -6503,8 +6507,11 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
                forever.  Clear it so the render pass can retry next frame. */
             if (job.sy >= 0 && job.sy < FLAT_RENDER_SECTIONS_Y &&
                 job.cz >= 0 && job.cz < FLAT_RENDER_CHUNKS && job.cx >= 0 && job.cx < FLAT_RENDER_CHUNKS &&
-                g_flat_section_mesh_version[job.sy][job.cz][job.cx] == job.version) {
+                g_flat_section_mesh_version[job.sy][job.cz][job.cx] == job.version &&
+                g_flat_chunk_light_version[job.cz][job.cx] == job.light_version) {
                 g_flat_section_mesh_building[job.sy][job.cz][job.cx] = 0;
+                g_flat_section_building_mesh_version[job.sy][job.cz][job.cx] = 0;
+                g_flat_section_building_light_version[job.sy][job.cz][job.cx] = 0;
                 g_flat_section_dirty[job.sy][job.cz][job.cx] = 1;
             }
         }
@@ -6558,7 +6565,17 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     if (!flat_async_section_mesh_enabled()) return 0;
     if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y || cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return 0;
     if (!g_flat_world_chunk_generated[cz][cx] || !flat_chunk_light_ready(cx, cz)) return 2;
-    if (g_flat_section_mesh_building[sy][cz][cx]) return 1;
+    if (g_flat_section_mesh_building[sy][cz][cx]) {
+        if (g_flat_section_building_mesh_version[sy][cz][cx] == g_flat_section_mesh_version[sy][cz][cx] &&
+            g_flat_section_building_light_version[sy][cz][cx] == g_flat_chunk_light_version[cz][cx]) {
+            return 1;
+        }
+        /* A newer terrain/light key exists.  Let the newer request own the slot;
+           the old worker result will be rejected by its stamped key. */
+        g_flat_section_mesh_building[sy][cz][cx] = 0;
+        g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+        g_flat_section_building_light_version[sy][cz][cx] = 0;
+    }
     async_section_mesh_init();
     if (!g_async_section_mesh_event || g_async_section_mesh_worker_count <= 0) return 0;
     if (pex_using_d3d11() && (!g_async_section_mesh_upload_event || !g_async_section_mesh_upload_thread)) return 0;
@@ -6605,7 +6622,10 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     profile_add_time(PROF_MESH_SUBMIT_SNAPSHOT, snapshot_start);
 
     EnterCriticalSection(&g_async_section_mesh_cs);
-    if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx]) {
+    if (!g_async_section_mesh_stop && !g_flat_section_mesh_building[sy][cz][cx] &&
+        g_flat_section_mesh_version[sy][cz][cx] == job.version &&
+        g_flat_chunk_light_version[cz][cx] == job.light_version &&
+        flat_chunk_light_ready(cx, cz)) {
         if (g_async_section_mesh_job_count >= ASYNC_SECTION_MESH_JOB_QUEUE_MAX && priority) {
             /* Player-near block/light edits must not wait behind a full streaming
                backlog.  Drop the newest queued background rebuild, clear its
@@ -6617,6 +6637,8 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
             if (dropped.sy >= 0 && dropped.sy < FLAT_RENDER_SECTIONS_Y &&
                 dropped.cz >= 0 && dropped.cz < FLAT_RENDER_CHUNKS && dropped.cx >= 0 && dropped.cx < FLAT_RENDER_CHUNKS) {
                 g_flat_section_mesh_building[dropped.sy][dropped.cz][dropped.cx] = 0;
+                g_flat_section_building_mesh_version[dropped.sy][dropped.cz][dropped.cx] = 0;
+                g_flat_section_building_light_version[dropped.sy][dropped.cz][dropped.cx] = 0;
             }
             memset(&g_async_section_mesh_jobs[drop], 0, sizeof(g_async_section_mesh_jobs[0]));
             g_async_section_mesh_job_tail = drop;
@@ -6632,6 +6654,8 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
             }
             g_async_section_mesh_job_count++;
             g_flat_section_mesh_building[sy][cz][cx] = 1;
+            g_flat_section_building_mesh_version[sy][cz][cx] = job.version;
+            g_flat_section_building_light_version[sy][cz][cx] = job.light_version;
             can_submit = 1;
         } else {
             can_submit = 0;
@@ -6678,9 +6702,10 @@ static void async_section_mesh_install_ready(int max_uploads) {
         if (r.origin_x == g_flat_world_origin_x && r.origin_z == g_flat_world_origin_z &&
             r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS &&
             g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version &&
+            g_flat_chunk_light_version[r.cz][r.cx] == r.light_version &&
             flat_chunk_light_ready(r.cx, r.cz)) {
-            /* Accept the mesh for the geometry version it was built for.  Light
-               version is intentionally not part of strict render validity. */
+            /* Accept only the exact terrain_rev + light_rev snapshot that is
+               current for this local section.  Any stale result is freed. */
             valid = 1;
         }
         if (valid) {
@@ -6700,16 +6725,16 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 flat_gl_cpu_mesh_install(r.sy, r.cz, r.cx, 1, &r.mb1, r.skip1, r.version, r.origin_x, r.origin_z);
             }
             g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
+            g_flat_section_building_mesh_version[r.sy][r.cz][r.cx] = 0;
+            g_flat_section_building_light_version[r.sy][r.cz][r.cx] = 0;
             if (installed) {
                 g_flat_section_dirty[r.sy][r.cz][r.cx] = 0;
                 g_flat_section_valid[r.sy][r.cz][r.cx] = 1;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][0] = r.skip0;
                 g_flat_section_skip_pass[r.sy][r.cz][r.cx][1] = r.skip1;
-                /* Mark this section settled for the current chunk light epoch.
-                   The baked vertex colors come from the job snapshot, but strict
-                   mode must not let later light-worker epochs automatically
-                   invalidate this installed mesh. */
-                g_flat_section_mesh_light_version[r.sy][r.cz][r.cx] = g_flat_chunk_light_version[r.cz][r.cx];
+                /* Mark this section settled for the exact light revision baked
+                   into the worker snapshot. */
+                g_flat_section_mesh_light_version[r.sy][r.cz][r.cx] = r.light_version;
                 pex_logf_trace("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
             } else {
                 g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
@@ -6720,8 +6745,11 @@ static void async_section_mesh_install_ready(int max_uploads) {
                If a newer geometry version exists, that newer edit/remap already owns
                the dirty/building state.  Only clear/retry when the result still
                matches the current version and there is no valid mesh to keep. */
-            if (g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version) {
+            if (g_flat_section_building_mesh_version[r.sy][r.cz][r.cx] == r.version &&
+                g_flat_section_building_light_version[r.sy][r.cz][r.cx] == r.light_version) {
                 g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
+                g_flat_section_building_mesh_version[r.sy][r.cz][r.cx] = 0;
+                g_flat_section_building_light_version[r.sy][r.cz][r.cx] = 0;
                 if (!g_flat_section_valid[r.sy][r.cz][r.cx]) g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
             }
             if (g_loggy_enabled) g_loggy_mesh_stale_results++;
@@ -6778,6 +6806,8 @@ static void async_section_mesh_shutdown(void) {
     g_async_section_mesh_upload_head = g_async_section_mesh_upload_tail = g_async_section_mesh_upload_count = 0;
     g_async_section_mesh_result_head = g_async_section_mesh_result_tail = g_async_section_mesh_result_count = 0;
     memset(g_flat_section_mesh_building, 0, sizeof(g_flat_section_mesh_building));
+    memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
+    memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
 }
 
 static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionRef *out, int cap) {
@@ -6802,6 +6832,7 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
     for (int cz = cz0; cz <= cz1; cz++) {
         for (int cx = cx0; cx <= cx1; cx++) {
             if (!g_flat_world_chunk_generated[cz][cx]) continue;
+            if (!flat_chunk_light_ready(cx, cz)) continue;
             float x0 = (float)(g_flat_world_origin_x + cx * FLAT_RENDER_CHUNK) - 2.0f;
             float z0 = (float)(g_flat_world_origin_z + cz * FLAT_RENDER_CHUNK) - 2.0f;
             float x1 = x0 + (float)FLAT_RENDER_CHUNK + 4.0f;
@@ -6902,7 +6933,19 @@ static void flat_self_heal_visible_sections(const FlatRenderSectionRef *refs, in
         int cx = refs[ri].cx, cz = refs[ri].cz, sy = refs[ri].sy;
         if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) continue;
         if (!g_flat_world_chunk_generated[cz][cx]) continue;
+        if (!flat_chunk_light_ready(cx, cz)) continue;
         probes_done++;
+
+        /* Math self-heal: sparsely validate generated, light-ready chunks against
+           the top-down skylight equation.  A mismatch queues a light repair only;
+           it does not dirty render meshes until the repair commits a new light_rev. */
+        if (!recent_edit && (s_frame_counter % 30) == 0 && sy == 0) {
+            if (flat_sky_light_needs_rebuild(cx, cz)) {
+                int wx = g_flat_world_origin_x + cx * FLAT_RENDER_CHUNK + 8;
+                int wz = g_flat_world_origin_z + cz * FLAT_RENDER_CHUNK + 8;
+                flat_queue_light_repair_at_block(wx, wz);
+            }
+        }
 
         int dirty_or_invalid = (!g_flat_section_valid[sy][cz][cx] || g_flat_section_dirty[sy][cz][cx]);
         int payload_missing = 0;
@@ -7348,7 +7391,7 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][0];
-        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] && h) rb->draw_mesh(h, &st);
+        if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] && h) rb->draw_mesh(h, &st);
     }
 }
 
@@ -7360,7 +7403,7 @@ static void draw_translucent_sections_direct(const FlatRenderSectionRef *refs, i
     for (int i = count - 1; i >= 0; i--) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][1];
-        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] && h) rb->draw_mesh(h, &st);
+        if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] && h) rb->draw_mesh(h, &st);
     }
 }
 
@@ -7388,7 +7431,7 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
     glDepthMask(GL_TRUE);
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
+        if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
             flat_gl_cpu_mesh_drawable(sy, cz, cx, 0)) {
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
         }
@@ -7413,7 +7456,7 @@ static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, i
     glDepthMask(GL_FALSE);
     for (int i = count - 1; i >= 0; i--) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
+        if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
             flat_gl_cpu_mesh_drawable(sy, cz, cx, 1)) {
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
         }
@@ -7437,7 +7480,7 @@ static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count
     glDepthMask(GL_TRUE);
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
+        if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
             g_flat_section_lists[sy][cz][cx][0] != 0) {
             glCallList(g_flat_section_lists[sy][cz][cx][0]);
         }
@@ -7459,7 +7502,7 @@ static void draw_translucent_sections(const FlatRenderSectionRef *refs, int coun
     glDepthMask(GL_FALSE);
     for (int i = count - 1; i >= 0; i--) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
-        if (g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
+        if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
             g_flat_section_lists[sy][cz][cx][1] != 0) {
             glCallList(g_flat_section_lists[sy][cz][cx][1]);
         }
