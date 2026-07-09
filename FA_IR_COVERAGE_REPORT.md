@@ -1,0 +1,285 @@
+# fa_IR language coverage notes
+
+This report was generated against the uploaded `fa_IR.lang` and the keys PexCraft asks for after the mapping patch.
+
+- PexCraft-used keys checked: 397
+- Missing from `fa_IR.lang`: 21
+- Present but ASCII/English-looking: 310
+
+## Missing keys
+
+- `downloadTerrain`
+- `item.dyePowder.name`
+- `item.fishCooked.name`
+- `item.fishRaw.name`
+- `menu.game`
+- `menu.preparingSpawn`
+- `selectWorld.legacyUnused`
+- `selectWorld.play`
+- `texturePack.folderInfo`
+- `texturePack.openFolder`
+- `texturePack.title`
+- `tile.brewingStand.name`
+- `tile.diode.name`
+- `tile.dirt.name`
+- `tile.flower.name`
+- `tile.melonStem.name`
+- `tile.pumpkinStem.name`
+- `tile.rose.name`
+- `tile.sand.name`
+- `tile.sapling.name`
+- `tile.stoneSlab.name`
+
+## Present but still English-looking in the uploaded file
+
+- `container.chest` = `Chest`
+- `container.crafting` = `Crafting`
+- `container.creative` = `Item Selection`
+- `container.furnace` = `Furnace`
+- `container.inventory` = `Inventory`
+- `deathScreen.respawn` = `Respawn`
+- `deathScreen.score` = `Score`
+- `deathScreen.title` = `You died!`
+- `deathScreen.titleScreen` = `Title screen`
+- `entity.Blaze.name` = `Blaze`
+- `entity.CaveSpider.name` = `Cave Spider`
+- `entity.Chicken.name` = `Chicken`
+- `entity.Cow.name` = `Cow`
+- `entity.Creeper.name` = `Creeper`
+- `entity.EnderDragon.name` = `Ender Dragon`
+- `entity.Enderman.name` = `Enderman`
+- `entity.Ghast.name` = `Ghast`
+- `entity.Giant.name` = `Giant`
+- `entity.LavaSlime.name` = `Magma Cube`
+- `entity.MushroomCow.name` = `Mooshroom`
+- `entity.Ozelot.name` = `Ocelot`
+- `entity.Pig.name` = `Pig`
+- `entity.PigZombie.name` = `Zombie Pigman`
+- `entity.Sheep.name` = `Sheep`
+- `entity.Silverfish.name` = `Silverfish`
+- `entity.Skeleton.name` = `Skeleton`
+- `entity.Slime.name` = `Slime`
+- `entity.SnowMan.name` = `Snow Golem`
+- `entity.Spider.name` = `Spider`
+- `entity.Squid.name` = `Squid`
+- `entity.Villager.name` = `Villager`
+- `entity.VillagerGolem.name` = `Iron Golem`
+- `entity.Wolf.name` = `Wolf`
+- `entity.Zombie.name` = `Zombie`
+- `item.apple.name` = `Apple`
+- `item.appleGold.name` = `Golden Apple`
+- `item.arrow.name` = `Arrow`
+- `item.beefCooked.name` = `Steak`
+- `item.beefRaw.name` = `Raw Beef`
+- `item.blazePowder.name` = `Blaze Powder`
+- `item.blazeRod.name` = `Blaze Rod`
+- `item.boat.name` = `Boat`
+- `item.bone.name` = `Bone`
+- `item.book.name` = `Book`
+- `item.bootsChain.name` = `Chain Boots`
+- `item.bootsCloth.name` = `Leather Boots`
+- `item.bootsDiamond.name` = `Diamond Boots`
+- `item.bootsGold.name` = `Golden Boots`
+- `item.bootsIron.name` = `Iron Boots`
+- `item.bow.name` = `Bow`
+- `item.bowl.name` = `Bowl`
+- `item.bread.name` = `Bread`
+- `item.brewingStand.name` = `Brewing Stand`
+- `item.brick.name` = `Brick`
+- `item.bucket.name` = `Bucket`
+- `item.bucketLava.name` = `Lava Bucket`
+- `item.bucketWater.name` = `Water Bucket`
+- `item.cauldron.name` = `Cauldron`
+- `item.chestplateChain.name` = `Chain Chestplate`
+- `item.chestplateCloth.name` = `Leather Tunic`
+- `item.chestplateDiamond.name` = `Diamond Chestplate`
+- `item.chestplateGold.name` = `Golden Chestplate`
+- `item.chestplateIron.name` = `Iron Chestplate`
+- `item.chickenCooked.name` = `Cooked Chicken`
+- `item.chickenRaw.name` = `Raw Chicken`
+- `item.clay.name` = `Clay`
+- `item.clock.name` = `Clock`
+- `item.coal.name` = `Coal`
+- `item.compass.name` = `Compass`
+- `item.cookie.name` = `Cookie`
+- `item.diamond.name` = `Diamond`
+- `item.diode.name` = `Redstone Repeater`
+- `item.doorIron.name` = `Iron Door`
+- `item.doorWood.name` = `Wooden Door`
+- `item.dyePowder.black.name` = `Ink Sac`
+- `item.dyePowder.blue.name` = `Lapis Lazuli`
+- `item.dyePowder.brown.name` = `Cocoa Beans`
+- `item.dyePowder.cyan.name` = `Cyan Dye`
+- `item.dyePowder.gray.name` = `Gray Dye`
+- `item.dyePowder.green.name` = `Cactus Green`
+- `item.dyePowder.lightBlue.name` = `Light Blue Dye`
+- `item.dyePowder.lime.name` = `Lime Dye`
+- `item.dyePowder.magenta.name` = `Magenta Dye`
+- `item.dyePowder.orange.name` = `Orange Dye`
+- `item.dyePowder.pink.name` = `Pink Dye`
+- `item.dyePowder.purple.name` = `Purple Dye`
+- `item.dyePowder.red.name` = `Rose Red`
+- `item.dyePowder.silver.name` = `Light Gray Dye`
+- `item.dyePowder.white.name` = `Bone Meal`
+- `item.dyePowder.yellow.name` = `Dandelion Yellow`
+- `item.egg.name` = `Egg`
+- `item.emptyPotion.name` = `Water Bottle`
+- `item.enderPearl.name` = `Ender Pearl`
+- `item.expBottle.name` = `Bottle o' Enchanting`
+- `item.eyeOfEnder.name` = `Eye of Ender`
+- `item.feather.name` = `Feather`
+- `item.fermentedSpiderEye.name` = `Fermented Spider Eye`
+- `item.fireball.name` = `Fire Charge`
+- `item.fishingRod.name` = `Fishing Rod`
+- `item.flint.name` = `Flint`
+- `item.flintAndSteel.name` = `Flint and Steel`
+- `item.ghastTear.name` = `Ghast Tear`
+- `item.glassBottle.name` = `Glass Bottle`
+- `item.goldNugget.name` = `Gold Nugget`
+- `item.hatchetDiamond.name` = `Diamond Axe`
+- `item.hatchetGold.name` = `Golden Axe`
+- `item.hatchetIron.name` = `Iron Axe`
+- `item.hatchetStone.name` = `Stone Axe`
+- `item.hatchetWood.name` = `Wooden Axe`
+- `item.helmetChain.name` = `Chain Helmet`
+- `item.helmetCloth.name` = `Leather Cap`
+- `item.helmetDiamond.name` = `Diamond Helmet`
+- `item.helmetGold.name` = `Golden Helmet`
+- `item.helmetIron.name` = `Iron Helmet`
+- `item.hoeDiamond.name` = `Diamond Hoe`
+- `item.hoeGold.name` = `Golden Hoe`
+- `item.hoeIron.name` = `Iron Hoe`
+- `item.hoeStone.name` = `Stone Hoe`
+- `item.hoeWood.name` = `Wooden Hoe`
+- `item.ingotGold.name` = `Gold Ingot`
+- `item.ingotIron.name` = `Iron Ingot`
+- `item.leather.name` = `Leather`
+- `item.leggingsChain.name` = `Chain Leggings`
+- `item.leggingsCloth.name` = `Leather Pants`
+- `item.leggingsDiamond.name` = `Diamond Leggings`
+- `item.leggingsGold.name` = `Golden Leggings`
+- `item.leggingsIron.name` = `Iron Leggings`
+- `item.magmaCream.name` = `Magma Cream`
+- `item.melon.name` = `Melon`
+- `item.milk.name` = `Milk`
+- `item.minecart.name` = `Minecart`
+- `item.minecartChest.name` = `Minecart with Chest`
+- `item.minecartFurnace.name` = `Minecart with Furnace`
+- `item.monsterPlacer.name` = `Spawn`
+- `item.mushroomStew.name` = `Mushroom Stew`
+- `item.netherStalkSeeds.name` = `Nether Wart`
+- `item.painting.name` = `Painting`
+- `item.paper.name` = `Paper`
+- `item.pickaxeDiamond.name` = `Diamond Pickaxe`
+- `item.pickaxeGold.name` = `Golden Pickaxe`
+- `item.pickaxeIron.name` = `Iron Pickaxe`
+- `item.pickaxeStone.name` = `Stone Pickaxe`
+- `item.pickaxeWood.name` = `Wooden Pickaxe`
+- `item.porkchopCooked.name` = `Cooked Porkchop`
+- `item.porkchopRaw.name` = `Raw Porkchop`
+- `item.potion.name` = `Potion`
+- `item.record.name` = `Music Disc`
+- `item.redstone.name` = `Redstone`
+- `item.reeds.name` = `Sugar Canes`
+- `item.rottenFlesh.name` = `Rotten Flesh`
+- `item.saddle.name` = `Saddle`
+- `item.seeds.name` = `Seeds`
+- `item.seeds_melon.name` = `Melon Seeds`
+- `item.seeds_pumpkin.name` = `Pumpkin Seeds`
+- `item.shovelDiamond.name` = `Diamond Shovel`
+- `item.shovelGold.name` = `Golden Shovel`
+- `item.shovelIron.name` = `Iron Shovel`
+- `item.shovelStone.name` = `Stone Shovel`
+- `item.shovelWood.name` = `Wooden Shovel`
+- `item.sign.name` = `Sign`
+- `item.slimeball.name` = `Slimeball`
+- `item.snowball.name` = `Snowball`
+- `item.speckledMelon.name` = `Glistering Melon`
+- `item.spiderEye.name` = `Spider Eye`
+- `item.stick.name` = `Stick`
+- `item.string.name` = `String`
+- `item.sulphur.name` = `Gunpowder`
+- `item.swordDiamond.name` = `Diamond Sword`
+- `item.swordGold.name` = `Golden Sword`
+- `item.swordIron.name` = `Iron Sword`
+- `item.swordStone.name` = `Stone Sword`
+- `item.swordWood.name` = `Wooden Sword`
+- `item.wheat.name` = `Wheat`
+- `item.yellowDust.name` = `Glowstone Dust`
+- `options.fov.max` = `Quake Pro`
+- `options.on` = `ON`
+- `potion.empty` = `No Effects`
+- `potion.prefix.grenade` = `Splash`
+- `tile.bed.name` = `Bed`
+- `tile.bedrock.name` = `Bedrock`
+- `tile.blockDiamond.name` = `Block of Diamond`
+- `tile.blockGold.name` = `Block of Gold`
+- `tile.blockIron.name` = `Block of Iron`
+- `tile.blockLapis.name` = `Lapis Lazuli Block`
+- `tile.bookshelf.name` = `Bookshelf`
+- `tile.brick.name` = `Bricks`
+- `tile.button.name` = `Button`
+- `tile.cactus.name` = `Cactus`
+- `tile.cake.name` = `Cake`
+- `tile.cauldron.name` = `Cauldron`
+- `tile.chest.name` = `Chest`
+- `tile.clay.name` = `Clay`
+- `tile.cloth.black.name` = `Black Wool`
+- `tile.cloth.blue.name` = `Blue Wool`
+- `tile.cloth.brown.name` = `Brown Wool`
+- `tile.cloth.cyan.name` = `Cyan Wool`
+- `tile.cloth.gray.name` = `Gray Wool`
+- `tile.cloth.green.name` = `Green Wool`
+- `tile.cloth.lightBlue.name` = `Light Blue Wool`
+- `tile.cloth.lime.name` = `Lime Wool`
+- `tile.cloth.magenta.name` = `Magenta Wool`
+- `tile.cloth.name` = `Wool`
+- `tile.cloth.orange.name` = `Orange Wool`
+- `tile.cloth.pink.name` = `Pink Wool`
+- `tile.cloth.purple.name` = `Purple Wool`
+- `tile.cloth.red.name` = `Red Wool`
+- `tile.cloth.silver.name` = `Light Gray Wool`
+- `tile.cloth.white.name` = `Wool`
+- `tile.cloth.yellow.name` = `Yellow Wool`
+- `tile.crops.name` = `Crops`
+- `tile.deadbush.name` = `Dead Bush`
+- `tile.detectorRail.name` = `Detector Rail`
+- `tile.dispenser.name` = `Dispenser`
+- `tile.doorIron.name` = `Iron Door`
+- `tile.doorWood.name` = `Wooden Door`
+- `tile.dragonEgg.name` = `Dragon Egg`
+- `tile.enchantmentTable.name` = `Enchantment Table`
+- `tile.endPortalFrame.name` = `End Portal`
+- `tile.farmland.name` = `Farmland`
+- `tile.fence.name` = `Fence`
+- `tile.fenceGate.name` = `Fence Gate`
+- `tile.fenceIron.name` = `Iron Bars`
+- `tile.fire.name` = `Fire`
+- `tile.furnace.name` = `Furnace`
+- `tile.glass.name` = `Glass`
+- `tile.goldenRail.name` = `Powered Rail`
+- `tile.gravel.name` = `Gravel`
+- `tile.hellrock.name` = `Netherrack`
+- `tile.hellsand.name` = `Soul Sand`
+- `tile.ice.name` = `Ice`
+- `tile.jukebox.name` = `Jukebox`
+- `tile.ladder.name` = `Ladder`
+- `tile.lava.name` = `Lava`
+- `tile.leaves.birch.name` = `Birch Leaves`
+- `tile.leaves.jungle.name` = `Jungle Leaves`
+- `tile.leaves.name` = `Leaves`
+- `tile.leaves.spruce.name` = `Spruce Leaves`
+- `tile.lever.name` = `Lever`
+- `tile.lightgem.name` = `Glowstone`
+- `tile.litpumpkin.name` = `Jack o'Lantern`
+- `tile.lockedchest.name` = `Locked chest`
+- `tile.log.birch.name` = `Birch Wood`
+- `tile.log.jungle.name` = `Jungle Wood`
+- `tile.log.name` = `Wood`
+- `tile.log.spruce.name` = `Spruce Wood`
+- `tile.melon.name` = `Melon`
+- `tile.mobSpawner.name` = `Monster Spawner`
+- `tile.mushroom.name` = `Mushroom`
+- `tile.musicBlock.name` = `Note Block`
+- `tile.mycel.name` = `Mycelium`
+- ... 60 more

@@ -545,24 +545,40 @@ static void draw_text_mcpe_colored(const char *text, int x, int y, int argb) {
     int seg_n = 0;
     const unsigned char *p = (const unsigned char *)text;
     while (*p) {
-        int section = 0;
-        char code = 0;
-        if (p[0] == 0xc2 && p[1] == 0xa7 && p[2]) { section = 1; code = (char)p[2]; }
-        else if (p[0] == 0xa7 && p[1]) { section = 2; code = (char)p[1]; }
-        if (section) {
-            if (seg_n > 0) {
-                seg[seg_n] = 0;
-                draw_text_chat_plain(seg, cur_x, y, alpha | rgb);
-                cur_x += text_width_chat_plain(seg);
-                seg_n = 0;
+        const unsigned char *start = p;
+        unsigned int cp = font_utf8_next(&p);
+        size_t bytes = (size_t)(p - start);
+
+        /* Chat color handling must be UTF-8 aware.  The old byte scanner also
+           accepted a raw 0xA7 byte as a section sign.  That corrupts Persian /
+           Arabic because many valid UTF-8 characters contain 0xA7 as a
+           continuation byte, for example U+0627 ALEF is D8 A7.  Only a decoded
+           U+00A7 is a formatting introducer. */
+        if (cp == 0x00A7u && *p) {
+            const unsigned char *code_start = p;
+            unsigned int code_cp = font_utf8_next(&p);
+            if (code_cp <= 0x7Fu) {
+                if (seg_n > 0) {
+                    seg[seg_n] = 0;
+                    draw_text_chat_plain(seg, cur_x, y, alpha | rgb);
+                    cur_x += text_width_chat_plain(seg);
+                    seg_n = 0;
+                }
+                {
+                    int c = mcpe_chat_color_rgb((char)code_cp);
+                    if (c >= 0) rgb = c;
+                }
+                continue;
             }
-            int c = mcpe_chat_color_rgb(code);
-            if (c >= 0) rgb = c;
-            p += section == 1 ? 3 : 2;
-            continue;
+            /* Malformed/non-ASCII formatting code: keep both chars as text. */
+            p = code_start;
         }
-        if (seg_n + 1 < (int)sizeof(seg)) seg[seg_n++] = (char)*p;
-        p++;
+
+        if (bytes == 0) break;
+        if (seg_n + (int)bytes < (int)sizeof(seg)) {
+            memcpy(seg + seg_n, start, bytes);
+            seg_n += (int)bytes;
+        }
     }
     if (seg_n > 0) {
         seg[seg_n] = 0;

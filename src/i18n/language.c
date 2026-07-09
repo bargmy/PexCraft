@@ -351,7 +351,25 @@ static const PexLangKeyAlias pex_lang_key_aliases[] = {
     {"texturePack.title", "resourcePack.title"},
     {"texturePack.openFolder", "resourcePack.openFolder"},
     {"texturePack.folderInfo", "resourcePack.folderInfo"},
-    {"menu.game", "menu.paused"}
+    {"menu.game", "menu.paused"},
+
+    /* The launcher legacy asset index carries newer language files, while this
+       port still has many Java 1.2.5 internal keys.  Bridge old item/block
+       keys to the newer keys when the old value is missing or still English. */
+    {"item.emerald.name", "item.diamond.name"},
+    {"tile.sign.name", "item.sign.name"},
+    {"tile.doorWood.name", "item.doorWood.name"},
+    {"tile.doorIron.name", "item.doorIron.name"},
+    {"tile.reeds.name", "item.reeds.name"},
+    {"tile.cake.name", "item.cake.name"},
+    {"tile.bed.name", "item.bed.name"},
+    {"tile.diode.name", "item.diode.name"},
+    {"tile.melon.name", "item.melon.name"},
+    {"tile.netherStalk.name", "item.netherStalkSeeds.name"},
+    {"tile.brewingStand.name", "item.brewingStand.name"},
+    {"tile.cauldron.name", "item.cauldron.name"},
+    {"tile.brick.name", "item.brick.name"},
+    {"tile.clay.name", "item.clay.name"}
 };
 
 static int pex_lang_value_is_bridge_english(const char *key, const char *value, const char *fallback) {
@@ -375,7 +393,316 @@ static int pex_lang_value_is_bridge_english(const char *key, const char *value, 
                pex_lang_str_eq(value, "Game Menu") ||
                pex_lang_str_eq(value, "Paused");
     }
+    if (pex_lang_str_eq(key, "item.emerald.name") && fallback && pex_lang_str_eq(fallback, "Diamond")) {
+        return pex_lang_str_eq(value, "Emerald");
+    }
     return 0;
+}
+
+
+typedef struct PexLangSupplement { const char *lang; const char *key; const char *value; } PexLangSupplement;
+static const PexLangSupplement pex_lang_supplements[] = {
+    /* fa_IR from the legacy asset index is incomplete and contains many English
+       values.  Keep the downloaded language as the main source, but patch keys
+       that the 1.2.5 UI needs or that are still raw English in that file. */
+    {"fa_IR", "menu.game", "منوی بازی"},
+    {"fa_IR", "menu.preparingSpawn", "در حال آماده‌سازی چانک‌ها"},
+    {"fa_IR", "downloadTerrain", "در حال دریافت زمین"},
+    {"fa_IR", "container.inventory", "موجودی"},
+    {"fa_IR", "container.crafting", "ساخت‌وساز"},
+    {"fa_IR", "container.furnace", "کوره"},
+    {"fa_IR", "container.chest", "صندوقچه"},
+    {"fa_IR", "container.creative", "انتخاب آیتم"},
+    {"fa_IR", "gui.achievements", "دستاوردها"},
+    {"fa_IR", "gui.stats", "آمار"},
+    {"fa_IR", "deathScreen.title", "مُردید!"},
+    {"fa_IR", "deathScreen.respawn", "تولد دوباره"},
+    {"fa_IR", "deathScreen.titleScreen", "صفحه اصلی"},
+    {"fa_IR", "deathScreen.score", "امتیاز"},
+    {"fa_IR", "selectWorld.legacyUnused", "این صفحه قدیمی استفاده نمی‌شود"},
+    {"fa_IR", "selectWorld.play", "بازی در دنیای انتخاب شده"},
+    {"fa_IR", "item.dyePowder.name", "رنگ"},
+    {"fa_IR", "item.fishRaw.name", "ماهی خام"},
+    {"fa_IR", "item.fishCooked.name", "ماهی پخته"},
+    {"fa_IR", "entity.Creeper.name", "کریپر"},
+    {"fa_IR", "entity.Skeleton.name", "اسکلت"},
+    {"fa_IR", "entity.Spider.name", "عنکبوت"},
+    {"fa_IR", "entity.Giant.name", "غول"},
+    {"fa_IR", "entity.Zombie.name", "زامبی"},
+    {"fa_IR", "entity.Slime.name", "اسلایم"},
+    {"fa_IR", "entity.Ghast.name", "گَست"},
+    {"fa_IR", "entity.PigZombie.name", "زامبی خوکی"},
+    {"fa_IR", "entity.Enderman.name", "اندرمن"},
+    {"fa_IR", "entity.CaveSpider.name", "عنکبوت غاری"},
+    {"fa_IR", "entity.Silverfish.name", "سیلورفیش"},
+    {"fa_IR", "entity.Blaze.name", "بلیز"},
+    {"fa_IR", "entity.LavaSlime.name", "مکعب ماگما"},
+    {"fa_IR", "entity.EnderDragon.name", "اژدهای اندر"},
+    {"fa_IR", "entity.Pig.name", "خوک"},
+    {"fa_IR", "entity.Sheep.name", "گوسفند"},
+    {"fa_IR", "entity.Cow.name", "گاو"},
+    {"fa_IR", "entity.Chicken.name", "مرغ"},
+    {"fa_IR", "entity.Squid.name", "ماهی مرکب"},
+    {"fa_IR", "entity.Wolf.name", "گرگ"},
+    {"fa_IR", "entity.MushroomCow.name", "موشروم"},
+    {"fa_IR", "entity.SnowMan.name", "گولم برفی"},
+    {"fa_IR", "entity.Ozelot.name", "اوسلوت"},
+    {"fa_IR", "entity.VillagerGolem.name", "گولم آهنی"},
+    {"fa_IR", "entity.Villager.name", "روستایی"},
+
+    {"fa_IR", "tile.stone.name", "سنگ"},
+    {"fa_IR", "tile.grass.name", "چمن"},
+    {"fa_IR", "tile.dirt.name", "خاک"},
+    {"fa_IR", "tile.stonebrick.name", "سنگفرش"},
+    {"fa_IR", "tile.wood.name", "تخته چوبی"},
+    {"fa_IR", "tile.sapling.name", "نهال"},
+    {"fa_IR", "tile.bedrock.name", "سنگ بستر"},
+    {"fa_IR", "tile.water.name", "آب"},
+    {"fa_IR", "tile.lava.name", "لاوا"},
+    {"fa_IR", "tile.sand.name", "شن"},
+    {"fa_IR", "tile.gravel.name", "ریگ"},
+    {"fa_IR", "tile.oreGold.name", "سنگ معدن طلا"},
+    {"fa_IR", "tile.oreIron.name", "سنگ معدن آهن"},
+    {"fa_IR", "tile.oreCoal.name", "سنگ معدن زغال"},
+    {"fa_IR", "tile.log.name", "چوب"},
+    {"fa_IR", "tile.leaves.name", "برگ‌ها"},
+    {"fa_IR", "tile.sponge.name", "اسفنج"},
+    {"fa_IR", "tile.glass.name", "شیشه"},
+    {"fa_IR", "tile.cloth.name", "پشم"},
+    {"fa_IR", "tile.flower.name", "گل"},
+    {"fa_IR", "tile.rose.name", "رز"},
+    {"fa_IR", "tile.mushroom.name", "قارچ"},
+    {"fa_IR", "tile.blockGold.name", "بلوک طلا"},
+    {"fa_IR", "tile.blockIron.name", "بلوک آهن"},
+    {"fa_IR", "tile.stoneSlab.name", "نیم‌بلوک سنگی"},
+    {"fa_IR", "tile.brick.name", "آجر"},
+    {"fa_IR", "tile.tnt.name", "تی‌ان‌تی"},
+    {"fa_IR", "tile.bookshelf.name", "قفسه کتاب"},
+    {"fa_IR", "tile.stoneMoss.name", "سنگ خزه‌ای"},
+    {"fa_IR", "tile.obsidian.name", "ابسیدین"},
+    {"fa_IR", "tile.torch.name", "مشعل"},
+    {"fa_IR", "tile.fire.name", "آتش"},
+    {"fa_IR", "tile.mobSpawner.name", "تولیدکننده هیولا"},
+    {"fa_IR", "tile.stairsWood.name", "پله چوبی"},
+    {"fa_IR", "tile.chest.name", "صندوقچه"},
+    {"fa_IR", "tile.redstoneDust.name", "غبار ردستون"},
+    {"fa_IR", "tile.oreDiamond.name", "سنگ معدن الماس"},
+    {"fa_IR", "tile.blockDiamond.name", "بلوک الماس"},
+    {"fa_IR", "tile.workbench.name", "میز کار"},
+    {"fa_IR", "tile.crops.name", "محصولات"},
+    {"fa_IR", "tile.farmland.name", "زمین کشاورزی"},
+    {"fa_IR", "tile.furnace.name", "کوره"},
+    {"fa_IR", "tile.sign.name", "تابلو"},
+    {"fa_IR", "tile.doorWood.name", "در چوبی"},
+    {"fa_IR", "tile.ladder.name", "نردبان"},
+    {"fa_IR", "tile.rail.name", "ریل"},
+    {"fa_IR", "tile.stairsStone.name", "پله سنگی"},
+    {"fa_IR", "tile.lever.name", "اهرم"},
+    {"fa_IR", "tile.pressurePlate.name", "صفحه فشاری"},
+    {"fa_IR", "tile.doorIron.name", "در آهنی"},
+    {"fa_IR", "tile.oreRedstone.name", "سنگ معدن ردستون"},
+    {"fa_IR", "tile.notGate.name", "مشعل ردستون"},
+    {"fa_IR", "tile.button.name", "دکمه"},
+    {"fa_IR", "tile.snow.name", "برف"},
+    {"fa_IR", "tile.ice.name", "یخ"},
+    {"fa_IR", "tile.cactus.name", "کاکتوس"},
+    {"fa_IR", "tile.clay.name", "رس"},
+    {"fa_IR", "tile.reeds.name", "نیشکر"},
+    {"fa_IR", "tile.jukebox.name", "جعبه موسیقی"},
+    {"fa_IR", "tile.fence.name", "حصار"},
+    {"fa_IR", "tile.pumpkin.name", "کدو"},
+    {"fa_IR", "tile.hellrock.name", "ندراک"},
+    {"fa_IR", "tile.hellsand.name", "شن روح"},
+    {"fa_IR", "tile.lightgem.name", "گلوستون"},
+    {"fa_IR", "tile.portal.name", "پرتال"},
+    {"fa_IR", "tile.litpumpkin.name", "جک اُ لنترن"},
+    {"fa_IR", "tile.oreLapis.name", "سنگ معدن لاجورد"},
+    {"fa_IR", "tile.blockLapis.name", "بلوک لاجورد"},
+    {"fa_IR", "tile.dispenser.name", "پخش‌کننده"},
+    {"fa_IR", "tile.sandStone.name", "ماسه‌سنگ"},
+    {"fa_IR", "tile.musicBlock.name", "بلوک نت"},
+    {"fa_IR", "tile.bed.name", "تخت خواب"},
+    {"fa_IR", "tile.goldenRail.name", "ریل قدرتی"},
+    {"fa_IR", "tile.detectorRail.name", "ریل آشکارساز"},
+    {"fa_IR", "tile.pistonStickyBase.name", "پیستون چسبنده"},
+    {"fa_IR", "tile.web.name", "تار عنکبوت"},
+    {"fa_IR", "tile.tallgrass.name", "چمن بلند"},
+    {"fa_IR", "tile.deadbush.name", "بوته خشک"},
+    {"fa_IR", "tile.pistonBase.name", "پیستون"},
+    {"fa_IR", "tile.cake.name", "کیک"},
+    {"fa_IR", "tile.diode.name", "تکرارکننده ردستون"},
+    {"fa_IR", "tile.trapdoor.name", "دریچه"},
+    {"fa_IR", "tile.stonebricksmooth.name", "آجر سنگی"},
+    {"fa_IR", "tile.fenceIron.name", "میله آهنی"},
+    {"fa_IR", "tile.thinGlass.name", "شیشه باریک"},
+    {"fa_IR", "tile.melon.name", "هندوانه"},
+    {"fa_IR", "tile.pumpkinStem.name", "ساقه کدو"},
+    {"fa_IR", "tile.melonStem.name", "ساقه هندوانه"},
+    {"fa_IR", "tile.vine.name", "پیچک"},
+    {"fa_IR", "tile.fenceGate.name", "دروازه حصار"},
+    {"fa_IR", "tile.stairsBrick.name", "پله آجری"},
+    {"fa_IR", "tile.stairsStoneBrickSmooth.name", "پله آجر سنگی"},
+    {"fa_IR", "tile.mycel.name", "مایسلیوم"},
+    {"fa_IR", "tile.waterlily.name", "نیلوفر آبی"},
+    {"fa_IR", "tile.netherBrick.name", "آجر ندر"},
+    {"fa_IR", "tile.netherFence.name", "حصار آجر ندر"},
+    {"fa_IR", "tile.stairsNetherBrick.name", "پله آجر ندر"},
+    {"fa_IR", "tile.netherStalk.name", "زگیل ندر"},
+    {"fa_IR", "tile.enchantmentTable.name", "میز افسون"},
+    {"fa_IR", "tile.brewingStand.name", "پایه معجون‌سازی"},
+    {"fa_IR", "tile.cauldron.name", "دیگ"},
+    {"fa_IR", "tile.endPortalFrame.name", "قاب پرتال پایان"},
+    {"fa_IR", "tile.whiteStone.name", "سنگ پایان"},
+    {"fa_IR", "tile.dragonEgg.name", "تخم اژدها"},
+    {"fa_IR", "tile.redstoneLight.name", "چراغ ردستون"},
+
+    {"fa_IR", "item.apple.name", "سیب"},
+    {"fa_IR", "item.appleGold.name", "سیب طلایی"},
+    {"fa_IR", "item.arrow.name", "تیر"},
+    {"fa_IR", "item.beefCooked.name", "استیک"},
+    {"fa_IR", "item.beefRaw.name", "گوشت گاو خام"},
+    {"fa_IR", "item.blazePowder.name", "پودر بلیز"},
+    {"fa_IR", "item.blazeRod.name", "میله بلیز"},
+    {"fa_IR", "item.boat.name", "قایق"},
+    {"fa_IR", "item.bone.name", "استخوان"},
+    {"fa_IR", "item.book.name", "کتاب"},
+    {"fa_IR", "item.bootsChain.name", "چکمه زنجیری"},
+    {"fa_IR", "item.bootsCloth.name", "چکمه چرمی"},
+    {"fa_IR", "item.bootsDiamond.name", "چکمه الماسی"},
+    {"fa_IR", "item.bootsGold.name", "چکمه طلایی"},
+    {"fa_IR", "item.bootsIron.name", "چکمه آهنی"},
+    {"fa_IR", "item.bow.name", "کمان"},
+    {"fa_IR", "item.bowl.name", "کاسه"},
+    {"fa_IR", "item.bread.name", "نان"},
+    {"fa_IR", "item.brick.name", "آجر"},
+    {"fa_IR", "item.bucket.name", "سطل"},
+    {"fa_IR", "item.bucketLava.name", "سطل لاوا"},
+    {"fa_IR", "item.bucketWater.name", "سطل آب"},
+    {"fa_IR", "item.chestplateChain.name", "زره سینه زنجیری"},
+    {"fa_IR", "item.chestplateCloth.name", "تُنیک چرمی"},
+    {"fa_IR", "item.chestplateDiamond.name", "زره سینه الماسی"},
+    {"fa_IR", "item.chestplateGold.name", "زره سینه طلایی"},
+    {"fa_IR", "item.chestplateIron.name", "زره سینه آهنی"},
+    {"fa_IR", "item.chickenCooked.name", "مرغ پخته"},
+    {"fa_IR", "item.chickenRaw.name", "مرغ خام"},
+    {"fa_IR", "item.clay.name", "رس"},
+    {"fa_IR", "item.clock.name", "ساعت"},
+    {"fa_IR", "item.coal.name", "زغال"},
+    {"fa_IR", "item.compass.name", "قطب‌نما"},
+    {"fa_IR", "item.cookie.name", "کلوچه"},
+    {"fa_IR", "item.diamond.name", "الماس"},
+    {"fa_IR", "item.emerald.name", "الماس"},
+    {"fa_IR", "item.diode.name", "تکرارکننده ردستون"},
+    {"fa_IR", "item.doorIron.name", "در آهنی"},
+    {"fa_IR", "item.doorWood.name", "در چوبی"},
+    {"fa_IR", "item.egg.name", "تخم‌مرغ"},
+    {"fa_IR", "item.enderPearl.name", "مروارید اندر"},
+    {"fa_IR", "item.expBottle.name", "بطری افسون"},
+    {"fa_IR", "item.eyeOfEnder.name", "چشم اندر"},
+    {"fa_IR", "item.feather.name", "پر"},
+    {"fa_IR", "item.fermentedSpiderEye.name", "چشم عنکبوت تخمیرشده"},
+    {"fa_IR", "item.fireball.name", "گوی آتش"},
+    {"fa_IR", "item.fishingRod.name", "چوب ماهیگیری"},
+    {"fa_IR", "item.flint.name", "سنگ چخماق"},
+    {"fa_IR", "item.flintAndSteel.name", "فندک"},
+    {"fa_IR", "item.ghastTear.name", "اشک گَست"},
+    {"fa_IR", "item.glassBottle.name", "بطری شیشه‌ای"},
+    {"fa_IR", "item.goldNugget.name", "تکه طلا"},
+    {"fa_IR", "item.hatchetDiamond.name", "تبر الماسی"},
+    {"fa_IR", "item.hatchetGold.name", "تبر طلایی"},
+    {"fa_IR", "item.hatchetIron.name", "تبر آهنی"},
+    {"fa_IR", "item.hatchetStone.name", "تبر سنگی"},
+    {"fa_IR", "item.hatchetWood.name", "تبر چوبی"},
+    {"fa_IR", "item.helmetChain.name", "کلاهخود زنجیری"},
+    {"fa_IR", "item.helmetCloth.name", "کلاه چرمی"},
+    {"fa_IR", "item.helmetDiamond.name", "کلاهخود الماسی"},
+    {"fa_IR", "item.helmetGold.name", "کلاهخود طلایی"},
+    {"fa_IR", "item.helmetIron.name", "کلاهخود آهنی"},
+    {"fa_IR", "item.hoeDiamond.name", "بیلچه الماسی"},
+    {"fa_IR", "item.hoeGold.name", "بیلچه طلایی"},
+    {"fa_IR", "item.hoeIron.name", "بیلچه آهنی"},
+    {"fa_IR", "item.hoeStone.name", "بیلچه سنگی"},
+    {"fa_IR", "item.hoeWood.name", "بیلچه چوبی"},
+    {"fa_IR", "item.ingotGold.name", "شمش طلا"},
+    {"fa_IR", "item.ingotIron.name", "شمش آهن"},
+    {"fa_IR", "item.leather.name", "چرم"},
+    {"fa_IR", "item.leggingsChain.name", "شلوار زنجیری"},
+    {"fa_IR", "item.leggingsCloth.name", "شلوار چرمی"},
+    {"fa_IR", "item.leggingsDiamond.name", "شلوار الماسی"},
+    {"fa_IR", "item.leggingsGold.name", "شلوار طلایی"},
+    {"fa_IR", "item.leggingsIron.name", "شلوار آهنی"},
+    {"fa_IR", "item.magmaCream.name", "کرم ماگما"},
+    {"fa_IR", "item.melon.name", "هندوانه"},
+    {"fa_IR", "item.milk.name", "شیر"},
+    {"fa_IR", "item.minecart.name", "واگن معدن"},
+    {"fa_IR", "item.minecartChest.name", "واگن معدن با صندوقچه"},
+    {"fa_IR", "item.minecartFurnace.name", "واگن معدن با کوره"},
+    {"fa_IR", "item.mushroomStew.name", "سوپ قارچ"},
+    {"fa_IR", "item.netherStalkSeeds.name", "زگیل ندر"},
+    {"fa_IR", "item.painting.name", "نقاشی"},
+    {"fa_IR", "item.paper.name", "کاغذ"},
+    {"fa_IR", "item.pickaxeDiamond.name", "کلنگ الماسی"},
+    {"fa_IR", "item.pickaxeGold.name", "کلنگ طلایی"},
+    {"fa_IR", "item.pickaxeIron.name", "کلنگ آهنی"},
+    {"fa_IR", "item.pickaxeStone.name", "کلنگ سنگی"},
+    {"fa_IR", "item.pickaxeWood.name", "کلنگ چوبی"},
+    {"fa_IR", "item.porkchopCooked.name", "گوشت خوک پخته"},
+    {"fa_IR", "item.porkchopRaw.name", "گوشت خوک خام"},
+    {"fa_IR", "item.redstone.name", "ردستون"},
+    {"fa_IR", "item.reeds.name", "نیشکر"},
+    {"fa_IR", "item.rottenFlesh.name", "گوشت فاسد"},
+    {"fa_IR", "item.saddle.name", "زین"},
+    {"fa_IR", "item.seeds.name", "دانه"},
+    {"fa_IR", "item.seeds_melon.name", "دانه هندوانه"},
+    {"fa_IR", "item.seeds_pumpkin.name", "دانه کدو"},
+    {"fa_IR", "item.shovelDiamond.name", "بیل الماسی"},
+    {"fa_IR", "item.shovelGold.name", "بیل طلایی"},
+    {"fa_IR", "item.shovelIron.name", "بیل آهنی"},
+    {"fa_IR", "item.shovelStone.name", "بیل سنگی"},
+    {"fa_IR", "item.shovelWood.name", "بیل چوبی"},
+    {"fa_IR", "item.sign.name", "تابلو"},
+    {"fa_IR", "item.slimeball.name", "گوی اسلایم"},
+    {"fa_IR", "item.snowball.name", "گلوله برفی"},
+    {"fa_IR", "item.speckledMelon.name", "هندوانه درخشان"},
+    {"fa_IR", "item.spiderEye.name", "چشم عنکبوت"},
+    {"fa_IR", "item.stick.name", "چوب‌دستی"},
+    {"fa_IR", "item.string.name", "نخ"},
+    {"fa_IR", "item.sulphur.name", "باروت"},
+    {"fa_IR", "item.swordDiamond.name", "شمشیر الماسی"},
+    {"fa_IR", "item.swordGold.name", "شمشیر طلایی"},
+    {"fa_IR", "item.swordIron.name", "شمشیر آهنی"},
+    {"fa_IR", "item.swordStone.name", "شمشیر سنگی"},
+    {"fa_IR", "item.swordWood.name", "شمشیر چوبی"},
+    {"fa_IR", "item.wheat.name", "گندم"},
+    {"fa_IR", "item.yellowDust.name", "غبار گلوستون"}
+};
+
+static int pex_lang_current_is(const char *code) {
+    const char *cur = NULL;
+    if (g_lang_list_loaded && g_lang_index >= 0 && g_lang_index < g_pex_lang_count) cur = g_pex_langs[g_lang_index].code;
+    if (!cur || !*cur) cur = g_opts.language;
+    return cur && pex_lang_str_eq(cur, code);
+}
+
+static int pex_lang_value_ascii_only(const char *value) {
+    const unsigned char *p = (const unsigned char *)value;
+    if (!value || !*value) return 1;
+    while (*p) {
+        if (*p >= 0x80) return 0;
+        ++p;
+    }
+    return 1;
+}
+
+static const char *pex_lang_lookup_supplemental_key(const char *key, const char *exact_value) {
+    if (!key || !*key) return NULL;
+    for (int i = 0; i < (int)ARRAY_COUNT(pex_lang_supplements); ++i) {
+        if (!pex_lang_current_is(pex_lang_supplements[i].lang)) continue;
+        if (!pex_lang_str_eq(pex_lang_supplements[i].key, key)) continue;
+        if (!exact_value || !*exact_value || pex_lang_value_ascii_only(exact_value)) return pex_lang_supplements[i].value;
+        return NULL;
+    }
+    return NULL;
 }
 
 static const char *tr_key_default(const char *key, const char *fallback) {
@@ -383,14 +710,24 @@ static const char *tr_key_default(const char *key, const char *fallback) {
     if (!key) return fallback ? fallback : "";
     if (!g_lang_list_loaded || g_lang_table_count <= 0) pex_set_language_code(g_opts.language[0] ? g_opts.language : "en_US");
     exact = pex_lang_lookup_loaded_key(key);
-    if (exact && !pex_lang_value_is_bridge_english(key, exact, fallback)) return exact;
+    if (exact && !pex_lang_value_is_bridge_english(key, exact, fallback)) {
+        const char *supp = pex_lang_lookup_supplemental_key(key, exact);
+        if (supp) return supp;
+        return exact;
+    }
 
-    /* Bridge old texturePack.* UI keys to newer resourcePack.* language files,
-       but do not let en_US resourcePack English mask a selected language that
-       only has the old texturePack key. */
+    {
+        const char *supp = pex_lang_lookup_supplemental_key(key, exact);
+        if (supp) return supp;
+    }
+
+    /* Bridge old 1.2.5 UI/item keys to newer legacy-index language files,
+       but do not let en_US/newer English mask a selected language. */
     for (int i = 0; i < (int)ARRAY_COUNT(pex_lang_key_aliases); ++i) {
         if (pex_lang_str_eq(pex_lang_key_aliases[i].primary, key)) {
             const char *v = pex_lang_lookup_loaded_key(pex_lang_key_aliases[i].secondary);
+            const char *supp = pex_lang_lookup_supplemental_key(pex_lang_key_aliases[i].secondary, v);
+            if (supp) return supp;
             if (v && !pex_lang_value_is_bridge_english(key, v, fallback)) return v;
         }
     }
