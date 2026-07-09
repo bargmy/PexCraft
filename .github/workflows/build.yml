@@ -805,7 +805,7 @@ jobs:
             echo "No repository secret named 'sign' was provided; Gradle will produce an unsigned release APK."
           fi
 
-      - name: Build Android arm64 APK
+      - name: Build Android universal APK
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS || 'pexcraft_android_tv' }}
@@ -818,7 +818,7 @@ jobs:
           {
             echo "Commit name: ${{ steps.commit.outputs.name }}"
             echo "Commit SHA:  $GITHUB_SHA"
-            echo "Builder:     Android arm64 APK"
+            echo "Builder:     Android universal APK"
             echo
             cd android
             gradle assembleRelease
@@ -831,10 +831,10 @@ jobs:
               echo "ANDROID_BUILD_OK=0" >> "$GITHUB_ENV"
             fi
             exit "$status"
-          } 2>&1 | tee logs/build-android-arm64.log
+          } 2>&1 | tee logs/build-android-universal.log
           exit ${PIPESTATUS[0]}
 
-      - name: Package Android arm64 APK
+      - name: Package Android universal APK
         if: env.ANDROID_BUILD_OK == '1'
         shell: bash
         run: |
@@ -842,18 +842,18 @@ jobs:
           apk="$(find android/app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
           test -n "$apk"
           mkdir -p dist
-          final="dist/pexcraft-android-arm64.apk"
+          final="dist/pexcraft-android-universal.apk"
           cp -f "$apk" "$final"
           echo "APK_PATH=$final" >> "$GITHUB_ENV"
 
-      - name: Upload Android arm64 build to Telegram
+      - name: Upload Android universal build to Telegram
         if: env.ANDROID_BUILD_OK == '1' && github.event_name != 'pull_request'
         env:
           TOKEN: ${{ secrets.TOKEN }}
           CHAT_ID: ${{ env.CHAT_ID }}
           FILE_PATH: ${{ env.APK_PATH }}
           COMMIT_NAME: ${{ steps.commit.outputs.name }}
-          BUILDER: Android arm64 APK
+          BUILDER: Android universal APK
         shell: bash
         run: python3 .github/scripts/telegram_upload_file.py
 
@@ -861,7 +861,7 @@ jobs:
         if: always() && env.ANDROID_BUILD_OK != '1'
         shell: bash
         run: |
-          echo "### Android arm64 APK failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Android universal APK failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: `${{ steps.commit.outputs.name }}`" >> "$GITHUB_STEP_SUMMARY"
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
 

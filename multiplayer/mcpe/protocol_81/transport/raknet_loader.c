@@ -21,6 +21,8 @@ const char* pex_raknet_library_expected_name(void) {
 const char* pex_raknet_library_expected_platform_folder(void) {
 #if defined(_WIN32) && (defined(_M_ARM64) || defined(__aarch64__))
     return PEX_RAKNET_PLATFORM_WINDOWS_ARM64;
+#elif defined(_WIN32) && (defined(PEX_TARGET_WINDOWS_ARM32) || defined(_M_ARM) || defined(__arm__))
+    return PEX_RAKNET_PLATFORM_WINDOWS_ARM32;
 #elif defined(_WIN32) && (defined(_M_IX86) || defined(__i386__))
     return PEX_RAKNET_PLATFORM_WINDOWS_X86;
 #elif defined(_WIN32)

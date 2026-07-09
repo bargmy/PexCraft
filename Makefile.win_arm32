@@ -1,0 +1,19 @@
+# PEXCRAFT Windows ARM32 cross-build Makefile.
+# Use an llvm-mingw/clang-style toolchain by default; override WIN_ARM32_CC if needed.
+
+WIN_ARM32_CC ?= armv7-w64-mingw32-clang
+CFLAGS ?= -std=c99 -O2 -Wall -Wextra -DPEX_TARGET_WINDOWS_ARM32=1
+LDFLAGS ?= -mwindows -static -static-libgcc
+LIBS = -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
+
+TARGET = pexcraft_win_arm32.exe
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): main.c $(wildcard src/*/*.c) src/common/common.h
+	$(WIN_ARM32_CC) $(CFLAGS) main.c -o $@ $(LDFLAGS) $(LIBS)
+
+clean:
+	rm -f $(TARGET)
