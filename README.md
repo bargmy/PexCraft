@@ -36,3 +36,13 @@ per-frame batches before title music starts.
 See `docs/save_and_quit_progress_teardown.md` for the shutdown order, deadlock
 protections, and validation notes. The earlier synchronous implementation is retained
 only as historical context in `docs/save_and_quit_full_world_teardown.md`.
+
+### Mesh-worker shutdown safety
+
+The quit coordinator now cooperatively cancels active section builds, drops queued
+mesh jobs, polls each worker handle independently, and reports per-worker state in
+the log. Direct3D 11 buffer creation is no longer performed on a background worker
+while the progress screen is presenting; CPU mesh results are uploaded by the
+render thread through the existing bounded install path.
+
+See `docs/save_and_quit_mesh_worker_fix.md` for the failure mechanism and changes.

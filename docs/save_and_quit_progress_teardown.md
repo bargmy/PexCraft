@@ -1,5 +1,9 @@
 # Save and Quit: responsive staged teardown
 
+> **Follow-up:** the D3D11 mesh-upload worker and non-cancellable mesh joins described
+> by the original implementation were replaced by the driver-safe cancellation path
+> in `save_and_quit_mesh_worker_fix.md`.
+
 ## Problem fixed
 
 The previous full-teardown patch performed thread joins, cache draining, final disk

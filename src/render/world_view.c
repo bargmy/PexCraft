@@ -1485,7 +1485,8 @@ static int liquid_side_tile_for_block(int id) { return (id == BLOCK_WATER || id 
 
 
 /* Async terrain mesh path -----------------------------------------------------------
-   D3D9/D3D11 upload worker-built CPU meshes into native vertex/index buffers.
+   D3D9/D3D11 upload worker-built CPU meshes into native vertex/index buffers on
+   the render thread.
    OpenGL keeps the same worker-built CPU mesh and draws it with client arrays on
    the render thread.  That removes the old glNewList/glBegin section rebuild from
    the main thread while still keeping all GL calls on the GL-owning thread. */
@@ -1523,6 +1524,15 @@ static PEX_THREAD_LOCAL FlatDirectMeshBuilder *g_flat_direct_capture_out1 = NULL
 static PEX_THREAD_LOCAL int *g_flat_direct_capture_skip0 = NULL;
 static PEX_THREAD_LOCAL int *g_flat_direct_capture_skip1 = NULL;
 static PEX_THREAD_LOCAL int g_flat_direct_capture_success = 0;
+static PEX_THREAD_LOCAL int g_flat_direct_capture_aborted = 0;
+/* Set before any mesh-worker join.  CPU mesh construction checks this flag at
+   bounded intervals so Save and Quit never waits for a dense section to finish. */
+static volatile LONG g_async_section_mesh_stop = 0;
+static int async_section_mesh_cancel_requested(void) {
+    return g_flat_direct_capture_only &&
+           (g_flat_direct_capture_aborted ||
+            InterlockedCompareExchange(&g_async_section_mesh_stop, 0, 0) != 0);
+}
 static PexTextureHandle g_flat_direct_terrain_texture = 0;
 static unsigned char *g_flat_direct_terrain_rgba = NULL;
 static int g_flat_direct_terrain_w = 0, g_flat_direct_terrain_h = 0;
@@ -1901,18 +1911,22 @@ static int java_block_normal_cube_at(int x, int y, int z) {
 
 static int flat_direct_reserve(FlatDirectMeshBuilder *b, uint32_t add_v, uint32_t add_i) {
     if (!b) return 0;
+    if (async_section_mesh_cancel_requested()) {
+        g_flat_direct_capture_aborted = 1;
+        return 0;
+    }
     if (b->vcount + add_v > b->vcap) {
         uint32_t nc = b->vcap ? b->vcap * 2u : 4096u;
         while (nc < b->vcount + add_v) nc *= 2u;
         PexVertex *nv = (PexVertex*)realloc(b->v, (size_t)nc * sizeof(PexVertex));
-        if (!nv) return 0;
+        if (!nv) { g_flat_direct_capture_aborted = 1; return 0; }
         b->v = nv; b->vcap = nc;
     }
     if (b->icount + add_i > b->icap) {
         uint32_t nc = b->icap ? b->icap * 2u : 6144u;
         while (nc < b->icount + add_i) nc *= 2u;
         uint32_t *ni = (uint32_t*)realloc(b->i, (size_t)nc * sizeof(uint32_t));
-        if (!ni) return 0;
+        if (!ni) { g_flat_direct_capture_aborted = 1; return 0; }
         b->i = ni; b->icap = nc;
     }
     return 1;
@@ -6545,14 +6559,18 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     if (y1 > FLAT_WORLD_Y_MAX) y1 = FLAT_WORLD_Y_MAX;
 
     int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
+    int cancelled = 0;
     FlatDirectMeshBuilder mb0, mb1;
+    memset(&mb0, 0, sizeof(mb0));
+    memset(&mb1, 0, sizeof(mb1));
 
     flat_direct_begin(&mb0);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
-    for (int y = y0; y <= y1; y++) {
+    for (int y = y0; y <= y1 && !cancelled; y++) {
         for (int z = z0; z <= z1; z++) {
+            if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
             for (int x = x0; x <= x1; x++) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
@@ -6573,19 +6591,25 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             }
         }
     }
-    if (has_special) {
-        for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
-            int id = flat_get_block(x, y, z);
-            if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) { draw_special_block_model(id, x, y, z); has0 = 1; }
+    if (!cancelled && has_special) {
+        for (int y = y0; y <= y1 && !cancelled; y++) {
+            for (int z = z0; z <= z1; z++) {
+                if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
+                for (int x = x0; x <= x1; x++) {
+                    int id = flat_get_block(x, y, z);
+                    if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) { draw_special_block_model(id, x, y, z); has0 = 1; }
+                }
+            }
         }
     }
-    if (has_cutout) {
+    if (!cancelled && has_cutout) {
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.5f);
-        for (int y = y0; y <= y1; y++) {
+        for (int y = y0; y <= y1 && !cancelled; y++) {
             for (int z = z0; z <= z1; z++) {
+                if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                 for (int x = x0; x <= x1; x++) {
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
@@ -6607,21 +6631,35 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     }
     glColor4f(1,1,1,1);
     flat_direct_end();
+    if (cancelled || async_section_mesh_cancel_requested()) {
+        flat_direct_free_builder(&mb0);
+        return;
+    }
 
     flat_direct_begin(&mb1);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     if (has1) {
-        for (int y = y0; y <= y1; y++) for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
-            int id = flat_get_block(x, y, z);
-            if (block_is_liquid(id)) {
-                if (flat_separate_liquid_pass_enabled()) emit_liquid_block_faces(id, x, y, z);
-            } else if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) {
-                draw_special_block_model(id, x, y, z);
+        for (int y = y0; y <= y1 && !cancelled; y++) {
+            for (int z = z0; z <= z1; z++) {
+                if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
+                for (int x = x0; x <= x1; x++) {
+                    int id = flat_get_block(x, y, z);
+                    if (block_is_liquid(id)) {
+                        if (flat_separate_liquid_pass_enabled()) emit_liquid_block_faces(id, x, y, z);
+                    } else if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) {
+                        draw_special_block_model(id, x, y, z);
+                    }
+                }
             }
         }
     }
     glColor4f(1,1,1,1);
     flat_direct_end();
+    if (cancelled || async_section_mesh_cancel_requested()) {
+        flat_direct_free_builder(&mb0);
+        flat_direct_free_builder(&mb1);
+        return;
+    }
 
     if (g_flat_direct_capture_only) {
         if (g_flat_direct_capture_out0) *g_flat_direct_capture_out0 = mb0;
@@ -6821,10 +6859,9 @@ typedef struct AsyncSectionMeshResult {
     int priority;
     FlatDirectMeshBuilder mb0, mb1;
     int skip0, skip1;
-    /* D3D11 can pre-create terrain section GPU buffers on the worker using the
-       ID3D11Device.  The render thread then only adopts already-created buffers,
-       avoiding the immediate-context Map/CreateBuffer hitch that made D3D11 feel
-       worse than OpenGL. */
+    /* Legacy prebuilt-buffer fields are retained for queue compatibility.
+       Safe shutdown mode leaves them empty because all GPU object creation and
+       release now stays on the render thread. */
     int d3d11_prebuilt;
     PexD3D11Mesh d3d11_mesh0, d3d11_mesh1;
 } AsyncSectionMeshResult;
@@ -6858,9 +6895,23 @@ static HANDLE g_async_section_mesh_threads[4] = { NULL, NULL, NULL, NULL };
 static int g_async_section_mesh_worker_count = 0;
 static HANDLE g_async_section_mesh_upload_thread = NULL;
 static int g_async_section_mesh_initialized = 0;
-static volatile LONG g_async_section_mesh_stop = 0;
 static int g_async_section_mesh_busy = 0;
 static int g_async_section_mesh_upload_busy = 0;
+
+enum {
+    ASYNC_MESH_WORKER_UNUSED = 0,
+    ASYNC_MESH_WORKER_WAITING = 1,
+    ASYNC_MESH_WORKER_BUILDING = 2,
+    ASYNC_MESH_WORKER_PUBLISHING = 3,
+    ASYNC_MESH_WORKER_EXITED = 4
+};
+static volatile LONG g_async_section_mesh_worker_state[4] = { 0, 0, 0, 0 };
+static volatile LONG g_async_section_mesh_upload_state = ASYNC_MESH_WORKER_UNUSED;
+
+/* ID3D11Device::CreateBuffer can block inside a vendor driver while the render
+   thread presents the quit-progress screen.  Keep every GPU create/release on
+   the render thread; workers now publish CPU builders for all backends. */
+static int async_mesh_worker_gpu_prebuild_enabled(void) { return 0; }
 
 #if defined(PEX_PLATFORM_PSP)
 /* PSP has far less RAM than desktop.  Keep the async mesh queue intentionally
@@ -6900,6 +6951,7 @@ static void async_section_mesh_clear_tls(void) {
     g_flat_direct_capture_skip0 = NULL;
     g_flat_direct_capture_skip1 = NULL;
     g_flat_direct_capture_success = 0;
+    g_flat_direct_capture_aborted = 0;
 }
 
 static void async_mesh_clear_results(AsyncSectionMeshResult *queue, int count) {
@@ -6962,6 +7014,7 @@ static int async_mesh_push_result(AsyncSectionMeshResult *r) {
 static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
     (void)unused;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
+    InterlockedExchange(&g_async_section_mesh_upload_state, ASYNC_MESH_WORKER_WAITING);
     for (;;) {
         /* A timeout guarantees the stop flag is observed even if an auto-reset
            wake is consumed by another shutdown waiter. */
@@ -6974,6 +7027,7 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
             EnterCriticalSection(&g_async_section_mesh_cs);
             if (g_async_section_mesh_stop) {
                 LeaveCriticalSection(&g_async_section_mesh_cs);
+                InterlockedExchange(&g_async_section_mesh_upload_state, ASYNC_MESH_WORKER_EXITED);
                 return 0;
             }
             if (g_async_section_mesh_upload_count > 0) {
@@ -6987,6 +7041,7 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
             LeaveCriticalSection(&g_async_section_mesh_cs);
             if (!have_job) break;
 
+            InterlockedExchange(&g_async_section_mesh_upload_state, ASYNC_MESH_WORKER_BUILDING);
             double upload_worker_start = now_seconds();
             if (pex_using_d3d11()) {
                 int ok0 = 1, ok1 = 1;
@@ -7030,6 +7085,7 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
                 g_prof_mesh_upload_worker_samples++;
             }
 
+            InterlockedExchange(&g_async_section_mesh_upload_state, ASYNC_MESH_WORKER_WAITING);
             EnterCriticalSection(&g_async_section_mesh_cs);
             g_async_section_mesh_upload_busy = 0;
             LeaveCriticalSection(&g_async_section_mesh_cs);
@@ -7038,9 +7094,11 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
 }
 
 static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
-    (void)unused;
+    int worker_index = (int)(intptr_t)unused - 1;
+    if (worker_index < 0 || worker_index >= (int)ARRAY_COUNT(g_async_section_mesh_worker_state)) worker_index = 0;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
     for (;;) {
+        InterlockedExchange(&g_async_section_mesh_worker_state[worker_index], ASYNC_MESH_WORKER_WAITING);
         /* Multiple mesh workers share an auto-reset event.  Periodically recheck
            the stop flag so shutdown cannot strand a sleeping worker. */
         WaitForSingleObject(g_async_section_mesh_event, 100);
@@ -7050,7 +7108,7 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
         EnterCriticalSection(&g_async_section_mesh_cs);
         if (g_async_section_mesh_stop) {
             LeaveCriticalSection(&g_async_section_mesh_cs);
-            return 0;
+            break;
         }
         if (g_async_section_mesh_job_count > 0) {
             job = g_async_section_mesh_jobs[g_async_section_mesh_job_head];
@@ -7062,6 +7120,7 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
         LeaveCriticalSection(&g_async_section_mesh_cs);
         if (!have_job) continue;
 
+        InterlockedExchange(&g_async_section_mesh_worker_state[worker_index], ASYNC_MESH_WORKER_BUILDING);
         FlatDirectMeshBuilder mb0, mb1;
         int skip0 = 1, skip1 = 1;
         memset(&mb0, 0, sizeof(mb0));
@@ -7088,6 +7147,7 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
         g_flat_direct_capture_skip0 = &skip0;
         g_flat_direct_capture_skip1 = &skip1;
         g_flat_direct_capture_success = 0;
+        g_flat_direct_capture_aborted = 0;
         double mesh_worker_start = now_seconds();
         rebuild_flat_section_mesh(job.sy, job.cx, job.cz);
         {
@@ -7100,8 +7160,10 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
         }
         int success = g_flat_direct_capture_success;
         async_section_mesh_clear_tls();
+        int stopping = InterlockedCompareExchange(&g_async_section_mesh_stop, 0, 0) != 0;
 
-        if (success) {
+        if (success && !stopping) {
+            InterlockedExchange(&g_async_section_mesh_worker_state[worker_index], ASYNC_MESH_WORKER_PUBLISHING);
             AsyncSectionMeshResult r;
             memset(&r, 0, sizeof(r));
             r.ready = 1;
@@ -7122,9 +7184,9 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             memset(&mb0, 0, sizeof(mb0));
             memset(&mb1, 0, sizeof(mb1));
 
-            if (pex_using_d3d11()) async_mesh_push_upload_job(&r);
+            if (async_mesh_worker_gpu_prebuild_enabled()) async_mesh_push_upload_job(&r);
             else async_mesh_push_result(&r);
-        } else {
+        } else if (!stopping) {
             /* A failed capture used to leave g_flat_section_mesh_building set
                forever.  Clear it so the render pass can retry next frame. */
             int current_cx = -1, current_cz = -1;
@@ -7146,9 +7208,13 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
         EnterCriticalSection(&g_async_section_mesh_cs);
         if (g_async_section_mesh_busy > 0) g_async_section_mesh_busy--;
         int more_jobs = (!g_async_section_mesh_stop && g_async_section_mesh_job_count > 0);
+        stopping = g_async_section_mesh_stop ? 1 : 0;
         LeaveCriticalSection(&g_async_section_mesh_cs);
+        if (stopping) break;
         if (more_jobs) SetEvent(g_async_section_mesh_event);
     }
+    InterlockedExchange(&g_async_section_mesh_worker_state[worker_index], ASYNC_MESH_WORKER_EXITED);
+    return 0;
 }
 
 static void async_section_mesh_init(void) {
@@ -7159,22 +7225,22 @@ static void async_section_mesh_init(void) {
     g_async_section_mesh_initialized = 1;
     InitializeCriticalSection(&g_async_section_mesh_cs);
     g_async_section_mesh_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (pex_using_d3d11()) g_async_section_mesh_upload_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (!g_async_section_mesh_event || (pex_using_d3d11() && !g_async_section_mesh_upload_event)) return;
+    if (async_mesh_worker_gpu_prebuild_enabled()) g_async_section_mesh_upload_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_async_section_mesh_event || (async_mesh_worker_gpu_prebuild_enabled() && !g_async_section_mesh_upload_event)) return;
     g_async_section_mesh_stop = 0;
     g_async_section_mesh_worker_count = 0;
     for (int i = 0; i < ASYNC_SECTION_MESH_WORKER_COUNT && i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
 #if defined(PEX_PLATFORM_PSP)
-        g_async_section_mesh_threads[i] = CreateThread(NULL, 0x20000, async_section_mesh_worker_proc, NULL, 0, NULL);
+        g_async_section_mesh_threads[i] = CreateThread(NULL, 0x20000, async_section_mesh_worker_proc, (LPVOID)(intptr_t)(i + 1), 0, NULL);
 #else
-        g_async_section_mesh_threads[i] = CreateThread(NULL, 0x400000, async_section_mesh_worker_proc, NULL, 0, NULL);
+        g_async_section_mesh_threads[i] = CreateThread(NULL, 0x400000, async_section_mesh_worker_proc, (LPVOID)(intptr_t)(i + 1), 0, NULL);
 #endif
         if (g_async_section_mesh_threads[i]) {
             SetThreadPriority(g_async_section_mesh_threads[i], THREAD_PRIORITY_NORMAL);
             g_async_section_mesh_worker_count++;
         }
     }
-    if (pex_using_d3d11()) g_async_section_mesh_upload_thread = CreateThread(NULL, 0x200000, async_mesh_upload_worker, NULL, 0, NULL);
+    if (async_mesh_worker_gpu_prebuild_enabled()) g_async_section_mesh_upload_thread = CreateThread(NULL, 0x200000, async_mesh_upload_worker, NULL, 0, NULL);
     if (g_async_section_mesh_upload_thread) SetThreadPriority(g_async_section_mesh_upload_thread, THREAD_PRIORITY_BELOW_NORMAL);
 }
 
@@ -7208,7 +7274,7 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     }
     async_section_mesh_init();
     if (!g_async_section_mesh_event || g_async_section_mesh_worker_count <= 0) return 0;
-    if (pex_using_d3d11() && (!g_async_section_mesh_upload_event || !g_async_section_mesh_upload_thread)) return 0;
+    if (async_mesh_worker_gpu_prebuild_enabled() && (!g_async_section_mesh_upload_event || !g_async_section_mesh_upload_thread)) return 0;
 
     int can_submit = 0;
     EnterCriticalSection(&g_async_section_mesh_cs);
@@ -7444,31 +7510,92 @@ static void async_section_mesh_install_ready(int max_uploads) {
 static void async_section_mesh_request_stop(void) {
     if (!g_async_section_mesh_initialized) return;
     InterlockedExchange(&g_async_section_mesh_stop, 1);
+    /* Discard jobs that have not started.  Busy workers own private snapshots and
+       will observe the cancellation flag inside their current section scan. */
+    EnterCriticalSection(&g_async_section_mesh_cs);
+    g_async_section_mesh_job_head = 0;
+    g_async_section_mesh_job_tail = 0;
+    g_async_section_mesh_job_count = 0;
+    LeaveCriticalSection(&g_async_section_mesh_cs);
     if (g_async_section_mesh_event) SetEvent(g_async_section_mesh_event);
     if (g_async_section_mesh_upload_event) SetEvent(g_async_section_mesh_upload_event);
-    for (int i = 0; i < g_async_section_mesh_worker_count && i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
+    for (int i = 0; i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
+        if (!g_async_section_mesh_threads[i]) continue;
         if (g_async_section_mesh_event) SetEvent(g_async_section_mesh_event);
-        if (g_async_section_mesh_threads[i]) SetThreadPriority(g_async_section_mesh_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
+        SetThreadPriority(g_async_section_mesh_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
     }
     if (g_async_section_mesh_upload_thread) SetThreadPriority(g_async_section_mesh_upload_thread, THREAD_PRIORITY_BELOW_NORMAL);
+}
+
+static int async_section_mesh_open_handle_count(void) {
+    int count = 0;
+    for (int i = 0; i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i)
+        if (g_async_section_mesh_threads[i]) count++;
+    if (g_async_section_mesh_upload_thread) count++;
+    return count;
+}
+
+static void async_section_mesh_join_workers(void) {
+    int total = async_section_mesh_open_handle_count();
+    int last_remaining = total;
+    DWORD last_log_ms = GetTickCount();
+    if (total <= 0) return;
+
+    for (;;) {
+        int remaining = 0;
+        for (int i = 0; i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
+            HANDLE h = g_async_section_mesh_threads[i];
+            if (!h) continue;
+            DWORD wr = WaitForSingleObject(h, 0);
+            if (wr == WAIT_OBJECT_0) {
+                CloseHandle(h);
+                g_async_section_mesh_threads[i] = NULL;
+            } else {
+                remaining++;
+            }
+        }
+        if (g_async_section_mesh_upload_thread) {
+            DWORD wr = WaitForSingleObject(g_async_section_mesh_upload_thread, 0);
+            if (wr == WAIT_OBJECT_0) {
+                CloseHandle(g_async_section_mesh_upload_thread);
+                g_async_section_mesh_upload_thread = NULL;
+            } else {
+                remaining++;
+            }
+        }
+        if (remaining <= 0) break;
+
+        if (g_async_section_mesh_event) {
+            for (int i = 0; i < remaining; ++i) SetEvent(g_async_section_mesh_event);
+        }
+        if (g_async_section_mesh_upload_event) SetEvent(g_async_section_mesh_upload_event);
+
+        if (world_quit_is_active()) {
+            int done = total - remaining;
+            world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS,
+                                 56 + (done * 9) / (total > 0 ? total : 1));
+        }
+        DWORD now_ms = GetTickCount();
+        if (remaining != last_remaining || (DWORD)(now_ms - last_log_ms) >= 2000u) {
+            pex_logf("mesh shutdown waiting remaining=%d states=%ld,%ld,%ld,%ld upload=%ld",
+                     remaining,
+                     (long)InterlockedCompareExchange(&g_async_section_mesh_worker_state[0], 0, 0),
+                     (long)InterlockedCompareExchange(&g_async_section_mesh_worker_state[1], 0, 0),
+                     (long)InterlockedCompareExchange(&g_async_section_mesh_worker_state[2], 0, 0),
+                     (long)InterlockedCompareExchange(&g_async_section_mesh_worker_state[3], 0, 0),
+                     (long)InterlockedCompareExchange(&g_async_section_mesh_upload_state, 0, 0));
+            last_remaining = remaining;
+            last_log_ms = now_ms;
+        }
+        Sleep(10);
+    }
 }
 
 static void async_section_mesh_shutdown(void) {
     if (!g_async_section_mesh_initialized) return;
     async_section_mesh_request_stop();
-    for (int i = 0; i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
-        if (g_async_section_mesh_threads[i]) {
-            WaitForSingleObject(g_async_section_mesh_threads[i], INFINITE);
-            CloseHandle(g_async_section_mesh_threads[i]);
-            g_async_section_mesh_threads[i] = NULL;
-        }
-    }
+    async_section_mesh_join_workers();
     g_async_section_mesh_worker_count = 0;
-    if (g_async_section_mesh_upload_thread) {
-        WaitForSingleObject(g_async_section_mesh_upload_thread, INFINITE);
-        CloseHandle(g_async_section_mesh_upload_thread);
-        g_async_section_mesh_upload_thread = NULL;
-    }
 
     async_mesh_clear_results(g_async_section_mesh_upload_jobs, ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX);
     async_mesh_clear_results(g_async_section_mesh_results, ASYNC_SECTION_MESH_RESULT_QUEUE_MAX);
@@ -7489,6 +7616,9 @@ static void async_section_mesh_shutdown(void) {
     g_async_section_mesh_job_head = g_async_section_mesh_job_tail = g_async_section_mesh_job_count = 0;
     g_async_section_mesh_upload_head = g_async_section_mesh_upload_tail = g_async_section_mesh_upload_count = 0;
     g_async_section_mesh_result_head = g_async_section_mesh_result_tail = g_async_section_mesh_result_count = 0;
+    for (int i = 0; i < (int)ARRAY_COUNT(g_async_section_mesh_worker_state); ++i)
+        InterlockedExchange(&g_async_section_mesh_worker_state[i], ASYNC_MESH_WORKER_UNUSED);
+    InterlockedExchange(&g_async_section_mesh_upload_state, ASYNC_MESH_WORKER_UNUSED);
     memset(g_flat_section_mesh_building, 0, sizeof(g_flat_section_mesh_building));
     memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
     memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));

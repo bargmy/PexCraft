@@ -1556,6 +1556,7 @@ typedef enum PexWorldQuitStage {
     PEX_WORLD_QUIT_DISCONNECTING,
     PEX_WORLD_QUIT_STOPPING_STREAMING,
     PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS,
+    PEX_WORLD_QUIT_STOPPING_ENTITY_RENDERER,
     PEX_WORLD_QUIT_DRAINING_SAVES,
     PEX_WORLD_QUIT_WRITING_FINAL_SAVE,
     PEX_WORLD_QUIT_RELEASING_LOCKS,
@@ -1601,7 +1602,8 @@ static const char *world_quit_stage_text(void) {
         case PEX_WORLD_QUIT_STOPPING_SIMULATION: return "Stopping simulation";
         case PEX_WORLD_QUIT_DISCONNECTING: return g_world_quit_was_multiplayer ? "Disconnecting from server" : "Stopping world cache";
         case PEX_WORLD_QUIT_STOPPING_STREAMING: return "Stopping terrain and lighting";
-        case PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS: return "Stopping mesh workers";
+        case PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS: return "Cancelling mesh builders";
+        case PEX_WORLD_QUIT_STOPPING_ENTITY_RENDERER: return "Stopping entity renderer";
         case PEX_WORLD_QUIT_DRAINING_SAVES: return "Finishing pending saves";
         case PEX_WORLD_QUIT_WRITING_FINAL_SAVE: return "Saving world to disk";
         case PEX_WORLD_QUIT_RELEASING_LOCKS: return "Closing world services";
@@ -1644,8 +1646,10 @@ static DWORD WINAPI world_quit_worker_proc(LPVOID unused) {
     world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_STREAMING, 42);
     world_stream_service_shutdown();
 
-    world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS, 58);
+    world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS, 56);
     async_section_mesh_shutdown();
+
+    world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_ENTITY_RENDERER, 66);
     passive_render_worker_shutdown();
 
     world_quit_set_stage(PEX_WORLD_QUIT_DRAINING_SAVES, 70);
