@@ -233,6 +233,7 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+    if (world_quit_is_active()) return;
     pex_join_save_thread_for_exit();
     if (g_mp_connected) {
         pex_net_disconnect();
@@ -635,6 +636,7 @@ int main(int argc, char **argv) {
     main_loop();
     set_mouse_grabbed(0);
     /* Stop world-state producers before consumers, then destroy shared locks. */
+    world_quit_shutdown_for_app_exit();
     ingame_tick_async_shutdown();
     world_stream_service_shutdown();
     async_section_mesh_shutdown();

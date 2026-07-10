@@ -1,3 +1,5 @@
+> **Superseded:** The synchronous button-callback teardown described here was replaced by the responsive staged design in `save_and_quit_progress_teardown.md`.
+
 # Save and Quit: full world-session teardown
 
 ## Required behavior

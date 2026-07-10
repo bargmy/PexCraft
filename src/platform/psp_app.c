@@ -202,6 +202,7 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+    if (world_quit_is_active()) return;
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     pex_join_save_thread_for_exit();
 #else
@@ -363,6 +364,7 @@ int main(int argc, char **argv) {
     main_loop();
     PEX_PSP_LOGF("main_loop returned; cleanup begin");
     set_mouse_grabbed(0);
+    world_quit_shutdown_for_app_exit();
     PEX_PSP_LOGF("save_world_state_for_exit begin");
     save_world_state_for_exit();
     PEX_PSP_LOGF("save_world_state_for_exit end");

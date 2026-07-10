@@ -101,6 +101,7 @@ static void draw_current_screen(float partial) {
         case SCREEN_TEXPACK: draw_texpack(); break;
         case SCREEN_TEXPACK_INSTALL: draw_texturepack_install_screen(); break;
         case SCREEN_GENERATING: draw_generating_screen(); break;
+        case SCREEN_SAVING_QUIT: draw_saving_quit_screen(); break;
         case SCREEN_INGAME: draw_ingame_screen(); break;
         case SCREEN_PAUSE: draw_pause_screen(); break;
         case SCREEN_INVENTORY: draw_inventory_screen(); break;
@@ -131,6 +132,7 @@ static void render(float partial) {
     update_debug_fps_counter();
     profile_add_time(PROF_RENDER_FPS_UPDATE, part_start);
     g_frame_partial = partial;
+    if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) world_quit_pump();
     part_start = profile_begin();
     player_render_begin_frame();
     profile_add_time(PROF_PLAYER_RENDER_SNAPSHOT, part_start);

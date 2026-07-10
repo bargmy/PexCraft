@@ -5122,7 +5122,7 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
 #if PEX_PASSIVE_RENDER_WORKER && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
 static CRITICAL_SECTION g_passive_render_cs;
 static int g_passive_render_initialized = 0;
-static int g_passive_render_stop = 0;
+static volatile LONG g_passive_render_stop = 0;
 static int g_passive_render_has_job = 0;
 static int g_passive_render_busy = 0;
 static HANDLE g_passive_render_event = NULL;
@@ -5187,14 +5187,18 @@ static void passive_render_worker_init(void) {
     }
 }
 
+static void passive_render_worker_request_stop(void) {
+    if (!g_passive_render_initialized) return;
+    InterlockedExchange(&g_passive_render_stop, 1);
+    g_passive_render_has_job = 0;
+    if (g_passive_render_event) SetEvent(g_passive_render_event);
+    if (g_passive_render_thread) SetThreadPriority(g_passive_render_thread, THREAD_PRIORITY_BELOW_NORMAL);
+}
+
 static void passive_render_worker_shutdown(void) {
     if (!g_passive_render_initialized) return;
+    passive_render_worker_request_stop();
 
-    EnterCriticalSection(&g_passive_render_cs);
-    g_passive_render_stop = 1;
-    g_passive_render_has_job = 0;
-    LeaveCriticalSection(&g_passive_render_cs);
-    if (g_passive_render_event) SetEvent(g_passive_render_event);
 
     if (g_passive_render_thread) {
         WaitForSingleObject(g_passive_render_thread, INFINITE);
@@ -5252,6 +5256,7 @@ static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
     return count;
 }
 #else
+static void passive_render_worker_request_stop(void) { }
 static void passive_render_worker_shutdown(void) { }
 static void passive_mobs_submit_render_job(float partial) { (void)partial; }
 static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {

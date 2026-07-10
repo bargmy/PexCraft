@@ -25,9 +25,14 @@ PexCraft is an experimental custom client written in C. It is trying to work lik
 
 See `android_tv/README.md` for the APK build, signing, TV remote mapping, and Google TV channel integration.
 
-## Save and Quit lifecycle fix
+## Responsive Save and Quit lifecycle
 
-This patched tree treats **Save and Quit to Title** as a complete world-session
-teardown: it stops world audio and every world-owned worker, drains autosaves, writes
-the final local save synchronously, releases world render/state ownership, and starts
-title music on return. See `docs/save_and_quit_full_world_teardown.md`.
+**Save and Quit to Title** now uses a live progress screen and a staged teardown.
+Thread joins and final disk saving run on a below-normal-priority coordinator while
+the main thread continues pumping the window and rendering progress. Renderer-owned
+textures and world meshes are then released safely on the render thread in bounded
+per-frame batches before title music starts.
+
+See `docs/save_and_quit_progress_teardown.md` for the shutdown order, deadlock
+protections, and validation notes. The earlier synchronous implementation is retained
+only as historical context in `docs/save_and_quit_full_world_teardown.md`.

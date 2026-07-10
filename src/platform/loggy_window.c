@@ -45,6 +45,7 @@ static const char *loggy_screen_name(ScreenId s) {
         case SCREEN_TEXPACK: return "TEXPACK";
         case SCREEN_TEXPACK_INSTALL: return "TEXPACK_INSTALL";
         case SCREEN_GENERATING: return "GENERATING";
+        case SCREEN_SAVING_QUIT: return "SAVING_QUIT";
         case SCREEN_INGAME: return "INGAME";
         case SCREEN_PAUSE: return "PAUSE";
         case SCREEN_INVENTORY: return "INVENTORY";
@@ -162,7 +163,7 @@ static void loggy_build_text(void) {
     int active_drops = 0;
     int active_particles = 0;
 
-    if (g_async_section_mesh_initialized) {
+    if (!world_quit_is_active() && g_async_section_mesh_initialized) {
         EnterCriticalSection(&g_async_section_mesh_cs);
         mesh_jobs = g_async_section_mesh_job_count;
         mesh_busy = g_async_section_mesh_busy;
@@ -171,7 +172,7 @@ static void loggy_build_text(void) {
         mesh_results = g_async_section_mesh_result_count;
         LeaveCriticalSection(&g_async_section_mesh_cs);
     }
-    if (g_stream_async_initialized && g_stream_async_event) {
+    if (!world_quit_is_active() && g_stream_async_initialized && g_stream_async_event) {
         EnterCriticalSection(&g_stream_async_cs);
         stream_jobs = g_stream_async_job_count;
         stream_active = g_stream_async_active_count;
@@ -179,7 +180,7 @@ static void loggy_build_text(void) {
         stream_workers = g_stream_async_worker_count;
         LeaveCriticalSection(&g_stream_async_cs);
     }
-    if (g_flat_light_dirty_cs_initialized) {
+    if (!world_quit_is_active() && g_flat_light_dirty_cs_initialized) {
         EnterCriticalSection(&g_flat_light_dirty_cs);
         light_dirty = g_flat_light_dirty;
         LeaveCriticalSection(&g_flat_light_dirty_cs);

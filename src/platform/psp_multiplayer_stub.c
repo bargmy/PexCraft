@@ -5,7 +5,10 @@ static int pex_net_connect_to_server(const char *server) { (void)server; pex_net
 static void pex_net_poll(void) { }
 static int pex_net_is_connecting(void) { return 0; }
 static void pex_net_update_smoothing(void) { }
+static void pex_net_disconnect_request_stop(void) { }
 static void pex_net_disconnect(void) { g_mp_connected = 0; g_mp_connecting = 0; g_mp_world_ready = 0; }
+static void pex_net_release_render_resources(void) { }
+static void pex_mp_cache_save_request_stop(void) { }
 static void pex_mp_cache_save_shutdown(void) { }
 static void pex_net_send_player_state(void) { }
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id) { (void)action; (void)x; (void)y; (void)z; (void)face; (void)block_id; }

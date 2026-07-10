@@ -155,6 +155,7 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+    if (world_quit_is_active()) return;
     pex_join_save_thread_for_exit();
     if (g_mp_connected) {
         pex_net_disconnect();

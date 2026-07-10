@@ -9768,7 +9768,7 @@ static void stream_generation_queue_clear(void) {
    user seeing holes while a torch/skylight region was being repaired. */
 static CRITICAL_SECTION g_flat_lighting_worker_cs;
 static int g_flat_lighting_worker_initialized = 0;
-static int g_flat_lighting_worker_stop = 0;
+static volatile LONG g_flat_lighting_worker_stop = 0;
 static int g_flat_lighting_worker_busy = 0;
 static HANDLE g_flat_lighting_worker_event = NULL;
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
@@ -9783,7 +9783,9 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
     (void)unused;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_STREAM;
     for (;;) {
-        WaitForSingleObject(g_flat_lighting_worker_event, INFINITE);
+        /* Use a bounded wait so every worker observes the stop flag even when the
+           auto-reset event wakes only one waiter during shutdown. */
+        WaitForSingleObject(g_flat_lighting_worker_event, 100);
         for (;;) {
             int stop = 0;
             EnterCriticalSection(&g_flat_lighting_worker_cs);
@@ -9870,17 +9872,24 @@ static void flat_lighting_worker_wake(void) {
 #endif
 }
 
+static void flat_lighting_worker_request_stop(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return;
+#else
+    if (!g_flat_lighting_worker_initialized) return;
+    InterlockedExchange(&g_flat_lighting_worker_stop, 1);
+    if (g_flat_lighting_worker_event) {
+        for (int i = 0; i < g_flat_lighting_worker_thread_count; ++i) SetEvent(g_flat_lighting_worker_event);
+    }
+#endif
+}
+
 static void flat_lighting_worker_shutdown(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return;
 #else
     if (!g_flat_lighting_worker_initialized) return;
-    EnterCriticalSection(&g_flat_lighting_worker_cs);
-    g_flat_lighting_worker_stop = 1;
-    LeaveCriticalSection(&g_flat_lighting_worker_cs);
-    if (g_flat_lighting_worker_event) {
-        for (int i = 0; i < g_flat_lighting_worker_thread_count; ++i) SetEvent(g_flat_lighting_worker_event);
-    }
+    flat_lighting_worker_request_stop();
     for (int i = 0; i < g_flat_lighting_worker_thread_count; ++i) {
         if (g_flat_lighting_worker_threads[i]) {
             WaitForSingleObject(g_flat_lighting_worker_threads[i], INFINITE);
@@ -9936,7 +9945,7 @@ static int g_stream_async_initialized = 0;
 static HANDLE g_stream_async_event = NULL;
 static HANDLE g_stream_async_threads[STREAM_ASYNC_MAX_WORKERS];
 static int g_stream_async_worker_count = 0;
-static int g_stream_async_stop = 0;
+static volatile LONG g_stream_async_stop = 0;
 static int g_stream_async_active_count = 0;
 static StreamAsyncJob g_stream_async_jobs[STREAM_ASYNC_JOB_RING];
 static int g_stream_async_job_head = 0, g_stream_async_job_tail = 0, g_stream_async_job_count = 0;
@@ -10188,6 +10197,7 @@ static void stream_async_init(void) {
 }
 
 static int stream_async_pending(void) {
+    if (world_quit_is_active()) return 0;
 #if defined(PEX_PLATFORM_WII)
     return 0;
 #endif
@@ -10309,6 +10319,19 @@ static int stream_async_install_ready(int max_install) {
     return installed;
 }
 
+static void stream_async_request_stop(void) {
+#if defined(PEX_PLATFORM_WII)
+    return;
+#else
+    if (!g_stream_async_initialized) return;
+    InterlockedExchange(&g_stream_async_stop, 1);
+    if (g_stream_async_event) SetEvent(g_stream_async_event);
+    for (int i = 0; i < g_stream_async_worker_count && i < STREAM_ASYNC_MAX_WORKERS; ++i) {
+        if (g_stream_async_threads[i]) SetThreadPriority(g_stream_async_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
+    }
+#endif
+}
+
 static void stream_async_shutdown(void) {
 #if defined(PEX_PLATFORM_WII)
     g_stream_async_initialized = 0;
@@ -10320,13 +10343,12 @@ static void stream_async_shutdown(void) {
     g_stream_async_initialized = 0;
     return;
 #else
+    stream_async_request_stop();
     if (g_stream_async_event || g_stream_async_worker_count > 0) {
         EnterCriticalSection(&g_stream_async_cs);
-        g_stream_async_stop = 1;
         /* Queued jobs have no world to publish into during process shutdown. */
         g_stream_async_job_head = g_stream_async_job_tail = g_stream_async_job_count = 0;
         LeaveCriticalSection(&g_stream_async_cs);
-        if (g_stream_async_event) SetEvent(g_stream_async_event);
     }
 
     for (int i = 0; i < STREAM_ASYNC_MAX_WORKERS; ++i) {
@@ -11232,7 +11254,7 @@ static void flat_run_initial_light_settle(void) {
 
 static CRITICAL_SECTION g_world_stream_service_cs;
 static int g_world_stream_service_initialized = 0;
-static int g_world_stream_service_stop = 0;
+static volatile LONG g_world_stream_service_stop = 0;
 static int g_world_stream_service_busy = 0;
 static HANDLE g_world_stream_service_thread = NULL;
 
@@ -11338,14 +11360,25 @@ static void world_stream_service_ensure(void) {
 #endif
 }
 
-static void world_stream_service_shutdown(void) {
+static void world_stream_service_request_stop(void) {
 #if defined(PEX_PLATFORM_WII)
     return;
 #else
     if (g_world_stream_service_initialized) {
-        EnterCriticalSection(&g_world_stream_service_cs);
-        g_world_stream_service_stop = 1;
-        LeaveCriticalSection(&g_world_stream_service_cs);
+        InterlockedExchange(&g_world_stream_service_stop, 1);
+        if (g_world_stream_service_thread) SetThreadPriority(g_world_stream_service_thread, THREAD_PRIORITY_BELOW_NORMAL);
+    }
+    stream_async_request_stop();
+    flat_lighting_worker_request_stop();
+#endif
+}
+
+static void world_stream_service_shutdown(void) {
+#if defined(PEX_PLATFORM_WII)
+    return;
+#else
+    world_stream_service_request_stop();
+    if (g_world_stream_service_initialized) {
         if (g_world_stream_service_thread) {
             WaitForSingleObject(g_world_stream_service_thread, INFINITE);
             CloseHandle(g_world_stream_service_thread);
@@ -11387,6 +11420,7 @@ static void world_stream_shared_locks_shutdown(void) {
 }
 
 static int world_stream_service_active(void) {
+    if (world_quit_is_active()) return 0;
 #if defined(PEX_PLATFORM_WII)
     return 0;
 #endif

@@ -321,6 +321,12 @@ static void net_free_render_players(void) {
     }
 }
 
+/* Texture destruction must run on the renderer/main thread for OpenGL and for
+   backends whose resource owner is the presentation thread. */
+static void pex_net_release_render_resources(void) {
+    net_free_render_players();
+}
+
 static float pex_net_smooth_step(float dt, float sharpness) {
     if (dt <= 0.0f) return 0.0f;
     float a = 1.0f - expf(-sharpness * dt);
@@ -1024,11 +1030,18 @@ static int pex_mp_cache_save_async_init(void) {
     return g_mp_cache_save_event && g_mp_cache_save_thread;
 }
 
-static void pex_mp_cache_save_shutdown(void) {
+static void pex_mp_cache_save_request_stop(void) {
     if (!g_mp_cache_save_initialized) return;
-
     InterlockedExchange(&g_mp_cache_save_stop, 1);
     if (g_mp_cache_save_event) SetEvent(g_mp_cache_save_event);
+    if (g_mp_cache_save_thread) SetThreadPriority(g_mp_cache_save_thread, THREAD_PRIORITY_BELOW_NORMAL);
+}
+
+static void pex_mp_cache_save_shutdown(void) {
+    if (!g_mp_cache_save_initialized) return;
+    pex_mp_cache_save_request_stop();
+
+
     if (g_mp_cache_save_thread) {
         WaitForSingleObject(g_mp_cache_save_thread, INFINITE);
         CloseHandle(g_mp_cache_save_thread);
@@ -2645,6 +2658,7 @@ static void pex_net_apply_snapshot(const PexNetSnapshot *snap) {
 }
 
 static void pex_net_update_smoothing(void) {
+    if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return;
     if (!g_mp_connected) return;
     double now = now_seconds();
     if (g_mp_render_last_time <= 0.0) g_mp_render_last_time = now;
@@ -3062,6 +3076,7 @@ static void pex_net_connect_tick(void) {
 }
 
 static void pex_net_poll(void) {
+    if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return;
     if (g_mp_connecting) pex_net_connect_tick();
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (g_mp_bedrock_session_active) {
@@ -3642,7 +3657,36 @@ static void pex_net_send_respawn(void) {
     }
 }
 
+static void pex_net_disconnect_request_stop(void) {
+    InterlockedExchange(&g_mp_rx_stop, 1);
+    if (g_mp_rx_thread) SetThreadPriority(g_mp_rx_thread, THREAD_PRIORITY_BELOW_NORMAL);
+    pex_mp_cache_save_request_stop();
+
+    /* Closing nonblocking sockets wakes receive/connect workers without waiting
+       on the UI thread.  The full disconnect stage joins them afterward. */
+    if (g_mp_socket != INVALID_SOCKET) {
+        if (g_mp_connected) {
+            PexNetPacketHeader h;
+            h.type = PEX_C2S_DISCONNECT;
+            h.reserved = 0;
+            h.size = 0;
+            send(g_mp_socket, (const char *)&h, (int)sizeof(h), 0);
+        }
+        closesocket(g_mp_socket);
+        g_mp_socket = INVALID_SOCKET;
+    }
+    if (g_mp_connect_socket != INVALID_SOCKET) {
+        closesocket(g_mp_connect_socket);
+        g_mp_connect_socket = INVALID_SOCKET;
+    }
+    if (g_mp_connect_thread_socket != INVALID_SOCKET) {
+        closesocket(g_mp_connect_thread_socket);
+        g_mp_connect_thread_socket = INVALID_SOCKET;
+    }
+}
+
 static void pex_net_disconnect(void) {
+    if (world_quit_is_active()) pex_net_disconnect_request_stop();
     pex_net_stop_rx_thread();
     pex_mp_cache_save_shutdown();
     if (g_mp_bedrock_session_active) {
@@ -3657,7 +3701,8 @@ static void pex_net_disconnect(void) {
         closesocket(g_mp_connect_thread_socket);
         g_mp_connect_thread_socket = INVALID_SOCKET;
     }
-    if (g_mp_connect_thread && InterlockedCompareExchange(&g_mp_connect_thread_done, 0, 0)) {
+    if (g_mp_connect_thread && (world_quit_is_active() || InterlockedCompareExchange(&g_mp_connect_thread_done, 0, 0))) {
+        if (world_quit_is_active()) WaitForSingleObject(g_mp_connect_thread, INFINITE);
         CloseHandle(g_mp_connect_thread);
         g_mp_connect_thread = NULL;
     }
@@ -3680,7 +3725,7 @@ static void pex_net_disconnect(void) {
     g_mp_player_count = 0;
     memset(g_mp_players, 0, sizeof(g_mp_players));
     memset(g_mp_prev_players, 0, sizeof(g_mp_prev_players));
-    net_free_render_players();
+    if (!world_quit_is_active()) net_free_render_players();
     memset(g_mp_render_drops, 0, sizeof(g_mp_render_drops));
     memset(g_falling_blocks, 0, sizeof(g_falling_blocks));
     g_mp_chunks_received = 0;

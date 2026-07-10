@@ -2126,38 +2126,96 @@ static void flat_delete_display_list_owned(GLuint list) {
    on the main/render thread after async mesh workers have stopped, so no worker
    can publish a new handle after the sweep.  Texture-pack resources remain
    alive because they belong to the client, not to a world session. */
-static void flat_world_render_resources_release(void) {
+static int g_flat_world_render_release_active = 0;
+static int g_flat_world_render_release_phase = 0;
+static int g_flat_world_render_release_index = 0;
+
+static void flat_world_render_resources_release_begin(void) {
+    g_flat_world_render_release_active = 1;
+    g_flat_world_render_release_phase = 0;
+    g_flat_world_render_release_index = 0;
+}
+
+static int flat_world_render_resources_release_progress(void) {
+    const int section_total = FLAT_RENDER_SECTIONS_Y * FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS * 2;
+    const int chunk_total = FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS;
+    const int total = section_total + chunk_total + 1;
+    int done = 0;
+    if (!g_flat_world_render_release_active) return 100;
+    if (g_flat_world_render_release_phase == 0) done = g_flat_world_render_release_index;
+    else if (g_flat_world_render_release_phase == 1) done = section_total + g_flat_world_render_release_index;
+    else done = section_total + chunk_total;
+    if (done < 0) done = 0;
+    if (done > total) done = total;
+    return (done * 100) / total;
+}
+
+/* Release a bounded number of renderer objects on the main thread.  Save and
+   Quit calls this once per frame so a large render distance cannot turn the
+   progress screen into another apparent freeze. */
+static int flat_world_render_resources_release_step(int budget) {
+    if (!g_flat_world_render_release_active) return 1;
+    if (budget < 1) budget = 1;
     PexRendererBackend *rb = flat_direct_backend();
+    const int section_total = FLAT_RENDER_SECTIONS_Y * FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS * 2;
+    const int chunk_total = FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS;
 
-    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
-        for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
-            for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
-                for (int pass = 0; pass < 2; ++pass) {
-                    unsigned int *slot = &g_flat_section_direct_mesh[sy][cz][cx][pass];
-                    if (rb && *slot) rb->destroy_mesh(*slot);
-                    *slot = 0;
-                    flat_delete_display_list_owned(g_flat_section_lists[sy][cz][cx][pass]);
-                    g_flat_section_lists[sy][cz][cx][pass] = 0;
-                }
-            }
+    while (budget > 0 && g_flat_world_render_release_phase == 0) {
+        if (g_flat_world_render_release_index >= section_total) {
+            g_flat_world_render_release_phase = 1;
+            g_flat_world_render_release_index = 0;
+            break;
         }
+        int idx = g_flat_world_render_release_index++;
+        int pass = idx & 1;
+        idx >>= 1;
+        int cx = idx % FLAT_RENDER_CHUNKS;
+        idx /= FLAT_RENDER_CHUNKS;
+        int cz = idx % FLAT_RENDER_CHUNKS;
+        int sy = idx / FLAT_RENDER_CHUNKS;
+
+        unsigned int *slot = &g_flat_section_direct_mesh[sy][cz][cx][pass];
+        if (rb && *slot) rb->destroy_mesh(*slot);
+        *slot = 0;
+        flat_delete_display_list_owned(g_flat_section_lists[sy][cz][cx][pass]);
+        g_flat_section_lists[sy][cz][cx][pass] = 0;
+        flat_gl_cpu_mesh_free(&g_flat_section_gl_cpu_mesh[sy][cz][cx][pass]);
+        budget--;
     }
 
-    for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
-        for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
-            flat_delete_display_list_owned(g_flat_world_chunk_lists[cz][cx]);
-            flat_delete_display_list_owned(g_flat_world_chunk_liquid_lists[cz][cx]);
+    while (budget > 0 && g_flat_world_render_release_phase == 1) {
+        if (g_flat_world_render_release_index >= chunk_total) {
+            g_flat_world_render_release_phase = 2;
+            g_flat_world_render_release_index = 0;
+            break;
         }
+        int idx = g_flat_world_render_release_index++;
+        int cx = idx % FLAT_RENDER_CHUNKS;
+        int cz = idx / FLAT_RENDER_CHUNKS;
+        flat_delete_display_list_owned(g_flat_world_chunk_lists[cz][cx]);
+        flat_delete_display_list_owned(g_flat_world_chunk_liquid_lists[cz][cx]);
+        g_flat_world_chunk_lists[cz][cx] = 0;
+        g_flat_world_chunk_liquid_lists[cz][cx] = 0;
+        budget--;
     }
 
-    flat_cpu_mesh_free_all();
-    memset(g_flat_world_chunk_lists, 0, sizeof(g_flat_world_chunk_lists));
-    memset(g_flat_world_chunk_liquid_lists, 0, sizeof(g_flat_world_chunk_liquid_lists));
-    memset(g_flat_section_lists, 0, sizeof(g_flat_section_lists));
-    memset(g_flat_section_direct_mesh, 0, sizeof(g_flat_section_direct_mesh));
-    g_flat_gl_cpu_mesh_origin_x = 0x7fffffff;
-    g_flat_gl_cpu_mesh_origin_z = 0x7fffffff;
-    pex_logf("world render resources released");
+    if (g_flat_world_render_release_phase == 2) {
+        memset(g_flat_section_lists, 0, sizeof(g_flat_section_lists));
+        memset(g_flat_section_direct_mesh, 0, sizeof(g_flat_section_direct_mesh));
+        g_flat_gl_cpu_mesh_origin_x = 0x7fffffff;
+        g_flat_gl_cpu_mesh_origin_z = 0x7fffffff;
+        g_flat_world_render_release_active = 0;
+        g_flat_world_render_release_phase = 0;
+        g_flat_world_render_release_index = 0;
+        pex_logf("world render resources released");
+        return 1;
+    }
+    return 0;
+}
+
+static void flat_world_render_resources_release(void) {
+    flat_world_render_resources_release_begin();
+    while (!flat_world_render_resources_release_step(4096)) { }
 }
 
 static void flat_cpu_mesh_remap_shift(int old_origin_x, int old_origin_z,
@@ -6800,7 +6858,7 @@ static HANDLE g_async_section_mesh_threads[4] = { NULL, NULL, NULL, NULL };
 static int g_async_section_mesh_worker_count = 0;
 static HANDLE g_async_section_mesh_upload_thread = NULL;
 static int g_async_section_mesh_initialized = 0;
-static int g_async_section_mesh_stop = 0;
+static volatile LONG g_async_section_mesh_stop = 0;
 static int g_async_section_mesh_busy = 0;
 static int g_async_section_mesh_upload_busy = 0;
 
@@ -6905,7 +6963,9 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
     (void)unused;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
     for (;;) {
-        WaitForSingleObject(g_async_section_mesh_upload_event, INFINITE);
+        /* A timeout guarantees the stop flag is observed even if an auto-reset
+           wake is consumed by another shutdown waiter. */
+        WaitForSingleObject(g_async_section_mesh_upload_event, 100);
         for (;;) {
             AsyncSectionMeshResult r;
             memset(&r, 0, sizeof(r));
@@ -6981,7 +7041,9 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
     (void)unused;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
     for (;;) {
-        WaitForSingleObject(g_async_section_mesh_event, INFINITE);
+        /* Multiple mesh workers share an auto-reset event.  Periodically recheck
+           the stop flag so shutdown cannot strand a sleeping worker. */
+        WaitForSingleObject(g_async_section_mesh_event, 100);
 
         AsyncSectionMeshJob job;
         int have_job = 0;
@@ -7117,6 +7179,7 @@ static void async_section_mesh_init(void) {
 }
 
 static int async_section_mesh_pending(void) {
+    if (world_quit_is_active()) return 0;
     if (!g_async_section_mesh_initialized) return 0;
     int pending = 0;
     EnterCriticalSection(&g_async_section_mesh_cs);
@@ -7378,18 +7441,21 @@ static void async_section_mesh_install_ready(int max_uploads) {
     }
 }
 
-static void async_section_mesh_shutdown(void) {
+static void async_section_mesh_request_stop(void) {
     if (!g_async_section_mesh_initialized) return;
-    if (g_async_section_mesh_event || g_async_section_mesh_upload_event) {
-        EnterCriticalSection(&g_async_section_mesh_cs);
-        g_async_section_mesh_stop = 1;
-        LeaveCriticalSection(&g_async_section_mesh_cs);
-        if (g_async_section_mesh_event) SetEvent(g_async_section_mesh_event);
-        if (g_async_section_mesh_upload_event) SetEvent(g_async_section_mesh_upload_event);
-    }
+    InterlockedExchange(&g_async_section_mesh_stop, 1);
+    if (g_async_section_mesh_event) SetEvent(g_async_section_mesh_event);
+    if (g_async_section_mesh_upload_event) SetEvent(g_async_section_mesh_upload_event);
     for (int i = 0; i < g_async_section_mesh_worker_count && i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
         if (g_async_section_mesh_event) SetEvent(g_async_section_mesh_event);
+        if (g_async_section_mesh_threads[i]) SetThreadPriority(g_async_section_mesh_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
     }
+    if (g_async_section_mesh_upload_thread) SetThreadPriority(g_async_section_mesh_upload_thread, THREAD_PRIORITY_BELOW_NORMAL);
+}
+
+static void async_section_mesh_shutdown(void) {
+    if (!g_async_section_mesh_initialized) return;
+    async_section_mesh_request_stop();
     for (int i = 0; i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
         if (g_async_section_mesh_threads[i]) {
             WaitForSingleObject(g_async_section_mesh_threads[i], INFINITE);

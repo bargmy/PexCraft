@@ -2072,6 +2072,7 @@ static int handle_local_chat_command(const char *text) {
 static void pex_utf8_backspace(char *s);
 
 static void handle_keydown(WPARAM vk) {
+    if (g_screen == SCREEN_SAVING_QUIT || world_quit_is_active()) return;
     if (g_screen == SCREEN_VIRTUAL_KEYBOARD) {
         if (vk == VK_LEFT) { pex_virtual_keyboard_move(-1, 0); return; }
         if (vk == VK_RIGHT) { pex_virtual_keyboard_move(1, 0); return; }
@@ -2152,7 +2153,7 @@ static void handle_keydown(WPARAM vk) {
     }
 
     if (vk == VK_ESCAPE) {
-        if (g_screen == SCREEN_TITLE || g_screen == SCREEN_GENERATING || g_screen == SCREEN_TEXPACK_INSTALL) { if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_request_cancel(); return; }
+        if (g_screen == SCREEN_TITLE || g_screen == SCREEN_GENERATING || g_screen == SCREEN_SAVING_QUIT || g_screen == SCREEN_TEXPACK_INSTALL) { if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_request_cancel(); return; }
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);

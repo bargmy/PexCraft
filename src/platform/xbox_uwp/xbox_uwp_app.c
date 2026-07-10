@@ -98,6 +98,9 @@ void pex_xbox_uwp_engine_key_up(int vk) { pex_xbox_uwp_set_key_state(vk, 0); }
 void pex_xbox_uwp_engine_char(uint32_t ch) { if (ch >= 32 && ch < 127) handle_char((WPARAM)ch); }
 
 void pex_xbox_uwp_engine_shutdown(void) {
+    /* Complete an in-flight progress teardown before the generic exit saver can
+       touch the same world and worker objects. */
+    world_quit_shutdown_for_app_exit();
     save_world_state_for_exit();
     /* Stop world-state producers before consumers, then destroy shared locks. */
     ingame_tick_async_shutdown();

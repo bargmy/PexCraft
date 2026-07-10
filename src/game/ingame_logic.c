@@ -319,7 +319,7 @@ static volatile int g_ingame_tick_async_needs_main_pump = 0;
 static CRITICAL_SECTION g_ingame_tick_async_cs;
 static HANDLE g_ingame_tick_async_thread = NULL;
 static int g_ingame_tick_async_initialized = 0;
-static int g_ingame_tick_async_stop = 0;
+static volatile LONG g_ingame_tick_async_stop = 0;
 static int g_ingame_tick_async_busy_flag = 0;
 static int g_ingame_tick_async_failed = 0;
 static int g_ingame_tick_async_completed = 0;
@@ -391,6 +391,7 @@ static void player_render_overlay_live_look(PexPlayerRenderState *s) {
 }
 
 static void player_render_begin_frame(void) {
+    if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return;
 #if PEX_ASYNC_INGAME_TICK
     if (g_player_render_frame_from_async_partial) {
         g_player_render_frame_from_async_partial = 0;
@@ -1199,6 +1200,7 @@ static void ingame_tick_async_queue(void) {
 
 static float ingame_tick_async_render_partial(float fallback_partial) {
 #if PEX_ASYNC_INGAME_TICK
+    if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return fallback_partial;
     if (!g_ingame_tick_async_initialized || g_ingame_tick_async_failed ||
         !g_ingame_tick_async_thread || g_mp_connected || pex_net_is_connecting()) {
         g_player_render_frame_from_async_partial = 0;
@@ -1228,6 +1230,7 @@ static float ingame_tick_async_render_partial(float fallback_partial) {
 
 static void ingame_pump_async_tick(void) {
 #if PEX_ASYNC_INGAME_TICK
+    if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return;
     if (!g_ingame_tick_async_needs_main_pump) return;
     g_ingame_tick_async_needs_main_pump = 0;
     /* No main-thread streaming pump here.  Gameplay streaming is serviced by
@@ -1235,13 +1238,19 @@ static void ingame_pump_async_tick(void) {
 #endif
 }
 
+static void ingame_tick_async_request_stop(void) {
+#if PEX_ASYNC_INGAME_TICK
+    if (!g_ingame_tick_async_initialized) return;
+    InterlockedExchange(&g_ingame_tick_async_stop, 1);
+    if (g_ingame_tick_async_thread) SetThreadPriority(g_ingame_tick_async_thread, THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+}
+
 static void ingame_tick_async_shutdown(void) {
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_initialized) return;
+    ingame_tick_async_request_stop();
     if (g_ingame_tick_async_thread) {
-        EnterCriticalSection(&g_ingame_tick_async_cs);
-        g_ingame_tick_async_stop = 1;
-        LeaveCriticalSection(&g_ingame_tick_async_cs);
         WaitForSingleObject(g_ingame_tick_async_thread, INFINITE);
         CloseHandle(g_ingame_tick_async_thread);
         g_ingame_tick_async_thread = NULL;
@@ -1267,6 +1276,7 @@ static int ingame_tick_async_pending_count(void) {
 }
 
 static int ingame_tick_async_busy(void) {
+    if (world_quit_is_active()) return 0;
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_initialized) return 0;
     int v;
@@ -1280,6 +1290,7 @@ static int ingame_tick_async_busy(void) {
 }
 
 static double ingame_tick_async_last_ms(void) {
+    if (world_quit_is_active()) return 0;
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_initialized) return 0.0;
     double v = 0.0;
@@ -1293,6 +1304,7 @@ static double ingame_tick_async_last_ms(void) {
 }
 
 static double ingame_tick_async_avg_ms(void) {
+    if (world_quit_is_active()) return 0;
 #if PEX_ASYNC_INGAME_TICK
     if (!g_ingame_tick_async_initialized) return 0.0;
     double v = 0.0;

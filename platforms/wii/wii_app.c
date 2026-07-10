@@ -61,6 +61,7 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+    if (world_quit_is_active()) return;
     pex_join_save_thread_for_exit();
     if (!g_wii_fat_ready) { wii_debug_logf("save skipped: SD/FAT unavailable"); return; }
     if (strncmp(g_loaded_world_dir, "memory:", 7) == 0) { wii_debug_logf("save skipped: memory world"); return; }
@@ -206,6 +207,7 @@ int main(int argc, char **argv) {
     wii_debug_stagef("starting frames");
     main_loop();
     set_mouse_grabbed(0);
+    world_quit_shutdown_for_app_exit();
     save_world_state_for_exit();
     async_section_mesh_shutdown();
     passive_render_worker_shutdown();

@@ -1376,6 +1376,36 @@ static const char *worldgen_translated_line(const char *src, char *out, size_t c
     return tr(src);
 }
 
+static void draw_saving_quit_screen(void) {
+    draw_default_bg();
+
+    int pct = world_quit_progress_percent();
+    int cx = g_gui_w / 2;
+    int cy = g_gui_h / 2;
+    int bw = 180;
+    int bh = 4;
+    int bx = cx - bw / 2;
+    int by = cy + 18;
+    int fill = (bw * pct) / 100;
+
+    draw_centered_text("Saving and closing world", cx, cy - 28, 16777215);
+    draw_centered_text(world_quit_stage_text(), cx, cy - 10, 14737632);
+    draw_rect(bx - 1, by - 1, bx + bw + 1, by + bh + 1, 0);
+    draw_rect(bx, by, bx + bw, by + bh, 4210752);
+    if (fill > 0) draw_rect(bx, by, bx + fill, by + bh, 8454016);
+
+    char pct_text[32];
+    snprintf(pct_text, sizeof(pct_text), "%d%%", pct);
+    draw_centered_text(pct_text, cx, by + 10, 10526880);
+
+    double elapsed = now_seconds() - g_world_quit_started_at;
+    if (elapsed > 4.0 && pct < 100) {
+        draw_centered_text("Waiting for world workers to stop safely...", cx, by + 28, 8421504);
+    } else {
+        draw_centered_text("Please do not turn off your computer.", cx, by + 28, 8421504);
+    }
+}
+
 static void draw_generating_screen(void) {
     draw_tiled_background_tint(0x404040, 0);
     int bar_w = 100;

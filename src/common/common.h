@@ -373,6 +373,7 @@ typedef enum ScreenId {
     SCREEN_TEXPACK,
     SCREEN_TEXPACK_INSTALL,
     SCREEN_GENERATING,
+    SCREEN_SAVING_QUIT,
     SCREEN_INGAME,
     SCREEN_PAUSE,
     SCREEN_INVENTORY,
@@ -2645,6 +2646,12 @@ static void restart_application_now(void);
 static void start_world_generation(int slot);
 static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot);
 static void worldgen_tick(void);
+static int world_quit_is_active(void);
+static int world_quit_progress_percent(void);
+static const char *world_quit_stage_text(void);
+static void world_quit_pump(void);
+static void world_quit_shutdown_for_app_exit(void);
+static void draw_saving_quit_screen(void);
 static int pack_is_installed(void);
 static int pack_resources_install_blocking(void);
 static void pex_menu_music_start_once(void);
@@ -2732,6 +2739,7 @@ static void ingame_tick_async_queue(void);
 static void ingame_pump_async_tick(void);
 static float ingame_tick_async_render_partial(float fallback_partial);
 static void player_render_begin_frame(void);
+static void ingame_tick_async_request_stop(void);
 static void ingame_tick_async_shutdown(void);
 static int ingame_tick_async_pending_count(void);
 static int ingame_tick_async_busy(void);
@@ -2862,6 +2870,7 @@ static void passive_mobs_ensure_population(int wanted, int attempts);
 static void update_passive_mobs(void);
 static void update_vehicles(void);
 static void passive_mobs_apply_riding(void);
+static void passive_render_worker_request_stop(void);
 static void passive_render_worker_shutdown(void);
 static int passive_mobs_attack_from_player(void);
 static int passive_mobs_player_interact(void);
@@ -2879,6 +2888,7 @@ static void add_splash_particle(float x, float y, float z, float mx, float my, f
 static void update_liquids(void);
 static void update_infinite_world_streaming(void);
 static void world_stream_service_ensure(void);
+static void world_stream_service_request_stop(void);
 static void world_stream_service_shutdown(void);
 static void world_stream_shared_locks_shutdown(void);
 static int world_stream_service_active(void);
@@ -2893,13 +2903,20 @@ static void save_modified_flat_chunks_sync(void);
 static void request_chunk_save_async(void);
 static void flat_load_chunk_delta(int cx, int cz);
 static void flat_mark_all_chunks_modified(void);
+static void async_section_mesh_request_stop(void);
 static void async_section_mesh_shutdown(void);
+static void flat_world_render_resources_release_begin(void);
+static int flat_world_render_resources_release_step(int budget);
+static int flat_world_render_resources_release_progress(void);
 static void flat_world_render_resources_release(void);
 static int pex_net_connect_to_server(const char *server);
 static void pex_net_poll(void);
 static int pex_net_is_connecting(void);
 static void pex_net_update_smoothing(void);
+static void pex_net_disconnect_request_stop(void);
 static void pex_net_disconnect(void);
+static void pex_net_release_render_resources(void);
+static void pex_mp_cache_save_request_stop(void);
 static void pex_mp_cache_save_shutdown(void);
 static void pex_net_send_player_state(void);
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id);

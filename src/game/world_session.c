@@ -1548,42 +1548,127 @@ static void enter_world_from_job(void) {
 }
 
 
-static void leave_world_to_title(void) {
-    const int was_multiplayer = g_mp_connected || pex_net_is_connecting();
-    const int had_local_world = (!was_multiplayer && g_loaded_world_dir[0]) ? 1 : 0;
+typedef enum PexWorldQuitStage {
+    PEX_WORLD_QUIT_IDLE = 0,
+    PEX_WORLD_QUIT_STARTING,
+    PEX_WORLD_QUIT_REQUESTING_STOPS,
+    PEX_WORLD_QUIT_STOPPING_SIMULATION,
+    PEX_WORLD_QUIT_DISCONNECTING,
+    PEX_WORLD_QUIT_STOPPING_STREAMING,
+    PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS,
+    PEX_WORLD_QUIT_DRAINING_SAVES,
+    PEX_WORLD_QUIT_WRITING_FINAL_SAVE,
+    PEX_WORLD_QUIT_RELEASING_LOCKS,
+    PEX_WORLD_QUIT_BACKGROUND_DONE,
+    PEX_WORLD_QUIT_RELEASING_RENDER_RESOURCES,
+    PEX_WORLD_QUIT_CLEARING_WORLD_STATE,
+    PEX_WORLD_QUIT_DONE,
+    PEX_WORLD_QUIT_FAILED
+} PexWorldQuitStage;
 
-    pex_logf("world teardown begin multiplayer=%d local=%d", was_multiplayer, had_local_world);
+static volatile LONG g_world_quit_active = 0;
+static volatile LONG g_world_quit_worker_done = 0;
+static volatile LONG g_world_quit_stage = PEX_WORLD_QUIT_IDLE;
+static volatile LONG g_world_quit_progress = 0;
+static HANDLE g_world_quit_thread = NULL;
+static int g_world_quit_was_multiplayer = 0;
+static int g_world_quit_had_local_world = 0;
+static int g_world_quit_finalize_step = 0;
+static double g_world_quit_started_at = 0.0;
 
-    /* Audio belongs to the world session too.  Stop it first so clicking Save
-       and Quit immediately silences a jukebox disc or in-game music, even if a
-       worker needs a moment to finish its current chunk. */
-    pex_sound_stop_world_audio();
-    g_record_is_playing = 0;
-    g_record_playing_up_for = 0;
-    g_record_playing_text[0] = 0;
+static void world_quit_set_stage(PexWorldQuitStage stage, int progress) {
+    if (progress < 0) progress = 0;
+    if (progress > 100) progress = 100;
+    InterlockedExchange(&g_world_quit_progress, (LONG)progress);
+    InterlockedExchange(&g_world_quit_stage, (LONG)stage);
+}
 
-    /* Freeze all producers before taking the final save.  No simulation,
-       network receive, terrain, lighting, or mesh worker is allowed to mutate
-       world state after this point. */
+static int world_quit_is_active(void) {
+    return InterlockedCompareExchange(&g_world_quit_active, 0, 0) ? 1 : 0;
+}
+
+static int world_quit_progress_percent(void) {
+    int p = (int)InterlockedCompareExchange(&g_world_quit_progress, 0, 0);
+    if (p < 0) p = 0;
+    if (p > 100) p = 100;
+    return p;
+}
+
+static const char *world_quit_stage_text(void) {
+    switch ((PexWorldQuitStage)InterlockedCompareExchange(&g_world_quit_stage, 0, 0)) {
+        case PEX_WORLD_QUIT_STARTING: return "Preparing safe shutdown";
+        case PEX_WORLD_QUIT_REQUESTING_STOPS: return "Stopping world activity";
+        case PEX_WORLD_QUIT_STOPPING_SIMULATION: return "Stopping simulation";
+        case PEX_WORLD_QUIT_DISCONNECTING: return g_world_quit_was_multiplayer ? "Disconnecting from server" : "Stopping world cache";
+        case PEX_WORLD_QUIT_STOPPING_STREAMING: return "Stopping terrain and lighting";
+        case PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS: return "Stopping mesh workers";
+        case PEX_WORLD_QUIT_DRAINING_SAVES: return "Finishing pending saves";
+        case PEX_WORLD_QUIT_WRITING_FINAL_SAVE: return "Saving world to disk";
+        case PEX_WORLD_QUIT_RELEASING_LOCKS: return "Closing world services";
+        case PEX_WORLD_QUIT_BACKGROUND_DONE: return "World services stopped";
+        case PEX_WORLD_QUIT_RELEASING_RENDER_RESOURCES: return "Releasing world graphics";
+        case PEX_WORLD_QUIT_CLEARING_WORLD_STATE: return "Clearing world memory";
+        case PEX_WORLD_QUIT_DONE: return "Done";
+        case PEX_WORLD_QUIT_FAILED: return "Safe shutdown could not start";
+        default: return "Saving and closing world";
+    }
+}
+
+/* Request every producer to stop before waiting for any one producer.  The old
+   synchronous path joined simulation first; if it was waiting on streaming or
+   lighting work that had not yet received a stop request, the button callback
+   could deadlock the render/message thread. */
+static void world_quit_request_all_stops(void) {
+    ingame_tick_async_request_stop();
+    pex_net_disconnect_request_stop();
+    pex_mp_cache_save_request_stop();
+    world_stream_service_request_stop();
+    async_section_mesh_request_stop();
+    passive_render_worker_request_stop();
+}
+
+static DWORD WINAPI world_quit_worker_proc(LPVOID unused) {
+    (void)unused;
+    g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_STREAM;
+
+    world_quit_set_stage(PEX_WORLD_QUIT_REQUESTING_STOPS, 5);
+    world_quit_request_all_stops();
+
+    world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_SIMULATION, 14);
     ingame_tick_async_shutdown();
-    if (was_multiplayer) pex_net_disconnect();
+
+    world_quit_set_stage(PEX_WORLD_QUIT_DISCONNECTING, 26);
+    if (g_world_quit_was_multiplayer) pex_net_disconnect();
     else pex_mp_cache_save_shutdown();
+
+    world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_STREAMING, 42);
     world_stream_service_shutdown();
+
+    world_quit_set_stage(PEX_WORLD_QUIT_STOPPING_RENDER_WORKERS, 58);
     async_section_mesh_shutdown();
     passive_render_worker_shutdown();
 
-    /* Drain older autosave snapshots, then write the final state synchronously.
-       Save and Quit must mean the save is on disk before the world is killed. */
+    world_quit_set_stage(PEX_WORLD_QUIT_DRAINING_SAVES, 70);
     pex_join_save_thread_for_exit();
+
 #if !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY)
-    if (had_local_world) save_world_state_sync();
+    if (g_world_quit_had_local_world) {
+        world_quit_set_stage(PEX_WORLD_QUIT_WRITING_FINAL_SAVE, 80);
+        save_world_state_sync();
+    }
 #endif
 
-    /* These are render-thread and in-memory world-owned resources. */
-    flat_world_render_resources_release();
+    world_quit_set_stage(PEX_WORLD_QUIT_RELEASING_LOCKS, 90);
+    world_stream_shared_locks_shutdown();
+
+    world_quit_set_stage(PEX_WORLD_QUIT_BACKGROUND_DONE, 92);
+    InterlockedExchange(&g_world_quit_worker_done, 1);
+    return 0;
+}
+
+static void world_quit_clear_session_state(void) {
     flat_world_unload_state();
     passive_mobs_reset();
-    world_stream_shared_locks_shutdown();
 
     memset(&g_worldgen, 0, sizeof(g_worldgen));
     g_loaded_world_dir[0] = 0;
@@ -1595,9 +1680,107 @@ static void leave_world_to_title(void) {
     g_player_dead = 0;
     g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
     reset_player_damage_visuals();
+}
 
-    pex_logf("world teardown complete; entering title");
+/* Called once per rendered frame.  Blocking joins and disk I/O happen on the
+   coordinator thread; only renderer-owned destruction and final state clearing
+   happen here, one visible stage at a time. */
+static void world_quit_pump(void) {
+    if (!world_quit_is_active()) return;
+    if (!InterlockedCompareExchange(&g_world_quit_worker_done, 0, 0)) return;
+
+    if (g_world_quit_finalize_step == 0) {
+        if (g_world_quit_thread) {
+            WaitForSingleObject(g_world_quit_thread, INFINITE);
+            CloseHandle(g_world_quit_thread);
+            g_world_quit_thread = NULL;
+        }
+        pex_net_release_render_resources();
+        flat_world_render_resources_release_begin();
+        world_quit_set_stage(PEX_WORLD_QUIT_RELEASING_RENDER_RESOURCES, 93);
+        g_world_quit_finalize_step = 1;
+        return;
+    }
+    if (g_world_quit_finalize_step == 1) {
+        int finished = flat_world_render_resources_release_step(128);
+        int render_pct = flat_world_render_resources_release_progress();
+        world_quit_set_stage(PEX_WORLD_QUIT_RELEASING_RENDER_RESOURCES, 93 + (render_pct * 4) / 100);
+        if (!finished) return;
+        world_quit_set_stage(PEX_WORLD_QUIT_CLEARING_WORLD_STATE, 98);
+        g_world_quit_finalize_step = 2;
+        return;
+    }
+    if (g_world_quit_finalize_step == 2) {
+        world_quit_clear_session_state();
+        world_quit_set_stage(PEX_WORLD_QUIT_DONE, 100);
+        g_world_quit_finalize_step = 3;
+        return;
+    }
+
+    pex_logf("world teardown complete in %.3f sec; entering title", now_seconds() - g_world_quit_started_at);
+    InterlockedExchange(&g_world_quit_active, 0);
+    InterlockedExchange(&g_world_quit_worker_done, 0);
+    g_world_quit_finalize_step = 0;
     set_screen(SCREEN_TITLE);
+}
+
+/* If the application window is closed while the progress screen is active,
+   finish the coordinator before the normal process-wide shutdown starts.  This
+   prevents two shutdown paths from joining/freeing the same worker objects. */
+static void world_quit_shutdown_for_app_exit(void) {
+    if (!world_quit_is_active()) return;
+
+    if (g_world_quit_thread) {
+        WaitForSingleObject(g_world_quit_thread, INFINITE);
+        CloseHandle(g_world_quit_thread);
+        g_world_quit_thread = NULL;
+    }
+    if (g_world_quit_finalize_step < 1) pex_net_release_render_resources();
+    if (g_world_quit_finalize_step < 2) flat_world_render_resources_release();
+    if (g_world_quit_finalize_step < 3) world_quit_clear_session_state();
+
+    g_world_quit_finalize_step = 0;
+    InterlockedExchange(&g_world_quit_worker_done, 0);
+    InterlockedExchange(&g_world_quit_active, 0);
+}
+
+static void leave_world_to_title(void) {
+    if (world_quit_is_active()) return;
+
+    g_world_quit_was_multiplayer = (g_mp_connected || pex_net_is_connecting()) ? 1 : 0;
+    g_world_quit_had_local_world = (!g_world_quit_was_multiplayer && g_loaded_world_dir[0]) ? 1 : 0;
+    g_world_quit_finalize_step = 0;
+    g_world_quit_started_at = now_seconds();
+    InterlockedExchange(&g_world_quit_worker_done, 0);
+    InterlockedExchange(&g_world_quit_active, 1);
+    world_quit_set_stage(PEX_WORLD_QUIT_STARTING, 1);
+
+    pex_logf("world teardown queued multiplayer=%d local=%d", g_world_quit_was_multiplayer, g_world_quit_had_local_world);
+
+    /* Make the old world inaudible and inaccessible to normal frame/tick paths
+       immediately.  The coordinator then owns the remaining teardown. */
+    pex_sound_stop_world_audio();
+    g_record_is_playing = 0;
+    g_record_playing_up_for = 0;
+    g_record_playing_text[0] = 0;
+    set_screen(SCREEN_SAVING_QUIT);
+
+    /* These calls only flip stop flags, wake events, and close nonblocking
+       sockets.  Issue them before creating the coordinator so the old world
+       starts becoming quiescent in the same button callback. */
+    world_quit_set_stage(PEX_WORLD_QUIT_REQUESTING_STOPS, 5);
+    world_quit_request_all_stops();
+
+    g_world_quit_thread = CreateThread(NULL, 0x100000, world_quit_worker_proc, NULL, 0, NULL);
+    if (g_world_quit_thread) {
+        SetThreadPriority(g_world_quit_thread, THREAD_PRIORITY_BELOW_NORMAL);
+    } else {
+        /* Thread creation failure is exceptionally rare.  Preserve correctness
+           rather than returning to gameplay with a half-torn-down session. */
+        pex_logf("world teardown coordinator thread creation failed; using synchronous fallback");
+        world_quit_set_stage(PEX_WORLD_QUIT_FAILED, 2);
+        world_quit_worker_proc(NULL);
+    }
 }
 
 static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot) {
