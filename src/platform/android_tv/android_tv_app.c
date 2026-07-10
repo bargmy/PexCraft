@@ -336,6 +336,8 @@ int main(int argc, char **argv) {
     ingame_tick_async_shutdown();
     world_stream_service_shutdown();
     async_section_mesh_shutdown();
+    passive_render_worker_shutdown();
+    pex_mp_cache_save_shutdown();
     world_stream_shared_locks_shutdown();
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);
     free_texture(&tex_black); free_texture(&tex_pack); free_texture(&tex_default_pack_icon); free_texture(&tex_unknown_pack);

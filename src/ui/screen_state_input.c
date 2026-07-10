@@ -50,7 +50,9 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
     if (s == SCREEN_TITLE) {
-        if (pex_screen_keeps_world_music(old_screen) || pex_screen_is_world_loading(old_screen)) pex_menu_music_stop();
+        if (pex_screen_keeps_world_music(old_screen) || pex_screen_is_world_loading(old_screen)) {
+            pex_sound_stop_world_audio();
+        }
         if (!g_release_title_state_initialized || old_screen != SCREEN_TITLE) {
             release_title_state_enter();
             g_release_title_state_initialized = 1;
@@ -58,8 +60,10 @@ static void set_screen(ScreenId s) {
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
         g_menu_music_started = 0;
     } else if (s == SCREEN_GENERATING || s == SCREEN_CONNECTING || (s == SCREEN_INGAME && !pex_screen_keeps_world_music(old_screen))) {
-        /* Stop title music when entering/loading a world, but do not restart the
-           current in-game track when closing pause, chat, inventory, or containers. */
+        /* Stop every previous-world stream when entering/loading a world, but do
+           not restart the current in-game track when closing pause, chat,
+           inventory, or containers. */
+        pex_sound_stop_record();
         pex_menu_music_stop();
         pex_game_music_reset_delay(40);
     }
@@ -89,6 +93,12 @@ static void set_screen(ScreenId s) {
     pex_ui_text_input_end();
     clear_buttons();
     rebuild_screen();
+    /* The old title-music start lived only inside the one-time Mojang boot
+       sequence.  Returning from a world therefore reset the flag but never
+       requested another menu track. */
+    if (s == SCREEN_TITLE && g_boot_sequence_done && !g_menu_music_started) {
+        pex_menu_music_start_once();
+    }
     if (s == SCREEN_CHAT) {
 #if defined(PEX_PLATFORM_XBOX_UWP)
         pex_virtual_keyboard_prepare(SCREEN_CHAT);

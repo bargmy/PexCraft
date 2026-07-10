@@ -570,7 +570,6 @@ static void draw_title_screen(float partial) {
         double elapsed = now_seconds() - g_title_enter_time;
         if (elapsed >= 2.0 && !g_menu_music_started) {
             pex_menu_music_start_once();
-            g_menu_music_started = 1;
         }
         if (elapsed < 3.0) {
             draw_boot_mojang_logo();

@@ -1549,19 +1549,54 @@ static void enter_world_from_job(void) {
 
 
 static void leave_world_to_title(void) {
-    pex_net_disconnect();
+    const int was_multiplayer = g_mp_connected || pex_net_is_connecting();
+    const int had_local_world = (!was_multiplayer && g_loaded_world_dir[0]) ? 1 : 0;
+
+    pex_logf("world teardown begin multiplayer=%d local=%d", was_multiplayer, had_local_world);
+
+    /* Audio belongs to the world session too.  Stop it first so clicking Save
+       and Quit immediately silences a jukebox disc or in-game music, even if a
+       worker needs a moment to finish its current chunk. */
+    pex_sound_stop_world_audio();
+    g_record_is_playing = 0;
+    g_record_playing_up_for = 0;
+    g_record_playing_text[0] = 0;
+
+    /* Freeze all producers before taking the final save.  No simulation,
+       network receive, terrain, lighting, or mesh worker is allowed to mutate
+       world state after this point. */
+    ingame_tick_async_shutdown();
+    if (was_multiplayer) pex_net_disconnect();
+    else pex_mp_cache_save_shutdown();
+    world_stream_service_shutdown();
+    async_section_mesh_shutdown();
+    passive_render_worker_shutdown();
+
+    /* Drain older autosave snapshots, then write the final state synchronously.
+       Save and Quit must mean the save is on disk before the world is killed. */
+    pex_join_save_thread_for_exit();
 #if !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY)
-    if (!g_mp_connected && g_loaded_world_dir[0]) {
-        save_current_world_state();
-        write_session_lock(g_loaded_world_dir);
-    }
+    if (had_local_world) save_world_state_sync();
 #endif
+
+    /* These are render-thread and in-memory world-owned resources. */
+    flat_world_render_resources_release();
+    flat_world_unload_state();
+    passive_mobs_reset();
+    world_stream_shared_locks_shutdown();
+
+    memset(&g_worldgen, 0, sizeof(g_worldgen));
     g_loaded_world_dir[0] = 0;
     g_loaded_world_name[0] = 0;
     g_chat_input[0] = 0;
     g_chat_count = 0;
+    g_save_dirty = 0;
+    g_save_message_ticks = 0;
+    g_player_dead = 0;
+    g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
     reset_player_damage_visuals();
-    pex_logf("left world to title");
+
+    pex_logf("world teardown complete; entering title");
     set_screen(SCREEN_TITLE);
 }
 

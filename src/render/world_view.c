@@ -2114,6 +2114,52 @@ static void flat_cpu_mesh_free_all(void) {
     }
 }
 
+static void flat_delete_display_list_owned(GLuint list) {
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII) && !defined(PEX_PLATFORM_ANDROID) && !defined(PEX_PLATFORM_ANDROID_TV) && !defined(PEX_PLATFORM_LGWEBOS)
+    if (list && flat_display_lists_supported()) glDeleteLists(list, 1);
+#else
+    (void)list;
+#endif
+}
+
+/* Release every render-owned object belonging to the current world.  This runs
+   on the main/render thread after async mesh workers have stopped, so no worker
+   can publish a new handle after the sweep.  Texture-pack resources remain
+   alive because they belong to the client, not to a world session. */
+static void flat_world_render_resources_release(void) {
+    PexRendererBackend *rb = flat_direct_backend();
+
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+        for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+            for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+                for (int pass = 0; pass < 2; ++pass) {
+                    unsigned int *slot = &g_flat_section_direct_mesh[sy][cz][cx][pass];
+                    if (rb && *slot) rb->destroy_mesh(*slot);
+                    *slot = 0;
+                    flat_delete_display_list_owned(g_flat_section_lists[sy][cz][cx][pass]);
+                    g_flat_section_lists[sy][cz][cx][pass] = 0;
+                }
+            }
+        }
+    }
+
+    for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+        for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+            flat_delete_display_list_owned(g_flat_world_chunk_lists[cz][cx]);
+            flat_delete_display_list_owned(g_flat_world_chunk_liquid_lists[cz][cx]);
+        }
+    }
+
+    flat_cpu_mesh_free_all();
+    memset(g_flat_world_chunk_lists, 0, sizeof(g_flat_world_chunk_lists));
+    memset(g_flat_world_chunk_liquid_lists, 0, sizeof(g_flat_world_chunk_liquid_lists));
+    memset(g_flat_section_lists, 0, sizeof(g_flat_section_lists));
+    memset(g_flat_section_direct_mesh, 0, sizeof(g_flat_section_direct_mesh));
+    g_flat_gl_cpu_mesh_origin_x = 0x7fffffff;
+    g_flat_gl_cpu_mesh_origin_z = 0x7fffffff;
+    pex_logf("world render resources released");
+}
+
 static void flat_cpu_mesh_remap_shift(int old_origin_x, int old_origin_z,
                                                 int new_origin_x, int new_origin_z) {
     /* Android/OpenGL CPU meshes are stored outside the normal section-handle
@@ -7045,6 +7091,9 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
 
 static void async_section_mesh_init(void) {
     if (g_async_section_mesh_initialized) return;
+    /* The previous world releases this session lock.  Mesh workers must never
+       start for the next world while flat_world_map_enter() is still a no-op. */
+    flat_world_map_lock_ensure();
     g_async_section_mesh_initialized = 1;
     InitializeCriticalSection(&g_async_section_mesh_cs);
     g_async_section_mesh_event = CreateEventA(NULL, FALSE, FALSE, NULL);

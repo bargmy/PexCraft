@@ -4014,6 +4014,67 @@ static void flat_world_reset_blocks(void) {
     g_next_dig_particle = 0;
 }
 
+/* Tear down the in-memory ownership of the current world without generating a
+   replacement world.  Save-and-quit calls this only after every simulation,
+   streaming, lighting, and mesh worker has been joined, so these arrays cannot
+   be repopulated behind the title screen.  The large ring buffers are static;
+   clearing their validity/ownership maps makes their old bytes unreachable and
+   lets the next world overwrite them normally. */
+static void flat_world_unload_state(void) {
+    stream_reset_initial_batch();
+    stream_generation_queue_clear();
+    g_stream_initial_light_settle_requested = 0;
+    g_stream_initial_light_settle_running = 0;
+    g_stream_initial_light_settle_done = 0;
+    g_stream_initial_light_settle_progress = 0;
+    g_stream_remap_in_progress = 0;
+    g_flat_light_dirty = 0;
+    g_flat_light_commit_in_progress = 0;
+    g_flat_persistent_edit_depth = 0;
+
+    memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
+    memset(g_flat_world_chunk_valid, 0, sizeof(g_flat_world_chunk_valid));
+    memset(g_flat_world_chunk_dirty, 0, sizeof(g_flat_world_chunk_dirty));
+    memset(g_flat_world_chunk_has_liquid, 0, sizeof(g_flat_world_chunk_has_liquid));
+    memset(g_flat_chunk_world_cx, 0, sizeof(g_flat_chunk_world_cx));
+    memset(g_flat_chunk_world_cz, 0, sizeof(g_flat_chunk_world_cz));
+    memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
+    memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
+    memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
+    memset(g_flat_chunk_section_non_empty_mask, 0, sizeof(g_flat_chunk_section_non_empty_mask));
+    memset(g_flat_section_dirty, 0, sizeof(g_flat_section_dirty));
+    memset(g_flat_section_valid, 0, sizeof(g_flat_section_valid));
+    memset(g_flat_section_mesh_building, 0, sizeof(g_flat_section_mesh_building));
+    memset(g_flat_section_building_mesh_version, 0, sizeof(g_flat_section_building_mesh_version));
+    memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
+    memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
+    memset(g_flat_section_skip_pass, 0, sizeof(g_flat_section_skip_pass));
+
+    memset(g_flat_levels, 0, sizeof(g_flat_levels));
+    memset(g_drops, 0, sizeof(g_drops));
+    memset(g_vehicles, 0, sizeof(g_vehicles));
+    memset(g_jukebox_tiles, 0, sizeof(g_jukebox_tiles));
+    memset(g_player_potion_effects, 0, sizeof(g_player_potion_effects));
+    memset(g_map_data, 0, sizeof(g_map_data));
+    g_next_map_id = 0;
+    memset(g_projectiles, 0, sizeof(g_projectiles));
+    memset(g_xp_orbs, 0, sizeof(g_xp_orbs));
+    memset(g_falling_blocks, 0, sizeof(g_falling_blocks));
+    memset(g_button_timers, 0, sizeof(g_button_timers));
+    memset(g_pressure_plate_timers, 0, sizeof(g_pressure_plate_timers));
+    memset(g_dig_particles, 0, sizeof(g_dig_particles));
+    g_next_dig_particle = 0;
+    chest_clear_all_tiles();
+    furnace_clear_all_tiles();
+
+    g_flat_world_geometry_dirty = 0;
+    g_flat_section_geometry_dirty = 0;
+    g_flat_renderer_sort_dirty = 1;
+}
+
 
 static int block_is_liquid(int id) {
     return id == BLOCK_WATER || id == BLOCK_STILL_WATER ||

@@ -24,3 +24,10 @@ PexCraft is an experimental custom client written in C. It is trying to work lik
 ## Android TV
 
 See `android_tv/README.md` for the APK build, signing, TV remote mapping, and Google TV channel integration.
+
+## Save and Quit lifecycle fix
+
+This patched tree treats **Save and Quit to Title** as a complete world-session
+teardown: it stops world audio and every world-owned worker, drains autosaves, writes
+the final local save synchronously, releases world render/state ownership, and starts
+title music on return. See `docs/save_and_quit_full_world_teardown.md`.

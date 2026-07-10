@@ -5187,6 +5187,36 @@ static void passive_render_worker_init(void) {
     }
 }
 
+static void passive_render_worker_shutdown(void) {
+    if (!g_passive_render_initialized) return;
+
+    EnterCriticalSection(&g_passive_render_cs);
+    g_passive_render_stop = 1;
+    g_passive_render_has_job = 0;
+    LeaveCriticalSection(&g_passive_render_cs);
+    if (g_passive_render_event) SetEvent(g_passive_render_event);
+
+    if (g_passive_render_thread) {
+        WaitForSingleObject(g_passive_render_thread, INFINITE);
+        CloseHandle(g_passive_render_thread);
+        g_passive_render_thread = NULL;
+    }
+    if (g_passive_render_event) {
+        CloseHandle(g_passive_render_event);
+        g_passive_render_event = NULL;
+    }
+    DeleteCriticalSection(&g_passive_render_cs);
+
+    g_passive_render_initialized = 0;
+    g_passive_render_stop = 0;
+    g_passive_render_has_job = 0;
+    g_passive_render_busy = 0;
+    g_passive_render_ready_count = 0;
+    memset(g_passive_render_job_mobs, 0, sizeof(g_passive_render_job_mobs));
+    memset(g_passive_render_ready, 0, sizeof(g_passive_render_ready));
+    pex_logf("passive render worker stopped");
+}
+
 static void passive_mobs_submit_render_job(float partial) {
     passive_render_worker_init();
     if (!g_passive_render_event || !g_passive_render_thread) return;
@@ -5222,6 +5252,7 @@ static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
     return count;
 }
 #else
+static void passive_render_worker_shutdown(void) { }
 static void passive_mobs_submit_render_job(float partial) { (void)partial; }
 static int passive_mobs_fetch_render_list(PassiveMobRenderEntry *out, int cap) {
     int count = 0;

@@ -103,6 +103,8 @@ void pex_xbox_uwp_engine_shutdown(void) {
     ingame_tick_async_shutdown();
     world_stream_service_shutdown();
     async_section_mesh_shutdown();
+    passive_render_worker_shutdown();
+    pex_mp_cache_save_shutdown();
     world_stream_shared_locks_shutdown();
     pex_gamepad_shutdown();
     pex_sound_shutdown();

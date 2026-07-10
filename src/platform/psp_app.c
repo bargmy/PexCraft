@@ -368,6 +368,8 @@ int main(int argc, char **argv) {
     PEX_PSP_LOGF("save_world_state_for_exit end");
     PEX_PSP_LOGF("async_section_mesh_shutdown begin");
     async_section_mesh_shutdown();
+    passive_render_worker_shutdown();
+    pex_mp_cache_save_shutdown();
     PEX_PSP_LOGF("async_section_mesh_shutdown end");
     PEX_PSP_LOGF("free textures begin");
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);

@@ -283,7 +283,10 @@ static DWORD WINAPI pex_net_rx_worker(LPVOID unused) {
 static void pex_net_stop_rx_thread(void) {
     InterlockedExchange(&g_mp_rx_stop, 1);
     if (g_mp_rx_thread) {
-        WaitForSingleObject(g_mp_rx_thread, 2000);
+        /* The socket is nonblocking and the worker checks g_mp_rx_stop on every
+           receive/queue iteration.  Do not abandon the handle after a timeout:
+           Save and Quit must return only after the old server thread is gone. */
+        WaitForSingleObject(g_mp_rx_thread, INFINITE);
         CloseHandle(g_mp_rx_thread);
         g_mp_rx_thread = NULL;
     }
@@ -1019,6 +1022,36 @@ static int pex_mp_cache_save_async_init(void) {
     }
     g_mp_cache_save_initialized = 1;
     return g_mp_cache_save_event && g_mp_cache_save_thread;
+}
+
+static void pex_mp_cache_save_shutdown(void) {
+    if (!g_mp_cache_save_initialized) return;
+
+    InterlockedExchange(&g_mp_cache_save_stop, 1);
+    if (g_mp_cache_save_event) SetEvent(g_mp_cache_save_event);
+    if (g_mp_cache_save_thread) {
+        WaitForSingleObject(g_mp_cache_save_thread, INFINITE);
+        CloseHandle(g_mp_cache_save_thread);
+        g_mp_cache_save_thread = NULL;
+    }
+
+    EnterCriticalSection(&g_mp_cache_save_cs);
+    for (int i = 0; i < PEX_MP_CACHE_SAVE_QUEUE_MAX; ++i) {
+        pex_mp_cache_save_job_free(&g_mp_cache_save_jobs[i]);
+    }
+    g_mp_cache_save_head = 0;
+    g_mp_cache_save_tail = 0;
+    g_mp_cache_save_count = 0;
+    LeaveCriticalSection(&g_mp_cache_save_cs);
+
+    if (g_mp_cache_save_event) {
+        CloseHandle(g_mp_cache_save_event);
+        g_mp_cache_save_event = NULL;
+    }
+    DeleteCriticalSection(&g_mp_cache_save_cs);
+    g_mp_cache_save_initialized = 0;
+    InterlockedExchange(&g_mp_cache_save_stop, 0);
+    pex_logf("multiplayer chunk-cache writer stopped");
 }
 
 static int pex_mp_cache_enqueue_save(const char *path, const PexMpChunkCacheHeader *header, unsigned char *payload) {
@@ -3611,6 +3644,7 @@ static void pex_net_send_respawn(void) {
 
 static void pex_net_disconnect(void) {
     pex_net_stop_rx_thread();
+    pex_mp_cache_save_shutdown();
     if (g_mp_bedrock_session_active) {
         pex_mcpe_join_session_disconnect(&g_mp_bedrock_session);
         g_mp_bedrock_session_active = 0;

@@ -1160,6 +1160,9 @@ static DWORD WINAPI ingame_tick_async_worker_proc(LPVOID unused) {
 
 static void ingame_tick_async_init(void) {
     if (g_ingame_tick_async_initialized || g_ingame_tick_async_failed) return;
+    /* Save-and-quit destroys world-session locks after all workers stop.  Recreate
+       the map lock before a new world's simulation worker can enter world code. */
+    flat_world_map_lock_ensure();
     g_ingame_tick_async_initialized = 1;
     g_ingame_tick_async_stop = 0;
     g_ingame_tick_async_busy_flag = 0;

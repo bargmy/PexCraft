@@ -542,9 +542,20 @@ static void sound_backend_stop_menu_music(void) {
     g_pex_menu_music_channel = -1;
 }
 
+static void sound_backend_stop_all_audio(void) {
+    /* Mix_HaltChannel(-1) stops every effect/stream channel, including sounds
+       that are not individually tracked by the gameplay layer. */
+    if (pMix_HaltChannel) pMix_HaltChannel(-1);
+    if (pMix_HaltMusic) pMix_HaltMusic();
+    g_pex_menu_music_channel = -1;
+    g_pex_record_channel = -1;
+    g_pex_record_active = 0;
+    if (g_pex_record_music && pMix_FreeMusic) pMix_FreeMusic(g_pex_record_music);
+    g_pex_record_music = NULL;
+}
+
 static void pex_sound_shutdown(void) {
-    sound_backend_stop_menu_music();
-    pex_sound_backend_stop_record();
+    sound_backend_stop_all_audio();
     for (int i = 0; i < g_sound_pitch_cache_count; ++i) {
         free(g_sound_pitch_cache[i].chunk.abuf);
         g_sound_pitch_cache[i].chunk.abuf = NULL;
@@ -586,9 +597,11 @@ typedef struct PexWinPlayJob {
     float volume;
     int is_menu_music;
     LONG menu_generation;
+    LONG session_generation;
 } PexWinPlayJob;
 
 static volatile LONG g_pex_menu_music_stop_generation = 0;
+static volatile LONG g_pex_sound_session_generation = 0;
 
 static int pex_win_pcm_append(BYTE **data, DWORD *bytes, DWORD *cap, const char *src, long src_bytes) {
     DWORD need;
@@ -697,7 +710,7 @@ static PexWinDecodedSound *pex_win_get_decoded_sound(const char *path) {
 }
 
 static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMATEX *fmt, float volume,
-                                       int is_menu_music, LONG menu_generation) {
+                                       int is_menu_music, LONG menu_generation, LONG session_generation) {
     HWAVEOUT hwo = NULL;
     WAVEHDR hdr;
     MMRESULT mm;
@@ -715,7 +728,12 @@ static int pex_win_waveout_play_buffer(BYTE *data, DWORD bytes, const WAVEFORMAT
         return 0;
     }
     while (!(hdr.dwFlags & WHDR_DONE)) {
-        if (is_menu_music && menu_generation != g_pex_menu_music_stop_generation) {
+        /* Detached waveOut jobs cannot be joined or addressed by channel.  A
+           generation mismatch is the session-wide stop signal used when a
+           world is torn down.  Newly started title music captures the new
+           generation and is therefore not cancelled with the old world. */
+        if (session_generation != g_pex_sound_session_generation ||
+            (is_menu_music && menu_generation != g_pex_menu_music_stop_generation)) {
             waveOutReset(hwo);
             break;
         }
@@ -730,7 +748,8 @@ static DWORD WINAPI pex_win_play_thread(LPVOID arg) {
     PexWinPlayJob *job = (PexWinPlayJob *)arg;
     if (!job) return 0;
     if (!pex_win_waveout_play_buffer(job->data, job->bytes, &job->fmt, job->volume,
-                                     job->is_menu_music, job->menu_generation)) {
+                                     job->is_menu_music, job->menu_generation,
+                                     job->session_generation)) {
         log_msg("Sound backend: waveOut failed to play PCM sound");
     }
     free(job->data);
@@ -762,6 +781,7 @@ static int pex_sound_backend_play_file(const char *path, float volume, float pit
     job->volume = volume;
     job->is_menu_music = g_pex_menu_music_request ? 1 : 0;
     job->menu_generation = g_pex_menu_music_stop_generation;
+    job->session_generation = g_pex_sound_session_generation;
 
     HANDLE th = CreateThread(NULL, 0, pex_win_play_thread, job, 0, NULL);
     if (!th) { free(job->data); free(job); return 0; }
@@ -780,9 +800,13 @@ static void sound_backend_stop_menu_music(void) {
     InterlockedIncrement((volatile LONG *)&g_pex_menu_music_stop_generation);
 }
 
+static void sound_backend_stop_all_audio(void) {
+    InterlockedIncrement((volatile LONG *)&g_pex_sound_session_generation);
+    InterlockedIncrement((volatile LONG *)&g_pex_menu_music_stop_generation);
+}
+
 static void pex_sound_shutdown(void) {
-    sound_backend_stop_menu_music();
-    pex_sound_backend_stop_record();
+    sound_backend_stop_all_audio();
     for (int i = 0; i < g_win_sound_cache_count; ++i) {
         free(g_win_sound_cache[i].data);
         g_win_sound_cache[i].data = NULL;
@@ -798,6 +822,7 @@ static void pex_sound_backend_stop_record(void) { }
 static int pex_sound_backend_play_record_file_at(const char *path, float x, float y, float z, float volume) { (void)path; (void)x; (void)y; (void)z; (void)volume; return 0; }
 static void pex_sound_backend_tick_record(void) { }
 static void sound_backend_stop_menu_music(void) { }
+static void sound_backend_stop_all_audio(void) { }
 static void pex_sound_shutdown(void) { }
 #endif
 
@@ -928,6 +953,17 @@ static void pex_menu_music_stop(void) {
     g_menu_music_started = 0;
     g_pex_game_music_started = 0;
     sound_backend_stop_menu_music();
+}
+
+static void pex_sound_stop_world_audio(void) {
+    /* Save and Quit is a hard world-session boundary.  Do not leave footsteps,
+       mobs, weather, game music, or a jukebox job playing behind the title UI. */
+    g_pex_menu_music_request = 0;
+    g_menu_music_started = 0;
+    g_pex_game_music_started = 0;
+    g_pex_game_music_ticks_before = -1;
+    sound_backend_stop_all_audio();
+    pex_sound_backend_stop_record();
 }
 
 static void pex_game_music_tick(void) {

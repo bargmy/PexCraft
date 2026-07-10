@@ -820,6 +820,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     ingame_tick_async_shutdown();
     world_stream_service_shutdown();
     async_section_mesh_shutdown();
+    passive_render_worker_shutdown();
+    pex_mp_cache_save_shutdown();
     world_stream_shared_locks_shutdown();
     free_texture(&tex_bg);
     free_texture(&tex_gui);
