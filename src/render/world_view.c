@@ -7855,18 +7855,22 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     drain_edit_priority_meshes(streaming, recent_edit);
     flat_self_heal_visible_sections(refs, count);
     int sf_updates = stivufine_chunk_updates();
+    LONG light_boost = InterlockedCompareExchange(&g_flat_light_mesh_boost_frames, 0, 0);
+    int lighting_repaint = flat_lighting_pending_dirty() || light_boost > 0;
+    if (light_boost > 0) {
+        (void)InterlockedCompareExchange(&g_flat_light_mesh_boost_frames, light_boost - 1, light_boost);
+    }
     int rebuilds_left = (recent_edit && stivufine_dynamic_chunk_updates_enabled()) ? sf_updates + 2 : sf_updates;
-    if (streaming && !recent_edit) {
-        /* Fixed one-section-per-frame submission could not keep up with three
-           terrain workers.  Submission is still bounded by the deadline below,
-           but allow several near-visible sections to enter the worker queue in
-           one frame so generated chunks do not remain invisible for seconds. */
-        int stream_budget = direct ? 6 : 8;
+    if ((streaming || lighting_repaint) && !recent_edit) {
+        /* Terrain generation and exact lighting both create bursts of dirty visible
+           sections.  Keep the submission path bounded, but do not fall back to one
+           section per frame while a completed light repair is waiting to be shown. */
+        int stream_budget = streaming ? (direct ? 6 : 8) : (direct ? 4 : 6);
         if (g_prof_mesh_jobs_last > 24) stream_budget = 4;
         if (g_prof_mesh_results_last > 24) stream_budget = 3;
         if (rebuilds_left < stream_budget) rebuilds_left = stream_budget;
     }
-    double deadline = now_seconds() + (recent_edit ? 0.0060 : (streaming ? 0.0015 : 0.0030));
+    double deadline = now_seconds() + (recent_edit ? 0.0060 : ((streaming || lighting_repaint) ? 0.0015 : 0.0030));
 
 #if defined(PEX_PLATFORM_PSP)
     if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
@@ -7876,8 +7880,8 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
        already-finished priority edit meshes before background stream results.
        Keep the normal budget low to avoid frame hitches. */
     if (async_mesh) {
-        int install_budget = recent_edit ? 8 : (streaming ? 4 : 2);
-        if (!recent_edit && g_prof_mesh_results_last > 12) install_budget = streaming ? 8 : 4;
+        int install_budget = recent_edit ? 8 : ((streaming || lighting_repaint) ? 4 : 2);
+        if (!recent_edit && g_prof_mesh_results_last > 12) install_budget = (streaming || lighting_repaint) ? 8 : 4;
         async_section_mesh_install_ready(install_budget);
     }
 #endif

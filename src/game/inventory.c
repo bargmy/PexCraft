@@ -451,6 +451,7 @@ static void flat_mark_edit_section_dirty(int cx, int cz, int sy);
 static void flat_mark_section_light_dirty(int cx, int cz, int sy);
 static int flat_section_has_blocks(int lcx, int lcz, int sy);
 static void flat_mark_light_dirty_region(int x0, int z0, int x1, int z1);
+static void stream_queue_one_chunk_light_validation(int lcx, int lcz);
 static int flat_current_dimension_has_sky(void);
 static void flat_bump_light_version(int lcx, int lcz);
 static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections);
@@ -490,6 +491,13 @@ static void flat_world_map_leave(void) {
    that copy; if they do, their light version will also be rejected on install,
    but this flag prevents most mixed-light snapshots from being queued at all. */
 static volatile int g_flat_light_commit_in_progress = 0;
+/* Per-chunk validation state: 0=idle, 1=queued/in flight, 2=run once more.
+   This keeps neighbor-perfect repair enabled without enqueueing the same full-height
+   chunk solve once for every adjacent streamed result. */
+static LONG g_flat_chunk_light_repair_state[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+/* Keep visible light-only mesh replacements moving for a short period after each
+   commit, even after the terrain streaming queue itself has gone idle. */
+static LONG g_flat_light_mesh_boost_frames = 0;
 static CRITICAL_SECTION g_flat_light_commit_cs;
 static int g_flat_light_commit_cs_initialized = 0;
 static int g_stream_suffocation_grace_until_tick = 0;
@@ -1329,9 +1337,42 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     }
     for (int lcz = lcz0; lcz <= lcz1; ++lcz) {
         for (int lcx = lcx0; lcx <= lcx1; ++lcx) {
-            if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
-                g_flat_chunk_light_ready[lcz][lcx] = 1;
-                g_flat_chunk_light_valid[lcz][lcx] = 1;
+            if (!flat_local_chunk_valid(lcx, lcz) || !g_flat_world_chunk_generated[lcz][lcx]) continue;
+            g_flat_chunk_light_ready[lcz][lcx] = 1;
+
+            /* A validation request represents a complete 16x16 chunk solve.  Partial
+               edit-light tiles must not accidentally claim that the whole chunk is
+               neighbor-perfect. */
+            int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+            int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+            int wx0 = wcx * FLAT_RENDER_CHUNK;
+            int wz0 = wcz * FLAT_RENDER_CHUNK;
+            int fully_covered = (cx0 <= wx0 && cx1 >= wx0 + FLAT_RENDER_CHUNK - 1 &&
+                                 cz0 <= wz0 && cz1 >= wz0 + FLAT_RENDER_CHUNK - 1);
+            if (!fully_covered) continue;
+
+            for (;;) {
+                LONG state = InterlockedCompareExchange(&g_flat_chunk_light_repair_state[lcz][lcx], 0, 0);
+                if (state == 0) {
+                    g_flat_chunk_light_valid[lcz][lcx] = 1;
+                    break;
+                }
+                if (state == 1) {
+                    /* Publish validity before releasing the state.  A request racing
+                       after the successful CAS will set validity back to zero and queue
+                       itself; a request racing before it changes state to 2. */
+                    g_flat_chunk_light_valid[lcz][lcx] = 1;
+                    if (InterlockedCompareExchange(&g_flat_chunk_light_repair_state[lcz][lcx], 0, 1) == 1) break;
+                    g_flat_chunk_light_valid[lcz][lcx] = 0;
+                    continue;
+                }
+                /* At least one boundary changed while this solve was queued/running.
+                   Collapse every such request into exactly one follow-up solve. */
+                g_flat_chunk_light_valid[lcz][lcx] = 0;
+                if (InterlockedCompareExchange(&g_flat_chunk_light_repair_state[lcz][lcx], 1, 2) == 2) {
+                    stream_queue_one_chunk_light_validation(lcx, lcz);
+                    break;
+                }
             }
         }
     }
@@ -1351,6 +1392,7 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
             }
         }
     }
+    if (changed_section_count > 0) InterlockedExchange(&g_flat_light_mesh_boost_frames, 45);
     pex_logf_trace("lighting region committed inner x=%d..%d z=%d..%d calc=%d..%d,%d..%d sky_spread=%d changed_sections=%d", cx0, cx1, cz0, cz1, x0, x1, z0, z1, propagate_sky, changed_section_count);
     (void)changed_section_count;
     free(sky); free(block); free(q);
@@ -1893,7 +1935,7 @@ static int g_flat_light_x0 = 0, g_flat_light_z0 = 0, g_flat_light_x1 = 0, g_flat
 static CRITICAL_SECTION g_flat_light_dirty_cs;
 static int g_flat_light_dirty_cs_initialized = 0;
 
-#define FLAT_LIGHT_DIRTY_QUEUE_MAX 64
+#define FLAT_LIGHT_DIRTY_QUEUE_MAX 256
 typedef struct FlatLightDirtyRegion { int x0, z0, x1, z1; } FlatLightDirtyRegion;
 static FlatLightDirtyRegion g_flat_light_dirty_regions[FLAT_LIGHT_DIRTY_QUEUE_MAX];
 
@@ -3066,28 +3108,52 @@ static int g_stream_suppress_generated_chunk_light_dirty = 0;
    had already finished. */
 static int g_stream_runtime_chunk_light_repair = 1;
 
+static void stream_queue_one_chunk_light_validation(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz) || !g_flat_world_chunk_generated[lcz][lcx]) return;
+    int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+    int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+    if (g_flat_chunk_world_cx[lcz][lcx] != wcx || g_flat_chunk_world_cz[lcz][lcx] != wcz) return;
+    flat_mark_light_dirty_region(wcx * FLAT_RENDER_CHUNK,
+                                 wcz * FLAT_RENDER_CHUNK,
+                                 wcx * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1,
+                                 wcz * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1);
+}
+
+static void stream_request_one_chunk_light_validation(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz) || !g_flat_world_chunk_generated[lcz][lcx]) return;
+    int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+    int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+    if (g_flat_chunk_world_cx[lcz][lcx] != wcx || g_flat_chunk_world_cz[lcz][lcx] != wcz) return;
+
+    g_flat_chunk_light_valid[lcz][lcx] = 0;
+    for (;;) {
+        LONG state = InterlockedCompareExchange(&g_flat_chunk_light_repair_state[lcz][lcx], 0, 0);
+        if (state == 0) {
+            if (InterlockedCompareExchange(&g_flat_chunk_light_repair_state[lcz][lcx], 1, 0) == 0) {
+                stream_queue_one_chunk_light_validation(lcx, lcz);
+                return;
+            }
+            continue;
+        }
+        if (state == 1) {
+            /* One repair is already queued or running.  Remember only that one
+               follow-up is needed; do not enqueue another duplicate rectangle. */
+            (void)InterlockedCompareExchange(&g_flat_chunk_light_repair_state[lcz][lcx], 2, 1);
+        }
+        return;
+    }
+}
+
 static void stream_queue_chunk_light_validation(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
-    int base_cx = floor_div16(g_flat_world_origin_x);
-    int base_cz = floor_div16(g_flat_world_origin_z);
 
     /* A newly published chunk changes the light boundary for itself and each
-       already-present horizontal neighbor.  Queue deterministic, chunk-sized
-       repairs rather than relying on the renderer's sparse self-heal scan. */
+       already-present horizontal neighbor.  Keep all five correctness repairs,
+       but coalesce repeated requests while a chunk is queued/in flight. */
     static const int dx[5] = {0, -1, 1, 0, 0};
     static const int dz[5] = {0, 0, 0, -1, 1};
     for (int i = 0; i < 5; ++i) {
-        int nx = lcx + dx[i];
-        int nz = lcz + dz[i];
-        if (!flat_local_chunk_valid(nx, nz) || !g_flat_world_chunk_generated[nz][nx]) continue;
-        int wcx = base_cx + nx;
-        int wcz = base_cz + nz;
-        if (g_flat_chunk_world_cx[nz][nx] != wcx || g_flat_chunk_world_cz[nz][nx] != wcz) continue;
-        g_flat_chunk_light_valid[nz][nx] = 0;
-        flat_mark_light_dirty_region(wcx * FLAT_RENDER_CHUNK,
-                                     wcz * FLAT_RENDER_CHUNK,
-                                     wcx * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1,
-                                     wcz * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1);
+        stream_request_one_chunk_light_validation(lcx + dx[i], lcz + dz[i]);
     }
 }
 
@@ -3583,6 +3649,7 @@ static void flat_prepare_initial_generation(void) {
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    memset(g_flat_chunk_light_repair_state, 0, sizeof(g_flat_chunk_light_repair_state));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
@@ -3803,6 +3870,7 @@ static void flat_generate_origin_blocks(void) {
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    memset(g_flat_chunk_light_repair_state, 0, sizeof(g_flat_chunk_light_repair_state));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
@@ -3946,6 +4014,7 @@ static void flat_generate_traceplace_area(int center_wcx, int center_wcz, int ra
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    memset(g_flat_chunk_light_repair_state, 0, sizeof(g_flat_chunk_light_repair_state));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
@@ -4041,6 +4110,7 @@ static void flat_world_unload_state(void) {
     memset(g_flat_chunk_world_cz, 0, sizeof(g_flat_chunk_world_cz));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    memset(g_flat_chunk_light_repair_state, 0, sizeof(g_flat_chunk_light_repair_state));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
@@ -10455,6 +10525,7 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     int old_world_cz[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_light_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    LONG old_light_repair_state[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned int old_light_versions[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_initial_preload[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -10485,6 +10556,7 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     memcpy(old_world_cz, g_flat_chunk_world_cz, sizeof(old_world_cz));
     memcpy(old_light_ready, g_flat_chunk_light_ready, sizeof(old_light_ready));
     memcpy(old_light_valid, g_flat_chunk_light_valid, sizeof(old_light_valid));
+    memcpy(old_light_repair_state, g_flat_chunk_light_repair_state, sizeof(old_light_repair_state));
     memcpy(old_light_versions, g_flat_chunk_light_version, sizeof(old_light_versions));
     memcpy(old_initial_preload, g_flat_chunk_initial_preload, sizeof(old_initial_preload));
     memcpy(old_modified, g_flat_world_chunk_modified, sizeof(old_modified));
@@ -10533,6 +10605,7 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     memset(g_flat_chunk_world_cz, 0, sizeof(g_flat_chunk_world_cz));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
     memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    memset(g_flat_chunk_light_repair_state, 0, sizeof(g_flat_chunk_light_repair_state));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
@@ -10571,6 +10644,7 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
                 g_flat_chunk_world_cz[ncz][ncx] = old_world_cz[ocz][ocx];
                 g_flat_chunk_light_ready[ncz][ncx] = old_light_ready[ocz][ocx];
                 g_flat_chunk_light_valid[ncz][ncx] = old_light_valid[ocz][ocx];
+                g_flat_chunk_light_repair_state[ncz][ncx] = old_light_repair_state[ocz][ocx];
                 g_flat_chunk_light_version[ncz][ncx] = old_light_versions[ocz][ocx];
                 g_flat_chunk_initial_preload[ncz][ncx] = old_initial_preload[ocz][ocx];
                 g_flat_world_chunk_modified[ncz][ncx] = old_modified[ocz][ocx];
@@ -10593,6 +10667,7 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
                 g_flat_chunk_world_cz[ncz][ncx] = wcz;
                 g_flat_chunk_light_ready[ncz][ncx] = 0;
                 g_flat_chunk_light_valid[ncz][ncx] = 0;
+                g_flat_chunk_light_repair_state[ncz][ncx] = 0;
                 g_flat_chunk_light_version[ncz][ncx] = 0;
                 g_flat_chunk_initial_preload[ncz][ncx] = 0;
                 g_flat_world_chunk_modified[ncz][ncx] = 0;
