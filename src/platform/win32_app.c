@@ -816,9 +816,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     InitializeCriticalSection(&g_save_cs);
     main_loop();
     set_mouse_grabbed(0);
-    world_stream_service_shutdown();
+    /* Stop world-state producers before consumers, then destroy shared locks. */
     ingame_tick_async_shutdown();
+    world_stream_service_shutdown();
     async_section_mesh_shutdown();
+    world_stream_shared_locks_shutdown();
     free_texture(&tex_bg);
     free_texture(&tex_gui);
     free_texture(&tex_font);

@@ -99,9 +99,11 @@ void pex_xbox_uwp_engine_char(uint32_t ch) { if (ch >= 32 && ch < 127) handle_ch
 
 void pex_xbox_uwp_engine_shutdown(void) {
     save_world_state_for_exit();
-    world_stream_service_shutdown();
+    /* Stop world-state producers before consumers, then destroy shared locks. */
     ingame_tick_async_shutdown();
+    world_stream_service_shutdown();
     async_section_mesh_shutdown();
+    world_stream_shared_locks_shutdown();
     pex_gamepad_shutdown();
     pex_sound_shutdown();
     loggy_shutdown();

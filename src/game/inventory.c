@@ -9775,6 +9775,10 @@ static void flat_lighting_worker_ensure(void) {
 #else
     if (g_flat_lighting_worker_initialized) return;
     flat_light_dirty_lock();
+    /* This lock is shared by both lighting workers.  Initialize it on the
+       single caller thread before either worker can race through the lazy
+       initializer. */
+    flat_light_commit_lock_ensure();
     InitializeCriticalSection(&g_flat_lighting_worker_cs);
     g_flat_lighting_worker_stop = 0;
     g_flat_lighting_worker_busy = 0;
@@ -9829,10 +9833,9 @@ static void flat_lighting_worker_shutdown(void) {
         g_flat_lighting_worker_event = NULL;
     }
     DeleteCriticalSection(&g_flat_lighting_worker_cs);
-    if (g_flat_light_commit_cs_initialized) {
-        DeleteCriticalSection(&g_flat_light_commit_cs);
-        g_flat_light_commit_cs_initialized = 0;
-    }
+    /* g_flat_light_commit_cs is shared with non-lighting paths.  It is
+       destroyed only after simulation, streaming, lighting, and mesh workers
+       have all stopped (world_stream_shared_locks_shutdown). */
     g_flat_lighting_worker_initialized = 0;
     g_flat_lighting_worker_stop = 0;
     g_flat_lighting_worker_busy = 0;
@@ -10243,6 +10246,57 @@ static int stream_async_install_ready(int max_install) {
     g_prof_stream_service_installs = installed;
     g_prof_stream_install_one_ms = last_one_ms;
     return installed;
+}
+
+static void stream_async_shutdown(void) {
+#if defined(PEX_PLATFORM_WII)
+    g_stream_async_initialized = 0;
+    return;
+#else
+    if (!g_stream_async_initialized) return;
+
+#if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
+    g_stream_async_initialized = 0;
+    return;
+#else
+    if (g_stream_async_event || g_stream_async_worker_count > 0) {
+        EnterCriticalSection(&g_stream_async_cs);
+        g_stream_async_stop = 1;
+        /* Queued jobs have no world to publish into during process shutdown. */
+        g_stream_async_job_head = g_stream_async_job_tail = g_stream_async_job_count = 0;
+        LeaveCriticalSection(&g_stream_async_cs);
+        if (g_stream_async_event) SetEvent(g_stream_async_event);
+    }
+
+    for (int i = 0; i < STREAM_ASYNC_MAX_WORKERS; ++i) {
+        if (g_stream_async_threads[i]) {
+            WaitForSingleObject(g_stream_async_threads[i], INFINITE);
+            CloseHandle(g_stream_async_threads[i]);
+            g_stream_async_threads[i] = NULL;
+        }
+    }
+    g_stream_async_worker_count = 0;
+
+    EnterCriticalSection(&g_stream_async_cs);
+    for (int i = 0; i < STREAM_ASYNC_RESULT_RING; ++i) {
+        stream_async_free_result_payload(&g_stream_async_results[i]);
+    }
+    memset(g_stream_async_jobs, 0, sizeof(g_stream_async_jobs));
+    g_stream_async_job_head = g_stream_async_job_tail = g_stream_async_job_count = 0;
+    g_stream_async_result_head = g_stream_async_result_tail = g_stream_async_result_count = 0;
+    g_stream_async_active_count = 0;
+    LeaveCriticalSection(&g_stream_async_cs);
+
+    if (g_stream_async_event) {
+        CloseHandle(g_stream_async_event);
+        g_stream_async_event = NULL;
+    }
+    DeleteCriticalSection(&g_stream_async_cs);
+    g_stream_async_initialized = 0;
+    g_stream_async_stop = 0;
+    pex_logf("stream async worker pool stopped");
+#endif
+#endif
 }
 
 static int stream_generation_active(void) {
@@ -11227,25 +11281,47 @@ static void world_stream_service_shutdown(void) {
 #if defined(PEX_PLATFORM_WII)
     return;
 #else
-    if (!g_world_stream_service_initialized) return;
-    EnterCriticalSection(&g_world_stream_service_cs);
-    g_world_stream_service_stop = 1;
-    LeaveCriticalSection(&g_world_stream_service_cs);
-    if (g_world_stream_service_thread) {
-        WaitForSingleObject(g_world_stream_service_thread, INFINITE);
-        CloseHandle(g_world_stream_service_thread);
-        g_world_stream_service_thread = NULL;
+    if (g_world_stream_service_initialized) {
+        EnterCriticalSection(&g_world_stream_service_cs);
+        g_world_stream_service_stop = 1;
+        LeaveCriticalSection(&g_world_stream_service_cs);
+        if (g_world_stream_service_thread) {
+            WaitForSingleObject(g_world_stream_service_thread, INFINITE);
+            CloseHandle(g_world_stream_service_thread);
+            g_world_stream_service_thread = NULL;
+        }
+        DeleteCriticalSection(&g_world_stream_service_cs);
+        g_world_stream_service_initialized = 0;
+        g_world_stream_service_stop = 0;
+        g_world_stream_service_busy = 0;
     }
-    DeleteCriticalSection(&g_world_stream_service_cs);
-    g_world_stream_service_initialized = 0;
-    g_world_stream_service_stop = 0;
-    g_world_stream_service_busy = 0;
+    /* The terrain pool is independent of the service thread and previously had
+       no shutdown path at all.  Stop it even if service-thread creation failed. */
+    stream_async_shutdown();
     flat_lighting_worker_shutdown();
+    pex_logf("world stream service stopped");
+#endif
+}
+
+static void world_stream_shared_locks_shutdown(void) {
+#if defined(PEX_PLATFORM_WII)
+    return;
+#else
+    /* Call only after simulation, stream, lighting, and section-mesh workers
+       are joined.  Destroying these locks while a worker can still enter them
+       is undefined and was the quit-after-world freeze race. */
     if (g_flat_world_map_cs_initialized) {
         DeleteCriticalSection(&g_flat_world_map_cs);
         g_flat_world_map_cs_initialized = 0;
     }
-    pex_logf("world stream service stopped");
+    if (g_flat_light_commit_cs_initialized) {
+        DeleteCriticalSection(&g_flat_light_commit_cs);
+        g_flat_light_commit_cs_initialized = 0;
+    }
+    if (g_flat_light_dirty_cs_initialized) {
+        DeleteCriticalSection(&g_flat_light_dirty_cs);
+        g_flat_light_dirty_cs_initialized = 0;
+    }
 #endif
 }
 

@@ -332,9 +332,11 @@ int main(int argc, char **argv) {
     InitializeCriticalSection(&g_save_cs);
     main_loop();
     set_mouse_grabbed(0);
-    world_stream_service_shutdown();
+    /* Stop world-state producers before consumers, then destroy shared locks. */
     ingame_tick_async_shutdown();
+    world_stream_service_shutdown();
     async_section_mesh_shutdown();
+    world_stream_shared_locks_shutdown();
     free_texture(&tex_bg); free_texture(&tex_gui); free_texture(&tex_font); free_texture(&tex_terrain);
     free_texture(&tex_black); free_texture(&tex_pack); free_texture(&tex_default_pack_icon); free_texture(&tex_unknown_pack);
     free_texture(&tex_icons); free_texture(&tex_inventory); free_texture(&tex_items); free_texture(&tex_steve); free_texture(&tex_mob_pig); free_texture(&tex_mob_sheep); free_texture(&tex_mob_sheep_fur); free_texture(&tex_mob_cow); free_texture(&tex_mob_chicken); free_texture(&tex_mob_saddle);
