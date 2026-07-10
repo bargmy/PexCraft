@@ -606,9 +606,9 @@ typedef struct Options {
     int fullscreen;
     int show_fps;
     int renderer_backend; /* RendererBackend saved to options.txt; restart required after changing */
-    /* HptiBine (OptiFine HD C6-inspired) graphics settings.  Unsupported
+    /* HptiBine (HptiBine graphics) graphics settings.  Unsupported
        features stay present in the UI as disabled/gray entries, but the stored
-       values mirror OptiFine names so old optionsof.txt files can be imported. */
+       values mirror HptiBine names so old optionshptibine_legacy.txt files can be imported. */
     int hpti_fog_type;
     float hpti_fog_start;
     float hpti_ao_level;
@@ -644,6 +644,11 @@ typedef struct Options {
     int hpti_fast_debug_info;
     int hpti_profiler;
     int hpti_weather;
+    float hpti_gamma;
+    int hpti_clear_water;
+    int hpti_better_snow;
+    int hpti_swamp_colors;
+    int hpti_smooth_biomes;
     int hpti_custom_fonts;
     int hpti_custom_colors;
 
@@ -2497,7 +2502,10 @@ static Texture tex_mob_snowman, tex_mob_ocelot, tex_mob_cat_black, tex_mob_cat_r
 static Texture tex_mob_villager_golem, tex_mob_villager, tex_mob_villager_farmer, tex_mob_villager_librarian, tex_mob_villager_priest, tex_mob_villager_smith, tex_mob_villager_butcher;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static Texture tex_sun, tex_moon, tex_moon_phases;
-static Texture tex_water_overlay, tex_shadow, tex_grasscolor, tex_foliagecolor, tex_particles;
+static Texture tex_water_overlay, tex_shadow;
+static Texture tex_grasscolor, tex_foliagecolor, tex_watercolor;
+static Texture tex_pinecolor, tex_birchcolor, tex_swampgrasscolor, tex_swampfoliagecolor;
+static Texture tex_particles;
 static Texture tex_title_logo, tex_mojang, tex_panorama[6];
 static int font_widths[256];
 
@@ -2673,6 +2681,7 @@ static void flat_center_origin_near(float px, float pz);
 static void flat_generate_origin_blocks(void);
 static void flat_generate_portal_travel_blocks(float px, float pz);
 static void flat_relight_chunks_near(float px, float pz, int radius_chunks);
+static void hptibine_update_water_opacity(void);
 static void flat_prepare_initial_generation(void);
 static void flat_begin_initial_generation(void);
 static void flat_continue_initial_generation(void);

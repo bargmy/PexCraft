@@ -1,0 +1,563 @@
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+ 
+
+options.graphics.tooltip.1=Vizuální kvalita
+options.graphics.tooltip.2=  Rychlá  - nižší kvalita, rychlejší
+options.graphics.tooltip.3=  Pěkná - vyšší kvalita, pomalejší
+options.graphics.tooltip.4=Mění vzhled mraků, listí, vody,
+options.graphics.tooltip.5=stínů a stran trávníků.
+
+hb.options.renderDistance.tiny=Maličký
+hb.options.renderDistance.short=Malý
+hb.options.renderDistance.normal=Normální
+hb.options.renderDistance.far=Velký
+hb.options.renderDistance.extreme=Extrémní
+
+options.renderDistance.tooltip.1=Dohled
+options.renderDistance.tooltip.2=  2 Maličký - 32m (nejrychlejší)
+options.renderDistance.tooltip.3=  4 Malý - 64m (rychlejší)
+options.renderDistance.tooltip.4=  8 Normální - 128m
+options.renderDistance.tooltip.5=  16 Velký - 256m (pomalejší)
+options.renderDistance.tooltip.6=  32 Extrémní - 512m (nejpomalejší!)
+options.renderDistance.tooltip.7=Extrémní Viditelná vzdálenost je velmi výkonově náročná!
+options.renderDistance.tooltip.8=Hodnoty nad 16 Velká jsou pouze pro lokální světy.
+
+options.ao.tooltip.1=Vyhlazené osvětlení.
+options.ao.tooltip.2=  VYPNUTO - žádné vyhlazené osvětlení (rychlejší)
+options.ao.tooltip.3=  Minimální - jednoduše vyhlazené osvětlení (pomalejší)
+options.ao.tooltip.4=  Maximální - kompletně vyhlazené osvětlení (nejpomalejší)
+
+options.framerateLimit.tooltip.1=Maximální FPS
+options.framerateLimit.tooltip.2=  VSync - limitované pro max počet FPS pro monitor (60, 30, 20)
+options.framerateLimit.tooltip.3=  5-255 - nastavitelné
+options.framerateLimit.tooltip.4=  Neomezené - bez limitu (nejrychlejší)
+options.framerateLimit.tooltip.5=FPS limit sníží FPS, i když
+options.framerateLimit.tooltip.6=stanovená hodnota není překročena.
+hb.options.framerateLimit.vsync=VSync
+
+hb.options.AO_LEVEL=Úroveň Vyhlazeného Osvětlení
+hb.options.AO_LEVEL.tooltip.1=Úroveň vyhlazeného osvětlení
+hb.options.AO_LEVEL.tooltip.2=  VYPNUTO - žádné stíny
+hb.options.AO_LEVEL.tooltip.3=  50%% - světlé stíny
+hb.options.AO_LEVEL.tooltip.4=  100%% - tmavé stíny
+
+options.viewBobbing.tooltip.1=Více realistický pohyb
+options.viewBobbing.tooltip.2=Pokud používáš mipmapy, nastav na VYPNUTO pro nejlepší výsledky.
+
+options.guiScale.tooltip.1=Velikost GUI
+options.guiScale.tooltip.2=  Automatická - maximální velikost
+options.guiScale.tooltip.3=  Malá, Normální, Velká - 1x až 3x
+options.guiScale.tooltip.4=  4x do 10x - dostupné na 4K obrazovkách
+options.guiScale.tooltip.5=Liché hodnoty (1x, 3x, 5x ...) nejsou kompatibilní s písmem Unicode.
+options.guiScale.tooltip.6=Menší GUI mohou být rychlejší.
+
+options.vbo.tooltip.1=VBO
+options.vbo.tooltip.2=Používá alternativní model renderování, který je
+options.vbo.tooltip.3=rychlejší (5-10%%) oproti výchozímu renderování.
+
+options.gamma.tooltip.1=Zvýší jas tmavých objektů.
+options.gamma.tooltip.2=  Tmavý - standardní jas
+options.gamma.tooltip.3=  1-99%% - nastavitelné
+options.gamma.tooltip.4=  Jasný - maximální jas tmavých objektů
+options.gamma.tooltip.5=Tato možnost nezmění jas
+options.gamma.tooltip.6=dokonale černých objektů.
+
+options.anaglyph.tooltip.1=3D Zobrazení
+options.anaglyph.tooltip.2=Zapne stereoskopické 3D, které používá rozdílné barvy
+options.anaglyph.tooltip.3=pro každé oko.
+options.anaglyph.tooltip.4=Vyžaduje červeno-modré brýle pro správné vidění.
+
+hb.options.ALTERNATE_BLOCKS=Různé Bloky
+options.blockAlternatives.tooltip.1=Alternativní Bloky
+options.blockAlternatives.tooltip.2=Používá rozdílné modely bloku pro některé modely.
+options.blockAlternatives.tooltip.3=Záleží na vybraném balíčku zdrojů.
+
+hb.options.FOG_FANCY=Mlha
+hb.options.FOG_FANCY.tooltip.1=Typ mlhy
+hb.options.FOG_FANCY.tooltip.2=  Rychlá - rychlejší mlha
+hb.options.FOG_FANCY.tooltip.3=  Pěkná - pomalejší mlha, vypadá pěkněji
+hb.options.FOG_FANCY.tooltip.4=  VYPNUTO - žádná mlha, rychlejší
+hb.options.FOG_FANCY.tooltip.5=Pěkná mlha se aktivuje jen když je podporována
+hb.options.FOG_FANCY.tooltip.6=grafickou kartou.
+
+hb.options.FOG_START=Začátek Mlhy
+hb.options.FOG_START.tooltip.1=Start Mlhy
+hb.options.FOG_START.tooltip.2=  0.2 - mlha začne přímo u hráče
+hb.options.FOG_START.tooltip.3=  0.8 - mlha začne daleko od hráče
+hb.options.FOG_START.tooltip.4=Tato možnost většinou neovlivňuje výkon.
+
+hb.options.CHUNK_LOADING=Načítaní Chunků
+hb.options.CHUNK_LOADING.tooltip.1= Načítaní Chunků
+hb.options.CHUNK_LOADING.tooltip.2=  Výchozí - nestabilní FPS při načítání chunků
+hb.options.CHUNK_LOADING.tooltip.3=  Plynulé - stabilní FPS
+hb.options.CHUNK_LOADING.tooltip.4=  Více jader - stabilní FPS, 3x rychlejší načítání světa
+hb.options.CHUNK_LOADING.tooltip.5=Plynulé a Multi-Jádra - odstraní sekání a 
+hb.options.CHUNK_LOADING.tooltip.6=zmrazování způsobené načítáním chunků.
+hb.options.CHUNK_LOADING.tooltip.7=Multi-Jádro může 3x zrychlit načítání světa a
+hb.options.CHUNK_LOADING.tooltip.8=zvýšit FPS používáním druhého jádra.
+hb.options.chunkLoading.smooth=Plynulé
+hb.options.chunkLoading.multiCore=Více jader
+
+hb.options.shaders=Stíny...
+hb.options.shadersTitle=Stíny
+
+hb.options.shaders.packNone=VYPNUTO
+hb.options.shaders.packDefault=(vložené)
+
+hb.options.shaders.ANTIALIASING=Antialiasing
+hb.options.shaders.NORMAL_MAP=Normální Mapa
+hb.options.shaders.SPECULAR_MAP=Zrcadlová Mapa
+hb.options.shaders.RENDER_RES_MUL=Kvalita Renderu
+hb.options.shaders.SHADOW_RES_MUL=Kvalita Stínů
+hb.options.shaders.HAND_DEPTH_MUL=Ruční Hloubka
+hb.options.shaders.CLOUD_SHADOW=Stíny mraků
+hb.options.shaders.OLD_HAND_LIGHT=Staré Ruční Osvětlení
+hb.options.shaders.OLD_LIGHTING=Staré Osvětlení
+hb.options.shaders.SHADER_PACK=Balíček Stínů
+
+hb.options.shaders.shadersFolder=Složka Stínů
+hb.options.shaders.shaderOptions=Možnosti Stínů...
+
+hb.options.shaderOptionsTitle=Možnosti Stínů
+
+hb.options.quality=Kvalita...
+hb.options.qualityTitle=Nastavení Kvality
+
+hb.options.details=Detaily...
+hb.options.detailsTitle=Nastavení Detailů
+
+hb.options.performance=Výkon...
+hb.options.performanceTitle=Nastavení Výkonu
+
+hb.options.animations=Animace...
+hb.options.animationsTitle=Nastavení Animací
+
+hb.options.other=Ostatní...
+hb.options.otherTitle=Zbytek Nastavení
+
+hb.options.other.reset=Vyresetovat Nastavení Videa/Grafiky ...
+
+
+
+hb.options.mipmap.bilinear=Bilineání
+hb.options.mipmap.linear=Lineární
+hb.options.mipmap.nearest=Nejbližší
+hb.options.mipmap.trilinear=Trilineární
+
+options.mipmapLevels.tooltip.1=Vizuální efekt, který dělá vzdálené objekty lepší
+options.mipmapLevels.tooltip.2=vyhlazováním texturových detailů.
+options.mipmapLevels.tooltip.3=  VYPNUTO - žádné vyhlazování
+options.mipmapLevels.tooltip.4=  1 - minimální vyhlazování
+options.mipmapLevels.tooltip.5=  4 - maximální vyhlazování
+options.mipmapLevels.tooltip.6=Tato možnost většinou neovlivňuje výkon.
+
+hb.options.MIPMAP_TYPE=Typ Mipmapy
+hb.options.MIPMAP_TYPE.tooltip.1=Vizuální efekty mohou udělat vzdálenější objekty pěknější
+hb.options.MIPMAP_TYPE.tooltip.2=vyhlazováním a detailními texturami.
+hb.options.MIPMAP_TYPE.tooltip.3=  Nejbližší - hrubé vyhlazování (nejrychlejší)
+hb.options.MIPMAP_TYPE.tooltip.4=  Lineární - normální vyhlazování
+hb.options.MIPMAP_TYPE.tooltip.5=  Bilineární - dobré vyhlazování
+hb.options.MIPMAP_TYPE.tooltip.6=  Trilineární - nejlepší vyhlazování (nejpomalejší)
+
+
+hb.options.AA_LEVEL=Antialiasing
+hb.options.AA_LEVEL.tooltip.1=Antialiasing
+hb.options.AA_LEVEL.tooltip.2= VYPNUTO - (výchozí) žádný Antialiasing (rychlé)
+hb.options.AA_LEVEL.tooltip.3= 2-16 - vyhlazené hrany a linie (pomalé)
+hb.options.AA_LEVEL.tooltip.4=Antialiasing vyhlazuje rozviklané hrany a 
+hb.options.AA_LEVEL.tooltip.5=přechody ostrých barev.
+hb.options.AA_LEVEL.tooltip.6=Pokud je zapnuto, může výrazně zmenší FPS.
+hb.options.AA_LEVEL.tooltip.7=Ne všechny úrovně jsou podporované všemi grafickými kartami.
+hb.options.AA_LEVEL.tooltip.8=Efektivní po RESTARTU!
+
+hb.options.AF_LEVEL=Antizotropní Filtrování
+hb.options.AF_LEVEL.tooltip.1= Antizotropní Filtrování
+hb.options.AF_LEVEL.tooltip.2= VYPNUTO - (výchozí) standartní detaily textur (rychlé)
+hb.options.AF_LEVEL.tooltip.3= 2-16 - lepší detaily v mipmapovaných texturách (pomalé)
+hb.options.AF_LEVEL.tooltip.4= Antizotropní Filtrování obnoví všechny detaily v
+hb.options.AF_LEVEL.tooltip.5=mipmapovaných texturách.
+hb.options.AF_LEVEL.tooltip.6=Pokud je zapnuto, výrazně sníží FPS.
+
+hb.options.CLEAR_WATER=Čistá Voda
+hb.options.CLEAR_WATER.tooltip.1= Čistá Voda
+hb.options.CLEAR_WATER.tooltip.2=  ZAPNUTO - čistá, průhledná voda
+hb.options.CLEAR_WATER.tooltip.3=  VYPNUTO - výchozí voda
+
+hb.options.RANDOM_MOBS=Náhodní Mobové
+hb.options.RANDOM_MOBS.tooltip.1= Náhodní Mobové
+hb.options.RANDOM_MOBS.tooltip.2=  VYPNUTO - žádní náhodní mobové, rychlejší
+hb.options.RANDOM_MOBS.tooltip.3=  ZAPNUTO - náhodní mobové, pomalejší
+hb.options.RANDOM_MOBS.tooltip.4=Funkce náhodní mobové používá náhodně textury pro moby ve hře.
+hb.options.RANDOM_MOBS.tooltip.5=Vyžaduje balíček textur, který má více textur mobů.
+
+hb.options.BETTER_GRASS=Lepší Trávník
+hb.options.BETTER_GRASS.tooltip.1=Lepší Trávník
+hb.options.BETTER_GRASS.tooltip.2=  VYPNUTO - výchozí strana trávníku, rychlejší
+hb.options.BETTER_GRASS.tooltip.3=  Rychlá - plná strana trávníku, pomalejší
+hb.options.BETTER_GRASS.tooltip.4=  Pěkná - dynamická strana trávníku, nepomalejší
+
+hb.options.BETTER_SNOW=Lepší Sníh
+hb.options.BETTER_SNOW.tooltip.1=Lepší sníh
+hb.options.BETTER_SNOW.tooltip.2=  VYPNUTO - výchozí sníh, rychlejší
+hb.options.BETTER_SNOW.tooltip.3=  ZAPNUTO - lepší sníh, pomalejší
+hb.options.BETTER_SNOW.tooltip.4=Zobrazuje sníh pod průhlednými bloky (plot, vysoká tráva)
+hb.options.BETTER_SNOW.tooltip.5=když sousedí se sněhovými bloky.
+
+hb.options.CUSTOM_FONTS=Vlastní Písmo
+hb.options.CUSTOM_FONTS.tooltip.1= Vlastní Písmo
+hb.options.CUSTOM_FONTS.tooltip.2=  ZAPNUTO - používá vlastní písmo (výchozí), pomalejší
+hb.options.CUSTOM_FONTS.tooltip.3=  VYPNUTO - používá výchozí písmo, rychlejší
+hb.options.CUSTOM_FONTS.tooltip.4=Vlastní písmo záleží na vybraném
+hb.options.CUSTOM_FONTS.tooltip.5=balíčku zdrojů.
+
+hb.options.CUSTOM_COLORS=Vlastní Barvy
+hb.options.CUSTOM_COLORS.tooltip.1= Vlastní Barvy
+hb.options.CUSTOM_COLORS.tooltip.2=  ZAPNUTO - používá vlastní barvy (výchozí), pomalejší
+hb.options.CUSTOM_COLORS.tooltip.3=  VYPNUTO - používá výchozí barvy, rychlejší
+hb.options.CUSTOM_COLORS.tooltip.4=Vlastní barvy záleží na vybraném
+hb.options.CUSTOM_COLORS.tooltip.5=balíčku zdrojů.
+
+hb.options.SWAMP_COLORS=Barvy v Bažinách
+hb.options.SWAMP_COLORS.tooltip.1= Barvy v Bažinách
+hb.options.SWAMP_COLORS.tooltip.2=  ZAPNUTO - používá barvy v bažinách (výchozí), pomalejší
+hb.options.SWAMP_COLORS.tooltip.3=  VYPNUTO - nepoužívá barvy v bažinách, rychlejší
+hb.options.SWAMP_COLORS.tooltip.4=Barvy v bažinách ovlivňují trávník, listy, lijány a vodu.
+
+hb.options.SMOOTH_BIOMES=Vyhlazené Biomy
+hb.options.SMOOTH_BIOMES.tooltip.1=Vyhlazené Biomy
+hb.options.SMOOTH_BIOMES.tooltip.2=  ZAPNUTO - vyhlazování hranic biomů (výchozí), pomalejší
+hb.options.SMOOTH_BIOMES.tooltip.3=  VYPNUTO - žádné vyhlazování hranic biomů, rychlejší.
+hb.options.SMOOTH_BIOMES.tooltip.4=Vyhlazování hranic biomů je uděláno vzorkováním
+hb.options.SMOOTH_BIOMES.tooltip.5=a průměrováním barev všech sousedících bloků.
+hb.options.SMOOTH_BIOMES.tooltip.6=Ovlivňuje trávník, listí, lijány a vodu.
+
+hb.options.CONNECTED_TEXTURES=Spojené Textury
+hb.options.CONNECTED_TEXTURES.tooltip.1=Spojené Textury
+hb.options.CONNECTED_TEXTURES.tooltip.2=  VYPNUTO - žádné spojené textury (výchozí), rychlejší
+hb.options.CONNECTED_TEXTURES.tooltip.3=  Rychlá - rychle spojené textury
+hb.options.CONNECTED_TEXTURES.tooltip.4=  Pěkná - pěkně spojené textury
+hb.options.CONNECTED_TEXTURES.tooltip.5=Spojené textury spojují textury skla,
+hb.options.CONNECTED_TEXTURES.tooltip.6=pískovce a knihoven když jsou
+hb.options.CONNECTED_TEXTURES.tooltip.7=vedle sebe. Spojené textury záleží
+hb.options.CONNECTED_TEXTURES.tooltip.8=na vybraném balíčku zdrojů.
+
+hb.options.NATURAL_TEXTURES=Naturální Textury
+hb.options.NATURAL_TEXTURES.tooltip.1=Naturální Textury
+hb.options.NATURAL_TEXTURES.tooltip.2=  VYPNUTO - žádné naturální textury, rychlejší
+hb.options.NATURAL_TEXTURES.tooltip.3=  ZAPNUTO - používá naturální textury
+hb.options.NATURAL_TEXTURES.tooltip.4=Naturální textury odstraňují vzor na hranách
+hb.options.NATURAL_TEXTURES.tooltip.5=vytvořen bloky stejných typů vedle sebe.
+hb.options.NATURAL_TEXTURES.tooltip.6=Používá otočené a převrácené základy
+hb.options.NATURAL_TEXTURES.tooltip.7=textury bloků. Nastavení pro naturální textury
+hb.options.NATURAL_TEXTURES.tooltip.8=je ovlivňováno vybraným balíčkem zdrojů.
+
+hb.options.EMISSIVE_TEXTURES=Emisivní Textury
+hb.options.EMISSIVE_TEXTURES.tooltip.1=Emisivní Textury
+hb.options.EMISSIVE_TEXTURES.tooltip.2=  VYPNUTO - žádné emisivní textury (výchozí)
+hb.options.EMISSIVE_TEXTURES.tooltip.3=  ZAPNUTO - použít emisivní textury
+hb.options.EMISSIVE_TEXTURES.tooltip.4=Emisivní textury jsou renderovány jako překrytí 
+hb.options.EMISSIVE_TEXTURES.tooltip.5=(s maximální září) textur. Mohou být použity na simulování 
+hb.options.EMISSIVE_TEXTURES.tooltip.6=ploch, které mají zářit na textuře bez překrytí.
+hb.options.EMISSIVE_TEXTURES.tooltip.7=Emisivní textury záleží na vybraném 
+hb.options.EMISSIVE_TEXTURES.tooltip.8=balíčku zdrojů.
+
+hb.options.CUSTOM_SKY=Vlastní Obloha
+hb.options.CUSTOM_SKY.tooltip.1=Vlastní Obloha
+hb.options.CUSTOM_SKY.tooltip.2=  ZAPNUTO - používá vlastní textury oblohy (výchozí), pomalejší
+hb.options.CUSTOM_SKY.tooltip.3=  VYPNUTO - výchozí obloha, rychlejší
+hb.options.CUSTOM_SKY.tooltip.4=Vlastní textura oblohy je ovlivňována vybraným
+hb.options.CUSTOM_SKY.tooltip.5=balíčkem zdrojů.
+
+hb.options.CUSTOM_ITEMS=Vlastní Itemy
+hb.options.CUSTOM_ITEMS.tooltip.1=Vlastní Itemy
+hb.options.CUSTOM_ITEMS.tooltip.2=  ZAPNUTO - vlastní textury itemů (výchozí), pomalejší
+hb.options.CUSTOM_ITEMS.tooltip.3=  VYPNUTO - výchozí textury itemů, rychlejší
+hb.options.CUSTOM_ITEMS.tooltip.4=Vlastní itemy záleží na vybraném
+hb.options.CUSTOM_ITEMS.tooltip.5=balíčku zdrojů.
+
+hb.options.CUSTOM_ENTITY_MODELS=Vlastní modely entit
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.1=Vlastní modely entit
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.2=  ZAPNUTO - vlastní modely entit (výchozí), pomalé
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.3=  VYPNUTO - výchozí modely entit, rychlejší
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.4=Vlastní modely entit záleží na vybraném
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.5=balíčku zdrojů.
+
+hb.options.CUSTOM_GUIS=Vlastní GUI
+hb.options.CUSTOM_GUIS.tooltip.1=Vlastní uživatelské rozhraní
+hb.options.CUSTOM_GUIS.tooltip.2=  ON - vlastní GUI (výchozí), pomalejší
+hb.options.CUSTOM_GUIS.tooltip.3=  OFF - výchozí GUI, rychlejší
+hb.options.CUSTOM_GUIS.tooltip.4=Vlastní GUI záleží na vybraném resource packu.
+
+
+hb.options.CLOUDS=Mraky
+hb.options.CLOUDS.tooltip.1=Mraky
+hb.options.CLOUDS.tooltip.2=  Výchozí - z nastavení Grafiky
+hb.options.CLOUDS.tooltip.3=  Rychlá - nižší kvalita, rychlejší
+hb.options.CLOUDS.tooltip.4=  Pěkná - vyšší kvalita, pěknější
+hb.options.CLOUDS.tooltip.5=  VYPNUTO - žádné mraky, nejrychlejší
+hb.options.CLOUDS.tooltip.6=Rychlé mraky jsou 2D.
+hb.options.CLOUDS.tooltip.7=Pěkné mraky jsou 3D.
+
+hb.options.CLOUD_HEIGHT=Výška Mraků
+hb.options.CLOUD_HEIGHT.tooltip.1=Výška Mraků
+hb.options.CLOUD_HEIGHT.tooltip.2=  VYPNUTO - výchozí výška
+hb.options.CLOUD_HEIGHT.tooltip.3=  100%% - nad limitem stavění
+
+hb.options.TREES=Stromy
+hb.options.TREES.tooltip.1=Stromy
+hb.options.TREES.tooltip.2=  Výchozí - z nastavení Grafiky
+hb.options.TREES.tooltip.3=  Rychlá - nejnižší kvalita, nejrychlejší
+hb.options.TREES.tooltip.4=  Chytrá - vyšší kvalita, rychlé
+hb.options.TREES.tooltip.5=  Pěkná - nejvyšší kvalita, nejpomalejší
+hb.options.TREES.tooltip.6=Rychlé stromy nemají průhledné listí.
+hb.options.TREES.tooltip.7=Pěkné a Chytré stromy mají průhledné listí.
+
+hb.options.RAIN=Sníh a Déšť
+hb.options.RAIN.tooltip.1=Sníh a Déšť
+hb.options.RAIN.tooltip.2=  Výchozí - z nastavení Grafiky
+hb.options.RAIN.tooltip.3=  Rychlá - lehký sníh/déšť, rychlejší
+hb.options.RAIN.tooltip.4=  Pěkná - velký sníh/déšť, pomalejší
+hb.options.RAIN.tooltip.5=  VYPNUTO - žádný sníh/déšť, nejrychlejší
+hb.options.RAIN.tooltip.6=Pokud je déšť vypnutý, jeho zvuky a částice dopadu
+hb.options.RAIN.tooltip.7=se stále objevují.
+
+hb.options.SKY=Obloha
+hb.options.SKY.tooltip.1=Obloha
+hb.options.SKY.tooltip.2=  ZAPNUTO - obloha je viditelná, pomalejší
+hb.options.SKY.tooltip.3=  VYPNUTO - obloha nejde vidět, rychlejší
+hb.options.SKY.tooltip.4=Pokud je obloha vypnutá, měsíc a slunce půjdou stále vidět.
+
+hb.options.STARS=Hvězdy
+hb.options.STARS.tooltip.1=Hvězdy
+hb.options.STARS.tooltip.2=  ZAPNUTO - hvězdy jsou viditelné, pomalejší
+hb.options.STARS.tooltip.3=  VYPNUTO - hvězdy nejdou vidět, rychlejší
+
+hb.options.SUN_MOON=Slunce a Měsíc
+hb.options.SUN_MOON.tooltip.1=Slunce a Měsíc
+hb.options.SUN_MOON.tooltip.2=  ZAPNUTO - slunce a měsíc lze vidět (výchozí)
+hb.options.SUN_MOON.tooltip.3=  VYPNUTO - slunce a měsíc nelze vidět, rychlejší
+
+hb.options.SHOW_CAPES=Zobrazovat Kápě
+hb.options.SHOW_CAPES.tooltip.1=Zobrazovat Kápě
+hb.options.SHOW_CAPES.tooltip.2=  ZAPNUTO - zobrazovat kápě hráčů (výchozí)
+hb.options.SHOW_CAPES.tooltip.3=  VYPNUTO - nezobrazovat kápě hráčů
+
+hb.options.TRANSLUCENT_BLOCKS=Průsvitné Bloky
+hb.options.TRANSLUCENT_BLOCKS.tooltip.1=Průsvitné Bloky
+hb.options.TRANSLUCENT_BLOCKS.tooltip.2=  Pěkná - správné míchání barev (výchozí)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.3=  Rychlá - rychlé míchání barev (rychlejší)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.4=Ovládá míchání barev průhledných bloků
+hb.options.TRANSLUCENT_BLOCKS.tooltip.5=s rozdílnou barvou (barevné sklo, voda, led)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.6=když jsou položeny za sebou s mezerou mezi nimi.
+
+hb.options.HELD_ITEM_TOOLTIPS=Popisek k Drženému Itemu
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.1=Popisek k Drženému Itemu
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.2=  ZAPNUTO - zobrazovat popisky (výchozí)
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.3=  VYPNUTO - nezobrazovat popisky
+
+hb.options.ADVANCED_TOOLTIPS=Pokročilé Popisky
+hb.options.ADVANCED_TOOLTIPS.tooltip.1=Pokročilé Popisky
+hb.options.ADVANCED_TOOLTIPS.tooltip.2=  ZAPNUTO - zobrazit pokročilé popisky 
+hb.options.ADVANCED_TOOLTIPS.tooltip.3=  VYPNUTO - nezobrazovat pokročilé popisky (výchozí)
+hb.options.ADVANCED_TOOLTIPS.tooltip.4=Pokročilé popisky zobrazí pokročilé informace pro
+hb.options.ADVANCED_TOOLTIPS.tooltip.5=itemy (id, durabilita) a pro možnosti stínů
+hb.options.ADVANCED_TOOLTIPS.tooltip.6=(id, zdroj, výchozí hodnota).
+
+hb.options.DROPPED_ITEMS=Vyhozené Itemy
+hb.options.DROPPED_ITEMS.tooltip.1=Vyhozené Itemy
+hb.options.DROPPED_ITEMS.tooltip.2=  Výchozí - podle nastavení Grafiky
+hb.options.DROPPED_ITEMS.tooltip.3=  Rychlá - vyhozené itemy ve 2D, rychlejší
+hb.options.DROPPED_ITEMS.tooltip.4=  Pěkná - vyhozené itemy ve 3D, pomalejší
+
+options.entityShadows.tooltip.1=Stíny Entit
+options.entityShadows.tooltip.2=  ZAPNUTO - zobrazovat stíny entit
+options.entityShadows.tooltip.3=  VYPNUTO - nezobrazovat stíny entit
+
+hb.options.VIGNETTE=Ztmavení
+hb.options.VIGNETTE.tooltip.1=Vizuální efekt, který trochu ztmaví okraje obrazovky.
+hb.options.VIGNETTE.tooltip.2=  Výchozí - záleží na nastavení Grafiky (výchozí)
+hb.options.VIGNETTE.tooltip.3=  Rychlá - ztmavení vypnuto (rychlejší)
+hb.options.VIGNETTE.tooltip.4=  Pěkná - ztmavení zapnuto (pomalejší)
+hb.options.VIGNETTE.tooltip.5=Ztmavení může mít veliký vliv na FPS,
+hb.options.VIGNETTE.tooltip.6=speciálně při hraní ve fullscreenu.
+hb.options.VIGNETTE.tooltip.7=Efekt ztmavení je velmi jemný a dá se bezpečně
+hb.options.VIGNETTE.tooltip.8=vypnout.
+
+hb.options.DYNAMIC_FOV=Dynamické FOV
+hb.options.DYNAMIC_FOV.tooltip.1=Dynamické FOV
+hb.options.DYNAMIC_FOV.tooltip.2=  ZAPNUTO - zapne dynamické FOV (výchozí)
+hb.options.DYNAMIC_FOV.tooltip.3=  VYPNUTO - vypne dynamické FOV
+hb.options.DYNAMIC_FOV.tooltip.4=Mění pole pohledu (FOV) při létání, sprintování 
+hb.options.DYNAMIC_FOV.tooltip.5=nebo při natahování luku.
+ 
+hb.options.DYNAMIC_LIGHTS=Dynamické Světla
+hb.options.DYNAMIC_LIGHTS.tooltip.1=Dynamické Světla
+hb.options.DYNAMIC_LIGHTS.tooltip.2=  VYPNUTO - žádná dynamícká světla (výchozí)
+hb.options.DYNAMIC_LIGHTS.tooltip.3=  Rychlá - rychlá dynamická světla (aktualizace každých 500ms)
+hb.options.DYNAMIC_LIGHTS.tooltip.4=  Pěkná - pěkná dynamická světla (aktualizováno vždy)
+hb.options.DYNAMIC_LIGHTS.tooltip.5=Pokud je zapnuto a v ruce, na zemi nebo v ruce
+hb.options.DYNAMIC_LIGHTS.tooltip.6=jiného hráče je držen svítící item (louč, světlit, atd.)
+hb.options.DYNAMIC_LIGHTS.tooltip.7=tak se osvětlí vše kolem.
+
+
+hb.options.SMOOTH_FPS=Vyhlazené FPS
+hb.options.SMOOTH_FPS.tooltip.1=Stabilizuje FPS čištěním vyrovnávací paměti grafického ovladače.
+hb.options.SMOOTH_FPS.tooltip.2=  VYPNUTO - žádná stabilizace, FPS mohou kolísat
+hb.options.SMOOTH_FPS.tooltip.3=  ZAPNUTO - stabilizace FPS
+hb.options.SMOOTH_FPS.tooltip.4=Tato možnost záleží na grafickém adaptéru a jeho efekt
+hb.options.SMOOTH_FPS.tooltip.5=není vždy vidět.
+
+hb.options.SMOOTH_WORLD=Vyhlazený Svět
+hb.options.SMOOTH_WORLD.tooltip.1=Odstraní lagy způsobené interním serverem.
+hb.options.SMOOTH_WORLD.tooltip.2=  VYPNUTO - žádná stabilizace, FPS mohou kolísat
+hb.options.SMOOTH_WORLD.tooltip.3=  ZAPNUTO - stabilizace FPS
+hb.options.SMOOTH_WORLD.tooltip.4=Stabilizuje FPS rozdělením načítání světa.
+hb.options.SMOOTH_WORLD.tooltip.5=Funguje jen na lokálních světech (hra pro jednoho hráče).
+
+hb.options.FAST_RENDER=Rychlý Render
+hb.options.FAST_RENDER.tooltip.1=Rychlý Render
+hb.options.FAST_RENDER.tooltip.2= VYPNUTO - standardní render
+hb.options.FAST_RENDER.tooltip.3= ZAPNUTO - vyvážený render (rychlejší)
+hb.options.FAST_RENDER.tooltip.4=Používáním vyváženěho renderovacího algoritmu se může snížít
+hb.options.FAST_RENDER.tooltip.5=využití GPU, což může zvýšit FPS.
+
+hb.options.FAST_MATH=Rychlá Matematika
+hb.options.FAST_MATH.tooltip.1=Rychlá Matematika
+hb.options.FAST_MATH.tooltip.2= VYPNUTO - standardní matematika
+hb.options.FAST_MATH.tooltip.3= ZAPNUTO - rychlá matematika
+hb.options.FAST_MATH.tooltip.4=Používá vyvážené sin() a cos() funkce, což může
+hb.options.FAST_MATH.tooltip.5=lépe uspořádat grafickou mezipaměť a zvýšit FPS.
+
+hb.options.CHUNK_UPDATES=Načítání Chunků
+hb.options.CHUNK_UPDATES.tooltip.1=Načítání Chunků
+hb.options.CHUNK_UPDATES.tooltip.2= 1 - pomalejší načítání světa, vyšší FPS (výchozí)
+hb.options.CHUNK_UPDATES.tooltip.3= 3 - rychlejší načítání světa, nižší FPS
+hb.options.CHUNK_UPDATES.tooltip.4= 5 - nejrychlejší načítání světa, nejnižší FPS
+hb.options.CHUNK_UPDATES.tooltip.5=Číslo chunků načtených za 1 FPS,
+hb.options.CHUNK_UPDATES.tooltip.6=Vyšší hodnoty mohou FPS snížit.
+
+hb.options.CHUNK_UPDATES_DYNAMIC=Dynamické Načítání
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.1=Dynamické načítání chunků
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.2= VYPNUTO - (výchozí) standardní počet chunků na FPS
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.3= ZAPNUTO - více chunků, když se hráč nehýbe
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.4=Dynamické načítání načte více chunků
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.5=když se hráč nehýbe, svět se načte rychleji.
+
+hb.options.LAZY_CHUNK_LOADING=Líné Načítání Chunků
+hb.options.LAZY_CHUNK_LOADING.tooltip.1=Pomalé načítání chunků
+hb.options.LAZY_CHUNK_LOADING.tooltip.2= VYPNUTO - výchozí načítání serverových chunků
+hb.options.LAZY_CHUNK_LOADING.tooltip.3= ZAPNUTO - pomalé načítání serverových chunků (plynulejší)
+hb.options.LAZY_CHUNK_LOADING.tooltip.4=Udělá plynulejší načítání chunků na integrovaném serveru
+hb.options.LAZY_CHUNK_LOADING.tooltip.5=jejich rozdělováním na několik tiků.
+hb.options.LAZY_CHUNK_LOADING.tooltip.6=Vypni to, pokud se některé části světa nenačtou správně.
+hb.options.LAZY_CHUNK_LOADING.tooltip.7=Efektivní pouze pro lokální světy (single-player).
+
+
+hb.options.animation.allOn=Vše ZAPNUTO
+hb.options.animation.allOff=Vše VYPNUTO
+hb.options.animation.dynamic=Dynamické
+
+hb.options.ANIMATED_WATER=Animovaná Voda
+hb.options.ANIMATED_LAVA=Animovaná Láva
+hb.options.ANIMATED_FIRE=Animovaný Oheň
+hb.options.ANIMATED_PORTAL=Animovaný Portál
+hb.options.ANIMATED_REDSTONE=Animovaný Redstone
+hb.options.ANIMATED_EXPLOSION=Animované Exploze
+hb.options.ANIMATED_FLAME=Animovaný Požár
+hb.options.ANIMATED_SMOKE=Animovaný Kouř
+hb.options.VOID_PARTICLES=Částice Voidu
+hb.options.WATER_PARTICLES=Částice Vody
+hb.options.RAIN_SPLASH=Částice Deště
+hb.options.PORTAL_PARTICLES=Částice Portálu
+hb.options.POTION_PARTICLES=Částice Lektvarů
+hb.options.DRIPPING_WATER_LAVA=Tekoucí Voda/Láva
+hb.options.ANIMATED_TERRAIN=Animovaný Terén
+hb.options.ANIMATED_TEXTURES=Animované Textury
+hb.options.FIREWORK_PARTICLES=Částice Rachejtle
+
+
+hb.options.LAGOMETER=Lagometer
+hb.options.LAGOMETER.tooltip.1=Zobrazí lagometer na ladící obrazovce (F3).
+hb.options.LAGOMETER.tooltip.2=* Oranžová - Nasbíraný odpad v RAM (garbage collector)
+hb.options.LAGOMETER.tooltip.3=* Světle Modrá - Tik
+hb.options.LAGOMETER.tooltip.4=* Modrá - Plánované soubory
+hb.options.LAGOMETER.tooltip.5=* Fialová - Načítání chunků
+hb.options.LAGOMETER.tooltip.6=* Červená - Přednačtené chunky
+hb.options.LAGOMETER.tooltip.7=* Žlutá - Kontrola viditelnosti
+hb.options.LAGOMETER.tooltip.8=* Zelená - Načítání terénu
+
+hb.options.PROFILER=Ladící Profil
+hb.options.PROFILER.tooltip.1=Ladící Profil
+hb.options.PROFILER.tooltip.2=  ZAPNUTO - ladící profil je aktivní, pomalejší
+hb.options.PROFILER.tooltip.3=  VYPNUTO - ladící profil je neaktivní, rychlejší
+hb.options.PROFILER.tooltip.4=Ladící profil sbírá a zobrazuje informace když
+hb.options.PROFILER.tooltip.5=je otevřena ladící obrazovka (F3).
+
+hb.options.WEATHER=Počasí
+hb.options.WEATHER.tooltip.1=Počasí
+hb.options.WEATHER.tooltip.2=  ZAPNUTO - počasí je aktivní, pomalejší
+hb.options.WEATHER.tooltip.3=  VYPNUTO - počasí je neaktivní, rychlejší
+hb.options.WEATHER.tooltip.4=Počasí ovládá deště, sněžení a bouřky.
+hb.options.WEATHER.tooltip.5=Ovládání počasí je možné pouze pro lokální světy.
+
+hb.options.time.dayOnly=Pouze Den
+hb.options.time.nightOnly=Pouze Noc
+
+hb.options.TIME=Čas
+hb.options.TIME.tooltip.1=Čas
+hb.options.TIME.tooltip.2= Výchozí - normální denní/noční cyklus
+hb.options.TIME.tooltip.3= Pouze Den - pouze den
+hb.options.TIME.tooltip.4= Pouze Noc - pouze noc
+hb.options.TIME.tooltip.5=Nastavení času je efektivní jen v KREATIVNíM módu
+hb.options.TIME.tooltip.6=a pro lokální světy.
+
+options.fullscreen.tooltip.1=Fullscreen
+options.fullscreen.tooltip.2=  ZAPNUTO - použít celoobrázkový mód
+options.fullscreen.tooltip.3=  VYPNUTO - použít mód v okně
+options.fullscreen.tooltip.4=Fullscreen mód může být rychlejší nebo pomalejší než
+options.fullscreen.tooltip.5=mód v okně, záleží na GPU.
+
+hb.options.FULLSCREEN_MODE=Fullscreen Mód
+hb.options.FULLSCREEN_MODE.tooltip.1=Celoobrázkový mód
+hb.options.FULLSCREEN_MODE.tooltip.2=  Výchozí - používá hlavní rozlišení, pomalejší
+hb.options.FULLSCREEN_MODE.tooltip.3=  ŠxV - používá vlastní rozlišení, může být rychlejší
+hb.options.FULLSCREEN_MODE.tooltip.4=Vybrané rozlišení je používáno ve fullscreenu (F11).
+hb.options.FULLSCREEN_MODE.tooltip.5=Nižší rozlišení by měli být většinou rychlejší.
+
+hb.options.SHOW_FPS=Zobrazit FPS
+hb.options.SHOW_FPS.tooltip.1=Kompaktně zobrazí informace o FPS a renderu.
+hb.options.SHOW_FPS.tooltip.2=  C: - načítání chunků
+hb.options.SHOW_FPS.tooltip.3=  E: - načtené entity + blokové entity
+hb.options.SHOW_FPS.tooltip.4=  U: - přednačtené chunky
+hb.options.SHOW_FPS.tooltip.5=Informace o FPS se zobrazí jen,
+hb.options.SHOW_FPS.tooltip.6=když je ladící obrazovka (F3) zneviditelněná.
+
+hb.options.save.default=Výchozí (2s)
+hb.options.save.20s=20s
+hb.options.save.3min=3min
+hb.options.save.30min=30min
+
+hb.options.AUTOSAVE_TICKS=Auto-ukládání
+hb.options.AUTOSAVE_TICKS.tooltip.1=Interval auto-ukládání
+hb.options.AUTOSAVE_TICKS.tooltip.2=Výchozí interval auto-ukládání (2s) se NEDOPORUčUJE
+hb.options.AUTOSAVE_TICKS.tooltip.3=Auto-ukládání způsobuje slavné sekací Smrti (Lag Spikes of Death).
+
+hb.options.SCREENSHOT_SIZE=Velikost Screenshotu
+hb.options.SCREENSHOT_SIZE.tooltip.1=Velikost Snímku Obrazovky
+hb.options.SCREENSHOT_SIZE.tooltip.2=  Výchozí - výchozí velikost screenshotu
+hb.options.SCREENSHOT_SIZE.tooltip.3=  2x-4x - vlastním velikost screenshotu
+hb.options.SCREENSHOT_SIZE.tooltip.4=Focení větších screenshotů může vyžadovat více RAM.
+hb.options.SCREENSHOT_SIZE.tooltip.5=Není kompatinilní s Rychlým Renderem a Antialiasingem.
+hb.options.SCREENSHOT_SIZE.tooltip.6=Vyžaduje podporu GPU framebufferu.

@@ -1,0 +1,576 @@
+
+
+# Keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Video settings
+
+options.graphics.tooltip.1=圖像畫質
+options.graphics.tooltip.2= 性能優先 - 低畫質，較流暢
+options.graphics.tooltip.3= 畫質優先 - 高畫質，較慢
+options.graphics.tooltip.4=改變雲、樹葉、水、
+options.graphics.tooltip.5=陰影和草地的外觀。
+
+hb.options.renderDistance.tiny=最近
+hb.options.renderDistance.short=近
+hb.options.renderDistance.normal=中等
+hb.options.renderDistance.far=遠
+hb.options.renderDistance.extreme=最遠
+
+options.renderDistance.tooltip.1=視野
+options.renderDistance.tooltip.2= 2 最近 - 32m (最快)
+options.renderDistance.tooltip.3= 4 近 - 64m (較快)
+options.renderDistance.tooltip.4= 8 中等 - 128m
+options.renderDistance.tooltip.5= 16 遠 - 256m (較慢)
+options.renderDistance.tooltip.6= 32 最遠 - 512m (最慢!)
+options.renderDistance.tooltip.7=最遠的視野設定非常消耗資源!
+options.renderDistance.tooltip.8= 16 以上的視野值只在本地世界有效。
+
+options.ao.tooltip.1=柔和化照明效果
+options.ao.tooltip.2= 關閉 - 沒有柔和化照明 (較快)
+options.ao.tooltip.3= 最小值 - 簡單柔和化照明 (較慢)
+options.ao.tooltip.4= 最大值 - 複雜柔和化照明 (最慢)
+
+options.framerateLimit.tooltip.1=最大FPS
+options.framerateLimit.tooltip.2= 垂直同步 - 受限於顯示器FPS(60，30，20)
+options.framerateLimit.tooltip.3= 5-255 - 可變
+options.framerateLimit.tooltip.4= 無限制 - 無限制(最快)
+options.framerateLimit.tooltip.5=即使未達FPS上限值
+options.framerateLimit.tooltip.6=上限仍會影響性能。
+hb.options.framerateLimit.vsync=垂直同步
+
+hb.options.AO_LEVEL=柔和化照明等級
+hb.options.AO_LEVEL.tooltip.1=柔和化照明等級
+hb.options.AO_LEVEL.tooltip.2= 關閉 - 沒有陰影
+hb.options.AO_LEVEL.tooltip.3= 50%% - 較亮的陰影
+hb.options.AO_LEVEL.tooltip.4= 100%% - 較暗的陰影
+
+options.viewBobbing.tooltip.1=更真實的移動。
+options.viewBobbing.tooltip.2=當使用多精度材質時，將它關閉以取得更佳效果。
+
+options.guiScale.tooltip.1=介面大小
+options.guiScale.tooltip.2= 自動 - 最大尺寸
+options.guiScale.tooltip.3= 小，中，大 - 1x到3x
+options.guiScale.tooltip.4= 4x到10x - 僅適用於4K解析度
+options.guiScale.tooltip.5=奇數值的放大倍數(1x，3x，5x等)與Unicode不相容。
+options.guiScale.tooltip.6=較小的介面或許會更流暢。
+
+options.vbo.tooltip.1=啟用緩衝區頂點物件(VBO)
+options.vbo.tooltip.2=使用一種常見的替代渲染模型
+options.vbo.tooltip.3=比預設渲染快(5-10%%)。
+
+options.gamma.tooltip.1=增加較暗物體的亮度
+options.gamma.tooltip.2= 標準 - 標準亮度
+options.gamma.tooltip.3= 1-99%% - 可變亮度
+options.gamma.tooltip.4= 明亮 - 最大亮度
+options.gamma.tooltip.5=此選項不會改變
+options.gamma.tooltip.6=全黑物體的亮度。
+
+options.anaglyph.tooltip.1=3D立體
+options.anaglyph.tooltip.2=透過為每隻眼睛分色
+options.anaglyph.tooltip.3=來產生3D立體效果。
+options.anaglyph.tooltip.4=需要使用紅藍眼鏡進行觀看。
+
+options.blockAlternatives.tooltip.1=替選方塊
+options.blockAlternatives.tooltip.2=為一些方塊使用備選的方塊模型.
+options.blockAlternatives.tooltip.3=取決於所選的資源包.
+
+hb.options.ALTERNATE_BLOCKS=方塊替換
+hb.options.ALTERNATE_BLOCKS.tooltip.1=方塊替換
+hb.options.ALTERNATE_BLOCKS.tooltip.2=為一些方塊使用備用的方塊模型。
+hb.options.ALTERNATE_BLOCKS.tooltip.3=取決於選用的資源包。
+
+hb.options.FOG_FANCY=迷霧
+hb.options.FOG_FANCY.tooltip.1=迷霧類型
+hb.options.FOG_FANCY.tooltip.2= 性能優先 - 較流暢的迷霧
+hb.options.FOG_FANCY.tooltip.3= 畫質優先 - 較慢的迷霧，視覺效果較佳
+hb.options.FOG_FANCY.tooltip.4= 關閉 - 無迷霧，最快
+hb.options.FOG_FANCY.tooltip.5=畫質優先的迷霧僅當
+hb.options.FOG_FANCY.tooltip.6=顯卡支援時可用。
+
+hb.options.FOG_START=迷霧起始位置
+hb.options.FOG_START.tooltip.1=迷霧起始位置
+hb.options.FOG_START.tooltip.2= 0.2 - 迷霧起始於玩家周圍
+hb.options.FOG_START.tooltip.3= 0.8 - 迷霧在離玩家較遠的地方出現
+hb.options.FOG_START.tooltip.4=此選項通常不會影響性能。
+
+hb.options.CHUNK_LOADING=區塊載入
+hb.options.CHUNK_LOADING.tooltip.1=區塊載入
+hb.options.CHUNK_LOADING.tooltip.2= 預設 - 當載入區塊時FPS不穩定
+hb.options.CHUNK_LOADING.tooltip.3= 柔和化 - 穩定FPS
+hb.options.CHUNK_LOADING.tooltip.4= 多核心 - 穩定FPS，3倍的世界載入速度
+hb.options.CHUNK_LOADING.tooltip.5=柔和化和多核心可消除由區塊
+hb.options.CHUNK_LOADING.tooltip.6=載入引起的延遲和卡頓。
+hb.options.CHUNK_LOADING.tooltip.7=多核心可以令世界載入速度提升3倍
+hb.options.CHUNK_LOADING.tooltip.8=並通過使用多個CPU核心來提升FPS。
+hb.options.chunkLoading.smooth=柔和化
+hb.options.chunkLoading.multiCore=多核心
+
+hb.options.shaders=光影…
+hb.options.shadersTitle=光影
+
+hb.options.shaders.packNone=關閉
+hb.options.shaders.packDefault=(內建)
+
+
+hb.options.shaders.ANTIALIASING=抗鋸齒
+hb.options.shaders.NORMAL_MAP=法線貼圖
+hb.options.shaders.SPECULAR_MAP=高光貼圖
+hb.options.shaders.RENDER_RES_MUL=渲染精細度
+hb.options.shaders.SHADOW_RES_MUL=陰影精細度
+hb.options.shaders.HAND_DEPTH_MUL=手部景深
+hb.options.shaders.CLOUD_SHADOW=雲的陰影
+hb.options.shaders.OLD_HAND_LIGHT=經典手持光源
+hb.options.shaders.OLD_LIGHTING=經典光照
+hb.options.shaders.SHADER_PACK=光影包文件夾
+
+hb.options.shaders.shadersFolder=光影資料夾
+hb.options.shaders.shaderOptions=光影設定…
+
+hb.options.shaderOptionsTitle=光影設定
+
+hb.options.quality=品質…
+hb.options.qualityTitle=品質設置
+
+hb.options.details=細節…
+hb.options.detailsTitle=細節設置
+
+hb.options.performance=性能…
+hb.options.performanceTitle=性能設置
+
+hb.options.animations=動畫…
+hb.options.animationsTitle=動畫設置
+
+hb.options.other=其他…
+hb.options.otherTitle=其他設置
+
+hb.options.other.reset=重設視頻設定…
+
+
+# Quality
+
+hb.options.mipmap.bilinear=雙線性
+hb.options.mipmap.linear=線性
+hb.options.mipmap.nearest=最近
+hb.options.mipmap.trilinear=三線性
+
+options.mipmapLevels.tooltip.1=使用多精度材質，使遠處的
+options.mipmapLevels.tooltip.2=物體看起來更好的視覺效果。
+options.mipmapLevels.tooltip.3= 關閉 - 無柔和化
+options.mipmapLevels.tooltip.4= 1 - 最小柔和化
+options.mipmapLevels.tooltip.5= 4 - 最大柔和化
+options.mipmapLevels.tooltip.6=此選項通常不影響性能。
+
+hb.options.MIPMAP_TYPE=多精度材質類型
+hb.options.MIPMAP_TYPE.tooltip.1=使用多精度材質，使遠處的
+hb.options.MIPMAP_TYPE.tooltip.2=物體看起來更好的視覺效果。
+hb.options.MIPMAP_TYPE.tooltip.3= 最近 - 粗糙柔和化(最快)
+hb.options.MIPMAP_TYPE.tooltip.4= 線性 - 正常柔和化
+hb.options.MIPMAP_TYPE.tooltip.5= 雙線性 - 精細
+hb.options.MIPMAP_TYPE.tooltip.6= 三線性 - 最佳柔和化(最慢)
+
+
+hb.options.AA_LEVEL=抗鋸齒
+hb.options.AA_LEVEL.tooltip.1=抗鋸齒
+hb.options.AA_LEVEL.tooltip.2= 關閉 - (預設)無抗鋸齒(較快)
+hb.options.AA_LEVEL.tooltip.3= 2-16 - 對線和邊緣使用抗鋸齒(較慢)
+hb.options.AA_LEVEL.tooltip.4=反鋸齒將平滑鋸齒線
+hb.options.AA_LEVEL.tooltip.5=和銳利的色彩過渡。
+hb.options.AA_LEVEL.tooltip.6=啟用它可能會大幅降低FPS。
+hb.options.AA_LEVEL.tooltip.7=並非所有等級都顯卡都支援。
+hb.options.AA_LEVEL.tooltip.8=重啟後生效！
+
+hb.options.AF_LEVEL=各向異性過濾
+hb.options.AF_LEVEL.tooltip.1=各向異性過濾
+hb.options.AF_LEVEL.tooltip.2= 關閉 - (預設)標準材質細節(較快)
+hb.options.AF_LEVEL.tooltip.3= 2-16 - 為多級材質過濾後的材質提供精細細節(較慢)
+hb.options.AF_LEVEL.tooltip.4=各向異性過濾還原了經多次
+hb.options.AF_LEVEL.tooltip.5=材質過濾後的材質細節。
+hb.options.AF_LEVEL.tooltip.6=啟用它可能會大幅降低FPS。
+
+hb.options.CLEAR_WATER=清澈水體
+hb.options.CLEAR_WATER.tooltip.1=清澈水體
+hb.options.CLEAR_WATER.tooltip.2= 開啟 - 清澈，透明水體
+hb.options.CLEAR_WATER.tooltip.3= 關閉 - 預設水體
+
+hb.options.RANDOM_MOBS=隨機生物
+hb.options.RANDOM_MOBS.tooltip.1=隨機生物
+hb.options.RANDOM_MOBS.tooltip.2=  關閉 - 關閉隨機生物，較快
+hb.options.RANDOM_MOBS.tooltip.3=  開啟 - 隨機生物，較慢
+hb.options.RANDOM_MOBS.tooltip.4=遊戲中的生物、怪物材質使用隨機的貼圖。
+hb.options.RANDOM_MOBS.tooltip.5=需要資源包內有多個生物、怪物貼圖。
+
+hb.options.BETTER_GRASS=更好的草地
+hb.options.BETTER_GRASS.tooltip.1=更好的草地
+hb.options.BETTER_GRASS.tooltip.2= 關閉 - 預設草地材質，較快
+hb.options.BETTER_GRASS.tooltip.3= 性能優先 - 草方塊側面全部使用草地材質，較慢
+hb.options.BETTER_GRASS.tooltip.4= 畫質優先 - 草方塊側面材質動態化，最慢
+
+hb.options.BETTER_SNOW=更好的雪地
+hb.options.BETTER_SNOW.tooltip.1=更好的雪地
+hb.options.BETTER_SNOW.tooltip.2= 關閉 - 預設的雪地，較快
+hb.options.BETTER_SNOW.tooltip.3= 開啟 - 更好的雪地，較慢
+hb.options.BETTER_SNOW.tooltip.4=在"透明方塊"(如柵欄，高草)與雪
+hb.options.BETTER_SNOW.tooltip.5=接壤時在其下顯示雪。
+
+hb.options.CUSTOM_FONTS=自定義字體
+hb.options.CUSTOM_FONTS.tooltip.1=自定義字體
+hb.options.CUSTOM_FONTS.tooltip.2= 開啟 - 使用自定義字體(預設)，較慢
+hb.options.CUSTOM_FONTS.tooltip.3= 關閉 - 使用預設字體，較快
+hb.options.CUSTOM_FONTS.tooltip.4=自定義字體一般由
+hb.options.CUSTOM_FONTS.tooltip.5=當前的資源包提供。
+
+hb.options.CUSTOM_COLORS=自定義色彩
+hb.options.CUSTOM_COLORS.tooltip.1=自定義色彩
+hb.options.CUSTOM_COLORS.tooltip.2= 開啟 - 使用自定義色彩(預設)，較慢
+hb.options.CUSTOM_COLORS.tooltip.3= 關閉 - 使用預設色彩，較快
+hb.options.CUSTOM_COLORS.tooltip.4=自定義色彩一般由
+hb.options.CUSTOM_COLORS.tooltip.5=當前的資源包提供。
+
+hb.options.SWAMP_COLORS=沼澤顏色
+hb.options.SWAMP_COLORS.tooltip.1=沼澤顏色
+hb.options.SWAMP_COLORS.tooltip.2= 開啟 - 使用沼澤顏色(預設)，較慢
+hb.options.SWAMP_COLORS.tooltip.3= 關閉 - 不使用沼澤顏色，較快
+hb.options.SWAMP_COLORS.tooltip.4=沼澤的顏色會影響草、樹葉、籐蔓和水。
+
+hb.options.SMOOTH_BIOMES=柔和化生物群落
+hb.options.SMOOTH_BIOMES.tooltip.1=柔和化生物群落
+hb.options.SMOOTH_BIOMES.tooltip.2= 開啟 - 柔和化生物群落的邊界(預設),較慢
+hb.options.SMOOTH_BIOMES.tooltip.3= 關閉 - 不柔和化生物群落的邊界,較快
+hb.options.SMOOTH_BIOMES.tooltip.4=柔和化生物群落的邊界平滑取樣於
+hb.options.SMOOTH_BIOMES.tooltip.5=附近所有方塊顏色的平均值。
+hb.options.SMOOTH_BIOMES.tooltip.6=草、樹葉、籐蔓和水將會受到影響。
+
+hb.options.CONNECTED_TEXTURES=連接材質
+hb.options.CONNECTED_TEXTURES.tooltip.1=連接材質
+hb.options.CONNECTED_TEXTURES.tooltip.2= 關閉 - 關閉連續材質(預設)
+hb.options.CONNECTED_TEXTURES.tooltip.3= 性能優先 - 快速處理連續材質
+hb.options.CONNECTED_TEXTURES.tooltip.4= 畫質優先 - 精細處理連續材質
+hb.options.CONNECTED_TEXTURES.tooltip.5=連接材質為玻璃、沙石和書架增加了連續材質，
+hb.options.CONNECTED_TEXTURES.tooltip.6=當它們互相放在一起時會將材質連接為一體。
+hb.options.CONNECTED_TEXTURES.tooltip.7=連續材質一般由
+hb.options.CONNECTED_TEXTURES.tooltip.8=當前的資源包提供。
+
+hb.options.NATURAL_TEXTURES=自然材質
+hb.options.NATURAL_TEXTURES.tooltip.1=自然材質
+hb.options.NATURAL_TEXTURES.tooltip.2= 關閉 - 關閉自然材質(預設)
+hb.options.NATURAL_TEXTURES.tooltip.3= 開啟 - 使用自然材質
+hb.options.NATURAL_TEXTURES.tooltip.4=自然材質移除由同一類型的
+hb.options.NATURAL_TEXTURES.tooltip.5=方塊重複產生的柵格狀圖案。
+hb.options.NATURAL_TEXTURES.tooltip.6=它通過旋轉和翻轉方塊的基礎材質
+hb.options.NATURAL_TEXTURES.tooltip.7=來產生材質變體。自然材質的配置和
+hb.options.NATURAL_TEXTURES.tooltip.8=材質一般由當前的資源包提供。
+
+hb.options.EMISSIVE_TEXTURES=光亮材質
+hb.options.EMISSIVE_TEXTURES.tooltip.1=光亮材質
+hb.options.EMISSIVE_TEXTURES.tooltip.2= 關閉 - 關閉光亮材質(預設)
+hb.options.EMISSIVE_TEXTURES.tooltip.3= 開啟 - 使用光亮材質
+hb.options.EMISSIVE_TEXTURES.tooltip.4=光亮材質被渲染為全亮度
+hb.options.EMISSIVE_TEXTURES.tooltip.5=的覆蓋層。它們可以用來
+hb.options.EMISSIVE_TEXTURES.tooltip.6=模擬基本材質的發光部分。
+hb.options.EMISSIVE_TEXTURES.tooltip.7=光亮材質一般由
+hb.options.EMISSIVE_TEXTURES.tooltip.8=當前的資源包提供。
+
+hb.options.CUSTOM_SKY=自定義天空
+hb.options.CUSTOM_SKY.tooltip.1=自定義天空
+hb.options.CUSTOM_SKY.tooltip.2= 開啟 - 自定義天空材質(預設)，較慢
+hb.options.CUSTOM_SKY.tooltip.3= 關閉 - 原版天空材質，較快
+hb.options.CUSTOM_SKY.tooltip.4=自定義天空材質一般由
+hb.options.CUSTOM_SKY.tooltip.5=當前的資源包提供。
+
+hb.options.CUSTOM_ITEMS=自定義物品
+hb.options.CUSTOM_ITEMS.tooltip.1=自定義物品
+hb.options.CUSTOM_ITEMS.tooltip.2= 開啟 - 自定義物品材質(預設)，較慢
+hb.options.CUSTOM_ITEMS.tooltip.3= 關閉 - 原版物品材質，較快
+hb.options.CUSTOM_ITEMS.tooltip.4=自定義物品材質一般由
+hb.options.CUSTOM_ITEMS.tooltip.5=當前的資源包提供。
+
+hb.options.CUSTOM_ENTITY_MODELS=自定義實體模型
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.1=自定義實體模型
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.2= 開啟 - 自定義實體模型(預設)，較慢
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.3= 關閉 - 原版實體模型，較快
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.4=自定義實體模型材質一般由
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.5=當前的資源包提供。
+
+hb.options.CUSTOM_GUIS=自定義GUI
+hb.options.CUSTOM_GUIS.tooltip.1=自定義GUI
+hb.options.CUSTOM_GUIS.tooltip.2=  開啟 - 自定義GUI(預設)，較慢
+hb.options.CUSTOM_GUIS.tooltip.3=  關閉 - 原版GUI，較快
+hb.options.CUSTOM_GUIS.tooltip.4=自定義GUI一般由當前的資源包提供。
+
+# Details
+
+hb.options.CLOUDS=雲塊
+hb.options.CLOUDS.tooltip.1=雲塊
+hb.options.CLOUDS.tooltip.2= 預設 - 以圖像畫質的設定為準
+hb.options.CLOUDS.tooltip.3= 性能優先 - 低品質，較快
+hb.options.CLOUDS.tooltip.4= 畫質優先 - 高品質，較慢
+hb.options.CLOUDS.tooltip.5= 關閉 - 沒有雲，最快
+hb.options.CLOUDS.tooltip.6=性能優先的雲塊使用2D渲染。
+hb.options.CLOUDS.tooltip.7=畫質優先的雲塊使用3D渲染。
+
+hb.options.CLOUD_HEIGHT=雲層高度
+hb.options.CLOUD_HEIGHT.tooltip.1=雲層高度
+hb.options.CLOUD_HEIGHT.tooltip.2= 關閉 - 預設高度
+hb.options.CLOUD_HEIGHT.tooltip.3= 100%% - 超過世界限制高度
+
+hb.options.TREES=樹
+hb.options.TREES.tooltip.1=樹
+hb.options.TREES.tooltip.2= 預設 - 以圖像畫質設定為標準
+hb.options.TREES.tooltip.3= 性能優先 - 低品質，最快
+hb.options.TREES.tooltip.4= 智慧 - 較高品質，較快
+hb.options.TREES.tooltip.4= 畫質優先 - 高品質，較慢
+hb.options.TREES.tooltip.5=性能優先的樹葉不透明。
+hb.options.TREES.tooltip.6=畫質優先的樹葉透明。
+
+hb.options.RAIN=雨 & 雪
+hb.options.RAIN.tooltip.1=雨 & 雪
+hb.options.RAIN.tooltip.2= 預設 - 以圖像畫質的設定為準
+hb.options.RAIN.tooltip.3= 性能優先  - 少量的雨/雪，較快
+hb.options.RAIN.tooltip.4= 畫質優先 - 大量的雨/雪，較慢
+hb.options.RAIN.tooltip.5= 關閉 - 沒有雨/雪，最快
+hb.options.RAIN.tooltip.6=當雨雪選項為 關閉 時，
+hb.options.RAIN.tooltip.7=雨聲仍然存在。
+
+hb.options.SKY=天空
+hb.options.SKY.tooltip.1=天空
+hb.options.SKY.tooltip.2= 開啟 - 天空可見，較慢
+hb.options.SKY.tooltip.3= 關閉 - 天空不可見，較快
+hb.options.SKY.tooltip.4=當天空關閉時，月亮和太陽依然可見。
+
+hb.options.STARS=星星
+hb.options.STARS.tooltip.1=星星
+hb.options.STARS.tooltip.2= 開啟 - 星星可見，較慢
+hb.options.STARS.tooltip.3= 關閉 - 星星不可見，較快
+
+hb.options.SUN_MOON=太陽 & 月亮
+hb.options.SUN_MOON.tooltip.1=太陽 & 月亮
+hb.options.SUN_MOON.tooltip.2= 開啟 - 太陽和月亮可見(預設)
+hb.options.SUN_MOON.tooltip.3= 關閉 - 太陽和月亮不可見(較快)
+
+hb.options.SHOW_CAPES=顯示披風
+hb.options.SHOW_CAPES.tooltip.1=顯示披風
+hb.options.SHOW_CAPES.tooltip.2= 開啟 - 顯示玩家披風(預設)
+hb.options.SHOW_CAPES.tooltip.3= 關閉 - 不顯示玩家披風
+
+hb.options.TRANSLUCENT_BLOCKS=半透明方塊
+hb.options.TRANSLUCENT_BLOCKS.tooltip.1=半透明方塊
+hb.options.TRANSLUCENT_BLOCKS.tooltip.2= 畫質優先 - 準確的混合顏色(預設)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.3= 性能優先 - 快速的混合顏色(較快)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.4=控制有色的半透明方塊
+hb.options.TRANSLUCENT_BLOCKS.tooltip.5=(彩色玻璃、水、冰)放在一起
+hb.options.TRANSLUCENT_BLOCKS.tooltip.6=時或與空氣相隔時的顏色混和。
+
+hb.options.HELD_ITEM_TOOLTIPS=持有物信息顯示
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.1=持有物信息顯示
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.2= 開啟 - 顯示持有物信息(預設)
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.3= 關閉 - 隱藏持有物信息
+
+hb.options.ADVANCED_TOOLTIPS=高級資訊提示
+hb.options.ADVANCED_TOOLTIPS.tooltip.1=高級資訊提示
+hb.options.ADVANCED_TOOLTIPS.tooltip.2= 開啟 - 顯示高級資訊提示
+hb.options.ADVANCED_TOOLTIPS.tooltip.3= 關閉 - 隱藏高級資訊提示(預設)
+hb.options.ADVANCED_TOOLTIPS.tooltip.4=高級資訊提示顯示物品
+hb.options.ADVANCED_TOOLTIPS.tooltip.5=(ID、耐久度)和光影設定資料
+hb.options.ADVANCED_TOOLTIPS.tooltip.6=(id，source，default value)。
+
+hb.options.DROPPED_ITEMS=掉落物品
+hb.options.DROPPED_ITEMS.tooltip.1=掉落物品
+hb.options.DROPPED_ITEMS.tooltip.2= 預設 - 以圖像畫質的設定為準
+hb.options.DROPPED_ITEMS.tooltip.3= 性能優先 - 2D掉落物品，較快
+hb.options.DROPPED_ITEMS.tooltip.4= 畫質優先 - 3D掉落物品，較慢
+
+options.entityShadows.tooltip.1=實體陰影
+options.entityShadows.tooltip.2= 開啟 - 顯示實體陰影
+options.entityShadows.tooltip.3= 關閉 - 隱藏實體陰影
+
+hb.options.VIGNETTE=暈影
+hb.options.VIGNETTE.tooltip.1=螢幕四角輕微變暗的視覺效果
+hb.options.VIGNETTE.tooltip.2= 預設 - 以圖像畫質的設定為準(預設)
+hb.options.VIGNETTE.tooltip.3= 性能優先 - 暈影關閉(較快)
+hb.options.VIGNETTE.tooltip.4= 畫質優先 - 暈影開啟(較慢)
+hb.options.VIGNETTE.tooltip.5=暈影可能對FPS有明顯影響，
+hb.options.VIGNETTE.tooltip.6=尤其是全螢幕遊戲時
+hb.options.VIGNETTE.tooltip.7=暈影的效果非常細微
+hb.options.VIGNETTE.tooltip.8=且可以被安全地關閉。
+
+hb.options.DYNAMIC_FOV=動態視場
+hb.options.DYNAMIC_FOV.tooltip.1=動態視場
+hb.options.DYNAMIC_FOV.tooltip.2= 開啟 - 啟用動態視場(預設)
+hb.options.DYNAMIC_FOV.tooltip.3= 關閉 - 禁用動態視場
+hb.options.DYNAMIC_FOV.tooltip.4=當正在飛行、疾跑或
+hb.options.DYNAMIC_FOV.tooltip.5=拉弓時改變視場。
+
+hb.options.DYNAMIC_LIGHTS=動態光源
+hb.options.DYNAMIC_LIGHTS.tooltip.1=動態光源
+hb.options.DYNAMIC_LIGHTS.tooltip.2= 關閉 - 無動態光源(預設)
+hb.options.DYNAMIC_LIGHTS.tooltip.3= 性能優先 - 較流暢的動態光源(每500ms更新一次)
+hb.options.DYNAMIC_LIGHTS.tooltip.4= 畫質優先 - 高品質的動態光源(即時更新)
+hb.options.DYNAMIC_LIGHTS.tooltip.5=允許發光的物品(火把、螢石等)
+hb.options.DYNAMIC_LIGHTS.tooltip.6=當被玩家左右手持握、裝備或
+hb.options.DYNAMIC_LIGHTS.tooltip.7=成爲掉落物時照亮周圍的一切。
+
+# Performance
+
+hb.options.SMOOTH_FPS=柔和化FPS
+hb.options.SMOOTH_FPS.tooltip.1=通過清除顯示卡緩衝區來穩定FPS
+hb.options.SMOOTH_FPS.tooltip.2= 關閉 - 不穩定，FPS可能波動
+hb.options.SMOOTH_FPS.tooltip.3= 開啟 - FPS穩定
+hb.options.SMOOTH_FPS.tooltip.4=此選項依賴於顯卡驅動
+hb.options.SMOOTH_FPS.tooltip.5=不一定有明顯效果。
+
+hb.options.SMOOTH_WORLD=柔和化世界
+hb.options.SMOOTH_WORLD.tooltip.1=移除內部伺服器造成的數據延遲。
+hb.options.SMOOTH_WORLD.tooltip.2= 關閉 - 不穩定，FPS可能波動
+hb.options.SMOOTH_WORLD.tooltip.3= 開啟 - FPS穩定
+hb.options.SMOOTH_WORLD.tooltip.4=分擔內部伺服器負載來穩定FPS。
+hb.options.SMOOTH_WORLD.tooltip.5=只在本地世界(單人遊戲)有效。
+
+hb.options.FAST_RENDER=快速渲染
+hb.options.FAST_RENDER.tooltip.1=快速渲染
+hb.options.FAST_RENDER.tooltip.2= 關閉 - 標準渲染(預設)
+hb.options.FAST_RENDER.tooltip.3= 開啟 - 優化渲染(較快)
+hb.options.FAST_RENDER.tooltip.4=採用優化渲染算法從而降低GPU的負載
+hb.options.FAST_RENDER.tooltip.5=並且可能大幅提升FPS。
+
+hb.options.FAST_MATH=快速運算
+hb.options.FAST_MATH.tooltip.1=快速運算
+hb.options.FAST_MATH.tooltip.2= 關閉 - 標準的運算(預設)
+hb.options.FAST_MATH.tooltip.3= 開啟 - 更快的運算
+hb.options.FAST_MATH.tooltip.4=採用優化的sin()和cos()函數可以
+hb.options.FAST_MATH.tooltip.5=更好的利用CPU緩存並且提升FPS。
+
+hb.options.CHUNK_UPDATES=區塊更新
+hb.options.CHUNK_UPDATES.tooltip.1=區塊更新
+hb.options.CHUNK_UPDATES.tooltip.2= 1 - 世界載入速度較慢，FPS較高 (預設)
+hb.options.CHUNK_UPDATES.tooltip.3= 3 - 世界載入速度較快，FPS較低
+hb.options.CHUNK_UPDATES.tooltip.4= 5 - 世界載入速度最快，FPS最低
+hb.options.CHUNK_UPDATES.tooltip.5=渲染每幀時更新的區塊數，
+hb.options.CHUNK_UPDATES.tooltip.6=愈高的值將會導致FPS不穩定。
+
+hb.options.CHUNK_UPDATES_DYNAMIC=動態更新
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.1=動態更新
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.2= 關閉 - (預設)每幀標準區塊更新
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.3= 開啟 - 當玩家站立不動時更多的區塊更新
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.4=當玩家站定時會更新
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.5=更多區塊以加速世界載入。
+
+hb.options.LAZY_CHUNK_LOADING=平緩區塊更新
+hb.options.LAZY_CHUNK_LOADING.tooltip.1=平緩區塊更新
+hb.options.LAZY_CHUNK_LOADING.tooltip.2= 關閉 - 預設的伺服器區塊載入
+hb.options.LAZY_CHUNK_LOADING.tooltip.3= 開啟 - 平緩伺服器區塊載入(更柔和)
+hb.options.LAZY_CHUNK_LOADING.tooltip.4=藉由將區塊分佈在多個ticks中讀取
+hb.options.LAZY_CHUNK_LOADING.tooltip.5=來柔和化伺服器整體區塊載入。
+hb.options.LAZY_CHUNK_LOADING.tooltip.6=如果世界無法正確的載入，請把它關閉。
+hb.options.LAZY_CHUNK_LOADING.tooltip.7=僅適用於單玩家的本地世界。
+
+# Animations
+
+hb.options.animation.allOn=全部開啟
+hb.options.animation.allOff=全部關閉
+hb.options.animation.dynamic=動態
+
+hb.options.ANIMATED_WATER=水面動畫
+hb.options.ANIMATED_LAVA=岩漿動畫
+hb.options.ANIMATED_FIRE=火焰動畫
+hb.options.ANIMATED_PORTAL=傳送門動畫
+hb.options.ANIMATED_REDSTONE=紅石動畫
+hb.options.ANIMATED_EXPLOSION=爆炸動畫
+hb.options.ANIMATED_FLAME=燃燒動畫
+hb.options.ANIMATED_SMOKE=煙霧動畫
+hb.options.VOID_PARTICLES=虛空粒子
+hb.options.WATER_PARTICLES=水濺粒子
+hb.options.RAIN_SPLASH=雨滴飛濺
+hb.options.PORTAL_PARTICLES=傳送門粒子
+hb.options.POTION_PARTICLES=藥水粒子
+hb.options.DRIPPING_WATER_LAVA=流動水/岩漿
+hb.options.ANIMATED_TERRAIN=地形動畫
+hb.options.ANIMATED_TEXTURES=材質動畫
+hb.options.FIREWORK_PARTICLES=煙火粒子
+
+# Other
+
+hb.options.LAGOMETER=Lagometer
+hb.options.LAGOMETER.tooltip.1=Shows the lagometer on the debug screen (F3).
+hb.options.LAGOMETER.tooltip.2=* 橙 - Memory garbage collection
+hb.options.LAGOMETER.tooltip.3=* 青 - Tick
+hb.options.LAGOMETER.tooltip.4=* 藍 - Scheduled executables
+hb.options.LAGOMETER.tooltip.5=* 紫 - Chunk upload
+hb.options.LAGOMETER.tooltip.6=* 紅 - Chunk updates
+hb.options.LAGOMETER.tooltip.7=* 黃 - Visibility check
+hb.options.LAGOMETER.tooltip.8=* 綠 - Render terrain
+
+hb.options.PROFILER=偵錯分析器
+hb.options.PROFILER.tooltip.1=偵錯分析器
+hb.options.PROFILER.tooltip.2= 開啟 - 偵錯分析器啟用，較慢
+hb.options.PROFILER.tooltip.3= 關閉 - 偵錯分析器禁用，較快
+hb.options.PROFILER.tooltip.4=偵錯分析器在偵錯界面開啟(F3)時
+hb.options.PROFILER.tooltip.5=收集並且顯示偵錯信息。
+
+hb.options.WEATHER=天氣
+hb.options.WEATHER.tooltip.1=天氣
+hb.options.WEATHER.tooltip.2= 開啟 - 開啟天氣，較慢
+hb.options.WEATHER.tooltip.3= 關閉 - 關閉天氣，較快
+hb.options.WEATHER.tooltip.4=天氣選項影響雨，雪和雷電。
+hb.options.WEATHER.tooltip.5=天氣選項僅在本地遊戲中生效。
+
+hb.options.time.dayOnly=只有白天
+hb.options.time.nightOnly=只有夜晚
+
+hb.options.TIME=時間
+hb.options.TIME.tooltip.1=時間
+hb.options.TIME.tooltip.2= 預設 - 正常的日夜交替
+hb.options.TIME.tooltip.3= 只有白天 - 只有白天
+hb.options.TIME.tooltip.4= 只有夜晚 - 只有夜晚
+hb.options.TIME.tooltip.5=時間設置只在創造模式下
+hb.options.TIME.tooltip.6=且為本地遊戲時有效。
+
+options.fullscreen.tooltip.1=全螢幕
+options.fullscreen.tooltip.2= 開啟 - 使用全螢幕模式
+options.fullscreen.tooltip.3= 關閉 - 使用視窗模式
+options.fullscreen.tooltip.4=全螢幕模式可能比視窗模式
+options.fullscreen.tooltip.5=更快或更慢，取決於顯卡。
+
+hb.options.FULLSCREEN_MODE=全螢幕模式
+hb.options.FULLSCREEN_MODE.tooltip.1=全螢幕模式
+hb.options.FULLSCREEN_MODE.tooltip.2= 預設 - 使用桌面解析度，較慢
+hb.options.FULLSCREEN_MODE.tooltip.3= 自定義 - 使用自定義螢幕解析度，可能會較快
+hb.options.FULLSCREEN_MODE.tooltip.4=此選項只在全螢幕模式下有效(F11)。
+hb.options.FULLSCREEN_MODE.tooltip.5=較低的解析度通常會較快。
+
+hb.options.SHOW_FPS=顯示FPS
+hb.options.SHOW_FPS.tooltip.1=顯示精簡的FPS和渲染信息
+hb.options.SHOW_FPS.tooltip.2= C: - 區塊渲染器
+hb.options.SHOW_FPS.tooltip.3= E: - 一般實體 + 方塊實體
+hb.options.SHOW_FPS.tooltip.4= U: - 區塊更新
+hb.options.SHOW_FPS.tooltip.5=只有偵錯畫面隱藏時
+hb.options.SHOW_FPS.tooltip.6=才會顯示精簡FPS信息。
+
+hb.options.save.default=預設(2秒)
+hb.options.save.20s=20秒
+hb.options.save.3min=3分鐘
+hb.options.save.30min=30分鐘
+
+hb.options.AUTOSAVE_TICKS=自動保存
+hb.options.AUTOSAVE_TICKS.tooltip.1=自動保存間隔
+hb.options.AUTOSAVE_TICKS.tooltip.2=不推薦使用預設自動保存間隔(2秒)。
+hb.options.AUTOSAVE_TICKS.tooltip.3=自動保存會導致卡頓。
+
+hb.options.SCREENSHOT_SIZE=截圖尺寸
+hb.options.SCREENSHOT_SIZE.tooltip.1=截圖尺寸
+hb.options.SCREENSHOT_SIZE.tooltip.2= 預設 - 預設的截圖尺寸
+hb.options.SCREENSHOT_SIZE.tooltip.3= 2x-4x - 自定義截圖尺寸
+hb.options.SCREENSHOT_SIZE.tooltip.4=抓取更大的截圖可能需要更多的記憶體。
+hb.options.SCREENSHOT_SIZE.tooltip.5=與快速渲染及抗鋸齒不相容。
+hb.options.SCREENSHOT_SIZE.tooltip.6=需要顯卡幀緩衝區支持。

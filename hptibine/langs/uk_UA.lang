@@ -1,0 +1,645 @@
+
+# Keys
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+# Video settings
+
+options.graphics.tooltip.1=Візуальна якість
+options.graphics.tooltip.2=  Швидка  - нижча якість, швидше
+options.graphics.tooltip.3=  Красива - вижча якість, повільніше
+options.graphics.tooltip.4=Змінює зовнішній вигляд хмар, листя води
+options.graphics.tooltip.5=тіней і сторін трави.
+
+hb.options.renderDistance.tiny=Маленька
+hb.options.renderDistance.short=Коротка
+hb.options.renderDistance.normal=Нормальна
+hb.options.renderDistance.far=Далека
+hb.options.renderDistance.extreme=Екстримальна
+hb.options.renderDistance.insane=Шалена
+hb.options.renderDistance.ludicrous=Безглузда
+
+options.renderDistance.tooltip.1=Видима відстань
+options.renderDistance.tooltip.2=  2 Маленька - 32м (Найшвидше)
+options.renderDistance.tooltip.3=  4 Коротка - 64м (Швидша)
+options.renderDistance.tooltip.4=  8 Нормальна - 128м
+options.renderDistance.tooltip.5=  16 Далека - 256м (повільніше)
+options.renderDistance.tooltip.6=  32 Надзвичайна - 512м (найповільніше!)
+options.renderDistance.tooltip.7=Для Надзвичайної видимої відстані потрібна велика кількість ресурсів комп'ютера!
+options.renderDistance.tooltip.8=Значення більша за 16 Далеко ефективні лиш для одиночних світів.
+
+options.ao.tooltip.1=М'яке освітлення
+options.ao.tooltip.2=  Вимк - без м'якого освітлення (Швидка)
+options.ao.tooltip.3=  Мінімум - просте м'яке освітлення (повільніше)
+options.ao.tooltip.4=  Максимум - комплексне м'яке освітлення (дуже повільно)
+
+options.framerateLimit.tooltip.1=Максимальна швидкість передачі кадрів
+options.framerateLimit.tooltip.2=  VSync - ліміт до максимальної кількості кадрів монітора (60, 30, 20)
+options.framerateLimit.tooltip.3=  5-255 - змінні
+options.framerateLimit.tooltip.4=  Необмежено - без ліміту (Найшвидше)
+options.framerateLimit.tooltip.5=Гранична частота зміни кадрів зменшує FPS навіть якщо
+options.framerateLimit.tooltip.6=значення ліміту не досягнуто.
+hb.options.framerateLimit.vsync=VSync
+
+hb.options.AO_LEVEL=Рівень м'якого освітлення
+hb.options.AO_LEVEL.tooltip.1=Рівень м'якого освітлення
+hb.options.AO_LEVEL.tooltip.2=  Вимк - без тіней
+hb.options.AO_LEVEL.tooltip.3=  50%% - легкі тіні
+hb.options.AO_LEVEL.tooltip.4=  100%% - темні тіні
+
+options.viewBobbing.tooltip.1=Реалістичний рух
+options.viewBobbing.tooltip.2=При використанні міпмапів встановіть його в положення Вимк для досягнення найкращих результатів.
+
+options.guiScale.tooltip.1=Розмір GUI
+options.guiScale.tooltip.2=  Авто - максимальний розмір
+options.guiScale.tooltip.3=  Малий, Нормальний, Великий - 1x до 3x
+options.guiScale.tooltip.4=  4x до 10x - доступні на 4K дисплеях
+options.guiScale.tooltip.5=Непарні значення (1x, 3x, 5x ...) не підтримуються юнікодом.
+options.guiScale.tooltip.6=Менший GUI швидший.
+
+options.vbo.tooltip.1=Об'єкти буфера вершин
+options.vbo.tooltip.2=Використовує альтернативну технологію рендерингу, що зазвичай
+options.vbo.tooltip.3=швидше (5-10%%) чим простий рендер.
+
+options.gamma.tooltip.1=Зменшує яскравість темніших об'єктів
+options.gamma.tooltip.2=  Похмурий - Стандартна яскравість
+options.gamma.tooltip.3=  1-99%% - змінні
+options.gamma.tooltip.4=  Яскраво - максимальна яскравість темних об'єктів
+options.gamma.tooltip.5=Ця опція не змінює яскравість 
+options.gamma.tooltip.6=повністю чорних об'єктів
+
+options.anaglyph.tooltip.1=3D анагліф
+options.anaglyph.tooltip.2=Вмикає стереоскопічний 3D ефекти використовуючи різні кольори
+options.anaglyph.tooltip.3=для кожного ока.
+options.anaglyph.tooltip.4=Потребує червоно-сині окуляри для перегляду.
+
+options.blockAlternatives.tooltip.1=Альтернативні блоки
+options.blockAlternatives.tooltip.2=Використовує альтернативні моделі для деяких блоків.
+options.blockAlternatives.tooltip.3=Базується на обраному ресурспаці.
+
+hb.options.ALTERNATE_BLOCKS=Альтернативні блоки
+hb.options.ALTERNATE_BLOCKS.tooltip.1=Альтернативні блоки
+hb.options.ALTERNATE_BLOCKS.tooltip.2=Використовує альтернативні моделі для деяких блоків.
+hb.options.ALTERNATE_BLOCKS.tooltip.3=Базується на обраному ресурспаці.
+
+hb.options.FOG_FANCY=Туман
+hb.options.FOG_FANCY.tooltip.1=Тип туману
+hb.options.FOG_FANCY.tooltip.2=  Швидкий - Швидкий туман
+hb.options.FOG_FANCY.tooltip.3=  Красивий - Повільніший туман, виглядає краще
+hb.options.FOG_FANCY.tooltip.4=  Вимк - без туману, найшвидше
+hb.options.FOG_FANCY.tooltip.5=Красивий туман буде доступний лиш тоді, коли 
+hb.options.FOG_FANCY.tooltip.6=його підтримує відеокарта.
+
+hb.options.FOG_START=Поява туману
+hb.options.FOG_START.tooltip.1=Поява туману
+hb.options.FOG_START.tooltip.2=  0.2 - туман з'являється недалеко від гравця
+hb.options.FOG_START.tooltip.3=  0.8 - туман з'являється далеко від гравця
+hb.options.FOG_START.tooltip.4=Ця опція зазвичай не зменшує продуктивність.
+
+hb.options.CHUNK_LOADING=Завантаження чанків
+hb.options.CHUNK_LOADING.tooltip.1=Завантаження чанків
+hb.options.CHUNK_LOADING.tooltip.2=  Базове - нестабільше FPS коли завантажується чанк
+hb.options.CHUNK_LOADING.tooltip.3=  Згладжене - стабільше FPS
+hb.options.CHUNK_LOADING.tooltip.4=  Multi-Core - стабільше FPS, 3x швидше завантжаення світу
+hb.options.CHUNK_LOADING.tooltip.5=Згладжене і Multi-Core видаляють заікання і
+hb.options.CHUNK_LOADING.tooltip.6=фрізи спричинені завантаженням чанків.
+hb.options.CHUNK_LOADING.tooltip.7=Multi-Core може збільшити до 3 разів швидкість завантаження світу
+hb.options.CHUNK_LOADING.tooltip.8=збільшуючи FPS завдяки використання другого ядра процессора.
+hb.options.chunkLoading.smooth=Згладжене
+hb.options.chunkLoading.multiCore=Multi-Core
+
+hb.options.shaders=Шейдери...
+hb.options.shadersTitle=Шейдери
+
+hb.options.shaders.packNone=Вимк
+hb.options.shaders.packDefault=(внутрішній)
+
+hb.options.shaders.ANTIALIASING=Згладжування
+hb.options.shaders.ANTIALIASING.tooltip.1=Згладжування
+hb.options.shaders.ANTIALIASING.tooltip.2=  Вимк - (базово) без згладжування (швидше)
+hb.options.shaders.ANTIALIASING.tooltip.3=  FXAA 2x, 4x - згладжені лінії та краї (повільніше)
+hb.options.shaders.ANTIALIASING.tooltip.4=FXAA це пост-ефект який згладжує
+hb.options.shaders.ANTIALIASING.tooltip.5=гострі краї та різкі зміни кольорів.
+hb.options.shaders.ANTIALIASING.tooltip.6=Це швидше ніж традиційне згладжування
+hb.options.shaders.ANTIALIASING.tooltip.7=і працює з Швидким Рендером.  
+
+hb.options.shaders.NORMAL_MAP=Нормальна мапа
+hb.options.shaders.NORMAL_MAP.tooltip.1=Нормальна мапа
+hb.options.shaders.NORMAL_MAP.tooltip.2=  Увімк - (базово) дозволити нормальні мапи 
+hb.options.shaders.NORMAL_MAP.tooltip.3=  Вимк - вимкнути нормальні мапи
+hb.options.shaders.NORMAL_MAP.tooltip.4=Шейдер використовує нормальні мапи
+hb.options.shaders.NORMAL_MAP.tooltip.5=щоб симулювати 3D геометрію на плоских моделях.
+hb.options.shaders.NORMAL_MAP.tooltip.6=Нормальна мапа встановлюється
+hb.options.shaders.NORMAL_MAP.tooltip.7=обраним шейдером.
+
+hb.options.shaders.SPECULAR_MAP=Дзеркальна мапа
+hb.options.shaders.SPECULAR_MAP.tooltip.1=Джеркальна мапа
+hb.options.shaders.SPECULAR_MAP.tooltip.2=  Увімк - (базово) увімкнути дзеркальні мапи
+hb.options.shaders.SPECULAR_MAP.tooltip.3=  Вимк - вимкнути дзеркальні мапи
+hb.options.shaders.SPECULAR_MAP.tooltip.4=Шейдер використовує дзеркальні мапи
+hb.options.shaders.SPECULAR_MAP.tooltip.5=щоб симулювати віддзеркалення.
+hb.options.shaders.SPECULAR_MAP.tooltip.6=Дзеркальна мапа встановлюється
+hb.options.shaders.SPECULAR_MAP.tooltip.7=обраним шейдером.
+
+hb.options.shaders.RENDER_RES_MUL=Якість рендеру
+hb.options.shaders.RENDER_RES_MUL.tooltip.1=Якість рендеру
+hb.options.shaders.RENDER_RES_MUL.tooltip.2=  0.5x - низька (швидка)
+hb.options.shaders.RENDER_RES_MUL.tooltip.3=  1x - стандартна (базова)
+hb.options.shaders.RENDER_RES_MUL.tooltip.4=  2x - висока (повільна)
+hb.options.shaders.RENDER_RES_MUL.tooltip.5=Якість рендеру контролює розмір текстури
+hb.options.shaders.RENDER_RES_MUL.tooltip.6=які шейдер використовує.
+hb.options.shaders.RENDER_RES_MUL.tooltip.7=Низька якість буде корисна для 4K дисплеїв.
+hb.options.shaders.RENDER_RES_MUL.tooltip.8=Висока якість працює як згладжування.
+
+hb.options.shaders.SHADOW_RES_MUL=Якість тіней
+hb.options.shaders.SHADOW_RES_MUL.tooltip.1=Якість тіней
+hb.options.shaders.SHADOW_RES_MUL.tooltip.2=  0.5x - низька (швидка)
+hb.options.shaders.SHADOW_RES_MUL.tooltip.3=  1x - стандартна (базова)
+hb.options.shaders.SHADOW_RES_MUL.tooltip.4=  2x - висока (повільна)
+hb.options.shaders.SHADOW_RES_MUL.tooltip.5=Якість тіней контролює розмір текстури
+hb.options.shaders.SHADOW_RES_MUL.tooltip.6=тіней яку використовує шейдер.
+hb.options.shaders.SHADOW_RES_MUL.tooltip.7=Низька якість = неточні, грубі тіні.
+hb.options.shaders.SHADOW_RES_MUL.tooltip.8=Висока якість = точні, красиві тіні.
+
+hb.options.shaders.HAND_DEPTH_MUL=Глибина руки
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.1=Глибина руки
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.2=  0.5x - рука коло камери
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.3=  1x - (базово)
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.4=  2x - рука далеко від камери
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.5=Глибина руки контролює наскільки далеко
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.6=знаходяться предмети в руці від камери.
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.7=Для шейдерів з глибоким розмиттям це змінить
+hb.options.shaders.HAND_DEPTH_MUL.tooltip.8=розмиття предметів в руці.
+
+hb.options.shaders.CLOUD_SHADOW=Тіні від хмар
+
+hb.options.shaders.OLD_HAND_LIGHT=Старе освітл. руки
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.1=Старе освітлення руки
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.2=  Базово - залежить від шейдера
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.3=  Увімк - використовувати старе
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.4=  Вимк - використовувати нове
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.5=Це дозволяє шейдерам які працюють лише з  
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.6=оствіленням в основній руці працювати з 
+hb.options.shaders.OLD_HAND_LIGHT.tooltip.7=речима в другій.
+
+hb.options.shaders.OLD_LIGHTING=Старе освітлення
+hb.options.shaders.OLD_LIGHTING.tooltip.1=Старе освітлення
+hb.options.shaders.OLD_LIGHTING.tooltip.2=  Базово - залежить від шейдера
+hb.options.shaders.OLD_LIGHTING.tooltip.3=  Увімк - використовувати старе
+hb.options.shaders.OLD_LIGHTING.tooltip.4=  Вимк - не використовувати старе
+hb.options.shaders.OLD_LIGHTING.tooltip.5=Старе освітлення контролює фіксовану базову
+hb.options.shaders.OLD_LIGHTING.tooltip.6=освітленність сторони блока.
+hb.options.shaders.OLD_LIGHTING.tooltip.7=Шейдери зазвичай надають краще освітлення в 
+hb.options.shaders.OLD_LIGHTING.tooltip.8=залежності від позиції сонця.
+
+hb.options.shaders.SHADER_PACK=Шейдерпак
+
+hb.options.shaders.shadersFolder=Папка з шейдерами
+hb.options.shaders.shaderOptions=Налаштування шейдерів...
+
+hb.options.shaderOptionsTitle=Налаштування шейдерів
+
+hb.options.quality=Якість...
+hb.options.qualityTitle=Налаштування якості
+
+hb.options.details=Деталі...
+hb.options.detailsTitle=Налаштування деталей
+
+hb.options.performance=Продуктивність...
+hb.options.performanceTitle=Налаштування продуктивності
+
+hb.options.animations=Анімації...
+hb.options.animationsTitle=Налаштування анімації
+
+hb.options.other=Інші...
+hb.options.otherTitle=Інші налаштування
+
+hb.options.other.reset=Скинути всі налаштування...
+
+
+# Quality
+
+hb.options.mipmap.bilinear=Білінійна
+hb.options.mipmap.linear=Лінійна
+hb.options.mipmap.nearest=Найближча
+hb.options.mipmap.trilinear=Трилінійна
+
+options.mipmapLevels.tooltip.1=Візуальний ефект який змушує далекі об'єкти виглядати краще
+options.mipmapLevels.tooltip.2=розмиваючи деталі текстур
+options.mipmapLevels.tooltip.3=  Вимк - без згладжування
+options.mipmapLevels.tooltip.4=  1 - мінімальне згладжування
+options.mipmapLevels.tooltip.5=  4 - максивальне згладжування
+options.mipmapLevels.tooltip.6=Ця опція зазвичай не впливає на продуктивність.
+
+hb.options.MIPMAP_TYPE=Тип Міпмап
+hb.options.MIPMAP_TYPE.tooltip.1=Візуальний ефект який змушує далекі об'єкти виглядати краще
+hb.options.MIPMAP_TYPE.tooltip.2=розмиваючи деталі текстур
+hb.options.MIPMAP_TYPE.tooltip.3=  Найближчий - грубе згладжування (найшвидша)
+hb.options.MIPMAP_TYPE.tooltip.4=  Лінійне - нормальне згладжування
+hb.options.MIPMAP_TYPE.tooltip.5=  Білінійне - краще згладжування
+hb.options.MIPMAP_TYPE.tooltip.6=  Трилінійне - найкраще згладжування (повільніше)
+
+
+hb.options.AA_LEVEL=Згладжування
+hb.options.AA_LEVEL.tooltip.1=Згладжування
+hb.options.AA_LEVEL.tooltip.2= Вимк - (базове) без згладжування (швидке)
+hb.options.AA_LEVEL.tooltip.3= 2-16 - згладжує лінії і границі (повільніше)
+hb.options.AA_LEVEL.tooltip.4=Згладжування розмиває зазубрені границі і 
+hb.options.AA_LEVEL.tooltip.5=гострі зміни кольору.
+hb.options.AA_LEVEL.tooltip.6=Коли увімкнуто, то по суті зменшує FPS.
+hb.options.AA_LEVEL.tooltip.7=Не всі рівні підтримуються різними відеокартами.
+hb.options.AA_LEVEL.tooltip.8=Ефективне після ПЕРЕЗАПУСКУ!
+
+hb.options.AF_LEVEL=Анізотропна фільтрація
+hb.options.AF_LEVEL.tooltip.1=Анізотропна фільтрація
+hb.options.AF_LEVEL.tooltip.2= Вимк - (базово) стандартна деталь текстури (швидка)
+hb.options.AF_LEVEL.tooltip.3= 2-16 - кращі деталі у Міпмап текстурах (повільніше)
+hb.options.AF_LEVEL.tooltip.4=Анізотропна фільтрація відновлює деталі у
+hb.options.AF_LEVEL.tooltip.5=Міпмап текстурах.
+hb.options.AF_LEVEL.tooltip.6=Коли ввімкнуто, зменшує FPS.
+
+hb.options.CLEAR_WATER=Чиста вода
+hb.options.CLEAR_WATER.tooltip.1=Чиста вода
+hb.options.CLEAR_WATER.tooltip.2=  Увімк - чиста, прозора вода
+hb.options.CLEAR_WATER.tooltip.3=  Вимк - стандартна вода
+
+hb.options.RANDOM_MOBS=Випадкові текстури мобів
+hb.options.RANDOM_MOBS.tooltip.1=Випадкові текстури мобів
+hb.options.RANDOM_MOBS.tooltip.2=  Вимк - одна текстура для моба, швидше
+hb.options.RANDOM_MOBS.tooltip.3=  Увімк - випадкові текстури, повільніше
+hb.options.RANDOM_MOBS.tooltip.4=Випадкові текстури мобів використовує різні текстури для моба.
+hb.options.RANDOM_MOBS.tooltip.5=Це потребує ресурспак з різними текстурами для одного моба.
+
+hb.options.BETTER_GRASS=Краща трава
+hb.options.BETTER_GRASS.tooltip.1=Краща трава
+hb.options.BETTER_GRASS.tooltip.2=  Вимк - базова текстура блока трави, швидше
+hb.options.BETTER_GRASS.tooltip.3=  Швидка - зелена бокова текстура блока трави, повільніше
+hb.options.BETTER_GRASS.tooltip.4=  Красива - динаміча текстура сторони блока, повільніше
+
+hb.options.BETTER_SNOW=Кращий сніг
+hb.options.BETTER_SNOW.tooltip.1=Кращий сніг
+hb.options.BETTER_SNOW.tooltip.2=  Вимк - базовий сніг, швидше
+hb.options.BETTER_SNOW.tooltip.3=  Увімк - кращий сніг, повільніше
+hb.options.BETTER_SNOW.tooltip.4=Показує сніг під прозорими блоками (огорожа, висока трава)
+hb.options.BETTER_SNOW.tooltip.5=коли межує з блоком снігу
+
+hb.options.CUSTOM_FONTS=Власні шрифти
+hb.options.CUSTOM_FONTS.tooltip.1=Власні шрифти
+hb.options.CUSTOM_FONTS.tooltip.2=  Увімк - використовує власні шрифти (базово), повільніше
+hb.options.CUSTOM_FONTS.tooltip.3=  Вимк - використовує базовий шрифт, швидше
+hb.options.CUSTOM_FONTS.tooltip.4=Власні шрифти встановлюються ресурспаком
+hb.options.CUSTOM_FONTS.tooltip.5=
+
+hb.options.CUSTOM_COLORS=Власні кольори
+hb.options.CUSTOM_COLORS.tooltip.1=Custom Colors
+hb.options.CUSTOM_COLORS.tooltip.2=  Увімк - використовує власні кольори (базово), повільніше
+hb.options.CUSTOM_COLORS.tooltip.3=  Вимк - використовує базові кольори, швидше
+hb.options.CUSTOM_COLORS.tooltip.4=Власні кольори встановлюються ресурспаком
+hb.options.CUSTOM_COLORS.tooltip.5=
+
+hb.options.SWAMP_COLORS=Кольори болота
+hb.options.SWAMP_COLORS.tooltip.1=Кольори болота
+hb.options.SWAMP_COLORS.tooltip.2=  Увімк - використовуються кольори болота (базово), повільніше
+hb.options.SWAMP_COLORS.tooltip.3=  Вимк - не використовує кольори болота, швидше
+hb.options.SWAMP_COLORS.tooltip.4=Кольори болота впливають на траву, листя, воду і ліани.
+
+hb.options.SMOOTH_BIOMES=Плавні біоми
+hb.options.SMOOTH_BIOMES.tooltip.1=Плавні біоми
+hb.options.SMOOTH_BIOMES.tooltip.2=  Увімк - згладжування границі біомів (базово), повільніше
+hb.options.SMOOTH_BIOMES.tooltip.3=  Вимк - без згладжування границь біомів, швидше
+hb.options.SMOOTH_BIOMES.tooltip.4=Згладжування зміняє кольори декількох блоків на границі
+hb.options.SMOOTH_BIOMES.tooltip.5=щоб зменшити різку зміну кольорів.
+hb.options.SMOOTH_BIOMES.tooltip.6=Впливає на траву, листя, воду і ліани.
+
+hb.options.CONNECTED_TEXTURES=З'єднані текстури
+hb.options.CONNECTED_TEXTURES.tooltip.1=З'єднані текстури
+hb.options.CONNECTED_TEXTURES.tooltip.2=  Вимк - без поєднаних текстур (базово)
+hb.options.CONNECTED_TEXTURES.tooltip.3=  Швидка - швидкі поєднані текстури
+hb.options.CONNECTED_TEXTURES.tooltip.4=  Красива - красиві поєднані текстури
+hb.options.CONNECTED_TEXTURES.tooltip.5=З'єднані текстури впливають на скло,
+hb.options.CONNECTED_TEXTURES.tooltip.6=пісковик і полички, що розташовані
+hb.options.CONNECTED_TEXTURES.tooltip.7=разом. Приєднанні текстури підтримують
+hb.options.CONNECTED_TEXTURES.tooltip.8=обрані ресурспаки.
+
+hb.options.NATURAL_TEXTURES=Натуральні текстури
+hb.options.NATURAL_TEXTURES.tooltip.1=Натуральні текстури
+hb.options.NATURAL_TEXTURES.tooltip.2=  Вимк - без натуральних текстур (базово)
+hb.options.NATURAL_TEXTURES.tooltip.3=  Увімк - використовує натуральні текстури
+hb.options.NATURAL_TEXTURES.tooltip.4=Натуральні текстури видаляють сітку як шаблон
+hb.options.NATURAL_TEXTURES.tooltip.5=створений повторенням блоків одного типу.
+hb.options.NATURAL_TEXTURES.tooltip.6=Це використовує перевернуті і повернуті текстури
+hb.options.NATURAL_TEXTURES.tooltip.7=блока. Налаштування натуральних текстур
+hb.options.NATURAL_TEXTURES.tooltip.8=надходить з обраного пакету текстур.
+
+hb.options.EMISSIVE_TEXTURES=Випромінюючі текстури
+hb.options.EMISSIVE_TEXTURES.tooltip.1=Випромінюючі текстури
+hb.options.EMISSIVE_TEXTURES.tooltip.2=  Увімк - використання випромінюючих текстур
+hb.options.EMISSIVE_TEXTURES.tooltip.3=  Вимк - без випромінюючих текстур
+hb.options.EMISSIVE_TEXTURES.tooltip.4=Випрюмінюючі текстури завжди відображаються з повною яскравістю.
+hb.options.EMISSIVE_TEXTURES.tooltip.5=Їх можно використовувати для імітації випромінювання світла
+hb.options.EMISSIVE_TEXTURES.tooltip.6=частинами основної текстури.
+hb.options.EMISSIVE_TEXTURES.tooltip.7=Додається обраним ресурспаком.
+hb.options.EMISSIVE_TEXTURES.tooltip.8=
+
+hb.options.CUSTOM_SKY=Власне небо
+hb.options.CUSTOM_SKY.tooltip.1=Власне небо
+hb.options.CUSTOM_SKY.tooltip.2=  Увімк - власні текстури неба (базово), повільніше
+hb.options.CUSTOM_SKY.tooltip.3=  Вимк - базове небо, швидше
+hb.options.CUSTOM_SKY.tooltip.4=Власна текстура неба може бути змінена
+hb.options.CUSTOM_SKY.tooltip.5=ресурспаком
+
+hb.options.CUSTOM_ITEMS=Власні текстури речей
+hb.options.CUSTOM_ITEMS.tooltip.1=Власні текстури речей
+hb.options.CUSTOM_ITEMS.tooltip.2=  Увімк - власні текстури речей (базово), повільніше
+hb.options.CUSTOM_ITEMS.tooltip.3=  Вимк - базові речі, швидше
+hb.options.CUSTOM_ITEMS.tooltip.4=Власна текстура неба може бути змінена
+hb.options.CUSTOM_ITEMS.tooltip.5=ресурспаком
+
+hb.options.CUSTOM_ENTITY_MODELS=Власні моделі істот
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.1=Власні моделі істот
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.2=  Увімк - власні моделі для істот (базово), повільніше
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.3=  Вимк - стандартні моделі істот, швидше
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.4=Моделі істот можуть бути змінені
+hb.options.CUSTOM_ENTITY_MODELS.tooltip.5=ресурспаком
+
+hb.options.CUSTOM_GUIS=Власні GUI
+hb.options.CUSTOM_GUIS.tooltip.1=Власні GUI
+hb.options.CUSTOM_GUIS.tooltip.2=  Увімк - власні GUI (базово), повільніше
+hb.options.CUSTOM_GUIS.tooltip.3=  Вимк - стандартні GUI, швидше
+hb.options.CUSTOM_GUIS.tooltip.4=Власні GUI встановлюються ресурспаком.
+
+# Details
+
+hb.options.CLOUDS=Хмари
+hb.options.CLOUDS.tooltip.1=Хмари
+hb.options.CLOUDS.tooltip.2=  Стандартні - як в налаштуваннях відео
+hb.options.CLOUDS.tooltip.3=  Швидкі - нижча якість, швидше
+hb.options.CLOUDS.tooltip.4=  Красива - вища якість, повільніше
+hb.options.CLOUDS.tooltip.5=  Вимк - без хмар, найшвидше
+hb.options.CLOUDS.tooltip.6=Швидкі хмари відображаються у 2D.
+hb.options.CLOUDS.tooltip.7=Красиві хмари відображаються у 3D.
+
+hb.options.CLOUD_HEIGHT=Висота хмар
+hb.options.CLOUD_HEIGHT.tooltip.1=Висота хмар
+hb.options.CLOUD_HEIGHT.tooltip.2=  Вимк - стандартна висота
+hb.options.CLOUD_HEIGHT.tooltip.3=  100%% - вище ліміту світу
+
+hb.options.TREES=Дерева
+hb.options.TREES.tooltip.1=Дерева
+hb.options.TREES.tooltip.2=  Стандартні - як в налаштуваннях відео
+hb.options.TREES.tooltip.3=  Швидкі - нижча якість, швидше
+hb.options.TREES.tooltip.4=  Розумні - вища якість, швидше
+hb.options.TREES.tooltip.5=  Красива - найвища якість, повільніше
+hb.options.TREES.tooltip.6=Швидкі дерева мають непрозоре листя.
+hb.options.TREES.tooltip.7=Красиві дерева мають прозорі листя.
+
+hb.options.RAIN=Дощ і сніг
+hb.options.RAIN.tooltip.1=Дощ і сніг
+hb.options.RAIN.tooltip.2=  Стандартні - як в налаштуваннях відео
+hb.options.RAIN.tooltip.3=  Швидкі - нижча якість, швидше
+hb.options.RAIN.tooltip.4=  Красиві - важкий дощ/сніг, повільніше
+hb.options.RAIN.tooltip.5=  Вимк - без дощу/снігу, найшвидше
+hb.options.RAIN.tooltip.6=Коли дощ вимкнено звуки крапель залишатимуться
+hb.options.RAIN.tooltip.7=
+
+hb.options.SKY=Небо
+hb.options.SKY.tooltip.1=Небо
+hb.options.SKY.tooltip.2=  Увімк - небо видиме, повільніше
+hb.options.SKY.tooltip.3=  Вимк - небо невидиме, швидше
+hb.options.SKY.tooltip.4=Коли небо вимкнене, сонце і місяць досі помітні.
+
+hb.options.STARS=Зірки
+hb.options.STARS.tooltip.1=Зірки
+hb.options.STARS.tooltip.2=  Увімк - зірки видимі, повільніше
+hb.options.STARS.tooltip.3=  Вимк - зірки невидимі, швидше
+
+hb.options.SUN_MOON=Сонце і місяць
+hb.options.SUN_MOON.tooltip.1=Сонце і місяць
+hb.options.SUN_MOON.tooltip.2=  Увімк - сонце і місяць видимі (базово)
+hb.options.SUN_MOON.tooltip.3=  Вимк - сонце і місяць невидимі (швидше)
+
+hb.options.SHOW_CAPES=Показувати плащі
+hb.options.SHOW_CAPES.tooltip.1=Показувати плащі
+hb.options.SHOW_CAPES.tooltip.2=  Увімк - показувати плащі (базово)
+hb.options.SHOW_CAPES.tooltip.3=  Вимк - не показувати плащі (швидше)
+
+hb.options.TRANSLUCENT_BLOCKS=Напівпрозорі блоки
+hb.options.TRANSLUCENT_BLOCKS.tooltip.1=Напівпрозорі блоки
+hb.options.TRANSLUCENT_BLOCKS.tooltip.2=  Красива - правильне змішування кольорів (базово)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.3=  Швидка - швидше змішування кольорів (швидше)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.4=Контролює змішування кольорів напівпрозорих блоків
+hb.options.TRANSLUCENT_BLOCKS.tooltip.5=з різним кольором (скло, вода, лід)
+hb.options.TRANSLUCENT_BLOCKS.tooltip.6=коли між ними є повітря.
+
+hb.options.HELD_ITEM_TOOLTIPS=Спливаючі підказки
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.1=Спливаючі підказки
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.2=  Увімк - показувати спливаючі підказки (базово)
+hb.options.HELD_ITEM_TOOLTIPS.tooltip.3=  Вимк - не показувати підказок
+
+hb.options.ADVANCED_TOOLTIPS=Розширені підказки
+hb.options.ADVANCED_TOOLTIPS.tooltip.1=Розширені спливаючі підказки
+hb.options.ADVANCED_TOOLTIPS.tooltip.2=  Увімк - показувати розширені підказки 
+hb.options.ADVANCED_TOOLTIPS.tooltip.3=  Вимк - не показувати розширені підказки (базово)
+hb.options.ADVANCED_TOOLTIPS.tooltip.4=Розширені підказки показують більше інформації про
+hb.options.ADVANCED_TOOLTIPS.tooltip.5=речі (id, міцність) і для налаштування шейдерів
+hb.options.ADVANCED_TOOLTIPS.tooltip.6=(id, джерело, стандартне значення)
+
+hb.options.DROPPED_ITEMS=Викинуті речі
+hb.options.DROPPED_ITEMS.tooltip.1=Викинуті речі
+hb.options.DROPPED_ITEMS.tooltip.2=  Базові - як у налаштуваннях відео
+hb.options.DROPPED_ITEMS.tooltip.3=  Швидка - викинуті речі у 2D, швидше
+hb.options.DROPPED_ITEMS.tooltip.4=  Красива - викинуті речі у 3D, повільніше
+
+options.entityShadows.tooltip.1=Тіні сутностей
+options.entityShadows.tooltip.2=  Увімк - показувати тіні сутностей
+options.entityShadows.tooltip.3=  Вимк - вимкнути тіні сутностей
+
+hb.options.VIGNETTE=Віньєтка
+hb.options.VIGNETTE.tooltip.1=Візуальний ефект який затемняє краї
+hb.options.VIGNETTE.tooltip.2=  Базово - як в налаштуваннях графіки
+hb.options.VIGNETTE.tooltip.3=  Швидка - віньтка вимкнена (швидша)
+hb.options.VIGNETTE.tooltip.4=  Красива - віньєтка увімкнена (повільніше)
+hb.options.VIGNETTE.tooltip.5=Віньєтка може зробити істотний вплив на FPS,
+hb.options.VIGNETTE.tooltip.6=особливо при грі у повноекранному режимі.
+hb.options.VIGNETTE.tooltip.7=Ефект не дуже важливий і легко
+hb.options.VIGNETTE.tooltip.8=може бути вимкненим
+
+hb.options.DYNAMIC_FOV=Динамічний FOV
+hb.options.DYNAMIC_FOV.tooltip.1=Динамічний FOV
+hb.options.DYNAMIC_FOV.tooltip.2=  Увімк - динамічний FOV увімкнуто(базово)
+hb.options.DYNAMIC_FOV.tooltip.3=  Вимк - динамічний FOV вимкнуто
+hb.options.DYNAMIC_FOV.tooltip.4=Змінює поле зору (FOV) коли літаємо, біжимо 
+hb.options.DYNAMIC_FOV.tooltip.5=чи натягуємо лук.
+
+hb.options.DYNAMIC_LIGHTS=Динамічне освітлення
+hb.options.DYNAMIC_LIGHTS.tooltip.1=Динамічне освітлення
+hb.options.DYNAMIC_LIGHTS.tooltip.2=  Вимк - без динамічного освітлення (базово)
+hb.options.DYNAMIC_LIGHTS.tooltip.3=  Швидка - швидке динамічне освітлення (оновлення кожні 500мс)
+hb.options.DYNAMIC_LIGHTS.tooltip.4=  Красива - красиве динамічне освітлення (оновлення в реальному часу)
+hb.options.DYNAMIC_LIGHTS.tooltip.5=Дозволяє випромінювати світло речам (факел, світлокамінь, т.д.)
+hb.options.DYNAMIC_LIGHTS.tooltip.6=щоб освітлювати все навкруги, коли знаходяться в руці,
+hb.options.DYNAMIC_LIGHTS.tooltip.7=вдягнуті іншим гравцем або викинуті на землю.
+
+# Performance
+
+hb.options.SMOOTH_FPS=Згладжене FPS
+hb.options.SMOOTH_FPS.tooltip.1=Стабілізує FPS промиванням графічних буферів драйвера
+hb.options.SMOOTH_FPS.tooltip.2=  Вимк - нема стабілізації, FPS може коливатись
+hb.options.SMOOTH_FPS.tooltip.3=  Увімк - FPS стабілізується
+hb.options.SMOOTH_FPS.tooltip.4=Цей параметр залежить від графічного драйвера
+hb.options.SMOOTH_FPS.tooltip.5=і його вплив не завжди помітний
+
+hb.options.SMOOTH_WORLD=Згладжений світ
+hb.options.SMOOTH_WORLD.tooltip.1=Прибирає фрізи при завантаження чатків.
+hb.options.SMOOTH_WORLD.tooltip.2=  Вимк - нема стабілізації, FPS може коливатись
+hb.options.SMOOTH_WORLD.tooltip.3=  Увімк - FPS стабілізується
+hb.options.SMOOTH_WORLD.tooltip.4=Стабілізує FPS лише на одиночній грі.
+hb.options.SMOOTH_WORLD.tooltip.5=
+
+hb.options.FAST_RENDER=Швидкий рендер
+hb.options.FAST_RENDER.tooltip.1=Швидки рендер
+hb.options.FAST_RENDER.tooltip.2= Вимк - стандартний рендер (базово)
+hb.options.FAST_RENDER.tooltip.3= Увімк - оптимізований рендер (швидший)
+hb.options.FAST_RENDER.tooltip.4=Використовує оптимізований алгоритм рендерингу
+hb.options.FAST_RENDER.tooltip.5=зменшує навантаження на процессор і збільшить FPS.
+
+hb.options.FAST_MATH=Швидка математика
+hb.options.FAST_MATH.tooltip.1=Швидка математика
+hb.options.FAST_MATH.tooltip.2= Вимк - стандартна математика(базово)
+hb.options.FAST_MATH.tooltip.3= Увімк - швидша математика
+hb.options.FAST_MATH.tooltip.4=Використовує оптимізовані функції sin() і cos(), що може краще
+hb.options.FAST_MATH.tooltip.5=утилізовувати кеш, і збільшити FPS.
+
+hb.options.CHUNK_UPDATES=Оновлення чанків
+hb.options.CHUNK_UPDATES.tooltip.1=Оновлення чанків
+hb.options.CHUNK_UPDATES.tooltip.2= 1 - Повільніше завантаження світу, більший FPS (базово)
+hb.options.CHUNK_UPDATES.tooltip.3= 3 - Швидше оновлення чанків, нижчий FPS
+hb.options.CHUNK_UPDATES.tooltip.4= 5 - Найшвидше оновлення чанків, найнижчий FPS
+hb.options.CHUNK_UPDATES.tooltip.5=Кількість оновленн чанку за один кадр,
+hb.options.CHUNK_UPDATES.tooltip.6=найбільші значення можуть зменшити FPS.
+
+hb.options.CHUNK_UPDATES_DYNAMIC=Динамічні оновлення
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.1=Динамічні оновлення чанків
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.2= Вимк - (базово) стандартне оновлення чанків за кадр
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.3= Увімк - більше оновленнь коли гравець стоїть
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.4=Динамічні оновлення змушують виконувати більше оновлень чанків
+hb.options.CHUNK_UPDATES_DYNAMIC.tooltip.5=коли гравець стоїть, світ провантажується швидше.
+
+hb.options.LAZY_CHUNK_LOADING=Ліниве завантаження чанків
+hb.options.LAZY_CHUNK_LOADING.tooltip.1=Ліниве завантаження чанків
+hb.options.LAZY_CHUNK_LOADING.tooltip.2= Вимк - базове серверне завантаження чанків
+hb.options.LAZY_CHUNK_LOADING.tooltip.3= Увімк - ліниве завантаження серверних чанків (плавніше)
+hb.options.LAZY_CHUNK_LOADING.tooltip.4=Згладжує завантаження чанків вбудований сервером
+hb.options.LAZY_CHUNK_LOADING.tooltip.5=розподіляючи чанки на декілька тіків.
+hb.options.LAZY_CHUNK_LOADING.tooltip.6=Вимкніть це якщо деякі частини світу не завантажуються правильно.
+hb.options.LAZY_CHUNK_LOADING.tooltip.7=Ефективно тільки для локальних світів і одноядрених процессорів.
+
+# Animations
+
+hb.options.animation.allOn=Всі Увімк
+hb.options.animation.allOff=Всі Вимк
+hb.options.animation.dynamic=Динамічні
+
+hb.options.ANIMATED_WATER=Анімація води
+hb.options.ANIMATED_LAVA=Анімація лави
+hb.options.ANIMATED_FIRE=Анімація вогню
+hb.options.ANIMATED_PORTAL=Анімація порталу
+hb.options.ANIMATED_REDSTONE=Анімація редстоуну
+hb.options.ANIMATED_EXPLOSION=Анімація вибуху
+hb.options.ANIMATED_FLAME=Анімація полум'я
+hb.options.ANIMATED_SMOKE=Анімація диму
+hb.options.VOID_PARTICLES=Частинки безодні
+hb.options.WATER_PARTICLES=Частинки води
+hb.options.RAIN_SPLASH=Краплі дощу
+hb.options.PORTAL_PARTICLES=Чатинки порталу
+hb.options.POTION_PARTICLES=Частинки зілль
+hb.options.DRIPPING_WATER_LAVA=Капаюча лава/вода
+hb.options.ANIMATED_TERRAIN=Анімація місцевості
+hb.options.ANIMATED_TEXTURES=Анімація текстур
+hb.options.FIREWORK_PARTICLES=Частинки феєрверку
+
+# Other
+
+hb.options.LAGOMETER=Лагометр
+hb.options.LAGOMETER.tooltip.1=Показує лагометр на екрані дебагу (F3).
+hb.options.LAGOMETER.tooltip.2=* Оранджевий - зберігання мусору в пам'яті
+hb.options.LAGOMETER.tooltip.3=* Блакитний - Тік
+hb.options.LAGOMETER.tooltip.4=* Синій - Заплановані дії
+hb.options.LAGOMETER.tooltip.5=* Фіолетовий - Завантаження чанків
+hb.options.LAGOMETER.tooltip.6=* Червоний - Оновлення чанків
+hb.options.LAGOMETER.tooltip.7=* Жовтий - Перевірка видимості
+hb.options.LAGOMETER.tooltip.8=* Зелений - Рендеринг місцевості
+
+hb.options.PROFILER=Профіль дебагу
+hb.options.PROFILER.tooltip.1=Профіль дебагу
+hb.options.PROFILER.tooltip.2=  Увімк - профіль дебагу увімкнуто, повільніше
+hb.options.PROFILER.tooltip.3=  Вимк - профіль дебагу вимкнуто, швидше
+hb.options.PROFILER.tooltip.4=Профіль дебагу збирає інформацію і показує її на
+hb.options.PROFILER.tooltip.5=екрані дебагу (F3)
+
+hb.options.WEATHER=Погода
+hb.options.WEATHER.tooltip.1=Погода
+hb.options.WEATHER.tooltip.2=  Увімк - погода активна, повільніше
+hb.options.WEATHER.tooltip.3=  Вимк - погода не активна, швидше
+hb.options.WEATHER.tooltip.4=Погода контролює дощі, грози і сніг.
+hb.options.WEATHER.tooltip.5=Працює лиш в ОДИНОЧНИХ СВІТАХ.
+
+hb.options.time.dayOnly=Тільки день
+hb.options.time.nightOnly=Тільки ніч
+
+hb.options.TIME=Час
+hb.options.TIME.tooltip.1=Час
+hb.options.TIME.tooltip.2= Базово - стандартний день
+hb.options.TIME.tooltip.3= Тільки день - тільки день
+hb.options.TIME.tooltip.4= Тільки ніч - тільки ніч
+hb.options.TIME.tooltip.5=Встановлення часу працює лиш для гравців у
+hb.options.TIME.tooltip.6=КРЕАТИВІ та у локальних світах.
+
+options.fullscreen.tooltip.1=Повноекранний режим
+options.fullscreen.tooltip.2=  Увімк - використовувати повноекранний режим
+options.fullscreen.tooltip.3=  Вимк - не використовувати повноекранний режим
+options.fullscreen.tooltip.4=В залежності від відеокарти, може
+options.fullscreen.tooltip.5=покращити продуктивність.
+
+hb.options.FULLSCREEN_MODE=Роздільна здатність
+hb.options.FULLSCREEN_MODE.tooltip.1=Роздільна здатність
+hb.options.FULLSCREEN_MODE.tooltip.2=  Базово - використовувати роздільну здатність монітора, повільніше
+hb.options.FULLSCREEN_MODE.tooltip.3=  WxH - використовувати власну роздільну якість, може бути швидше
+hb.options.FULLSCREEN_MODE.tooltip.4=Обрана якість буде використовуватись в повноекраному режимі (F11).
+hb.options.FULLSCREEN_MODE.tooltip.5=Найнижча якість завжди швидша.
+
+hb.options.SHOW_FPS=Показувати FPS
+hb.options.SHOW_FPS.tooltip.1=Показує компактно FPS і інформацію рендеру
+hb.options.SHOW_FPS.tooltip.2=  C: - чанків рендериться
+hb.options.SHOW_FPS.tooltip.3=  E: - сутностей в рендері + блоковано сутностей
+hb.options.SHOW_FPS.tooltip.4=  U: - чанків оновлюється
+hb.options.SHOW_FPS.tooltip.5=Компактне FPS показується лиш коли
+hb.options.SHOW_FPS.tooltip.6=екран дебагу вимкнено.
+
+hb.options.save.default=Базове (2с)
+hb.options.save.20s=20с
+hb.options.save.3min=3хв
+hb.options.save.30min=30хв
+
+hb.options.AUTOSAVE_TICKS=Автозбереження
+hb.options.AUTOSAVE_TICKS.tooltip.1=Інтервал автозбереження
+hb.options.AUTOSAVE_TICKS.tooltip.2=Базовий інтервал збереження (2с) НЕ РЕКОМЕНДОВАНО.
+hb.options.AUTOSAVE_TICKS.tooltip.3=Автозбереження спричиняє "фріз смерті".
+
+hb.options.SCREENSHOT_SIZE=Розмір знімку екрану
+hb.options.SCREENSHOT_SIZE.tooltip.1=Розмір скріншоту
+hb.options.SCREENSHOT_SIZE.tooltip.2=  Базовий - стандартний розмір скріншоту
+hb.options.SCREENSHOT_SIZE.tooltip.3=  2x-4x - власний розмір скріншоту
+hb.options.SCREENSHOT_SIZE.tooltip.4=Зйомка більшого скріншоту потребує більше пам'яті
+hb.options.SCREENSHOT_SIZE.tooltip.5=Не сумісне з швидким рендером і згладжуванням
+hb.options.SCREENSHOT_SIZE.tooltip.6=Потребує підтримку фреймбуфера GPU.

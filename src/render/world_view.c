@@ -1643,6 +1643,27 @@ static int colorizer_lookup(Texture *tex, float temp, float humid, int fallback_
     return ((int)p[0] << 16) | ((int)p[1] << 8) | (int)p[2];
 }
 
+static int java_swamp_tint_color(int base_rgb) {
+    /* BiomeGenSwamp 1.2.5: ((base & 16711422) + 5115470) / 2. */
+    return ((base_rgb & 0xFEFEFE) + 0x4E0E4E) / 2;
+}
+
+static int java_biome_water_color_for_id(int biome_id) {
+    if (biome_id == BIOME_SWAMPLAND && hptibine_swamp_colors_enabled()) return 0xE0FFAE;
+    return 0xFFFFFF;
+}
+
+static int rgb_average9(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7, int a8) {
+    int vals[9] = { a0, a1, a2, a3, a4, a5, a6, a7, a8 };
+    int r = 0, g = 0, b = 0;
+    for (int i = 0; i < 9; ++i) {
+        r += (vals[i] >> 16) & 255;
+        g += (vals[i] >> 8) & 255;
+        b += vals[i] & 255;
+    }
+    return ((r / 9) << 16) | ((g / 9) << 8) | (b / 9);
+}
+
 typedef struct WorldBiomeColorCache {
     BiomeManager mgr;
     int mgr_ready;
@@ -1650,10 +1671,21 @@ typedef struct WorldBiomeColorCache {
     int chunk_x;
     int chunk_z;
     unsigned char valid[16 * 16];
+    int biome_id[16 * 16];
     int grass[16 * 16];
     int foliage[16 * 16];
+    int water[16 * 16];
     float temp[16 * 16];
     float humid[16 * 16];
+    int swamp_colors;
+    int custom_colors;
+    unsigned char *grass_rgba;
+    unsigned char *foliage_rgba;
+    unsigned char *water_rgba;
+    unsigned char *pine_rgba;
+    unsigned char *birch_rgba;
+    unsigned char *swampgrass_rgba;
+    unsigned char *swampfoliage_rgba;
 } WorldBiomeColorCache;
 
 static PEX_THREAD_LOCAL WorldBiomeColorCache g_world_biome_color_cache;
@@ -1667,11 +1699,38 @@ static void world_biome_color_cache_reset_chunk(WorldBiomeColorCache *c, int chu
 static void world_biome_color_cache_prepare(WorldBiomeColorCache *c, int x, int z) {
     int cx = floor_div16(x);
     int cz = floor_div16(z);
+    int swamp_colors = hptibine_swamp_colors_enabled();
+    int custom_colors = hptibine_custom_colors_enabled();
+    unsigned char *grass_rgba = tex_grasscolor.rgba;
+    unsigned char *foliage_rgba = tex_foliagecolor.rgba;
+    unsigned char *water_rgba = tex_watercolor.rgba;
+    unsigned char *pine_rgba = tex_pinecolor.rgba;
+    unsigned char *birch_rgba = tex_birchcolor.rgba;
+    unsigned char *swampgrass_rgba = tex_swampgrasscolor.rgba;
+    unsigned char *swampfoliage_rgba = tex_swampfoliagecolor.rgba;
+    int color_state_changed = c->swamp_colors != swamp_colors || c->custom_colors != custom_colors ||
+                              c->grass_rgba != grass_rgba || c->foliage_rgba != foliage_rgba ||
+                              c->water_rgba != water_rgba || c->pine_rgba != pine_rgba || c->birch_rgba != birch_rgba ||
+                              c->swampgrass_rgba != swampgrass_rgba || c->swampfoliage_rgba != swampfoliage_rgba;
     if (!c->mgr_ready || c->seed != g_world_seed) {
         if (c->mgr_ready) { free(c->mgr.temp); memset(&c->mgr, 0, sizeof(c->mgr)); }
         biome_manager_init(&c->mgr, g_world_seed);
         c->seed = g_world_seed;
         c->mgr_ready = 1;
+        c->chunk_x = 0x7fffffff;
+        c->chunk_z = 0x7fffffff;
+        memset(c->valid, 0, sizeof(c->valid));
+    }
+    if (color_state_changed) {
+        c->swamp_colors = swamp_colors;
+        c->custom_colors = custom_colors;
+        c->grass_rgba = grass_rgba;
+        c->foliage_rgba = foliage_rgba;
+        c->water_rgba = water_rgba;
+        c->pine_rgba = pine_rgba;
+        c->birch_rgba = birch_rgba;
+        c->swampgrass_rgba = swampgrass_rgba;
+        c->swampfoliage_rgba = swampfoliage_rgba;
         c->chunk_x = 0x7fffffff;
         c->chunk_z = 0x7fffffff;
         memset(c->valid, 0, sizeof(c->valid));
@@ -1692,10 +1751,30 @@ static void biome_temp_humid_at(int x, int z, float *temp, float *humid) {
         for (int i = 0; i < 16 * 16; ++i) {
             float t = biomes[i].temperature;
             float h = biomes[i].rainfall;
+            int biome_id = biomes[i].id;
+            int grass = colorizer_lookup(&tex_grasscolor, t, h, 0x6FAD3A);
+            int foliage = colorizer_lookup(&tex_foliagecolor, t, h, 0x59A83A);
+            if (biome_id == BIOME_SWAMPLAND && hptibine_swamp_colors_enabled()) {
+                int swamp_grass_fallback = java_swamp_tint_color(grass);
+                int swamp_foliage_fallback = java_swamp_tint_color(foliage);
+                if (hptibine_custom_colors_enabled() && tex_swampgrasscolor.rgba)
+                    grass = colorizer_lookup(&tex_swampgrasscolor, t, h, swamp_grass_fallback);
+                else
+                    grass = swamp_grass_fallback;
+                if (hptibine_custom_colors_enabled() && tex_swampfoliagecolor.rgba)
+                    foliage = colorizer_lookup(&tex_swampfoliagecolor, t, h, swamp_foliage_fallback);
+                else
+                    foliage = swamp_foliage_fallback;
+            }
+            c->biome_id[i] = biome_id;
             c->temp[i] = t;
             c->humid[i] = h;
-            c->grass[i] = colorizer_lookup(&tex_grasscolor, t, h, 0x6FAD3A);
-            c->foliage[i] = colorizer_lookup(&tex_foliagecolor, t, h, 0x59A83A);
+            c->grass[i] = grass;
+            c->foliage[i] = foliage;
+            int water = java_biome_water_color_for_id(biome_id);
+            if (hptibine_custom_colors_enabled() && tex_watercolor.rgba)
+                water = colorizer_lookup(&tex_watercolor, t, h, water);
+            c->water[i] = water;
             c->valid[i] = 1;
         }
     }
@@ -1703,7 +1782,7 @@ static void biome_temp_humid_at(int x, int z, float *temp, float *humid) {
     *humid = c->humid[idx];
 }
 
-static int java_grass_color_at(int x, int z) {
+static int java_raw_grass_color_at(int x, int z) {
     WorldBiomeColorCache *c = &g_world_biome_color_cache;
     world_biome_color_cache_prepare(c, x, z);
     int lx = x - c->chunk_x * 16;
@@ -1716,7 +1795,7 @@ static int java_grass_color_at(int x, int z) {
     return c->grass[idx];
 }
 
-static int java_foliage_color_at(int x, int z) {
+static int java_raw_foliage_color_at(int x, int z) {
     WorldBiomeColorCache *c = &g_world_biome_color_cache;
     world_biome_color_cache_prepare(c, x, z);
     int lx = x - c->chunk_x * 16;
@@ -1727,6 +1806,78 @@ static int java_foliage_color_at(int x, int z) {
         biome_temp_humid_at(x, z, &t, &h);
     }
     return c->foliage[idx];
+}
+
+static int java_grass_color_at(int x, int z) {
+    if (!hptibine_smooth_biomes_enabled()) return java_raw_grass_color_at(x, z);
+    /* the custom colorizer.getSmoothColorMultiplier() averages the
+       surrounding 3x3 biome color samples when Smooth Biomes is enabled. */
+    return rgb_average9(java_raw_grass_color_at(x - 1, z - 1), java_raw_grass_color_at(x, z - 1), java_raw_grass_color_at(x + 1, z - 1),
+                        java_raw_grass_color_at(x - 1, z),     java_raw_grass_color_at(x, z),     java_raw_grass_color_at(x + 1, z),
+                        java_raw_grass_color_at(x - 1, z + 1), java_raw_grass_color_at(x, z + 1), java_raw_grass_color_at(x + 1, z + 1));
+}
+
+static int java_raw_foliage_color_for_meta_at(int x, int z, int meta) {
+    int type = meta & 3;
+    float t = 0.0f, h = 0.0f;
+    if (type == BLOCK_META_WOOD_SPRUCE) {
+        if (hptibine_custom_colors_enabled() && tex_pinecolor.rgba) {
+            biome_temp_humid_at(x, z, &t, &h);
+            return colorizer_lookup(&tex_pinecolor, t, h, 0x619961);
+        }
+        return 0x619961; /* ColorizerFoliage.getFoliageColorPine() */
+    }
+    if (type == BLOCK_META_WOOD_BIRCH) {
+        if (hptibine_custom_colors_enabled() && tex_birchcolor.rgba) {
+            biome_temp_humid_at(x, z, &t, &h);
+            return colorizer_lookup(&tex_birchcolor, t, h, 0x80A755);
+        }
+        return 0x80A755; /* ColorizerFoliage.getFoliageColorBirch() */
+    }
+    return java_raw_foliage_color_at(x, z);
+}
+
+static int java_foliage_color_for_meta_at(int x, int z, int meta) {
+    if (!hptibine_smooth_biomes_enabled()) return java_raw_foliage_color_for_meta_at(x, z, meta);
+    return rgb_average9(java_raw_foliage_color_for_meta_at(x - 1, z - 1, meta), java_raw_foliage_color_for_meta_at(x, z - 1, meta), java_raw_foliage_color_for_meta_at(x + 1, z - 1, meta),
+                        java_raw_foliage_color_for_meta_at(x - 1, z, meta),     java_raw_foliage_color_for_meta_at(x, z, meta),     java_raw_foliage_color_for_meta_at(x + 1, z, meta),
+                        java_raw_foliage_color_for_meta_at(x - 1, z + 1, meta), java_raw_foliage_color_for_meta_at(x, z + 1, meta), java_raw_foliage_color_for_meta_at(x + 1, z + 1, meta));
+}
+
+static int java_foliage_color_at(int x, int z) {
+    return java_foliage_color_for_meta_at(x, z, 0);
+}
+
+static void world_set_shade(float shade);
+static void world_set_color_shade(int rgb, float shade);
+
+static int java_raw_water_color_at(int x, int z) {
+    WorldBiomeColorCache *c = &g_world_biome_color_cache;
+    world_biome_color_cache_prepare(c, x, z);
+    int lx = x - c->chunk_x * 16;
+    int lz = z - c->chunk_z * 16;
+    int idx = lz * 16 + lx;
+    if (!c->valid[idx]) {
+        float t, h;
+        biome_temp_humid_at(x, z, &t, &h);
+    }
+    return c->water[idx];
+}
+
+static int java_water_color_at(int x, int z) {
+    if (hptibine_custom_colors_enabled() && tex_watercolor.rgba && !hptibine_smooth_biomes_enabled())
+        return java_raw_water_color_at(x, z);
+    /* Vanilla BlockFluid.colorMultiplier averages 3x3 biome water colors.
+       HptiBine also averages custom watercolorX.png through
+       CustomColorizer.getSmoothColor() while Smooth Biomes is enabled. */
+    return rgb_average9(java_raw_water_color_at(x - 1, z - 1), java_raw_water_color_at(x, z - 1), java_raw_water_color_at(x + 1, z - 1),
+                        java_raw_water_color_at(x - 1, z),     java_raw_water_color_at(x, z),     java_raw_water_color_at(x + 1, z),
+                        java_raw_water_color_at(x - 1, z + 1), java_raw_water_color_at(x, z + 1), java_raw_water_color_at(x + 1, z + 1));
+}
+
+static void world_set_liquid_shade(int is_water, int x, int z, float shade) {
+    if (is_water) world_set_color_shade(java_water_color_at(x, z), shade);
+    else world_set_shade(shade);
 }
 
 static int java_block_normal_cube_at(int x, int y, int z) {
@@ -3913,7 +4064,7 @@ static float world_face_base_shade(int face) {
 
 static int world_face_tint_rgb(int id, int face) {
     if (id == BLOCK_GRASS && face == 1) return java_grass_color_at(g_world_style_x, g_world_style_z);
-    if (id == BLOCK_LEAVES) return java_foliage_color_at(g_world_style_x, g_world_style_z);
+    if (id == BLOCK_LEAVES) return java_foliage_color_for_meta_at(g_world_style_x, g_world_style_z, flat_get_meta(g_world_style_x, g_world_style_y, g_world_style_z));
     return 0xFFFFFF;
 }
 
@@ -4180,7 +4331,7 @@ static void world_face_style(int id, int face, int *tile) {
 
     if (id == BLOCK_WATER || id == BLOCK_STILL_WATER) {
         *tile = (face == 0 || face == 1) ? water_top_tile() : water_side_tile();
-        world_set_shade(shade);
+        world_set_color_shade(java_water_color_at(g_world_style_x, g_world_style_z), shade);
         return;
     }
 
@@ -4276,7 +4427,7 @@ static void world_face_style(int id, int face, int *tile) {
         /* BlockLeaves.setGraphicsLevel(): Fancy/minimal-Fancy terrain uses base
            texture 52; the legacy opaque Fast path uses texture 53. */
         *tile = flat_fancy_leaf_texture_enabled() ? 52 : 53;
-        world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
+        world_set_color_shade(java_foliage_color_for_meta_at(g_world_style_x, g_world_style_z, flat_get_meta(g_world_style_x, g_world_style_y, g_world_style_z)), shade);
         return;
     }
     if (id == BLOCK_SPONGE) { *tile = 48; world_set_shade(shade); return; }
@@ -4323,6 +4474,9 @@ static void world_face_style(int id, int face, int *tile) {
     world_set_shade(shade);
 }
 
+static int hptibine_side_grass_texture(int x, int y, int z, int face, int tile_num);
+static int hptibine_side_snow_grass_texture(int x, int y, int z, int face);
+
 static void world_face_style_at(int id, int x, int y, int z, int face, int *tile) {
     world_style_set_pos(x, y, z);
     world_light_set_pos_for_face(x, y, z, face);
@@ -4331,12 +4485,23 @@ static void world_face_style_at(int id, int x, int y, int z, int face, int *tile
        a visual overlay choice; the block underneath remains grass. */
     if (id == BLOCK_GRASS && face >= 2 && face <= 5) {
         int above = flat_get_block(x, y + 1, z);
+        float shade = (face == 2 || face == 3) ? 0.80f : 0.60f;
         if (above == BLOCK_SNOW_LAYER || above == BLOCK_SNOW_BLOCK) {
-            float shade = (face == 2 || face == 3) ? 0.80f : 0.60f;
-            *tile = 68;
+            *tile = hptibine_side_snow_grass_texture(x, y, z, face);
             world_set_shade(shade);
             return;
+        } else {
+            *tile = hptibine_side_grass_texture(x, y, z, face, 3);
+            if (*tile == 0) world_set_color_shade(java_grass_color_at(x, z), shade);
+            else world_set_shade(shade);
+            return;
         }
+    }
+    if (id == BLOCK_MYCELIUM && face >= 2 && face <= 5) {
+        float shade = (face == 2 || face == 3) ? 0.80f : 0.60f;
+        *tile = hptibine_side_grass_texture(x, y, z, face, 77);
+        world_set_shade(shade);
+        return;
     }
     {
         int meta = flat_get_meta(x, y, z);
@@ -4344,7 +4509,8 @@ static void world_face_style_at(int id, int x, int y, int z, int face, int *tile
         if (tile_idx >= 0) {
             float shade = world_face_base_shade(face);
             *tile = tile_idx;
-            if (id == BLOCK_LEAVES || id == BLOCK_VINE) world_set_color_shade(java_foliage_color_at(x, z), shade);
+            if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_for_meta_at(x, z, meta), shade);
+            else if (id == BLOCK_VINE) world_set_color_shade(java_foliage_color_at(x, z), shade);
             else if (id == BLOCK_TALL_GRASS || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(x, z), shade);
             else world_set_shade(shade);
             return;
@@ -4404,11 +4570,116 @@ static void draw_snow_layer_block(float x, float y, float z) {
     glColor4f(1, 1, 1, 1);
 }
 
+
+/* HptiBine 1.2.5 Better Snow: visual-only fake Block.snow rendering around
+   selected non-cube render types.  The trigger is exactly the HD C6 rule:
+   one horizontal neighbour must be the snow layer block (ID 78), and the block
+   below must be an opaque cube.  Snow blocks (ID 80) do not trigger it. */
+static int hptibine_has_snow_neighbours(int x, int y, int z) {
+    if (!hptibine_better_snow_enabled()) return 0;
+    if (flat_get_block(x - 1, y, z) != BLOCK_SNOW_LAYER &&
+        flat_get_block(x + 1, y, z) != BLOCK_SNOW_LAYER &&
+        flat_get_block(x, y, z - 1) != BLOCK_SNOW_LAYER &&
+        flat_get_block(x, y, z + 1) != BLOCK_SNOW_LAYER) return 0;
+    return java_block_normal_cube_at(x, y - 1, z);
+}
+
+static int hptibine_better_snow_cross_target(int id) {
+    return id == BLOCK_SAPLING || id == BLOCK_YELLOW_FLOWER || id == BLOCK_RED_ROSE ||
+           id == BLOCK_BROWN_MUSHROOM || id == BLOCK_RED_MUSHROOM ||
+           id == BLOCK_REEDS || id == BLOCK_TALL_GRASS || id == BLOCK_DEAD_BUSH;
+}
+
+static int hptibine_better_snow_side_exposed(int x, int y, int z, int face) {
+    if (face == 1) return 1;
+    if (face == 0) return 0;
+    return !block_occludes_render_face(neighbor_for_face(x, y, z, face));
+}
+
+static void emit_better_snow_face_float(int x, int y, int z, float h, int face) {
+    float x0 = (float)x, x1 = (float)x + 1.0f;
+    float y0 = (float)y, y1 = (float)y + h;
+    float z0 = (float)z, z1 = (float)z + 1.0f;
+    float u0, v0, u1, v1;
+    terrain_tile_uv(66, &u0, &v0, &u1, &v1);
+    if (face != 1) {
+        float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+        v1 = v0 + (h * 16.0f / th);
+    }
+    world_style_set_pos(x, y, z);
+    world_light_set_pos_for_face(x, y, z, face);
+
+    if (face == 1) {
+        world_set_shade(1.0f);
+        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
+    } else if (face == 2) {
+        world_set_shade(0.80f);
+        world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+    } else if (face == 3) {
+        world_set_shade(0.80f);
+        world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+    } else if (face == 4) {
+        world_set_shade(0.60f);
+        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+    } else if (face == 5) {
+        world_set_shade(0.60f);
+        world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+    }
+}
+
+static void emit_better_snow_overlay_if(int x, int y, int z, float h) {
+    if (!hptibine_has_snow_neighbours(x, y, z)) return;
+    for (int face = 1; face < 6; ++face) {
+        if (hptibine_better_snow_side_exposed(x, y, z, face)) emit_better_snow_face_float(x, y, z, h, face);
+    }
+}
+
+static void draw_better_snow_overlay_if(int x, int y, int z, float h) {
+    if (!hptibine_has_snow_neighbours(x, y, z)) return;
+    glBegin(GL_QUADS);
+    emit_better_snow_overlay_if(x, y, z, h);
+    glEnd();
+    glColor4f(1, 1, 1, 1);
+}
+
+static void hptibine_side_offset_for_face(int face, int *dx, int *dz) {
+    *dx = 0; *dz = 0;
+    if (face == 2) *dz = -1;
+    else if (face == 3) *dz = 1;
+    else if (face == 4) *dx = -1;
+    else if (face == 5) *dx = 1;
+}
+
+static int hptibine_side_grass_texture(int x, int y, int z, int face, int tile_num) {
+    int full_tile = 0;
+    int dest_block = BLOCK_GRASS;
+    if (!hptibine_better_grass_enabled()) return tile_num;
+    if (tile_num == 77) { full_tile = 78; dest_block = BLOCK_MYCELIUM; }
+    if (hptibine_better_grass_fancy_enabled()) {
+        int dx, dz;
+        hptibine_side_offset_for_face(face, &dx, &dz);
+        if (flat_get_block(x + dx, y - 1, z + dz) != dest_block) return tile_num;
+    }
+    return full_tile;
+}
+
+static int hptibine_side_snow_grass_texture(int x, int y, int z, int face) {
+    if (!hptibine_better_grass_enabled()) return 68;
+    if (hptibine_better_grass_fancy_enabled()) {
+        int dx, dz, id;
+        hptibine_side_offset_for_face(face, &dx, &dz);
+        id = flat_get_block(x + dx, y, z + dz);
+        if (id != BLOCK_SNOW_LAYER && id != BLOCK_SNOW_BLOCK) return 68;
+    }
+    return 66;
+}
+
 static int grass_side_overlay_face_needed(int x, int y, int z, int face) {
     if (!flat_fancy_grass_overlay_enabled()) return 0;
     if (face < 2 || face > 5) return 0;
     int above = flat_get_block(x, y + 1, z);
     if (above == BLOCK_SNOW_LAYER || above == BLOCK_SNOW_BLOCK) return 0;
+    if (hptibine_side_grass_texture(x, y, z, face, 3) != 3) return 0;
     return flat_face_exposed_for_block(BLOCK_GRASS, x, y, z, face);
 }
 
@@ -4652,7 +4923,8 @@ static void emit_cuboid_block_faces_lit(int id, float x0, float y0, float z0, fl
         if (tile_idx >= 0) {
             float shade = world_face_base_shade(face);
             tile = tile_idx;
-            if (id == BLOCK_LEAVES || id == BLOCK_VINE) world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
+            if (id == BLOCK_LEAVES) world_set_color_shade(java_foliage_color_for_meta_at(g_world_style_x, g_world_style_z, meta), shade);
+            else if (id == BLOCK_VINE) world_set_color_shade(java_foliage_color_at(g_world_style_x, g_world_style_z), shade);
             else if (id == BLOCK_TALL_GRASS || id == BLOCK_MYCELIUM) world_set_color_shade(java_grass_color_at(g_world_style_x, g_world_style_z), shade);
             else world_set_shade(shade);
         } else {
@@ -5354,8 +5626,8 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_VINE) { draw_vine_block_model(x, y, z); return; }
     if (id == BLOCK_SLAB) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,0.5f,1); return; }
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) { draw_stairs_block_model(id, x, y, z); return; }
-    if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); return; }
-    if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0,0.5625f,1,1); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0.4375f,1,1,0.5625f); return; }
+    if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) { draw_fence_block_model(id, x, y, z); draw_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); return; }
+    if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.4375f,0,0,0.5625f,1,1); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0.4375f,1,1,0.5625f); draw_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); return; }
     if (id == BLOCK_LILY_PAD) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, block_texture_resolve(id, flat_get_meta(x,y,z), 1)); glEnd(); return; }
     if (id == BLOCK_PORTAL) {
         float u0, v0, u1, v1;
@@ -5427,8 +5699,8 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_END_PORTAL_FRAME) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0,0,0,1,13.0f/16.0f,1); return; }
     if (id == BLOCK_CACTUS) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,1,0.9375f); return; }
     if (id == BLOCK_STONE_PRESSURE_PLATE || id == BLOCK_WOOD_PRESSURE_PLATE) { float h = (flat_get_meta(x,y,z) & 1) ? (1.0f/32.0f) : (1.0f/16.0f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.0625f,0,0.0625f,0.9375f,h,0.9375f); return; }
-    if (id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_REDSTONE_WIRE) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, (id == BLOCK_RAILS) ? 128 : (id == BLOCK_POWERED_RAIL ? 179 : (id == BLOCK_DETECTOR_RAIL ? 195 : 84))); glEnd(); return; }
-    if (id == BLOCK_SIGN_POST) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.25f,0.55f,0.4375f,0.75f,1.0f,0.5625f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.46875f,0.0f,0.46875f,0.53125f,0.55f,0.53125f); return; }
+    if (id == BLOCK_RAILS || id == BLOCK_POWERED_RAIL || id == BLOCK_DETECTOR_RAIL || id == BLOCK_REDSTONE_WIRE) { glBegin(GL_QUADS); emit_flat_quad_tile((float)x, (float)y + 0.01f, (float)z, (float)x+1, (float)z+1, (id == BLOCK_RAILS) ? 128 : (id == BLOCK_POWERED_RAIL ? 179 : (id == BLOCK_DETECTOR_RAIL ? 195 : 84))); glEnd(); draw_better_snow_overlay_if(x, y, z, id == BLOCK_REDSTONE_WIRE ? 0.01f : 0.05f); return; }
+    if (id == BLOCK_SIGN_POST) { draw_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.25f,0.55f,0.4375f,0.75f,1.0f,0.5625f); draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.46875f,0.0f,0.46875f,0.53125f,0.55f,0.53125f); return; }
     if (id == BLOCK_WALL_SIGN) { draw_cuboid_model_for_block(id, (float)x, (float)y, (float)z, 0.25f,0.35f,0.02f,0.75f,0.85f,0.10f); return; }
     if (id == BLOCK_STONE_BUTTON) {
         BlockBounds bb = block_bounds_for_selection(id, x, y, z);
@@ -5437,8 +5709,8 @@ static void draw_special_block_model(int id, int x, int y, int z) {
                                     bb.x1 - (float)x, bb.y1 - (float)y, bb.z1 - (float)z);
         return;
     }
-    if (id == BLOCK_LEVER) { draw_lever_block_model(x, y, z); return; }
-    if (id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) { draw_torch_block_model(id, x, y, z); return; }
+    if (id == BLOCK_LEVER) { draw_lever_block_model(x, y, z); draw_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); return; }
+    if (id == BLOCK_TORCH || id == BLOCK_REDSTONE_TORCH_OFF || id == BLOCK_REDSTONE_TORCH_ON) { draw_torch_block_model(id, x, y, z); if (id != BLOCK_TORCH) { int side = flat_get_meta(x, y, z) & 7; if (side < 1 || side > 4) draw_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); } return; }
 }
 
 
@@ -5537,7 +5809,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
 
     if (liquid_face_exposed(x, y, z, 1)) {
         world_light_set_pos_for_face(x, y, z, 1);
-        world_set_shade(1.0f);
+        world_set_liquid_shade(is_water, x, z, 1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
         liquid_top_uvs_source(top_tile, liquid_flow_angle_at(x, y, z, is_water),
                               &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
@@ -5549,7 +5821,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
 
     if (liquid_face_exposed(x, y, z, 0)) {
         world_light_set_pos_for_face(x, y, z, 0);
-        world_set_shade(0.5f);
+        world_set_liquid_shade(is_water, x, z, 0.5f);
         terrain_tile_uv(top_tile, &u0, &v0, &u1, &v1);
         world_tex_vertex(x0, y0, z1, u0, v0);
         world_tex_vertex(x1, y0, z1, u1, v0);
@@ -5561,7 +5833,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h10, h00, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 2);
-        world_set_shade(0.8f);
+        world_set_liquid_shade(is_water, x, z, 0.8f);
         world_tex_vertex(x1, (float)y + h10, z0, vu0, va);
         world_tex_vertex(x0, (float)y + h00, z0, vu1, vb);
         world_tex_vertex(x0, y0, z0, vu1, vbot);
@@ -5571,7 +5843,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h01, h11, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 3);
-        world_set_shade(0.8f);
+        world_set_liquid_shade(is_water, x, z, 0.8f);
         world_tex_vertex(x0, (float)y + h01, z1, vu0, va);
         world_tex_vertex(x1, (float)y + h11, z1, vu1, vb);
         world_tex_vertex(x1, y0, z1, vu1, vbot);
@@ -5581,7 +5853,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h00, h01, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 4);
-        world_set_shade(0.6f);
+        world_set_liquid_shade(is_water, x, z, 0.6f);
         world_tex_vertex(x0, (float)y + h00, z0, vu0, va);
         world_tex_vertex(x0, (float)y + h01, z1, vu1, vb);
         world_tex_vertex(x0, y0, z1, vu1, vbot);
@@ -5591,7 +5863,7 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h11, h10, &vu0, &vu1, &va, &vb, &vbot);
         world_light_set_pos_for_face(x, y, z, 5);
-        world_set_shade(0.6f);
+        world_set_liquid_shade(is_water, x, z, 0.6f);
         world_tex_vertex(x1, (float)y + h11, z1, vu0, va);
         world_tex_vertex(x1, (float)y + h10, z0, vu1, vb);
         world_tex_vertex(x1, y0, z0, vu1, vbot);
@@ -5619,7 +5891,7 @@ static void draw_liquid_block(int id, float x, float y, float z) {
     world_style_set_pos(ix, iy, iz);
 
     if (liquid_face_exposed(ix, iy, iz, 1)) {
-        world_set_shade(1.0f);
+        world_set_liquid_shade(is_water, ix, iz, 1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
         liquid_top_uvs_source(top_tile, liquid_flow_angle_at(ix, iy, iz, is_water),
                               &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
@@ -5632,7 +5904,7 @@ static void draw_liquid_block(int id, float x, float y, float z) {
     }
 
     if (liquid_face_exposed(ix, iy, iz, 0)) {
-        world_set_shade(0.5f);
+        world_set_liquid_shade(is_water, ix, iz, 0.5f);
         terrain_tile_uv(top_tile, &u0, &v0, &u1, &v1);
         glBegin(GL_QUADS);
         world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
@@ -5640,7 +5912,7 @@ static void draw_liquid_block(int id, float x, float y, float z) {
     }
 
     glBegin(GL_QUADS);
-    world_set_shade(0.8f);
+    world_set_liquid_shade(is_water, ix, iz, 0.8f);
     if (liquid_face_exposed(ix, iy, iz, 2)) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h10, h00, &vu0, &vu1, &va, &vb, &vbot);
@@ -5654,13 +5926,13 @@ static void draw_liquid_block(int id, float x, float y, float z) {
     if (liquid_face_exposed(ix, iy, iz, 4)) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h00, h01, &vu0, &vu1, &va, &vb, &vbot);
-        world_set_shade(0.6f);
+        world_set_liquid_shade(is_water, ix, iz, 0.6f);
         world_tex_vertex(x0,y+h00,z0,vu0,va); world_tex_vertex(x0,y+h01,z1,vu1,vb); world_tex_vertex(x0,y0,z1,vu1,vbot); world_tex_vertex(x0,y0,z0,vu0,vbot);
     }
     if (liquid_face_exposed(ix, iy, iz, 5)) {
         float vu0, vu1, va, vb, vbot;
         liquid_side_uvs_source(side_tile, h11, h10, &vu0, &vu1, &va, &vb, &vbot);
-        world_set_shade(0.6f);
+        world_set_liquid_shade(is_water, ix, iz, 0.6f);
         world_tex_vertex(x1,y+h11,z1,vu0,va); world_tex_vertex(x1,y+h10,z0,vu1,vb); world_tex_vertex(x1,y0,z0,vu1,vbot); world_tex_vertex(x1,y0,z1,vu0,vbot);
     }
     glEnd();
@@ -5675,7 +5947,7 @@ static void draw_world_block_exposed(int id, int x, int y, int z) {
     if (id == BLOCK_SNOW_LAYER) { glBegin(GL_QUADS); emit_snow_layer_block(x, y, z); glEnd(); glColor4f(1,1,1,1); return; }
     if (block_is_liquid(id) && flat_separate_liquid_pass_enabled()) { draw_liquid_block(id, (float)x, (float)y, (float)z); return; }
     if (block_uses_special_model(id)) { draw_special_block_model(id, x, y, z); return; }
-    if (block_uses_cross_plant_model(id)) { draw_cross_plant_block(id, (float)x, (float)y, (float)z); return; }
+    if (block_uses_cross_plant_model(id)) { draw_cross_plant_block(id, (float)x, (float)y, (float)z); if (hptibine_better_snow_cross_target(id)) draw_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); return; }
     for (int face = 0; face < 6; face++) {
         if (flat_face_exposed_for_block(id, x, y, z, face)) draw_world_block_face(id, x, y, z, face);
     }
@@ -5777,6 +6049,7 @@ static void rebuild_flat_chunk_list(int cx, int cz) {
                     if (!id) continue;
                     if (block_uses_cross_plant_model(id)) {
                         emit_cross_plant_block(id, x, y, z);
+                        if (hptibine_better_snow_cross_target(id)) emit_better_snow_overlay_if(x, y, z, 2.0f / 16.0f);
                         continue;
                     }
                     if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
@@ -6008,7 +6281,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 for (int x = x0; x <= x1; x++) {
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
-                    if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); has0 = 1; continue; }
+                    if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); if (hptibine_better_snow_cross_target(id)) emit_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); has0 = 1; continue; }
                     if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
@@ -6143,7 +6416,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
                 for (int x = x0; x <= x1; x++) {
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
-                    if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); has0 = 1; continue; }
+                    if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); if (hptibine_better_snow_cross_target(id)) emit_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); has0 = 1; continue; }
                     if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }

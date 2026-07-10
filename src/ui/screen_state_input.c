@@ -898,14 +898,14 @@ static void rebuild_screen(void) {
         }
         {
             int nav_y = y0 + 22 * ((ARRAY_COUNT(video_options) + ARRAY_COUNT(hpti_video_options) + 1) >> 1) + 4;
-            add_button_full(HPTI_NAV_DETAILS,     g_gui_w / 2 - 155, nav_y,      150, 20, "Details...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_QUALITY,     g_gui_w / 2 + 5,   nav_y,      150, 20, "Quality...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_ANIMATIONS,  g_gui_w / 2 - 155, nav_y + 22, 150, 20, "Animations...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_PERFORMANCE, g_gui_w / 2 + 5,   nav_y + 22, 150, 20, "Performance...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_TEXPACKS,    g_gui_w / 2 - 155, nav_y + 44, 150, 20, "Texture Packs...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_OTHER,       g_gui_w / 2 + 5,   nav_y + 44, 150, 20, "Other...", BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_DETAILS,     g_gui_w / 2 - 155, nav_y,      150, 20, tr_key_default("hb.options.details", "Details..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_QUALITY,     g_gui_w / 2 + 5,   nav_y,      150, 20, tr_key_default("hb.options.quality", "Quality..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_ANIMATIONS,  g_gui_w / 2 - 155, nav_y + 22, 150, 20, tr_key_default("hb.options.animations", "Animations..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_PERFORMANCE, g_gui_w / 2 + 5,   nav_y + 22, 150, 20, tr_key_default("hb.options.performance", "Performance..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_TEXPACKS,    g_gui_w / 2 - 155, nav_y + 44, 150, 20, tr_key_default("texturePack.title", "Texture Packs..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_OTHER,       g_gui_w / 2 + 5,   nav_y + 44, 150, 20, tr_key_default("hb.options.other", "Other..."), BUTTON_NORMAL);
         }
-        add_button_full(122, g_gui_w / 2 - 100, g_gui_h - 28, 98, 20, "Info...", BUTTON_NORMAL);
+        add_button_full(122, g_gui_w / 2 - 100, g_gui_h - 28, 98, 20, tr_key_default("hb.options.info", "Info..."), BUTTON_NORMAL);
         add_button_full(199, g_gui_w / 2 + 2,   g_gui_h - 28, 98, 20, tr("Done"), BUTTON_NORMAL);
     } else if (hptibine_screen_category(g_screen) >= 0) {
         int count = hptibine_option_count_for_screen(g_screen);
@@ -922,12 +922,12 @@ static void rebuild_screen(void) {
         }
         if (g_screen == SCREEN_HPTIBINE) {
             int y = g_gui_h / 6 + 21 * (count / 2) - 10;
-            add_button_full(HPTI_NAV_DETAILS,     g_gui_w / 2 - 155, y,      150, 20, "Details...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_QUALITY,     g_gui_w / 2 + 5,   y,      150, 20, "Quality...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_ANIMATIONS,  g_gui_w / 2 - 155, y + 21, 150, 20, "Animations...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_PERFORMANCE, g_gui_w / 2 + 5,   y + 21, 150, 20, "Performance...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_TEXPACKS,    g_gui_w / 2 - 155, y + 42, 150, 20, "Texture Packs...", BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_OTHER,       g_gui_w / 2 + 5,   y + 42, 150, 20, "Other...", BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_DETAILS,     g_gui_w / 2 - 155, y,      150, 20, tr_key_default("hb.options.details", "Details..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_QUALITY,     g_gui_w / 2 + 5,   y,      150, 20, tr_key_default("hb.options.quality", "Quality..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_ANIMATIONS,  g_gui_w / 2 - 155, y + 21, 150, 20, tr_key_default("hb.options.animations", "Animations..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_PERFORMANCE, g_gui_w / 2 + 5,   y + 21, 150, 20, tr_key_default("hb.options.performance", "Performance..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_TEXPACKS,    g_gui_w / 2 - 155, y + 42, 150, 20, tr_key_default("texturePack.title", "Texture Packs..."), BUTTON_NORMAL);
+            add_button_full(HPTI_NAV_OTHER,       g_gui_w / 2 + 5,   y + 42, 150, 20, tr_key_default("hb.options.other", "Other..."), BUTTON_NORMAL);
         }
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_ASSETS) {

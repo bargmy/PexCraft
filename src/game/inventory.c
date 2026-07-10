@@ -721,7 +721,8 @@ static int flat_light_opacity_for_id(int id) {
        This is intentionally separate from collision/render occlusion: glass does
        not block light, leaves block one level, and water/ice block three levels. */
     if (id == 0) return 0;
-    if (id == BLOCK_WATER || id == BLOCK_STILL_WATER || id == BLOCK_ICE) return 3;
+    if (id == BLOCK_WATER || id == BLOCK_STILL_WATER) return g_opts.hpti_clear_water ? 1 : 3;
+    if (id == BLOCK_ICE) return 3;
     if (id == BLOCK_LEAVES || id == BLOCK_WEB) return 1;
     if (id == BLOCK_GLASS || id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS ||
         id == BLOCK_SNOW_LAYER || id == BLOCK_END_PORTAL || id == BLOCK_END_PORTAL_FRAME) return 0;
@@ -961,17 +962,21 @@ static unsigned int flat_current_lightmap_version(void) {
        coordinates stable and updates EntityRenderer's lightmap texture when the
        sun changes; this must never be used to dirty or invalidate sections. */
     int sun = (int)(flat_light_sun_brightness(1.0f) * 32.0f + 0.5f);
+    int gamma = (int)(g_opts.hpti_gamma * 255.0f + 0.5f);
     if (sun < 0) sun = 0;
     if (sun > 32) sun = 32;
-    return (unsigned int)(1 + sun);
+    if (gamma < 0) gamma = 0;
+    if (gamma > 255) gamma = 255;
+    return (unsigned int)(1 + sun + gamma * 33);
 }
 
 static void flat_lightmap_color(int packed, float *r, float *g, float *b) {
     /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
-       overworld, gamma=0, torchFlickerX=0, no lightning.  Java applies this as
-       a 16x16 lightmap texture every frame.  This renderer still bakes the
-       current lightmap result into section vertex colors, so time-light changes
-       dirty section colors without invalidating the old drawable mesh. */
+       overworld, torchFlickerX=0, no lightning.  Java/HptiBine apply gamma by
+       blending each channel toward 1.0 - (1.0 - channel)^4, then applying the
+       final 0.96 + 0.03 pass.  This renderer still bakes the current lightmap
+       result into section vertex colors, so lightmap changes refresh draw-time
+       colors without invalidating geometry on CPU-mesh backends. */
     int sky = (packed >> 20) & 15;
     int block = (packed >> 4) & 15;
     float sun = flat_light_sun_brightness(1.0f);
@@ -987,11 +992,25 @@ static void flat_lightmap_color(int packed, float *r, float *g, float *b) {
     gg = gg * 0.96f + 0.03f;
     bb = bb * 0.96f + 0.03f;
     if (rr > 1.0f) rr = 1.0f; if (gg > 1.0f) gg = 1.0f; if (bb > 1.0f) bb = 1.0f;
-    if (rr < 0.0f) rr = 0.0f; if (gg < 0.0f) gg = 0.0f; if (bb < 0.0f) bb = 0.0f;
+    {
+        float gamma = g_opts.hpti_gamma;
+        float ir = 1.0f - rr;
+        float ig = 1.0f - gg;
+        float ib = 1.0f - bb;
+        if (gamma < 0.0f) gamma = 0.0f;
+        if (gamma > 1.0f) gamma = 1.0f;
+        ir = 1.0f - ir * ir * ir * ir;
+        ig = 1.0f - ig * ig * ig * ig;
+        ib = 1.0f - ib * ib * ib * ib;
+        rr = rr * (1.0f - gamma) + ir * gamma;
+        gg = gg * (1.0f - gamma) + ig * gamma;
+        bb = bb * (1.0f - gamma) + ib * gamma;
+    }
     rr = rr * 0.96f + 0.03f;
     gg = gg * 0.96f + 0.03f;
     bb = bb * 0.96f + 0.03f;
     if (rr > 1.0f) rr = 1.0f; if (gg > 1.0f) gg = 1.0f; if (bb > 1.0f) bb = 1.0f;
+    if (rr < 0.0f) rr = 0.0f; if (gg < 0.0f) gg = 0.0f; if (bb < 0.0f) bb = 0.0f;
     *r = rr; *g = gg; *b = bb;
 }
 
@@ -2639,6 +2658,34 @@ static void flat_mark_all_chunks_dirty(void) {
     g_flat_section_geometry_dirty = 0;
 }
 
+static void hptibine_update_water_opacity(void) {
+    /* HptiBine 1.2.5 updateWaterOpacity():
+       - vanilla water light opacity is 3;
+       - Clear Water sets moving/still water light opacity to 1;
+       - loaded chunks have their skylight regenerated;
+       - renderers are reloaded.
+       PexCraft derives opacity from flat_light_opacity_for_id(), so changing
+       g_opts.hpti_clear_water is enough for future lighting.  This pass
+       regenerates the active generated chunks now and invalidates their meshes,
+       matching the Java visible-world refresh behavior. */
+    int base_cx = floor_div16(g_flat_world_origin_x);
+    int base_cz = floor_div16(g_flat_world_origin_z);
+    int any = 0;
+    for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; ++lcz) {
+        for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; ++lcx) {
+            if (!g_flat_world_chunk_generated[lcz][lcx]) continue;
+            flat_relight_fast_surface_chunk(base_cx + lcx, base_cz + lcz);
+            any = 1;
+        }
+    }
+    if (any) {
+        flat_mark_light_dirty_region(base_cx * 16, base_cz * 16,
+                                     (base_cx + FLAT_RENDER_CHUNKS) * 16 - 1,
+                                     (base_cz + FLAT_RENDER_CHUNKS) * 16 - 1);
+    }
+    flat_mark_all_chunks_dirty();
+}
+
 static void flat_mark_chunks_dirty_near(int x, int z) {
     if (!flat_in_bounds(x, FLAT_WORLD_Y_MIN, z)) return;
     int fx = flat_index(x);
@@ -4214,7 +4261,7 @@ static void psp_ensure_spawn_surface(float *px, float *py, float *pz, int force_
 #endif
 
 static int block_drop_id(int block_id) {
-    /* ph.java grass drops dirt via of.v.a(0, random). */
+    /* Java grass drops dirt through the normal block-drop path. */
     if (block_id == BLOCK_GRASS) return BLOCK_DIRT;
     if (block_id == BLOCK_SNOW_LAYER) return ITEM_SNOWBALL;
     if (block_id == BLOCK_LEAVES) return 0;

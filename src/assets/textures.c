@@ -1116,6 +1116,14 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_shadow, "misc\\shadow.png", 0);
     try_release_texture(&tex_grasscolor, "misc\\grasscolor.png", 0);
     try_release_texture(&tex_foliagecolor, "misc\\foliagecolor.png", 0);
+    /* HptiBine custom color maps are texture-pack overlays, not vanilla base
+       assets.  Reset them when returning to the base pack so stale custom maps
+       cannot survive Custom Colors OFF or a texture-pack switch. */
+    free_texture(&tex_watercolor);
+    free_texture(&tex_pinecolor);
+    free_texture(&tex_birchcolor);
+    free_texture(&tex_swampgrasscolor);
+    free_texture(&tex_swampfoliagecolor);
     try_release_texture(&tex_particles, "particles.png", 0);
     ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
     ok = try_release_texture(&tex_mojang, "title\\mojang.png", 0) && ok;
@@ -1189,6 +1197,11 @@ static int load_default_textures(void) {
     PEX_PSP_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
     PEX_PSP_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
     PEX_PSP_LOAD_OPT(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0, 256, 256);
+    free_texture(&tex_watercolor);
+    free_texture(&tex_pinecolor);
+    free_texture(&tex_birchcolor);
+    free_texture(&tex_swampgrasscolor);
+    free_texture(&tex_swampfoliagecolor);
     PEX_PSP_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
     psp_drop_gui_texture_cpu_copies();
     #if defined(PEX_PLATFORM_PSP)
@@ -1255,6 +1268,11 @@ static int load_default_textures(void) {
     PEX_LOAD_OPT(&tex_shadow, "misc_shadow.mcrw", 0, 64, 64);
     PEX_LOAD_OPT(&tex_grasscolor, "misc_grasscolor.mcrw", 0, 256, 256);
     PEX_LOAD_OPT(&tex_foliagecolor, "misc_foliagecolor.mcrw", 0, 256, 256);
+    free_texture(&tex_watercolor);
+    free_texture(&tex_pinecolor);
+    free_texture(&tex_birchcolor);
+    free_texture(&tex_swampgrasscolor);
+    free_texture(&tex_swampfoliagecolor);
     PEX_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
     if (missing_required) log_msg("Started with %d fallback required assets; showing resource download UI", missing_required);
 #undef PEX_LOAD_REQ
@@ -1275,6 +1293,11 @@ static void try_pack_texture(TexturePackEntry *e, Texture *tex, const char *rel,
 static void apply_texture_pack_index(int index) {
     if (index < 0 || index >= g_texpack_count) index = 0;
     if (!load_default_textures()) return;
+    free_texture(&tex_watercolor);
+    free_texture(&tex_pinecolor);
+    free_texture(&tex_birchcolor);
+    free_texture(&tex_swampgrasscolor);
+    free_texture(&tex_swampfoliagecolor);
     g_selected_texpack = index;
     snprintf(g_current_texpack, sizeof(g_current_texpack), "%s", g_texpacks[index].name);
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", g_texpacks[index].name);
@@ -1367,6 +1390,11 @@ static void apply_texture_pack_index(int index) {
         if (hptibine_custom_colors_enabled()) {
             try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
             try_pack_texture(e, &tex_foliagecolor, "misc\\foliagecolor.png", 0);
+            try_pack_texture(e, &tex_watercolor, "misc\\watercolorX.png", 0);
+            try_pack_texture(e, &tex_pinecolor, "misc\\pinecolor.png", 0);
+            try_pack_texture(e, &tex_birchcolor, "misc\\birchcolor.png", 0);
+            try_pack_texture(e, &tex_swampgrasscolor, "misc\\swampgrasscolor.png", 0);
+            try_pack_texture(e, &tex_swampfoliagecolor, "misc\\swampfoliagecolor.png", 0);
         }
 #endif
     }
