@@ -321,19 +321,70 @@ static inline BOOL SetEvent(HANDLE h) {
     if (!h || h->kind != PEX_HANDLE_EVENT) return FALSE;
     pthread_mutex_lock(&h->mutex); h->signaled = 1; pthread_cond_broadcast(&h->cond); pthread_mutex_unlock(&h->mutex); return TRUE;
 }
+static inline void pex_deadline_after_ms(struct timespec *deadline, DWORD ms) {
+    clock_gettime(CLOCK_REALTIME, deadline);
+    deadline->tv_sec += (time_t)(ms / 1000u);
+    deadline->tv_nsec += (long)(ms % 1000u) * 1000000L;
+    if (deadline->tv_nsec >= 1000000000L) {
+        deadline->tv_sec += 1;
+        deadline->tv_nsec -= 1000000000L;
+    }
+}
+
 static inline DWORD WaitForSingleObject(HANDLE h, DWORD ms) {
     if (!h || h == INVALID_HANDLE_VALUE) return WAIT_TIMEOUT;
     if (h->kind == PEX_HANDLE_THREAD) {
-        if (ms == 0) return h->thread_joined ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
-        if (!h->thread_joined) { pthread_join(h->thread, NULL); h->thread_joined = 1; }
+        if (h->thread_joined) return WAIT_OBJECT_0;
+#if defined(__linux__)
+        /* The mesh shutdown coordinator polls worker handles with a zero timeout.
+           The old SDL shim only inspected thread_joined, which is set *by* join,
+           so a finished pthread could never become observable and the loop waited
+           forever.  GNU pthread try/timed joins provide Win32-compatible polling. */
+        int jr;
+        if (ms == 0) {
+            jr = pthread_tryjoin_np(h->thread, NULL);
+        } else if (ms == INFINITE) {
+            jr = pthread_join(h->thread, NULL);
+        } else {
+            struct timespec deadline;
+            pex_deadline_after_ms(&deadline, ms);
+            jr = pthread_timedjoin_np(h->thread, NULL, &deadline);
+        }
+        if (jr == 0) {
+            h->thread_joined = 1;
+            return WAIT_OBJECT_0;
+        }
+        if (jr == EBUSY || jr == ETIMEDOUT) return WAIT_TIMEOUT;
+        return WAIT_TIMEOUT;
+#else
+        if (ms == 0) return WAIT_TIMEOUT;
+        if (pthread_join(h->thread, NULL) != 0) return WAIT_TIMEOUT;
+        h->thread_joined = 1;
         return WAIT_OBJECT_0;
+#endif
     }
     if (h->kind == PEX_HANDLE_EVENT) {
+        int wait_rc = 0;
         pthread_mutex_lock(&h->mutex);
-        if (!h->signaled && ms == 0) { pthread_mutex_unlock(&h->mutex); return WAIT_TIMEOUT; }
-        while (!h->signaled) pthread_cond_wait(&h->cond, &h->mutex);
+        if (!h->signaled && ms == 0) {
+            pthread_mutex_unlock(&h->mutex);
+            return WAIT_TIMEOUT;
+        }
+        if (ms == INFINITE) {
+            while (!h->signaled) pthread_cond_wait(&h->cond, &h->mutex);
+        } else if (!h->signaled) {
+            struct timespec deadline;
+            pex_deadline_after_ms(&deadline, ms);
+            while (!h->signaled && wait_rc != ETIMEDOUT)
+                wait_rc = pthread_cond_timedwait(&h->cond, &h->mutex, &deadline);
+            if (!h->signaled) {
+                pthread_mutex_unlock(&h->mutex);
+                return WAIT_TIMEOUT;
+            }
+        }
         if (!h->manual_reset) h->signaled = 0;
-        pthread_mutex_unlock(&h->mutex); return WAIT_OBJECT_0;
+        pthread_mutex_unlock(&h->mutex);
+        return WAIT_OBJECT_0;
     }
     return WAIT_TIMEOUT;
 }

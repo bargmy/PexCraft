@@ -46,3 +46,10 @@ while the progress screen is presenting; CPU mesh results are uploaded by the
 render thread through the existing bounded install path.
 
 See `docs/save_and_quit_mesh_worker_fix.md` for the failure mechanism and changes.
+## Linux/OpenGL mesh shutdown correction
+
+This revision fixes the SDL pthread compatibility layer used by Linux/OpenGL.
+Zero-time thread waits can now detect completed pthreads, and finite event waits
+actually time out. This prevents **Cancelling mesh builders** from waiting forever.
+See `docs/linux_opengl_mesh_shutdown_fix.md`.
+
