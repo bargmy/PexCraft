@@ -143,20 +143,20 @@ static const StivuFineOptionDef stivufine_defs[] = {
     { SF_SHOW_CAPES, "Show Capes", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
     { SF_DEPTH_FOG, "Depth Fog", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
 
-    { SF_MIPMAP_LEVEL, "Mipmap Level", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
-    { SF_MIPMAP_TYPE, "Mipmap Type", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_MIPMAP_LEVEL, "Mipmap Level", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_MIPMAP_TYPE, "Mipmap Type", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_CLEAR_WATER, "Clear Water", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
-    { SF_RANDOM_MOBS, "Random Mobs", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_RANDOM_MOBS, "Random Mobs", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_BETTER_GRASS, "Better Grass", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_BETTER_SNOW, "Better Snow", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_CUSTOM_FONTS, "Custom Fonts", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_CUSTOM_COLORS, "Custom Colors", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_SWAMP_COLORS, "Swamp Colors", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
     { SF_SMOOTH_BIOMES, "Smooth Biomes", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
-    { SF_CONNECTED_TEXTURES, "Connected Textures", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
-    { SF_NATURAL_TEXTURES, "Natural Textures", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
-    { SF_AA_LEVEL, "Antialiasing", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
-    { SF_AF_LEVEL, "Anisotropic Filtering", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_CONNECTED_TEXTURES, "Connected Textures", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_NATURAL_TEXTURES, "Natural Textures", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_AA_LEVEL, "Antialiasing", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_AF_LEVEL, "Anisotropic Filtering", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
 
     { SF_ANIMATED_WATER, "Water Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
     { SF_ANIMATED_LAVA, "Lava Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
@@ -404,6 +404,13 @@ static void stivufine_set_defaults(void) {
     g_opts.sf_smooth_biomes = 1;
     g_opts.sf_custom_fonts = 1;
     g_opts.sf_custom_colors = 1;
+    g_opts.sf_random_mobs = 1;
+    g_opts.sf_mipmap_level = 0;
+    g_opts.sf_mipmap_linear = 0;
+    g_opts.sf_connected_textures = 2;
+    g_opts.sf_natural_textures = 0;
+    g_opts.sf_aa_level = 0;
+    g_opts.sf_af_level = 1;
 }
 
 static void stivufine_clamp_options(void) {
@@ -430,6 +437,14 @@ static void stivufine_clamp_options(void) {
     if (g_opts.sf_smooth_biomes < 0 || g_opts.sf_smooth_biomes > 1) g_opts.sf_smooth_biomes = 1;
     if (g_opts.sf_custom_fonts < 0 || g_opts.sf_custom_fonts > 1) g_opts.sf_custom_fonts = 1;
     if (g_opts.sf_custom_colors < 0 || g_opts.sf_custom_colors > 1) g_opts.sf_custom_colors = 1;
+    if (g_opts.sf_random_mobs < 0 || g_opts.sf_random_mobs > 1) g_opts.sf_random_mobs = 1;
+    if (g_opts.sf_mipmap_level < 0) g_opts.sf_mipmap_level = 0;
+    if (g_opts.sf_mipmap_level > 4) g_opts.sf_mipmap_level = 4;
+    if (g_opts.sf_mipmap_linear < 0 || g_opts.sf_mipmap_linear > 1) g_opts.sf_mipmap_linear = 0;
+    if (g_opts.sf_connected_textures < 1 || g_opts.sf_connected_textures > 3) g_opts.sf_connected_textures = 2;
+    if (g_opts.sf_natural_textures < 0 || g_opts.sf_natural_textures > 1) g_opts.sf_natural_textures = 0;
+    { int aa = g_opts.sf_aa_level; if (!(aa==0||aa==2||aa==4||aa==6||aa==8||aa==12||aa==16)) g_opts.sf_aa_level = 0; }
+    { int af = g_opts.sf_af_level; if (!(af==1||af==2||af==4||af==8||af==16)) g_opts.sf_af_level = 1; }
     if (g_opts.sf_chunk_updates < 1) g_opts.sf_chunk_updates = 1;
     if (g_opts.sf_chunk_updates > 5) g_opts.sf_chunk_updates = 5;
 }
@@ -490,6 +505,13 @@ static void stivufine_load_file_named(const char *name) {
         else if (!strcmp(k, "gamma") || !strcmp(k, "sfGamma") || !strcmp(k, "sfBrightness")) g_opts.sf_gamma = parse_float_java(v);
         else if (!strcmp(k, "sfCustomFonts")) g_opts.sf_custom_fonts = stivufine_parse_bool(v);
         else if (!strcmp(k, "sfCustomColors")) g_opts.sf_custom_colors = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfRandomMobs")) g_opts.sf_random_mobs = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfMipmapLevel")) g_opts.sf_mipmap_level = atoi(v);
+        else if (!strcmp(k, "sfMipmapLinear")) g_opts.sf_mipmap_linear = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfConnectedTextures")) g_opts.sf_connected_textures = atoi(v);
+        else if (!strcmp(k, "sfNaturalTextures")) g_opts.sf_natural_textures = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAaLevel")) g_opts.sf_aa_level = atoi(v);
+        else if (!strcmp(k, "sfAfLevel")) g_opts.sf_af_level = atoi(v);
         else if (!strcmp(k, "particles") || !strcmp(k, "particleSetting")) g_opts.sf_particles = atoi(v);
     }
     fclose(f);
@@ -557,6 +579,13 @@ static void save_stivufine_options(void) {
     fprintf(f, "sfGamma:%g\n", g_opts.sf_gamma);
     fprintf(f, "sfCustomFonts:%s\n", g_opts.sf_custom_fonts ? "true" : "false");
     fprintf(f, "sfCustomColors:%s\n", g_opts.sf_custom_colors ? "true" : "false");
+    fprintf(f, "sfRandomMobs:%s\n", g_opts.sf_random_mobs ? "true" : "false");
+    fprintf(f, "sfMipmapLevel:%d\n", g_opts.sf_mipmap_level);
+    fprintf(f, "sfMipmapLinear:%s\n", g_opts.sf_mipmap_linear ? "true" : "false");
+    fprintf(f, "sfConnectedTextures:%d\n", g_opts.sf_connected_textures);
+    fprintf(f, "sfNaturalTextures:%s\n", g_opts.sf_natural_textures ? "true" : "false");
+    fprintf(f, "sfAaLevel:%d\n", g_opts.sf_aa_level);
+    fprintf(f, "sfAfLevel:%d\n", g_opts.sf_af_level);
     fclose(f);
 #endif
 }
@@ -581,6 +610,13 @@ static int stivufine_custom_colors_enabled(void) { return g_opts.sf_custom_color
 static int stivufine_better_snow_enabled(void) { return g_opts.sf_better_snow; }
 static int stivufine_swamp_colors_enabled(void) { return g_opts.sf_swamp_colors; }
 static int stivufine_smooth_biomes_enabled(void) { return g_opts.sf_smooth_biomes; }
+static int stivufine_random_mobs_enabled(void) { return g_opts.sf_random_mobs; }
+static int stivufine_mipmap_level(void) { stivufine_clamp_options(); return g_opts.sf_mipmap_level; }
+static int stivufine_mipmap_linear(void) { return g_opts.sf_mipmap_linear != 0; }
+static int stivufine_connected_textures_mode(void) { return g_opts.sf_connected_textures; }
+static int stivufine_natural_textures_enabled(void) { return g_opts.sf_natural_textures != 0; }
+static int stivufine_aa_level(void) { return g_opts.sf_aa_level; }
+static int stivufine_af_level(void) { return g_opts.sf_af_level; }
 
 static int stivufine_smooth_lighting_enabled(void) {
     return g_opts.sf_ao_level > 0.0001f;
@@ -679,6 +715,17 @@ static void get_stivufine_option_label(StivuFineOptionId opt, char *out, size_t 
         case SF_BETTER_SNOW: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_better_snow)); break;
         case SF_SWAMP_COLORS: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_swamp_colors)); break;
         case SF_SMOOTH_BIOMES: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_smooth_biomes)); break;
+        case SF_RANDOM_MOBS: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_random_mobs)); break;
+        case SF_MIPMAP_LEVEL:
+            if (g_opts.sf_mipmap_level <= 0) snprintf(out, cap, "%s: %s", name, stivufine_ui_off());
+            else if (g_opts.sf_mipmap_level >= 4) snprintf(out, cap, "%s: Max", name);
+            else snprintf(out, cap, "%s: %d", name, g_opts.sf_mipmap_level);
+            break;
+        case SF_MIPMAP_TYPE: snprintf(out, cap, "%s: %s", name, g_opts.sf_mipmap_linear ? "Linear" : "Nearest"); break;
+        case SF_CONNECTED_TEXTURES: snprintf(out, cap, "%s: %s", name, g_opts.sf_connected_textures == SF_FAST ? stivufine_ui_fast() : (g_opts.sf_connected_textures == SF_FANCY ? stivufine_ui_fancy() : stivufine_ui_off())); break;
+        case SF_NATURAL_TEXTURES: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_natural_textures)); break;
+        case SF_AA_LEVEL: if (g_opts.sf_aa_level <= 0) snprintf(out, cap, "%s: %s", name, stivufine_ui_off()); else snprintf(out, cap, "%s: %dx (restart)", name, g_opts.sf_aa_level); break;
+        case SF_AF_LEVEL: if (g_opts.sf_af_level <= 1) snprintf(out, cap, "%s: %s", name, stivufine_ui_off()); else snprintf(out, cap, "%s: %dx", name, g_opts.sf_af_level); break;
         case SF_ANAGLYPH: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.anaglyph)); break;
         case SF_VIEW_BOBBING: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.view_bobbing)); break;
         case SF_RENDER_CLOUDS: snprintf(out, cap, "%s: %s", name, stivufine_cloud_mode() == SF_OFF ? stivufine_ui_off() : stivufine_ui_on()); break;
@@ -783,6 +830,42 @@ static void bump_stivufine_option(StivuFineOptionId opt, int delta) {
             g_opts.sf_smooth_biomes = !g_opts.sf_smooth_biomes;
             flat_mark_all_chunks_dirty();
             break;
+        case SF_RANDOM_MOBS:
+            g_opts.sf_random_mobs = !g_opts.sf_random_mobs;
+            apply_texture_pack_index(g_selected_texpack);
+            break;
+        case SF_MIPMAP_LEVEL:
+            g_opts.sf_mipmap_level++;
+            if (g_opts.sf_mipmap_level > 4) g_opts.sf_mipmap_level = 0;
+            apply_texture_pack_index(g_selected_texpack);
+            break;
+        case SF_MIPMAP_TYPE:
+            g_opts.sf_mipmap_linear = !g_opts.sf_mipmap_linear;
+            apply_texture_pack_index(g_selected_texpack);
+            break;
+        case SF_CONNECTED_TEXTURES:
+            g_opts.sf_connected_textures++;
+            if (g_opts.sf_connected_textures > 3) g_opts.sf_connected_textures = 1;
+            apply_texture_pack_index(g_selected_texpack);
+            flat_mark_all_chunks_dirty();
+            break;
+        case SF_NATURAL_TEXTURES:
+            g_opts.sf_natural_textures = !g_opts.sf_natural_textures;
+            apply_texture_pack_index(g_selected_texpack);
+            flat_mark_all_chunks_dirty();
+            break;
+        case SF_AA_LEVEL: {
+            static const int levels[] = {0,2,4,6,8,12,16};
+            int i = 0; while (i < (int)ARRAY_COUNT(levels) && levels[i] != g_opts.sf_aa_level) ++i;
+            g_opts.sf_aa_level = levels[(i + 1) % (int)ARRAY_COUNT(levels)];
+            break;
+        }
+        case SF_AF_LEVEL:
+            if (g_opts.sf_af_level <= 1) g_opts.sf_af_level = 2;
+            else if (g_opts.sf_af_level >= 16) g_opts.sf_af_level = 1;
+            else g_opts.sf_af_level <<= 1;
+            apply_texture_pack_index(g_selected_texpack);
+            break;
         case SF_CHUNK_UPDATES:
             g_opts.sf_chunk_updates++;
             if (g_opts.sf_chunk_updates > 5) g_opts.sf_chunk_updates = 1;
@@ -836,6 +919,13 @@ static void load_options(void) {
         else if (!strcmp(k, "sfBetterSnow")) g_opts.sf_better_snow = stivufine_parse_bool(v);
         else if (!strcmp(k, "sfSwampColors")) g_opts.sf_swamp_colors = stivufine_parse_bool(v);
         else if (!strcmp(k, "sfSmoothBiomes")) g_opts.sf_smooth_biomes = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfRandomMobs")) g_opts.sf_random_mobs = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfMipmapLevel")) g_opts.sf_mipmap_level = atoi(v);
+        else if (!strcmp(k, "sfMipmapLinear")) g_opts.sf_mipmap_linear = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfConnectedTextures")) g_opts.sf_connected_textures = atoi(v);
+        else if (!strcmp(k, "sfNaturalTextures")) g_opts.sf_natural_textures = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAaLevel")) g_opts.sf_aa_level = atoi(v);
+        else if (!strcmp(k, "sfAfLevel")) g_opts.sf_af_level = atoi(v);
         else if (!strcmp(k, "difficulty")) g_opts.difficulty = atoi(v) & 3;
         else if (!strcmp(k, "fancyGraphics")) g_opts.fancy_graphics = !strcmp(v, "true");
         else if (!strcmp(k, "fullscreen") || !strcmp(k, "enableFullscreen")) g_opts.fullscreen = !strcmp(v, "true");
@@ -884,6 +974,14 @@ static void load_options(void) {
     if (g_opts.sf_better_snow < 0 || g_opts.sf_better_snow > 1) g_opts.sf_better_snow = 0;
     if (g_opts.sf_swamp_colors < 0 || g_opts.sf_swamp_colors > 1) g_opts.sf_swamp_colors = 1;
     if (g_opts.sf_smooth_biomes < 0 || g_opts.sf_smooth_biomes > 1) g_opts.sf_smooth_biomes = 1;
+    if (g_opts.sf_random_mobs < 0 || g_opts.sf_random_mobs > 1) g_opts.sf_random_mobs = 1;
+    if (g_opts.sf_mipmap_level < 0) g_opts.sf_mipmap_level = 0;
+    if (g_opts.sf_mipmap_level > 4) g_opts.sf_mipmap_level = 4;
+    if (g_opts.sf_mipmap_linear < 0 || g_opts.sf_mipmap_linear > 1) g_opts.sf_mipmap_linear = 0;
+    if (g_opts.sf_connected_textures < 1 || g_opts.sf_connected_textures > 3) g_opts.sf_connected_textures = 2;
+    if (g_opts.sf_natural_textures < 0 || g_opts.sf_natural_textures > 1) g_opts.sf_natural_textures = 0;
+    { int aa = g_opts.sf_aa_level; if (!(aa==0||aa==2||aa==4||aa==6||aa==8||aa==12||aa==16)) g_opts.sf_aa_level = 0; }
+    { int af = g_opts.sf_af_level; if (!(af==1||af==2||af==4||af==8||af==16)) g_opts.sf_af_level = 1; }
     if (g_opts.render_distance < 2) g_opts.render_distance = 8;
     if (g_opts.render_distance > 32) g_opts.render_distance = 32;
     if (g_opts.max_fps < 0) g_opts.max_fps = 0;
@@ -951,6 +1049,13 @@ static void save_options(void) {
     fprintf(f, "sfBetterSnow:%s\n", g_opts.sf_better_snow ? "true" : "false");
     fprintf(f, "sfSwampColors:%s\n", g_opts.sf_swamp_colors ? "true" : "false");
     fprintf(f, "sfSmoothBiomes:%s\n", g_opts.sf_smooth_biomes ? "true" : "false");
+    fprintf(f, "sfRandomMobs:%s\n", g_opts.sf_random_mobs ? "true" : "false");
+    fprintf(f, "sfMipmapLevel:%d\n", g_opts.sf_mipmap_level);
+    fprintf(f, "sfMipmapLinear:%s\n", g_opts.sf_mipmap_linear ? "true" : "false");
+    fprintf(f, "sfConnectedTextures:%d\n", g_opts.sf_connected_textures);
+    fprintf(f, "sfNaturalTextures:%s\n", g_opts.sf_natural_textures ? "true" : "false");
+    fprintf(f, "sfAaLevel:%d\n", g_opts.sf_aa_level);
+    fprintf(f, "sfAfLevel:%d\n", g_opts.sf_af_level);
     fprintf(f, "difficulty:%d\n", g_opts.difficulty);
     fprintf(f, "fancyGraphics:%s\n", g_opts.fancy_graphics ? "true" : "false");
     fprintf(f, "fullscreen:%s\n", g_opts.fullscreen ? "true" : "false");

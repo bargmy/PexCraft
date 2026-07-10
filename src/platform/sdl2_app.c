@@ -1,12 +1,20 @@
 /* SDL2/Linux window, OpenGL context, renderer-present, and main loop. */
 
-static int init_gl(SDL_Window *window) {
-    (void)window;
+static int g_stivufine_runtime_aa = 0;
+
+static void stivufine_configure_gl_attributes(int samples) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, samples > 0 ? 1 : 0);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, samples > 0 ? samples : 0);
+}
+
+static int init_gl(SDL_Window *window) {
+    (void)window;
+    stivufine_configure_gl_attributes(g_stivufine_runtime_aa);
 
     g_glrc = SDL_GL_CreateContext(g_hwnd);
     if (!g_glrc) return 0;
@@ -20,6 +28,12 @@ static int init_gl(SDL_Window *window) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.1f);
+    if (g_stivufine_runtime_aa > 0) glEnable(GL_MULTISAMPLE);
+    {
+        int actual_samples = 0;
+        SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &actual_samples);
+        pex_logf("StivuFine antialiasing requested=%d actual=%d", g_opts.sf_aa_level, actual_samples);
+    }
     scan_texture_packs();
     if (!load_default_textures()) return 0;
     if (g_selected_texpack > 0) apply_texture_pack_index(g_selected_texpack);
@@ -570,8 +584,16 @@ int main(int argc, char **argv) {
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_opts.last_server);
     snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username[0] ? g_opts.username : "Player");
 
+    g_stivufine_runtime_aa = stivufine_aa_level();
+    stivufine_configure_gl_attributes(g_stivufine_runtime_aa);
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
     g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 854, 480, flags);
+    if (!g_hwnd && g_stivufine_runtime_aa > 0) {
+        pex_logf("Multisample window failed at %dx; retrying without AA", g_stivufine_runtime_aa);
+        g_stivufine_runtime_aa = 0;
+        stivufine_configure_gl_attributes(0);
+        g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 854, 480, flags);
+    }
     if (!g_hwnd) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         IMG_Quit(); SDL_Quit();
@@ -581,9 +603,23 @@ int main(int argc, char **argv) {
     g_render_w = g_win_w; g_render_h = g_win_h;
     setup_scale();
     if (!pex_renderer_backend_init(g_hwnd)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, APP_TITLE, "PEXCRAFT failed to initialize SDL2/OpenGL or load assets.", g_hwnd);
-        SDL_DestroyWindow(g_hwnd); IMG_Quit(); SDL_Quit();
-        return 3;
+        if (g_stivufine_runtime_aa > 0) {
+            pex_logf("Multisample context failed at %dx; retrying without AA", g_stivufine_runtime_aa);
+            if (g_glrc) { SDL_GL_DeleteContext(g_glrc); g_glrc = NULL; }
+            SDL_DestroyWindow(g_hwnd); g_hwnd = NULL;
+            g_stivufine_runtime_aa = 0;
+            stivufine_configure_gl_attributes(0);
+            g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 854, 480, flags);
+            if (g_hwnd) {
+                SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
+                g_render_w = g_win_w; g_render_h = g_win_h; setup_scale();
+            }
+        }
+        if (!g_hwnd || !pex_renderer_backend_init(g_hwnd)) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, APP_TITLE, "PEXCRAFT failed to initialize SDL2/OpenGL or load assets.", g_hwnd);
+            if (g_hwnd) SDL_DestroyWindow(g_hwnd); IMG_Quit(); SDL_Quit();
+            return 3;
+        }
     }
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
     if (g_loggy_enabled) {

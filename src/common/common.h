@@ -65,6 +65,24 @@
 #define PEX_GL_CLAMP_EDGE GL_CLAMP
 #endif
 #endif
+#ifndef GL_NEAREST_MIPMAP_NEAREST
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#endif
+#ifndef GL_LINEAR_MIPMAP_NEAREST
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#endif
+#ifndef GL_NEAREST_MIPMAP_LINEAR
+#define GL_NEAREST_MIPMAP_LINEAR 0x2702
+#endif
+#ifndef GL_LINEAR_MIPMAP_LINEAR
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#endif
+#ifndef GL_TEXTURE_BASE_LEVEL
+#define GL_TEXTURE_BASE_LEVEL 0x813C
+#endif
+#ifndef GL_TEXTURE_MAX_LEVEL
+#define GL_TEXTURE_MAX_LEVEL 0x813D
+#endif
 #ifndef PEX_THREAD_LOCAL
 #if defined(PEX_PLATFORM_WII)
 /* devkitPPC/libogc Wii DOLs do not have the desktop TLS runtime that GCC
@@ -552,6 +570,11 @@ typedef enum StivuFineAnimationMode {
    included modules such as textures.c. */
 static int stivufine_custom_fonts_enabled(void);
 static int stivufine_custom_colors_enabled(void);
+static int stivufine_random_mobs_enabled(void);
+static int stivufine_connected_textures_mode(void);
+static int stivufine_natural_textures_enabled(void);
+static int stivufine_aa_level(void);
+static int stivufine_af_level(void);
 
 typedef enum OptionId {
     OPT_MUSIC = 0,
@@ -651,6 +674,13 @@ typedef struct Options {
     int sf_smooth_biomes;
     int sf_custom_fonts;
     int sf_custom_colors;
+    int sf_random_mobs;
+    int sf_mipmap_level;
+    int sf_mipmap_linear;
+    int sf_connected_textures; /* 1 Fast, 2 Fancy, 3 OFF */
+    int sf_natural_textures;
+    int sf_aa_level;           /* 0,2,4,6,8,12,16; restart on SDL/OpenGL */
+    int sf_af_level;           /* 1=OFF, then 2/4/8/16 */
 
     int ignore_classic_resources_warning;
     int download_classic_textures;
@@ -927,6 +957,7 @@ typedef struct PassiveMob {
        unity-style codebase.  Indices use PEX_POTION_* ids. */
     int potion_duration[32];
     int potion_amplifier[32];
+    int random_mob_id; /* StivuFine Random Mobs persistent numeric skin id. */
 } PassiveMob;
 
 #ifdef PEX_PLATFORM_SDL2

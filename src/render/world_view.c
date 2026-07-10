@@ -1056,15 +1056,27 @@ static void apply_player_camera(float partial) {
     }
 }
 
+static void stivufine_terrain_tile_pixel_rect(int tile, int *x, int *y, int *w, int *h) {
+    int base_w = stivufine_terrain_base_w > 0 ? stivufine_terrain_base_w : (tex_terrain.w > 0 ? tex_terrain.w : 256);
+    int base_h = stivufine_terrain_base_h > 0 ? stivufine_terrain_base_h : (tex_terrain.h > 0 ? tex_terrain.h : 256);
+    int cell = tile >= 0 ? tile / 256 : 0;
+    int local = tile >= 0 ? tile & 255 : 0;
+    int cells = stivufine_terrain_cells_per_row > 0 ? stivufine_terrain_cells_per_row : 1;
+    int tile_w = base_w / 16, tile_h = base_h / 16;
+    *x = (cell % cells) * base_w + (local & 15) * tile_w;
+    *y = (cell / cells) * base_h + (local >> 4) * tile_h;
+    *w = tile_w; *h = tile_h;
+}
+
 static void terrain_tile_uv(int tile, float *u0, float *v0, float *u1, float *v1) {
-    float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
-    float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
-    int tx = (tile & 15) * 16;
-    int ty = (tile >> 4) * 16;
-    *u0 = ((float)tx + 0.01f) / tw;
-    *v0 = ((float)ty + 0.01f) / th;
-    *u1 = ((float)tx + 15.99f) / tw;
-    *v1 = ((float)ty + 15.99f) / th;
+    float aw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
+    float ah = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+    int tx, ty, pw, ph;
+    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &pw, &ph);
+    *u0 = ((float)tx + 0.01f) / aw;
+    *v0 = ((float)ty + 0.01f) / ah;
+    *u1 = ((float)tx + (float)pw - 0.01f) / aw;
+    *v1 = ((float)ty + (float)ph - 0.01f) / ah;
 }
 
 #define PEX_PORTAL_TILE 14
@@ -1125,9 +1137,9 @@ static void pex_portal_build_frames(void) {
 static void update_portal_texture_animation(void) {
     if (!stivufine_animate_portal_texture()) return;
     if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return;
-    int tx = (PEX_PORTAL_TILE & 15) * 16;
-    int ty = (PEX_PORTAL_TILE >> 4) * 16;
-    if (tx + 16 > tex_terrain.w || ty + 16 > tex_terrain.h) return;
+    int tx, ty, tw, th;
+    stivufine_terrain_tile_pixel_rect(PEX_PORTAL_TILE, &tx, &ty, &tw, &th);
+    if (tw != 16 || th != 16 || tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return;
     pex_portal_build_frames();
     int frame = (g_ingame_ticks + 1) & (PEX_PORTAL_FRAME_COUNT - 1);
     if (frame == g_portal_uploaded_frame && g_portal_uploaded_rgba == tex_terrain.rgba &&
@@ -1145,6 +1157,9 @@ static void update_portal_texture_animation(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
+    /* Portal may be the only enabled terrain animation. Rebuild immediately so
+       its level-0 upload cannot leave the atlas stuck on plain GL_NEAREST. */
+    stivufine_rebuild_terrain_mipmaps();
     g_portal_anim_terrain_dirty = 1; /* force direct backends to rebuild their terrain texture from the updated CPU atlas */
     g_portal_uploaded_frame = frame;
     g_portal_uploaded_rgba = tex_terrain.rgba;
@@ -1277,11 +1292,9 @@ static void pex_liquid_fx_lava_tick(PexLiquidTextureFX *fx, int flowing, unsigne
 
 static void pex_upload_animated_terrain_tile(int tile, const unsigned char src[16 * 16 * 4]) {
     if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0 || !src) return;
-    int tw = tex_terrain.w / 16;
-    int th = tex_terrain.h / 16;
+    int tx, ty, tw, th;
+    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tw, &th);
     if (tw <= 0 || th <= 0) return;
-    int tx = (tile & 15) * tw;
-    int ty = (tile >> 4) * th;
     if (tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return;
     for (int y = 0; y < th; ++y) {
         int sy = (y * 16) / th;
@@ -1305,6 +1318,7 @@ static void pex_upload_animated_terrain_tile(int tile, const unsigned char src[1
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexSubImage2D(GL_TEXTURE_2D, 0, tx, ty, tw, th, GL_RGBA, GL_UNSIGNED_BYTE, upload);
     free(upload);
+    stivufine_rebuild_terrain_mipmaps();
     g_portal_anim_terrain_dirty = 1;
 }
 
@@ -1388,12 +1402,12 @@ static void draw_portal_overlay(void) {
 
 static int terrain_tile_has_opaque_pixels(int tile) {
     if (!tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
-    int tx = (tile & 15) * 16;
-    int ty = (tile >> 4) * 16;
-    if (tx + 16 > tex_terrain.w || ty + 16 > tex_terrain.h) return 0;
+    int tx, ty, tw, th;
+    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tw, &th);
+    if (tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return 0;
     int count = 0;
-    for (int yy = 0; yy < 16; yy++) {
-        for (int xx = 0; xx < 16; xx++) {
+    for (int yy = 0; yy < th; yy++) {
+        for (int xx = 0; xx < tw; xx++) {
             unsigned char *p = &tex_terrain.rgba[((ty + yy) * tex_terrain.w + (tx + xx)) * 4];
             if (p[3] > 8) count++;
         }
@@ -1403,12 +1417,12 @@ static int terrain_tile_has_opaque_pixels(int tile) {
 
 static int terrain_tile_liquid_like(int tile, int water) {
     if (!tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
-    int tx = (tile & 15) * 16;
-    int ty = (tile >> 4) * 16;
-    if (tx + 16 > tex_terrain.w || ty + 16 > tex_terrain.h) return 0;
+    int tx, ty, tw, th;
+    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tw, &th);
+    if (tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return 0;
     int opaque = 0, match = 0, gray = 0;
-    for (int yy = 0; yy < 16; yy++) {
-        for (int xx = 0; xx < 16; xx++) {
+    for (int yy = 0; yy < th; yy++) {
+        for (int xx = 0; xx < tw; xx++) {
             unsigned char *p = &tex_terrain.rgba[((ty + yy) * tex_terrain.w + (tx + xx)) * 4];
             if (p[3] <= 8) continue;
             int r = p[0], g = p[1], b = p[2];
@@ -4329,6 +4343,162 @@ static int block_texture_resolve(int block_id, int meta, int face) {
 }
 
 
+
+static void world_face_style(int id, int face, int *tile);
+
+static int stivufine_ctm_rule_metadata_matches(const StivuFineCtmRule *r, int meta) {
+    if (!r || r->metadata_count <= 0) return 1;
+    for (int i = 0; i < r->metadata_count; ++i) if (r->metadata[i] == (meta & 15)) return 1;
+    return 0;
+}
+
+static int stivufine_ctm_neighbour(const StivuFineCtmRule *r, int x, int y, int z,
+                                    int block_id, int face, int base_tile) {
+    int nid = flat_get_block(x, y, z);
+    if (r->connect == 1) return nid == block_id;
+    if (r->connect == 2) {
+        if (nid <= 0) return 0;
+        int nt = block_texture_resolve(nid, flat_get_meta(x, y, z), face);
+        if (nt < 0) {
+            int dummy = 2;
+            world_face_style(nid, face, &dummy);
+            nt = dummy;
+        }
+        return nt == base_tile;
+    }
+    return 0;
+}
+
+static int stivufine_ctm_index_cardinal(const StivuFineCtmRule *r, int x, int y, int z,
+                                         int block_id, int face, int tile, int fancy) {
+    int b[4] = {0,0,0,0};
+    if (face == 0 || face == 1) {
+        b[0] = stivufine_ctm_neighbour(r,x-1,y,z,block_id,face,tile);
+        b[1] = stivufine_ctm_neighbour(r,x+1,y,z,block_id,face,tile);
+        b[2] = stivufine_ctm_neighbour(r,x,y,z+1,block_id,face,tile);
+        b[3] = stivufine_ctm_neighbour(r,x,y,z-1,block_id,face,tile);
+    } else if (face == 2) {
+        b[0] = stivufine_ctm_neighbour(r,x+1,y,z,block_id,face,tile);
+        b[1] = stivufine_ctm_neighbour(r,x-1,y,z,block_id,face,tile);
+        b[2] = stivufine_ctm_neighbour(r,x,y-1,z,block_id,face,tile);
+        b[3] = stivufine_ctm_neighbour(r,x,y+1,z,block_id,face,tile);
+    } else if (face == 3) {
+        b[0] = stivufine_ctm_neighbour(r,x-1,y,z,block_id,face,tile);
+        b[1] = stivufine_ctm_neighbour(r,x+1,y,z,block_id,face,tile);
+        b[2] = stivufine_ctm_neighbour(r,x,y-1,z,block_id,face,tile);
+        b[3] = stivufine_ctm_neighbour(r,x,y+1,z,block_id,face,tile);
+    } else if (face == 4) {
+        b[0] = stivufine_ctm_neighbour(r,x,y,z-1,block_id,face,tile);
+        b[1] = stivufine_ctm_neighbour(r,x,y,z+1,block_id,face,tile);
+        b[2] = stivufine_ctm_neighbour(r,x,y-1,z,block_id,face,tile);
+        b[3] = stivufine_ctm_neighbour(r,x,y+1,z,block_id,face,tile);
+    } else {
+        b[0] = stivufine_ctm_neighbour(r,x,y,z+1,block_id,face,tile);
+        b[1] = stivufine_ctm_neighbour(r,x,y,z-1,block_id,face,tile);
+        b[2] = stivufine_ctm_neighbour(r,x,y-1,z,block_id,face,tile);
+        b[3] = stivufine_ctm_neighbour(r,x,y+1,z,block_id,face,tile);
+    }
+    int index = 0;
+    if (b[0] && !b[1] && !b[2] && !b[3]) index=3;
+    else if (!b[0] && b[1] && !b[2] && !b[3]) index=1;
+    else if (!b[0] && !b[1] && b[2] && !b[3]) index=12;
+    else if (!b[0] && !b[1] && !b[2] && b[3]) index=36;
+    else if (b[0] && b[1] && !b[2] && !b[3]) index=2;
+    else if (!b[0] && !b[1] && b[2] && b[3]) index=24;
+    else if (b[0] && !b[1] && b[2] && !b[3]) index=15;
+    else if (b[0] && !b[1] && !b[2] && b[3]) index=39;
+    else if (!b[0] && b[1] && b[2] && !b[3]) index=13;
+    else if (!b[0] && b[1] && !b[2] && b[3]) index=37;
+    else if (!b[0] && b[1] && b[2] && b[3]) index=25;
+    else if (b[0] && !b[1] && b[2] && b[3]) index=27;
+    else if (b[0] && b[1] && !b[2] && b[3]) index=38;
+    else if (b[0] && b[1] && b[2] && !b[3]) index=14;
+    else if (b[0] && b[1] && b[2] && b[3]) index=26;
+    if (!fancy) return index;
+
+    int e[4] = {0,0,0,0};
+    if (face==0||face==1) {
+        e[0]=!stivufine_ctm_neighbour(r,x+1,y,z+1,block_id,face,tile);
+        e[1]=!stivufine_ctm_neighbour(r,x-1,y,z+1,block_id,face,tile);
+        e[2]=!stivufine_ctm_neighbour(r,x+1,y,z-1,block_id,face,tile);
+        e[3]=!stivufine_ctm_neighbour(r,x-1,y,z-1,block_id,face,tile);
+    } else if(face==2) {
+        e[0]=!stivufine_ctm_neighbour(r,x-1,y-1,z,block_id,face,tile);
+        e[1]=!stivufine_ctm_neighbour(r,x+1,y-1,z,block_id,face,tile);
+        e[2]=!stivufine_ctm_neighbour(r,x-1,y+1,z,block_id,face,tile);
+        e[3]=!stivufine_ctm_neighbour(r,x+1,y+1,z,block_id,face,tile);
+    } else if(face==3) {
+        e[0]=!stivufine_ctm_neighbour(r,x+1,y-1,z,block_id,face,tile);
+        e[1]=!stivufine_ctm_neighbour(r,x-1,y-1,z,block_id,face,tile);
+        e[2]=!stivufine_ctm_neighbour(r,x+1,y+1,z,block_id,face,tile);
+        e[3]=!stivufine_ctm_neighbour(r,x-1,y+1,z,block_id,face,tile);
+    } else if(face==4) {
+        e[0]=!stivufine_ctm_neighbour(r,x,y-1,z+1,block_id,face,tile);
+        e[1]=!stivufine_ctm_neighbour(r,x,y-1,z-1,block_id,face,tile);
+        e[2]=!stivufine_ctm_neighbour(r,x,y+1,z+1,block_id,face,tile);
+        e[3]=!stivufine_ctm_neighbour(r,x,y+1,z-1,block_id,face,tile);
+    } else {
+        e[0]=!stivufine_ctm_neighbour(r,x,y-1,z-1,block_id,face,tile);
+        e[1]=!stivufine_ctm_neighbour(r,x,y-1,z+1,block_id,face,tile);
+        e[2]=!stivufine_ctm_neighbour(r,x,y+1,z-1,block_id,face,tile);
+        e[3]=!stivufine_ctm_neighbour(r,x,y+1,z+1,block_id,face,tile);
+    }
+    if(index==13&&e[0])index=4;if(index==15&&e[1])index=5;if(index==37&&e[2])index=16;if(index==39&&e[3])index=17;
+    if(index==14&&e[0]&&e[1])index=7;if(index==25&&e[0]&&e[2])index=6;if(index==27&&e[3]&&e[1])index=19;if(index==38&&e[3]&&e[2])index=18;
+    if(index==14&&!e[0]&&e[1])index=31;if(index==25&&e[0]&&!e[2])index=30;if(index==27&&!e[3]&&e[1])index=41;if(index==38&&e[3]&&!e[2])index=40;
+    if(index==14&&e[0]&&!e[1])index=29;if(index==25&&!e[0]&&e[2])index=28;if(index==27&&e[3]&&!e[1])index=43;if(index==38&&!e[3]&&e[2])index=42;
+    if(index==26&&e[0]&&e[1]&&e[2]&&e[3])index=46;
+    if(index==26&&!e[0]&&e[1]&&e[2]&&e[3])index=9;
+    if(index==26&&e[0]&&!e[1]&&e[2]&&e[3])index=21;
+    if(index==26&&e[0]&&e[1]&&!e[2]&&e[3])index=8;
+    if(index==26&&e[0]&&e[1]&&e[2]&&!e[3])index=20;
+    if(index==26&&e[0]&&e[1]&&!e[2]&&!e[3])index=11;
+    if(index==26&&!e[0]&&!e[1]&&e[2]&&e[3])index=22;
+    if(index==26&&!e[0]&&e[1]&&!e[2]&&e[3])index=23;
+    if(index==26&&e[0]&&!e[1]&&e[2]&&!e[3])index=10;
+    if(index==26&&e[0]&&!e[1]&&!e[2]&&e[3])index=34;
+    if(index==26&&!e[0]&&e[1]&&e[2]&&!e[3])index=35;
+    if(index==26&&e[0]&&!e[1]&&!e[2]&&!e[3])index=32;
+    if(index==26&&!e[0]&&e[1]&&!e[2]&&!e[3])index=33;
+    if(index==26&&!e[0]&&!e[1]&&!e[2]&&e[3])index=44;
+    if(index==26&&!e[0]&&!e[1]&&e[2]&&!e[3])index=45;
+    return index;
+}
+
+static int stivufine_connected_texture_tile(int block_id,int x,int y,int z,int face,int base_tile) {
+    int mode=stivufine_connected_textures_mode();
+    if(mode==SF_OFF||base_tile<0||g_force_fullbright_item_model>0)return base_tile;
+    int meta=flat_get_meta(x,y,z);
+    for(int ri=0;ri<stivufine_ctm_rule_count;++ri){
+        const StivuFineCtmRule *r=&stivufine_ctm_rules[ri];
+        if((r->faces&(1<<face))==0||!stivufine_ctm_rule_metadata_matches(r,meta))continue;
+        if(r->target_kind==1&&r->target!=block_id)continue;
+        if(r->target_kind==2&&r->target!=base_tile)continue;
+        int idx=-1;
+        if(r->method==1) idx=stivufine_ctm_index_cardinal(r,x,y,z,block_id,face,base_tile,mode==SF_FANCY);
+        else if(r->method==2||r->method==6){
+            if(face==0||face==1)continue; int a=0,b=0;
+            if(r->method==6){a=stivufine_ctm_neighbour(r,x,y-1,z,block_id,face,base_tile);b=stivufine_ctm_neighbour(r,x,y+1,z,block_id,face,base_tile);}
+            else if(face==2){a=stivufine_ctm_neighbour(r,x+1,y,z,block_id,face,base_tile);b=stivufine_ctm_neighbour(r,x-1,y,z,block_id,face,base_tile);}
+            else if(face==3){a=stivufine_ctm_neighbour(r,x-1,y,z,block_id,face,base_tile);b=stivufine_ctm_neighbour(r,x+1,y,z,block_id,face,base_tile);}
+            else if(face==4){a=stivufine_ctm_neighbour(r,x,y,z-1,block_id,face,base_tile);b=stivufine_ctm_neighbour(r,x,y,z+1,block_id,face,base_tile);}
+            else {a=stivufine_ctm_neighbour(r,x,y,z+1,block_id,face,base_tile);b=stivufine_ctm_neighbour(r,x,y,z-1,block_id,face,base_tile);}
+            idx=a?(b?1:2):(b?0:3);
+        } else if(r->method==3){if(face==0||face==1)continue;if(!stivufine_ctm_neighbour(r,x,y+1,z,block_id,face,base_tile))continue;idx=0;}
+        else if(r->method==4){/* C6 computes a symmetry-adjusted local but passes the original face to Config.getRandom. */int rr=stivufine_coord_random(x,y,z,face)&0x7fffffff;if(r->weight_count&&r->weight_sum>0){int w=rr%r->weight_sum,sum=0;for(int i=0;i<r->tile_count;++i){sum+=r->weights[i];if(w<sum){idx=i;break;}}}else idx=rr%r->tile_count;}
+        else if(r->method==5){int nx=0,ny=0;if(face<=1){nx=x;ny=z;}else if(face==2){nx=-x-1;ny=-y;}else if(face==3){nx=x;ny=-y;}else if(face==4){nx=z;ny=-y;}else{nx=-z-1;ny=-y;}nx%=r->width;ny%=r->height;if(nx<0)nx+=r->width;if(ny<0)ny+=r->height;idx=ny*r->width+nx;}
+        if(idx>=0&&idx<r->tile_count)return r->source_slot*256+r->tiles[idx];
+    }
+    return base_tile;
+}
+
+static void stivufine_natural_uv(int tile,int x,int y,int z,int face,float u0,float v0,float u1,float v1,float uv[8]) {
+    int rot=0,flip=0;
+    if(stivufine_natural_textures_enabled()&&g_force_fullbright_item_model<=0&&tile>=0){int slot=tile/256,local=tile&255;if(slot>=0&&slot<=SF_CTM_MAX_SOURCES){int n=stivufine_coord_random(x,y,z,face);int maxr=stivufine_natural_rotation[slot][local];if(maxr>1){rot=n&3;if(maxr==2)rot=(rot/2)*3;}if(stivufine_natural_flip[slot][local])flip=(n&4)!=0;}}
+    float lu[4]={0,1,1,0},lv[4]={0,0,1,1};
+    for(int i=0;i<4;++i){float a=lu[i],b=lv[i];for(int r=0;r<rot;++r){float t=a;a=1.0f-b;b=t;}if(flip)a=1.0f-a;uv[i*2]=u0+(u1-u0)*a;uv[i*2+1]=v0+(v1-v0)*b;}
+}
+
 static void world_face_style(int id, int face, int *tile) {
     float shade = world_face_base_shade(face);
 
@@ -4757,58 +4927,61 @@ static void emit_world_block_face_at(int id, int x, int y, int z, int face) {
         world_light_set_pos(x, y, z);
     }
     world_face_style_at(id, x, y, z, face, &tile);
+    int base_tile = tile;
+    tile = stivufine_connected_texture_tile(id, x, y, z, face, tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+    float sfuv[8]; stivufine_natural_uv(tile, x, y, z, face, u0, v0, u1, v1, sfuv);
     if (smooth_block_lighting_enabled(id)) {
         float ao[4];
         uint32_t light[4];
-        int rgb = world_face_tint_rgb(id, x, y, z, face, tile);
+        int rgb = world_face_tint_rgb(id, x, y, z, face, base_tile);
         float shade = world_face_base_shade(face);
         world_smooth_face_lights(x, y, z, face, ao, light);
         if (face == 1) {
-            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
-            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
-            world_tex_vertex_lit(x1, y1, z1, u1, v1, rgb, shade, ao[2], light[2]);
-            world_tex_vertex_lit(x0, y1, z1, u0, v1, rgb, shade, ao[3], light[3]);
+            world_tex_vertex_lit(x0, y1, z0, sfuv[0], sfuv[1], rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z0, sfuv[2], sfuv[3], rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y1, z1, sfuv[4], sfuv[5], rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y1, z1, sfuv[6], sfuv[7], rgb, shade, ao[3], light[3]);
         } else if (face == 0) {
-            world_tex_vertex_lit(x0, y0, z1, u0, v0, rgb, shade, ao[0], light[0]);
-            world_tex_vertex_lit(x1, y0, z1, u1, v0, rgb, shade, ao[1], light[1]);
-            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
-            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
+            world_tex_vertex_lit(x0, y0, z1, sfuv[0], sfuv[1], rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y0, z1, sfuv[2], sfuv[3], rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z0, sfuv[4], sfuv[5], rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z0, sfuv[6], sfuv[7], rgb, shade, ao[3], light[3]);
         } else if (face == 2) {
-            world_tex_vertex_lit(x1, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
-            world_tex_vertex_lit(x0, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
-            world_tex_vertex_lit(x0, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
-            world_tex_vertex_lit(x1, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
+            world_tex_vertex_lit(x1, y1, z0, sfuv[0], sfuv[1], rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x0, y1, z0, sfuv[2], sfuv[3], rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x0, y0, z0, sfuv[4], sfuv[5], rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x1, y0, z0, sfuv[6], sfuv[7], rgb, shade, ao[3], light[3]);
         } else if (face == 3) {
-            world_tex_vertex_lit(x0, y1, z1, u0, v0, rgb, shade, ao[0], light[0]);
-            world_tex_vertex_lit(x1, y1, z1, u1, v0, rgb, shade, ao[1], light[1]);
-            world_tex_vertex_lit(x1, y0, z1, u1, v1, rgb, shade, ao[2], light[2]);
-            world_tex_vertex_lit(x0, y0, z1, u0, v1, rgb, shade, ao[3], light[3]);
+            world_tex_vertex_lit(x0, y1, z1, sfuv[0], sfuv[1], rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z1, sfuv[2], sfuv[3], rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z1, sfuv[4], sfuv[5], rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z1, sfuv[6], sfuv[7], rgb, shade, ao[3], light[3]);
         } else if (face == 4) {
-            world_tex_vertex_lit(x0, y1, z0, u0, v0, rgb, shade, ao[0], light[0]);
-            world_tex_vertex_lit(x0, y1, z1, u1, v0, rgb, shade, ao[1], light[1]);
-            world_tex_vertex_lit(x0, y0, z1, u1, v1, rgb, shade, ao[2], light[2]);
-            world_tex_vertex_lit(x0, y0, z0, u0, v1, rgb, shade, ao[3], light[3]);
+            world_tex_vertex_lit(x0, y1, z0, sfuv[0], sfuv[1], rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x0, y1, z1, sfuv[2], sfuv[3], rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x0, y0, z1, sfuv[4], sfuv[5], rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x0, y0, z0, sfuv[6], sfuv[7], rgb, shade, ao[3], light[3]);
         } else if (face == 5) {
-            world_tex_vertex_lit(x1, y1, z1, u0, v0, rgb, shade, ao[0], light[0]);
-            world_tex_vertex_lit(x1, y1, z0, u1, v0, rgb, shade, ao[1], light[1]);
-            world_tex_vertex_lit(x1, y0, z0, u1, v1, rgb, shade, ao[2], light[2]);
-            world_tex_vertex_lit(x1, y0, z1, u0, v1, rgb, shade, ao[3], light[3]);
+            world_tex_vertex_lit(x1, y1, z1, sfuv[0], sfuv[1], rgb, shade, ao[0], light[0]);
+            world_tex_vertex_lit(x1, y1, z0, sfuv[2], sfuv[3], rgb, shade, ao[1], light[1]);
+            world_tex_vertex_lit(x1, y0, z0, sfuv[4], sfuv[5], rgb, shade, ao[2], light[2]);
+            world_tex_vertex_lit(x1, y0, z1, sfuv[6], sfuv[7], rgb, shade, ao[3], light[3]);
         }
         return;
     }
     if (face == 1) {
-        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
+        world_tex_vertex(x0, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x1, y1, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y1, z1, sfuv[6], sfuv[7]);
     } else if (face == 0) {
-        world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, y0, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y0, z1, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 2) {
-        world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+        world_tex_vertex(x1, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x0, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x0, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x1, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 3) {
-        world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+        world_tex_vertex(x0, y1, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z1, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z1, sfuv[6], sfuv[7]);
     } else if (face == 4) {
-        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x0, y1, z1, sfuv[2], sfuv[3]); world_tex_vertex(x0, y0, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 5) {
-        world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+        world_tex_vertex(x1, y1, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x1, y0, z1, sfuv[6], sfuv[7]);
     }
 }
 
@@ -4822,19 +4995,21 @@ static void emit_world_block_face_float(int id, float x, float y, float z, int f
     world_style_set_pos(bx, by, bz);
     world_light_set_pos_for_face(bx, by, bz, face);
     world_face_style_at(id, bx, by, bz, face, &tile);
+    tile = stivufine_connected_texture_tile(id, bx, by, bz, face, tile);
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+    float sfuv[8]; stivufine_natural_uv(tile, bx, by, bz, face, u0, v0, u1, v1, sfuv);
     if (face == 1) { /* top */
-        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
+        world_tex_vertex(x0, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x1, y1, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y1, z1, sfuv[6], sfuv[7]);
     } else if (face == 0) { /* bottom */
-        world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, y0, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y0, z1, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 2) { /* north z- */
-        world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+        world_tex_vertex(x1, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x0, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x0, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x1, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 3) { /* south z+ */
-        world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+        world_tex_vertex(x0, y1, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z1, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z1, sfuv[6], sfuv[7]);
     } else if (face == 4) { /* west x- */
-        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x0, y1, z1, sfuv[2], sfuv[3]); world_tex_vertex(x0, y0, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 5) { /* east x+ */
-        world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+        world_tex_vertex(x1, y1, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x1, y0, z1, sfuv[6], sfuv[7]);
     }
 }
 
@@ -4895,24 +5070,27 @@ static void emit_cuboid_face_tile(float x0, float y0, float z0, float x1, float 
     }
     if (g_render_flip_texture_once) { float tu = u0; u0 = u1; u1 = tu; }
 
+    int sfx=(int)floorf(x0), sfy=(int)floorf(y0), sfz=(int)floorf(z0);
+    float sfuv[8]; stivufine_natural_uv(tile, sfx, sfy, sfz, face, u0, v0, u1, v1, sfuv);
+
     if (face == 1) {
         world_set_shade(1.0f);
-        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y1, z1, u1, v1); world_tex_vertex(x0, y1, z1, u0, v1);
+        world_tex_vertex(x0, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x1, y1, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y1, z1, sfuv[6], sfuv[7]);
     } else if (face == 0) {
         world_set_shade(0.50f);
-        world_tex_vertex(x0, y0, z1, u0, v0); world_tex_vertex(x1, y0, z1, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, y0, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y0, z1, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 2) {
         world_set_shade(0.80f);
-        world_tex_vertex(x1, y1, z0, u0, v0); world_tex_vertex(x0, y1, z0, u1, v0); world_tex_vertex(x0, y0, z0, u1, v1); world_tex_vertex(x1, y0, z0, u0, v1);
+        world_tex_vertex(x1, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x0, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x0, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x1, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 3) {
         world_set_shade(0.80f);
-        world_tex_vertex(x0, y1, z1, u0, v0); world_tex_vertex(x1, y1, z1, u1, v0); world_tex_vertex(x1, y0, z1, u1, v1); world_tex_vertex(x0, y0, z1, u0, v1);
+        world_tex_vertex(x0, y1, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z1, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z1, sfuv[6], sfuv[7]);
     } else if (face == 4) {
         world_set_shade(0.60f);
-        world_tex_vertex(x0, y1, z0, u0, v0); world_tex_vertex(x0, y1, z1, u1, v0); world_tex_vertex(x0, y0, z1, u1, v1); world_tex_vertex(x0, y0, z0, u0, v1);
+        world_tex_vertex(x0, y1, z0, sfuv[0], sfuv[1]); world_tex_vertex(x0, y1, z1, sfuv[2], sfuv[3]); world_tex_vertex(x0, y0, z1, sfuv[4], sfuv[5]); world_tex_vertex(x0, y0, z0, sfuv[6], sfuv[7]);
     } else if (face == 5) {
         world_set_shade(0.60f);
-        world_tex_vertex(x1, y1, z1, u0, v0); world_tex_vertex(x1, y1, z0, u1, v0); world_tex_vertex(x1, y0, z0, u1, v1); world_tex_vertex(x1, y0, z1, u0, v1);
+        world_tex_vertex(x1, y1, z1, sfuv[0], sfuv[1]); world_tex_vertex(x1, y1, z0, sfuv[2], sfuv[3]); world_tex_vertex(x1, y0, z0, sfuv[4], sfuv[5]); world_tex_vertex(x1, y0, z1, sfuv[6], sfuv[7]);
     }
 }
 
@@ -4939,6 +5117,7 @@ static void emit_cuboid_block_faces_lit(int id, float x0, float y0, float z0, fl
         } else {
             world_face_style(id, face, &tile);
         }
+        tile = stivufine_connected_texture_tile(id, (int)floorf(x0), (int)floorf(y0), (int)floorf(z0), face, tile);
         emit_cuboid_face_tile(x0, y0, z0, x1, y1, z1,
                               lx0, ly0, lz0, lx1, ly1, lz1, face, tile);
     }

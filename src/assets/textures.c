@@ -41,6 +41,20 @@ static void free_texture(Texture *t) {
     t->rgba = NULL;
 }
 
+static void stivufine_clear_random_mob_variants(void);
+static int stivufine_mipmaps_suppressed = 0;
+static int stivufine_terrain_tiles_per_axis = 16;
+static int stivufine_defer_quality_update = 0;
+static void stivufine_apply_anisotropy_bound(void);
+static int load_png_texture(Texture *t, const char *path, int repeat);
+static char *stivufine_trim_ascii(char *s);
+
+static int stivufine_texture_is_font(const Texture *t) {
+    if (!t) return 0;
+    if (t == &tex_font) return 1;
+    for (int i = 0; i < 256; ++i) if (t == &tex_font_glyph[i]) return 1;
+    return 0;
+}
 
 static void set_texture_filter_wrap(Texture *t, int linear, int repeat) {
     if (!t || !t->id) return;
@@ -49,6 +63,543 @@ static void set_texture_filter_wrap(Texture *t, int linear, int repeat) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
+    stivufine_apply_anisotropy_bound();
+}
+
+static int stivufine_texture_mipmap_level_for(const Texture *t) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    (void)t;
+    return 0;
+#else
+    if (!t || t == &tex_items || stivufine_mipmaps_suppressed || stivufine_texture_is_font(t)) return 0;
+#if !defined(PEX_PLATFORM_SDL2)
+    if (pex_using_gpu_backend()) return 0;
+#endif
+    int level = g_opts.sf_mipmap_level;
+    if (level <= 0 || !t->rgba || t->w <= 1 || t->h <= 1) return 0;
+    int max_level = 0;
+    if (t == &tex_terrain) {
+        int grid = stivufine_terrain_tiles_per_axis > 0 ? stivufine_terrain_tiles_per_axis : 16;
+        int tile_w = t->w / grid;
+        int tile_h = t->h / grid;
+        if (tile_w <= 1 || tile_h <= 1 || tile_w * grid != t->w || tile_h * grid != t->h) return 0;
+        int min_tile = tile_w < tile_h ? tile_w : tile_h;
+        while (min_tile > 1 && max_level < 12) { min_tile >>= 1; max_level++; }
+    } else {
+        int min_dim = t->w < t->h ? t->w : t->h;
+        while (min_dim > 1 && max_level < 12) { min_dim >>= 1; max_level++; }
+        if (level >= 4 && max_level > 4) max_level -= 4; /* Match Java's Max headroom for non-atlas textures. */
+    }
+    if (level >= 4) level = max_level;
+    if (level > max_level) level = max_level;
+    if (level < 0) level = 0;
+    return level;
+#endif
+}
+
+static void stivufine_alpha_blend_pair(const unsigned char *a, const unsigned char *b, unsigned char out[4]) {
+    int a1 = a[3], a2 = b[3];
+    int ax = (a1 + a2) / 2;
+    const unsigned char *c1 = a, *c2 = b;
+    if (a1 == 0 && a2 == 0) {
+        a1 = 1;
+        a2 = 1;
+    } else {
+        if (a1 == 0) { c1 = b; ax /= 2; }
+        if (a2 == 0) { c2 = c1; ax /= 2; }
+    }
+    out[0] = (unsigned char)(((int)c1[0] * a1 + (int)c2[0] * a2) / (a1 + a2));
+    out[1] = (unsigned char)(((int)c1[1] * a1 + (int)c2[1] * a2) / (a1 + a2));
+    out[2] = (unsigned char)(((int)c1[2] * a1 + (int)c2[2] * a2) / (a1 + a2));
+    out[3] = (unsigned char)ax;
+}
+
+/* Exact RenderEngine.alphaBlend(c1,c2,c3,c4) pairing/order from the
+   Minecraft 1.2.5 StivuFine reference: blend top pair, bottom pair, then both. */
+static void stivufine_alpha_blend_four(const unsigned char *p1, const unsigned char *p2,
+                                       const unsigned char *p3, const unsigned char *p4,
+                                       unsigned char out[4]) {
+    unsigned char a[4], b[4];
+    stivufine_alpha_blend_pair(p1, p2, a);
+    stivufine_alpha_blend_pair(p3, p4, b);
+    stivufine_alpha_blend_pair(a, b, out);
+}
+
+static void stivufine_prepare_terrain_transparent_rgb(unsigned char *rgba, int w, int h) {
+    if (!rgba || w <= 0 || h <= 0 || (w % 16) || (h % 16)) return;
+    int grid = stivufine_terrain_tiles_per_axis > 0 ? stivufine_terrain_tiles_per_axis : 16;
+    int tw = w / grid, th = h / grid;
+    for (int ty = 0; ty < grid; ++ty) for (int tx = 0; tx < grid; ++tx) {
+        unsigned long long rs = 0, gs = 0, bs = 0, count = 0;
+        int x0 = tx * tw, y0 = ty * th;
+        for (int y = 0; y < th; ++y) for (int x = 0; x < tw; ++x) {
+            unsigned char *px = &rgba[((y0 + y) * w + (x0 + x)) * 4];
+            if (px[3] != 0) { rs += px[0]; gs += px[1]; bs += px[2]; count++; }
+        }
+        if (!count) continue;
+        unsigned char r = (unsigned char)(rs / count);
+        unsigned char g = (unsigned char)(gs / count);
+        unsigned char b = (unsigned char)(bs / count);
+        for (int y = 0; y < th; ++y) for (int x = 0; x < tw; ++x) {
+            unsigned char *px = &rgba[((y0 + y) * w + (x0 + x)) * 4];
+            if (px[3] == 0) { px[0] = r; px[1] = g; px[2] = b; }
+        }
+    }
+}
+
+static void stivufine_upload_atlas_mipmap_levels(Texture *t) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    (void)t;
+#else
+    int levels = stivufine_texture_mipmap_level_for(t);
+    if (!t || !t->rgba || !t->id || levels <= 0) return;
+    int grid = stivufine_terrain_tiles_per_axis > 0 ? stivufine_terrain_tiles_per_axis : 16;
+    int base_tile_w = t->w / grid;
+    int base_tile_h = t->h / grid;
+    int prev_w = t->w;
+    unsigned char *prev = (unsigned char*)malloc((size_t)t->w * (size_t)t->h * 4u);
+    if (!prev) return;
+    memcpy(prev, t->rgba, (size_t)t->w * (size_t)t->h * 4u);
+    stivufine_prepare_terrain_transparent_rgb(prev, t->w, t->h);
+    for (int level = 1; level <= levels; ++level) {
+        int src_tile_w = base_tile_w >> (level - 1);
+        int src_tile_h = base_tile_h >> (level - 1);
+        int dst_tile_w = base_tile_w >> level;
+        int dst_tile_h = base_tile_h >> level;
+        if (src_tile_w < 1) src_tile_w = 1;
+        if (src_tile_h < 1) src_tile_h = 1;
+        if (dst_tile_w < 1) dst_tile_w = 1;
+        if (dst_tile_h < 1) dst_tile_h = 1;
+        int dst_w = dst_tile_w * grid;
+        int dst_h = dst_tile_h * grid;
+        unsigned char *dst = (unsigned char*)calloc((size_t)dst_w * (size_t)dst_h * 4u, 1u);
+        if (!dst) break;
+        for (int ty = 0; ty < grid; ++ty) for (int tx = 0; tx < grid; ++tx) {
+            int src0x = tx * src_tile_w, src0y = ty * src_tile_h;
+            int dst0x = tx * dst_tile_w, dst0y = ty * dst_tile_h;
+            for (int y = 0; y < dst_tile_h; ++y) for (int x = 0; x < dst_tile_w; ++x) {
+                int sx0 = x * 2, sy0 = y * 2;
+                int sx1 = sx0 + 1 < src_tile_w ? sx0 + 1 : sx0;
+                int sy1 = sy0 + 1 < src_tile_h ? sy0 + 1 : sy0;
+                const unsigned char *p1 = &prev[((src0y + sy0) * prev_w + (src0x + sx0)) * 4];
+                const unsigned char *p2 = &prev[((src0y + sy0) * prev_w + (src0x + sx1)) * 4];
+                const unsigned char *p3 = &prev[((src0y + sy1) * prev_w + (src0x + sx1)) * 4];
+                const unsigned char *p4 = &prev[((src0y + sy1) * prev_w + (src0x + sx0)) * 4];
+                unsigned char *dp = &dst[((dst0y + y) * dst_w + (dst0x + x)) * 4];
+                stivufine_alpha_blend_four(p1, p2, p3, p4, dp);
+            }
+        }
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, dst_w, dst_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, dst);
+        free(prev);
+        prev = dst;
+        prev_w = dst_w;
+    }
+    free(prev);
+#endif
+}
+
+static void stivufine_upload_generic_mipmap_levels(Texture *t) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    (void)t;
+#else
+    int levels = stivufine_texture_mipmap_level_for(t);
+    if (!t || !t->rgba || !t->id || levels <= 0) return;
+    int prev_w = t->w;
+    int prev_h = t->h;
+    unsigned char *prev = (unsigned char*)malloc((size_t)prev_w * (size_t)prev_h * 4u);
+    if (!prev) return;
+    memcpy(prev, t->rgba, (size_t)prev_w * (size_t)prev_h * 4u);
+    for (int level = 1; level <= levels; ++level) {
+        int dst_w = prev_w > 1 ? (prev_w >> 1) : 1;
+        int dst_h = prev_h > 1 ? (prev_h >> 1) : 1;
+        unsigned char *dst = (unsigned char*)calloc((size_t)dst_w * (size_t)dst_h * 4u, 1u);
+        if (!dst) break;
+        for (int y = 0; y < dst_h; ++y) for (int x = 0; x < dst_w; ++x) {
+            int sx0 = x * 2, sy0 = y * 2;
+            int sx1 = sx0 + 1 < prev_w ? sx0 + 1 : sx0;
+            int sy1 = sy0 + 1 < prev_h ? sy0 + 1 : sy0;
+            const unsigned char *p1 = &prev[(sy0 * prev_w + sx0) * 4];
+            const unsigned char *p2 = &prev[(sy0 * prev_w + sx1) * 4];
+            const unsigned char *p3 = &prev[(sy1 * prev_w + sx1) * 4];
+            const unsigned char *p4 = &prev[(sy1 * prev_w + sx0) * 4];
+            unsigned char *dp = &dst[(y * dst_w + x) * 4];
+            stivufine_alpha_blend_four(p1, p2, p3, p4, dp);
+        }
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, dst_w, dst_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, dst);
+        free(prev);
+        prev = dst;
+        prev_w = dst_w;
+        prev_h = dst_h;
+        if (dst_w <= 1 && dst_h <= 1) break;
+    }
+    free(prev);
+#endif
+}
+
+static void stivufine_apply_texture_mipmap_params(Texture *t) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    (void)t;
+#else
+    if (!t || !t->id) return;
+    int levels = stivufine_texture_mipmap_level_for(t);
+    glBindTexture(GL_TEXTURE_2D, t->id);
+    if (levels > 0) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, g_opts.sf_mipmap_linear ? GL_NEAREST_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        stivufine_apply_anisotropy_bound();
+        if (t == &tex_terrain) stivufine_upload_atlas_mipmap_levels(t);
+        else stivufine_upload_generic_mipmap_levels(t);
+    } else {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        stivufine_apply_anisotropy_bound();
+    }
+#endif
+}
+
+static void stivufine_rebuild_terrain_mipmaps(void) {
+    if (!tex_terrain.id || !tex_terrain.rgba) return;
+    stivufine_apply_texture_mipmap_params(&tex_terrain);
+}
+
+static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, int repeat);
+
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#endif
+#ifndef GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
+
+#define SF_CTM_MAX_RULES 768
+#define SF_CTM_MAX_SOURCES 15
+#define SF_CTM_MAX_TILES 48
+
+typedef struct StivuFineCtmRule {
+    int target_kind; /* 1 block id, 2 terrain tile */
+    int target;
+    int method;      /* 1 ctm, 2 horizontal, 3 top, 4 random, 5 repeat, 6 vertical */
+    int source_slot;
+    int connect;     /* 1 block, 2 tile */
+    int faces;
+    int metadata[16], metadata_count;
+    int tiles[SF_CTM_MAX_TILES], tile_count;
+    int weights[SF_CTM_MAX_TILES], weight_count, weight_sum;
+    int symmetry;
+    int width, height;
+} StivuFineCtmRule;
+
+typedef struct StivuFineCtmSource {
+    char rel[MAX_PATHBUF];
+    Texture texture;
+    int matched_base_dimensions;
+} StivuFineCtmSource;
+
+static StivuFineCtmRule stivufine_ctm_rules[SF_CTM_MAX_RULES];
+static int stivufine_ctm_rule_count = 0;
+static StivuFineCtmSource stivufine_ctm_sources[SF_CTM_MAX_SOURCES];
+static int stivufine_ctm_source_count = 0;
+static int stivufine_terrain_cells_per_row = 1;
+static int stivufine_terrain_base_w = 256;
+static int stivufine_terrain_base_h = 256;
+static unsigned char stivufine_natural_rotation[SF_CTM_MAX_SOURCES + 1][256];
+static unsigned char stivufine_natural_flip[SF_CTM_MAX_SOURCES + 1][256];
+static int stivufine_anisotropy_checked = 0;
+static float stivufine_anisotropy_max = 1.0f;
+
+static int stivufine_int_hash(int x) {
+    uint32_t u = (uint32_t)x;
+    u = u ^ 61u ^ (u >> 16);
+    u += u << 3;
+    u ^= u >> 4;
+    u *= 668265261u;
+    u ^= u >> 15;
+    return (int)u;
+}
+
+static int stivufine_coord_random(int x, int y, int z, int face) {
+    int r = stivufine_int_hash(face + 37);
+    r = stivufine_int_hash(r + x);
+    r = stivufine_int_hash(r + z);
+    return stivufine_int_hash(r + y);
+}
+
+static void stivufine_detect_anisotropy(void) {
+    if (stivufine_anisotropy_checked) return;
+    stivufine_anisotropy_checked = 1;
+    stivufine_anisotropy_max = 1.0f;
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+    const char *ext = (const char*)glGetString(GL_EXTENSIONS);
+    if (ext && strstr(ext, "GL_EXT_texture_filter_anisotropic")) {
+        GLfloat maxv = 1.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxv);
+        if (maxv > 1.0f) stivufine_anisotropy_max = maxv;
+    }
+#endif
+}
+
+static void stivufine_apply_anisotropy_bound(void) {
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+    stivufine_detect_anisotropy();
+    float want = (float)stivufine_af_level();
+    if (want < 1.0f) want = 1.0f;
+    if (want > stivufine_anisotropy_max) want = stivufine_anisotropy_max;
+    if (stivufine_anisotropy_max > 1.0f) glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, want);
+#endif
+}
+
+static void stivufine_reset_quality_texture_state(void) {
+    for (int i = 0; i < stivufine_ctm_source_count; ++i) free_texture(&stivufine_ctm_sources[i].texture);
+    memset(stivufine_ctm_sources, 0, sizeof(stivufine_ctm_sources));
+    memset(stivufine_ctm_rules, 0, sizeof(stivufine_ctm_rules));
+    memset(stivufine_natural_rotation, 0, sizeof(stivufine_natural_rotation));
+    memset(stivufine_natural_flip, 0, sizeof(stivufine_natural_flip));
+    stivufine_ctm_source_count = 0;
+    stivufine_ctm_rule_count = 0;
+    stivufine_terrain_cells_per_row = 1;
+    stivufine_terrain_tiles_per_axis = 16;
+    stivufine_terrain_base_w = tex_terrain.w > 0 ? tex_terrain.w : 256;
+    stivufine_terrain_base_h = tex_terrain.h > 0 ? tex_terrain.h : 256;
+}
+
+static int stivufine_parse_int_list(const char *text, int *out, int cap) {
+    int n = 0;
+    char buf[512];
+    if (!text || !out || cap <= 0) return 0;
+    snprintf(buf, sizeof(buf), "%s", text);
+    for (char *tok = strtok(buf, " ,\t"); tok && n < cap; tok = strtok(NULL, " ,\t")) {
+        char *dash = strchr(tok, '-');
+        if (dash) {
+            *dash++ = 0;
+            int a = atoi(tok), b = atoi(dash);
+            if (a >= 0 && b >= a) for (int v = a; v <= b && n < cap; ++v) out[n++] = v;
+        } else {
+            int v = atoi(tok);
+            if (v >= 0) out[n++] = v;
+        }
+    }
+    return n;
+}
+
+static int stivufine_parse_faces(const char *text) {
+    if (!text || !*text) return 63;
+    int mask = 0;
+    char buf[256]; snprintf(buf, sizeof(buf), "%s", text);
+    for (char *tok = strtok(buf, " ,\t"); tok; tok = strtok(NULL, " ,\t")) {
+        if (!strcmp(tok,"bottom")) mask |= 1;
+        else if (!strcmp(tok,"top")) mask |= 2;
+        else if (!strcmp(tok,"north")) mask |= 4;
+        else if (!strcmp(tok,"south")) mask |= 8;
+        else if (!strcmp(tok,"west")) mask |= 16;
+        else if (!strcmp(tok,"east")) mask |= 32;
+        else if (!strcmp(tok,"sides")) mask |= 60;
+        else if (!strcmp(tok,"all")) mask |= 63;
+    }
+    return mask;
+}
+
+static int stivufine_load_pack_or_builtin(TexturePackEntry *e, Texture *out, const char *rel) {
+    char path[MAX_PATHBUF];
+    if (e && !e->is_default) {
+        snprintf(path, sizeof(path), "%s/%s", e->path, rel[0]=='/' ? rel+1 : rel);
+        for (char *c=path; *c; ++c) if (*c=='\\') *c='/';
+        if (load_png_texture(out, path, 0)) return 1;
+    }
+    if (!strcmp(rel, "/ctm.png") || !strcmp(rel, "ctm.png")) {
+        if (load_png_texture(out, "stivufine/ctm.png", 0)) return 1;
+        snprintf(path, sizeof(path), "%s/stivufine/ctm.png", g_mc_dir);
+        if (load_png_texture(out, path, 0)) return 1;
+    }
+    return 0;
+}
+
+static int stivufine_resize_texture_rgba(Texture *t, int w, int h) {
+    if (!t || !t->rgba || t->w <= 0 || t->h <= 0 || w <= 0 || h <= 0) return 0;
+    if (t->w == w && t->h == h) return 1;
+    unsigned char *dst = (unsigned char*)malloc((size_t)w * (size_t)h * 4u);
+    if (!dst) return 0;
+    for (int y = 0; y < h; ++y) {
+        int sy = (int)((long long)y * t->h / h);
+        if (sy >= t->h) sy = t->h - 1;
+        for (int x = 0; x < w; ++x) {
+            int sx = (int)((long long)x * t->w / w);
+            if (sx >= t->w) sx = t->w - 1;
+            memcpy(&dst[((size_t)y * w + x) * 4u], &t->rgba[((size_t)sy * t->w + sx) * 4u], 4u);
+        }
+    }
+    if (t->id) glDeleteTextures(1, &t->id);
+    free(t->rgba);
+    t->rgba = dst; t->w = w; t->h = h; t->id = 0;
+    return 1;
+}
+
+static int stivufine_ctm_source_slot(TexturePackEntry *e, const char *source) {
+    char norm[MAX_PATHBUF];
+    if (!source || !*source) source = "/ctm.png";
+    snprintf(norm, sizeof(norm), "%s", source);
+    for (char *c=norm; *c; ++c) if (*c=='\\') *c='/';
+    if (norm[0] != '/') { char tmp[MAX_PATHBUF]; snprintf(tmp,sizeof(tmp),"/%s",norm); snprintf(norm,sizeof(norm),"%s",tmp); }
+    for (int i=0;i<stivufine_ctm_source_count;++i) if (!strcmp(stivufine_ctm_sources[i].rel,norm)) return i+1;
+    if (stivufine_ctm_source_count >= SF_CTM_MAX_SOURCES) return -1;
+    Texture t={0};
+    if (!stivufine_load_pack_or_builtin(e,&t,norm)) return -1;
+    int matched_base = (t.w == stivufine_terrain_base_w && t.h == stivufine_terrain_base_h);
+    if (!matched_base && !stivufine_resize_texture_rgba(&t, stivufine_terrain_base_w, stivufine_terrain_base_h)) {
+        free_texture(&t); return -1;
+    }
+    int i=stivufine_ctm_source_count++;
+    snprintf(stivufine_ctm_sources[i].rel,sizeof(stivufine_ctm_sources[i].rel),"%s",norm);
+    stivufine_ctm_sources[i].texture=t;
+    stivufine_ctm_sources[i].matched_base_dimensions=matched_base;
+    return i+1;
+}
+
+static void stivufine_natural_defaults(void) {
+    static const struct { unsigned char tile, rot, flip; } d[] = {
+        {0,4,1},{1,2,1},{2,4,1},{3,1,1},{38,1,1},{6,1,1},{17,2,1},{18,4,1},{19,4,0},
+        {20,2,1},{21,4,1},{32,2,1},{33,2,1},{34,2,1},{50,2,1},{51,2,1},{160,2,1},
+        {37,4,1},{52,2,1},{53,2,1},{196,2,0},{197,2,0},{66,4,1},{68,1,1},{70,2,1},
+        {72,4,1},{77,1,1},{78,4,1},{86,2,1},{87,2,1},{103,4,1},{104,4,1},{105,4,0},
+        {116,2,1},{117,1,1},{132,2,1},{133,2,1},{153,2,1},{175,4,0},{176,4,0},
+        {208,4,1},{211,4,1},{212,4,1}
+    };
+    for (size_t i=0;i<sizeof(d)/sizeof(d[0]);++i) { stivufine_natural_rotation[0][d[i].tile]=d[i].rot; stivufine_natural_flip[0][d[i].tile]=d[i].flip; }
+}
+
+static int stivufine_natural_texture_slot(const char *name) {
+    char norm[MAX_PATHBUF];
+    if (!name || !*name) return -1;
+    snprintf(norm, sizeof(norm), "%s", name);
+    for (char *c = norm; *c; ++c) if (*c == '\\') *c = '/';
+    if (norm[0] != '/') { char tmp[MAX_PATHBUF]; snprintf(tmp, sizeof(tmp), "/%s", norm); snprintf(norm, sizeof(norm), "%s", tmp); }
+    if (!strcmp(norm, "/terrain.png")) return 0;
+    for (int i = 0; i < stivufine_ctm_source_count; ++i)
+        if (!strcmp(norm, stivufine_ctm_sources[i].rel)) return i + 1;
+    return -1;
+}
+
+static void stivufine_load_natural_properties(TexturePackEntry *e) {
+    if (!stivufine_natural_textures_enabled()) return;
+    if (!e || e->is_default) { stivufine_natural_defaults(); return; }
+    char path[MAX_PATHBUF]; snprintf(path,sizeof(path),"%s/natural.properties",e->path);
+    FILE *f=fopen(path,"r");
+    if (!f) return; /* exact 1.2.5 behavior: custom packs do not inherit defaults */
+    char line[512];
+    while (fgets(line,sizeof(line),f)) {
+        char *hash=strchr(line,'#'); if(hash)*hash=0;
+        char *eq=strchr(line,'='); if(!eq)continue; *eq++=0;
+        char *lhs=stivufine_trim_ascii(line), *type=stivufine_trim_ascii(eq);
+        char *colon=strrchr(lhs,':'); if(!colon)continue; *colon++=0;
+        int slot=stivufine_natural_texture_slot(lhs); if(slot<0||slot>SF_CTM_MAX_SOURCES)continue;
+        int tile=atoi(colon); if(tile<0||tile>255)continue;
+        int rot=1, flip=0;
+        if(!strcmp(type,"4")){rot=4;} else if(!strcmp(type,"2")){rot=2;} else if(!strcmp(type,"F")){flip=1;}
+        else if(!strcmp(type,"4F")){rot=4;flip=1;} else if(!strcmp(type,"2F")){rot=2;flip=1;} else continue;
+        stivufine_natural_rotation[slot][tile]=(unsigned char)rot; stivufine_natural_flip[slot][tile]=(unsigned char)flip;
+    }
+    fclose(f);
+}
+
+static int stivufine_ctm_method(const char *v) {
+    if(!v||!*v||!strcmp(v,"ctm"))return 1; if(!strcmp(v,"horizontal"))return 2; if(!strcmp(v,"top"))return 3;
+    if(!strcmp(v,"random"))return 4; if(!strcmp(v,"repeat"))return 5; if(!strcmp(v,"vertical"))return 6; return 0;
+}
+
+static int stivufine_load_ctm_rule_file(TexturePackEntry *e, const char *path, int target_kind, int target, int def_connect) {
+    FILE *f=fopen(path,"r"); if(!f||stivufine_ctm_rule_count>=SF_CTM_MAX_RULES){if(f)fclose(f);return 0;}
+    char source[MAX_PATHBUF]="", method[32]="ctm", tiles[512]="", connect[32]="", faces[128]="", metadata[128]="", weights[512]="", symmetry[32]="", width[32]="", height[32]="";
+    char line[768];
+    while(fgets(line,sizeof(line),f)){
+        char *hash=strchr(line,'#');if(hash)*hash=0; char *eq=strchr(line,'=');if(!eq)continue;*eq++=0;
+        char *k=stivufine_trim_ascii(line),*v=stivufine_trim_ascii(eq);
+        char *dst=NULL; size_t cap=0;
+        if(!strcmp(k,"source")){dst=source;cap=sizeof(source);}else if(!strcmp(k,"method")){dst=method;cap=sizeof(method);}
+        else if(!strcmp(k,"tiles")){dst=tiles;cap=sizeof(tiles);}else if(!strcmp(k,"connect")){dst=connect;cap=sizeof(connect);}
+        else if(!strcmp(k,"faces")){dst=faces;cap=sizeof(faces);}else if(!strcmp(k,"metadata")){dst=metadata;cap=sizeof(metadata);}
+        else if(!strcmp(k,"weights")){dst=weights;cap=sizeof(weights);}else if(!strcmp(k,"symmetry")){dst=symmetry;cap=sizeof(symmetry);}
+        else if(!strcmp(k,"width")){dst=width;cap=sizeof(width);}else if(!strcmp(k,"height")){dst=height;cap=sizeof(height);}
+        if(dst)snprintf(dst,cap,"%s",v);
+    } fclose(f);
+    StivuFineCtmRule r; memset(&r,0,sizeof(r)); r.target_kind=target_kind;r.target=target;r.method=stivufine_ctm_method(method);r.connect=def_connect;r.faces=stivufine_parse_faces(faces);r.symmetry=1;
+    if(!strcmp(connect,"block"))r.connect=1;else if(!strcmp(connect,"tile"))r.connect=2;
+    if(!strcmp(symmetry,"opposite"))r.symmetry=2;else if(!strcmp(symmetry,"all"))r.symmetry=6;
+    r.width=atoi(width);r.height=atoi(height);r.metadata_count=stivufine_parse_int_list(metadata,r.metadata,16);
+    r.tile_count=stivufine_parse_int_list(tiles,r.tiles,SF_CTM_MAX_TILES);r.weight_count=stivufine_parse_int_list(weights,r.weights,SF_CTM_MAX_TILES);
+    if(r.method==1&&r.tile_count==0)r.tile_count=stivufine_parse_int_list("0-11 16-27 32-43 48-59",r.tiles,SF_CTM_MAX_TILES);
+    if(r.method==2&&r.tile_count==0)r.tile_count=stivufine_parse_int_list("12-15",r.tiles,SF_CTM_MAX_TILES);
+    if(r.method==3&&r.tile_count==0){r.tiles[0]=66;r.tile_count=1;}
+    if(r.method==1&&r.tile_count!=48)return 0;if((r.method==2||r.method==6)&&r.tile_count!=4)return 0;if(r.method==3&&r.tile_count!=1)return 0;
+    if(r.method==5&&(r.width<1||r.width>16||r.height<1||r.height>16||r.width*r.height!=r.tile_count))return 0;if(r.method==4&&r.tile_count<1)return 0;
+    if(r.weight_count==r.tile_count){for(int i=0;i<r.weight_count;++i){if(r.weights[i]<0)return 0;r.weight_sum+=r.weights[i];}if(r.weight_sum<=0)return 0;}else if(r.weight_count>0)return 0;
+    if(!source[0])return 0;
+    r.source_slot=stivufine_ctm_source_slot(e,source); if(r.source_slot<1)return 0;
+    stivufine_ctm_rules[stivufine_ctm_rule_count++]=r; return 1;
+}
+
+static void stivufine_add_default_ctm_rule(int kind,int target,int method,int source_slot) {
+    if(stivufine_ctm_rule_count>=SF_CTM_MAX_RULES)return; StivuFineCtmRule r;memset(&r,0,sizeof(r));
+    r.target_kind=kind;r.target=target;r.method=method;r.source_slot=source_slot;r.connect=kind==1?1:2;r.faces=63;r.symmetry=1;
+    if(method==1)r.tile_count=stivufine_parse_int_list("0-11 16-27 32-43 48-59",r.tiles,SF_CTM_MAX_TILES);
+    else if(method==2)r.tile_count=stivufine_parse_int_list("12-15",r.tiles,SF_CTM_MAX_TILES);
+    else {r.tiles[0]=66;r.tile_count=1;}
+    stivufine_ctm_rules[stivufine_ctm_rule_count++]=r;
+}
+
+static void stivufine_load_connected_properties(TexturePackEntry *e) {
+    if(stivufine_connected_textures_mode()==SF_OFF)return;
+    int before=stivufine_ctm_rule_count;
+    if(e&&!e->is_default){
+        static const char suff[]=" abcdefghijklmnopqrstuvwxyz"; char path[MAX_PATHBUF];
+        /* The 1.2.5 resolver checks terrain/tile properties before block
+           properties. Preserve that priority when both match the same face. */
+        static const int kinds[] = {2, 1};
+        for (int ki = 0; ki < 2; ++ki) {
+            int kind = kinds[ki];
+            for(int n=0;n<256;++n)for(int si=0;si<27;++si){
+                char suffix[2]={0,0};if(si>0)suffix[0]=suff[si];
+                snprintf(path,sizeof(path),"%s/ctm/%s%d%s.properties",e->path,kind==1?"block":"terrain",n,suffix);
+                if(!file_exists(path))break;
+                stivufine_load_ctm_rule_file(e,path,kind,n,kind==1?1:2);
+            }
+        }
+    }
+    if(stivufine_ctm_rule_count==before){
+        int slot=stivufine_ctm_source_slot(e,"/ctm.png");
+        if(slot>0 && stivufine_ctm_sources[slot-1].matched_base_dimensions){
+            stivufine_add_default_ctm_rule(1,BLOCK_GLASS,1,slot);
+            stivufine_add_default_ctm_rule(1,BLOCK_BOOKSHELF,2,slot);
+            stivufine_add_default_ctm_rule(2,176,3,slot); /* sandstone top */
+        }
+    }
+}
+
+static void stivufine_build_combined_terrain_atlas(void) {
+    int sources=1+stivufine_ctm_source_count;if(sources<=1||!tex_terrain.rgba)return;
+    int cells=1;while(cells*cells<sources)cells<<=1;if(cells>4)cells=4;
+    int w=stivufine_terrain_base_w*cells,h=stivufine_terrain_base_h*cells;
+    unsigned char *rgba=(unsigned char*)calloc((size_t)w*(size_t)h*4u,1u);if(!rgba)return;
+    for(int slot=0;slot<sources&&slot<cells*cells;++slot){
+        Texture *src=slot==0?&tex_terrain:&stivufine_ctm_sources[slot-1].texture;
+        int cx=slot%cells,cy=slot/cells;
+        for(int y=0;y<stivufine_terrain_base_h;++y)memcpy(&rgba[((cy*stivufine_terrain_base_h+y)*w+cx*stivufine_terrain_base_w)*4],&src->rgba[(size_t)y*src->w*4],(size_t)stivufine_terrain_base_w*4);
+    }
+    stivufine_terrain_cells_per_row=cells;stivufine_terrain_tiles_per_axis=16*cells;
+    upload_rgba_texture(&tex_terrain,w,h,rgba,1);
+    /* CTM pixels now live in the combined terrain atlas. Keep only rule/source
+       metadata so reloads do not retain duplicate GPU/CPU texture copies. */
+    for (int i = 0; i < stivufine_ctm_source_count; ++i) free_texture(&stivufine_ctm_sources[i].texture);
+}
+
+static void stivufine_update_quality_textures(TexturePackEntry *e) {
+    stivufine_reset_quality_texture_state();
+    stivufine_terrain_base_w=tex_terrain.w;stivufine_terrain_base_h=tex_terrain.h;
+    stivufine_load_connected_properties(e);
+    stivufine_load_natural_properties(e);
+    stivufine_build_combined_terrain_atlas();
 }
 
 static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, int repeat) {
@@ -63,7 +614,9 @@ static int upload_rgba_texture(Texture *t, int w, int h, unsigned char *rgba, in
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : PEX_GL_CLAMP_EDGE);
+    stivufine_apply_anisotropy_bound();
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t->rgba);
+    stivufine_apply_texture_mipmap_params(t);
     return t->id != 0;
 }
 
@@ -228,6 +781,7 @@ static void normalize_terrain_liquid_tiles(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
+    stivufine_rebuild_terrain_mipmaps();
 }
 
 
@@ -1124,6 +1678,7 @@ static int load_release_textures_from_pack(void) {
     free_texture(&tex_birchcolor);
     free_texture(&tex_swampgrasscolor);
     free_texture(&tex_swampfoliagecolor);
+    stivufine_clear_random_mob_variants();
     stivufine_lilypad_color = -1;
     try_release_texture(&tex_particles, "particles.png", 0);
     ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
@@ -1215,7 +1770,10 @@ static int load_default_textures(void) {
 #undef PEX_PSP_LOAD_OPT
     return 1;
 #else
-    if (load_release_textures_from_pack()) return 1;
+    if (load_release_textures_from_pack()) {
+        if (!stivufine_defer_quality_update) stivufine_update_quality_textures(NULL);
+        return 1;
+    }
     int missing_required = 0;
 #define PEX_LOAD_REQ(tex, file, repeat, fw, fh) do { \
         if (!load_mcrw((tex), (file), (repeat))) { \
@@ -1280,6 +1838,7 @@ static int load_default_textures(void) {
     if (missing_required) log_msg("Started with %d fallback required assets; showing resource download UI", missing_required);
 #undef PEX_LOAD_REQ
 #undef PEX_LOAD_OPT
+    if (!stivufine_defer_quality_update) stivufine_update_quality_textures(NULL);
     return 1;
 #endif
 }
@@ -1348,9 +1907,151 @@ static void try_pack_texture(TexturePackEntry *e, Texture *tex, const char *rel,
     load_png_texture(tex, path, repeat);
 }
 
+#define SF_RANDOM_MOB_MAX_TEXTURE_NUMBER 1000
+
+typedef struct StivuFineRandomMobTextureSet {
+    Texture *base;
+    const char *rel;
+    Texture *variants;
+    int variant_count;
+    int variant_capacity;
+} StivuFineRandomMobTextureSet;
+
+static StivuFineRandomMobTextureSet stivufine_random_mob_sets[] = {
+    { &tex_mob_pig, "mob\\pig.png", NULL, 0, 0 },
+    { &tex_mob_sheep, "mob\\sheep.png", NULL, 0, 0 },
+    { &tex_mob_cow, "mob\\cow.png", NULL, 0, 0 },
+    { &tex_mob_chicken, "mob\\chicken.png", NULL, 0, 0 },
+    { &tex_mob_creeper, "mob\\creeper.png", NULL, 0, 0 },
+    { &tex_mob_skeleton, "mob\\skeleton.png", NULL, 0, 0 },
+    { &tex_mob_spider, "mob\\spider.png", NULL, 0, 0 },
+    { &tex_mob_zombie, "mob\\zombie.png", NULL, 0, 0 },
+    { &tex_mob_slime, "mob\\slime.png", NULL, 0, 0 },
+    { &tex_mob_ghast, "mob\\ghast.png", NULL, 0, 0 },
+    { &tex_mob_ghast_fire, "mob\\ghast_fire.png", NULL, 0, 0 },
+    { &tex_mob_pigzombie, "mob\\pigzombie.png", NULL, 0, 0 },
+    { &tex_mob_enderman, "mob\\enderman.png", NULL, 0, 0 },
+    { &tex_mob_cavespider, "mob\\cavespider.png", NULL, 0, 0 },
+    { &tex_mob_silverfish, "mob\\silverfish.png", NULL, 0, 0 },
+    { &tex_mob_blaze, "mob\\fire.png", NULL, 0, 0 },
+    { &tex_mob_lava, "mob\\lava.png", NULL, 0, 0 },
+    { &tex_mob_enderdragon, "mob\\enderdragon\\ender.png", NULL, 0, 0 },
+    { &tex_mob_squid, "mob\\squid.png", NULL, 0, 0 },
+    { &tex_mob_wolf, "mob\\wolf.png", NULL, 0, 0 },
+    { &tex_mob_wolf_tame, "mob\\wolf_tame.png", NULL, 0, 0 },
+    { &tex_mob_wolf_angry, "mob\\wolf_angry.png", NULL, 0, 0 },
+    { &tex_mob_mooshroom, "mob\\redcow.png", NULL, 0, 0 },
+    { &tex_mob_snowman, "mob\\snowman.png", NULL, 0, 0 },
+    { &tex_mob_ocelot, "mob\\ozelot.png", NULL, 0, 0 },
+    { &tex_mob_cat_black, "mob\\cat_black.png", NULL, 0, 0 },
+    { &tex_mob_cat_red, "mob\\cat_red.png", NULL, 0, 0 },
+    { &tex_mob_cat_siamese, "mob\\cat_siamese.png", NULL, 0, 0 },
+    { &tex_mob_villager_golem, "mob\\villager_golem.png", NULL, 0, 0 },
+    { &tex_mob_villager, "mob\\villager\\villager.png", NULL, 0, 0 },
+    { &tex_mob_villager_farmer, "mob\\villager\\farmer.png", NULL, 0, 0 },
+    { &tex_mob_villager_librarian, "mob\\villager\\librarian.png", NULL, 0, 0 },
+    { &tex_mob_villager_priest, "mob\\villager\\priest.png", NULL, 0, 0 },
+    { &tex_mob_villager_smith, "mob\\villager\\smith.png", NULL, 0, 0 },
+    { &tex_mob_villager_butcher, "mob\\villager\\butcher.png", NULL, 0, 0 },
+};
+
+static void stivufine_clear_random_mob_variants(void) {
+    size_t n = sizeof(stivufine_random_mob_sets) / sizeof(stivufine_random_mob_sets[0]);
+    for (size_t i = 0; i < n; ++i) {
+        StivuFineRandomMobTextureSet *set = &stivufine_random_mob_sets[i];
+        for (int j = 0; j < set->variant_count; ++j) free_texture(&set->variants[j]);
+        free(set->variants);
+        set->variants = NULL;
+        set->variant_count = 0;
+        set->variant_capacity = 0;
+    }
+}
+
+static int stivufine_try_load_pack_texture(TexturePackEntry *e, Texture *tex, const char *rel, int repeat) {
+    char path[MAX_PATHBUF];
+    snprintf(path, sizeof(path), "%s\\%s", e->path, rel);
+    if (load_png_texture(tex, path, repeat)) return 1;
+    snprintf(path, sizeof(path), "%s/%s", e->path, rel);
+    for (char *c = path; *c; ++c) if (*c == '\\') *c = '/';
+    return load_png_texture(tex, path, repeat);
+}
+
+static void stivufine_make_random_variant_rel(char *out, size_t cap, const char *rel, int num) {
+    const char *dot = strrchr(rel, '.');
+    if (!dot) { snprintf(out, cap, "%s%d", rel, num); return; }
+    size_t prefix = (size_t)(dot - rel);
+    if (prefix >= cap) prefix = cap - 1;
+    memcpy(out, rel, prefix);
+    out[prefix] = 0;
+    snprintf(out + prefix, cap - prefix, "%d%s", num, dot);
+}
+
+static int stivufine_random_mob_append(StivuFineRandomMobTextureSet *set, Texture *loaded) {
+    if (set->variant_count >= set->variant_capacity) {
+        int next = set->variant_capacity ? set->variant_capacity * 2 : 4;
+        if (next > SF_RANDOM_MOB_MAX_TEXTURE_NUMBER - 1) next = SF_RANDOM_MOB_MAX_TEXTURE_NUMBER - 1;
+        Texture *grown = (Texture*)realloc(set->variants, (size_t)next * sizeof(Texture));
+        if (!grown) return 0;
+        memset(grown + set->variant_capacity, 0, (size_t)(next - set->variant_capacity) * sizeof(Texture));
+        set->variants = grown;
+        set->variant_capacity = next;
+    }
+    set->variants[set->variant_count++] = *loaded;
+    memset(loaded, 0, sizeof(*loaded));
+    return 1;
+}
+
+static void stivufine_load_random_mob_variants(TexturePackEntry *e) {
+    stivufine_clear_random_mob_variants();
+    if (!e || e->is_default || !stivufine_random_mobs_enabled()) return;
+    size_t n = sizeof(stivufine_random_mob_sets) / sizeof(stivufine_random_mob_sets[0]);
+    for (size_t i = 0; i < n; ++i) {
+        StivuFineRandomMobTextureSet *set = &stivufine_random_mob_sets[i];
+        /* Reference behavior scans numbered files sequentially and stops at the
+           first missing entry, with a maximum texture number of 1000. */
+        for (int suffix = 2; suffix <= SF_RANDOM_MOB_MAX_TEXTURE_NUMBER; ++suffix) {
+            char rel[MAX_PATHBUF];
+            Texture loaded = {0};
+            stivufine_make_random_variant_rel(rel, sizeof(rel), set->rel, suffix);
+            if (!stivufine_try_load_pack_texture(e, &loaded, rel, 0)) break;
+            if (!stivufine_random_mob_append(set, &loaded)) { free_texture(&loaded); break; }
+        }
+    }
+}
+
+static unsigned int stivufine_java_decimal_string_hash_text(const char *text) {
+    uint32_t h = 0;
+    for (const unsigned char *p = (const unsigned char*)text; *p; ++p) h = h * 31u + (uint32_t)*p;
+    /* Java Math.abs(int), expressed without signed-overflow UB. Persistent IDs
+       are non-negative, and this returns the same positive magnitude used by RandomMobs. */
+    if (h & 0x80000000u) h = (~h) + 1u;
+    return h;
+}
+
+static Texture *stivufine_random_mob_texture_for_base(Texture *base, int random_id) {
+    char skin_url[24];
+    if (!base || !stivufine_random_mobs_enabled()) return base;
+    snprintf(skin_url, sizeof(skin_url), "%d", random_id);
+    if (strlen(skin_url) <= 1 || skin_url[0] < '0' || skin_url[0] > '9') return base;
+    size_t n = sizeof(stivufine_random_mob_sets) / sizeof(stivufine_random_mob_sets[0]);
+    unsigned int num = stivufine_java_decimal_string_hash_text(skin_url);
+    for (size_t i = 0; i < n; ++i) {
+        StivuFineRandomMobTextureSet *set = &stivufine_random_mob_sets[i];
+        if (set->base != base || set->variant_count <= 0) continue;
+        int pick = (int)(num % (unsigned int)(set->variant_count + 1));
+        if (pick == 0) return base;
+        Texture *v = &set->variants[pick - 1];
+        return (v && v->id) ? v : base;
+    }
+    return base;
+}
+
 static void apply_texture_pack_index(int index) {
     if (index < 0 || index >= g_texpack_count) index = 0;
-    if (!load_default_textures()) return;
+    stivufine_defer_quality_update = 1;
+    int default_ok = load_default_textures();
+    stivufine_defer_quality_update = 0;
+    if (!default_ok) return;
     free_texture(&tex_watercolor);
     free_texture(&tex_pinecolor);
     free_texture(&tex_birchcolor);
@@ -1457,6 +2158,8 @@ static void apply_texture_pack_index(int index) {
         }
 #endif
     }
+    stivufine_update_quality_textures(&g_texpacks[index]);
+    stivufine_load_random_mob_variants(&g_texpacks[index]);
     if (g_opts.skin_path[0]) load_custom_skin_path(g_opts.skin_path, 0);
     init_font_widths();
     log_msg("Applied texture pack: %s", g_current_texpack);

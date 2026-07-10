@@ -1,7 +1,7 @@
 /* Minecraft 1.2.5-style local mobs. Included in the unity build after
    inventory.c so it can reuse the existing world/item/collision helpers. */
 
-#define PASSIVE_MOB_SAVE_VERSION 34
+#define PASSIVE_MOB_SAVE_VERSION 35
 
 static PassiveMob *passive_mob_raycast(float max_dist, float *out_t);
 static void passive_mob_assign_owner(PassiveMob *m);
@@ -33,6 +33,37 @@ static void draw_dropped_item_sprite(int tile);
 static void passive_draw_terrain_sprite_tile(int tile);
 static void draw_item3d_from_texture(Texture *atlas, int tile);
 static void draw_block_item_model(int id, float x, float y, float z);
+
+static uint64_t g_random_mob_java_seed = 0;
+
+static int passive_random_mob_java_next(int bits) {
+    if (!g_random_mob_java_seed) {
+        uint64_t raw = ((uint64_t)(unsigned int)time(NULL) << 20) ^
+                       ((uint64_t)(unsigned int)clock() << 4) ^
+                       (uint64_t)(unsigned int)rand();
+        g_random_mob_java_seed = (raw ^ 0x5DEECE66DULL) & ((1ULL << 48) - 1ULL);
+    }
+    g_random_mob_java_seed = (g_random_mob_java_seed * 0x5DEECE66DULL + 0xBULL) & ((1ULL << 48) - 1ULL);
+    return (int)(g_random_mob_java_seed >> (48 - bits));
+}
+
+static int passive_random_mob_java_next_int_bound(int bound) {
+    if (bound <= 0) return 0;
+    if ((bound & -bound) == bound) return (int)((bound * (int64_t)passive_random_mob_java_next(31)) >> 31);
+    int bits, val;
+    do {
+        bits = passive_random_mob_java_next(31);
+        val = bits % bound;
+        /* Java retries when the signed-int expression overflows negative. */
+    } while ((int64_t)bits - (int64_t)val + (int64_t)(bound - 1) > 0x7fffffffLL);
+    return val;
+}
+
+static int passive_mob_make_random_mob_id(int type, float x, float y, float z) {
+    (void)type; (void)x; (void)y; (void)z;
+    /* EntityLiving 1.2.5 reference: random.nextInt(Integer.MAX_VALUE). */
+    return passive_random_mob_java_next_int_bound(0x7fffffff);
+}
 
 /* Performance knobs: this port renders animal models with immediate-mode
    cube parts.  Keep active/rendered passive mobs close to b1.0 density instead
@@ -984,6 +1015,7 @@ static void passive_mob_init(PassiveMob *m, int type, float x, float y, float z)
     m->attack_time = 0;
     m->burn_time = 0;
     m->target_mob_index = -1;
+    m->random_mob_id = passive_mob_make_random_mob_id(type, x, y, z);
     m->baby_age = 0;
     m->sitting = 0;
     m->held_block = 0;
@@ -4979,6 +5011,7 @@ typedef struct PassiveMobRenderEntry {
     int attack_time;
     int hurt;
     int detail;
+    int random_mob_id;
     float x, y, z;
     float yaw;
     float head_yaw;
@@ -5054,6 +5087,7 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
         e->attack_time = m->attack_time;
         e->hurt = (m->hurt_time > 0 || m->death_time > 0);
         e->detail = (dx*dx + dy*dy + dz*dz) < (18.0f * 18.0f) ? 1 : 0;
+        e->random_mob_id = m->random_mob_id ? m->random_mob_id : passive_mob_make_random_mob_id(m->type, m->x, m->y, m->z);
         e->x = x; e->y = y; e->z = z;
         e->yaw = passive_lerp_angle(m->prev_render_yaw, m->render_yaw, partial);
         e->head_yaw = passive_lerp_angle(m->prev_yaw, m->yaw, partial) - e->yaw;
@@ -6136,6 +6170,7 @@ static void draw_passive_mobs(float partial) {
         } else if (e->type == PASSIVE_MOB_GHAST && e->attack_time > 0 && tex_mob_ghast_fire.id) {
             t = &tex_mob_ghast_fire;
         }
+        t = stivufine_random_mob_texture_for_base(t, e->random_mob_id);
         if (!t || !t->id) continue;
 
         float shadow_size = passive_mob_shadow_size_125(e->type);
@@ -6433,6 +6468,7 @@ static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs) {
         fwrite(&m->last_looting_level, sizeof(int), 1, f);
         fwrite(&m->held_item, sizeof(int), 1, f);
         fwrite(m->equipment, sizeof(int), 4, f);
+        fwrite(&m->random_mob_id, sizeof(int), 1, f);
     }
     passive_villages_write_binary_125(f);
     passive_spawners_write_binary_125(f);
@@ -6561,7 +6597,8 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
             if (fread(&m->recently_hit, sizeof(int), 1, f) != 1 ||
                 fread(&m->last_looting_level, sizeof(int), 1, f) != 1 ||
                 fread(&m->held_item, sizeof(int), 1, f) != 1 ||
-                fread(m->equipment, sizeof(int), 4, f) != 4) {
+                fread(m->equipment, sizeof(int), 4, f) != 4 ||
+                (version >= 35 && fread(&m->random_mob_id, sizeof(int), 1, f) != 1)) {
                 passive_mobs_reset();
                 return;
             }
@@ -6572,6 +6609,7 @@ static void passive_mobs_read_from_file(FILE *f, int version) {
             memset(m->equipment, 0, sizeof(m->equipment));
             passive_mob_apply_default_equipment_125(m);
         }
+        if (m->random_mob_id == 0) m->random_mob_id = passive_mob_make_random_mob_id(m->type, m->x, m->y, m->z);
         if (!passive_mob_type_valid(m->type) || m->health <= 0 ||
             !isfinite(m->x) || !isfinite(m->y) || !isfinite(m->z) ||
             m->x < (float)g_flat_world_origin_x - 16.0f ||
