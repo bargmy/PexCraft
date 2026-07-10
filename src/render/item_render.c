@@ -665,6 +665,10 @@ static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
 }
 
 
+static int item_chest_icon_tile(void) {
+    return chest_front_tile();
+}
+
 static int item_water_tile(void) { return 205; }
 static int item_lava_tile(void) { return 237; }
 
