@@ -155,8 +155,12 @@ static int player_apply_potion_damage_reduction(int amount, int *carryover) {
 }
 
 static int player_attack_entity_from(PexDamageSource source, int amount) {
-    if (player_is_creative() && !source.creative_allowed) return 0;
+    if (player_damage_disabled() && !source.creative_allowed) return 0;
     if (amount <= 0 || g_player_dead) return 0;
+    if (source.true_kind==PEX_DAMAGE_ENTITY_MOB && source.true_mob_index>=0 && source.true_mob_index<MAX_PASSIVE_MOBS) {
+        PassiveMob *attacker=&g_passive_mobs[source.true_mob_index];
+        if(attacker->active){g_player_last_hurt_by_mob_entity_id=attacker->entity_id;g_player_last_hurt_by_mob_ticks=100;}
+    }
     if (source.fire_damage && player_has_potion(PEX_POTION_FIRE_RESISTANCE)) return 0;
 
     int incoming = amount;
@@ -468,6 +472,7 @@ static void pex_update_time_light_bucket(void) {
 }
 
 static void ingame_tick(void) {
+    player_capabilities_apply_game_mode();
     double prof_ingame_start = profile_begin();
     double prof_part = 0.0;
     int input_active = (g_screen == SCREEN_INGAME && !g_player_dead);
@@ -653,11 +658,27 @@ static void ingame_tick(void) {
         pex_sound_play("random.splash", 1.0f, 1.0f);
     }
     g_player_was_in_water = in_water;
+    if (in_water && g_player_fire_ticks > 0) {
+        pex_sound_play("random.fizz", 0.7f, 1.6f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
+        g_player_fire_ticks = 0;
+    }
+    if (g_player_fire_ticks > 0) {
+        if ((g_player_fire_ticks % 20) == 0)
+            (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_ON_FIRE), 1);
+        --g_player_fire_ticks;
+    }
+    if (flat_get_block((int)floorf(g_player_x), (int)floorf(g_player_y - 0.9f), (int)floorf(g_player_z)) == BLOCK_FIRE) {
+        if (g_player_fire_ticks < 160) g_player_fire_ticks = 160;
+        (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_IN_FIRE), 1);
+    }
     int in_ladder = flat_player_in_ladder();
     if (in_water || in_lava || in_ladder) {
         g_player_fall_distance = 0.0f;
         if (in_water || in_lava) apply_player_fluid_velocity(in_water ? 1 : 0);
-        if (in_lava && (g_ingame_ticks % 20) == 0) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_LAVA), 4);
+        if (in_lava) {
+            (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_LAVA), 4);
+            if (g_player_fire_ticks < 300) g_player_fire_ticks = 300;
+        }
     }
 
     if (g_sprinting_ticks_left > 0) {
@@ -957,8 +978,8 @@ static void ingame_tick(void) {
         g_player_fall_distance += -previous_motion_y;
     }
 
-    if (!player_is_creative() && g_player_y < -16.0f) {
-        player_die("fell out of the world");
+    if (g_player_y < -64.0f) {
+        (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_OUT_OF_WORLD), 4);
     }
 
     if (g_creative_flying && g_player_on_ground) {

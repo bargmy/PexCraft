@@ -41,6 +41,45 @@ static int pex_read_item_stack_125(FILE *f, ItemStack *s, int save_version) {
 }
 
 
+
+static void pex_write_projectile_125(FILE *f, const FlatProjectile *p) {
+    fwrite(&p->type,sizeof(int),1,f); fwrite(&p->item_damage,sizeof(int),1,f);
+    fwrite(&p->owner_type,sizeof(int),1,f); fwrite(&p->owner_mob_type,sizeof(int),1,f); fwrite(&p->owner_mob_index,sizeof(int),1,f);
+    fwrite(&p->damage,sizeof(int),1,f); fwrite(&p->critical,sizeof(int),1,f);
+    fwrite(&p->x,sizeof(float),1,f); fwrite(&p->y,sizeof(float),1,f); fwrite(&p->z,sizeof(float),1,f);
+    fwrite(&p->prev_x,sizeof(float),1,f); fwrite(&p->prev_y,sizeof(float),1,f); fwrite(&p->prev_z,sizeof(float),1,f);
+    fwrite(&p->mx,sizeof(float),1,f); fwrite(&p->my,sizeof(float),1,f); fwrite(&p->mz,sizeof(float),1,f);
+    fwrite(&p->yaw,sizeof(float),1,f); fwrite(&p->pitch,sizeof(float),1,f);
+    fwrite(&p->prev_yaw,sizeof(float),1,f); fwrite(&p->prev_pitch,sizeof(float),1,f);
+    fwrite(&p->age,sizeof(int),1,f); fwrite(&p->fire_ticks,sizeof(int),1,f); fwrite(&p->in_ground,sizeof(int),1,f);
+    fwrite(&p->tile_x,sizeof(int),1,f); fwrite(&p->tile_y,sizeof(int),1,f); fwrite(&p->tile_z,sizeof(int),1,f);
+    fwrite(&p->in_tile,sizeof(int),1,f); fwrite(&p->in_data,sizeof(int),1,f);
+    fwrite(&p->ticks_in_ground,sizeof(int),1,f); fwrite(&p->ticks_in_air,sizeof(int),1,f);
+    fwrite(&p->arrow_shake,sizeof(int),1,f); fwrite(&p->player_arrow,sizeof(int),1,f); fwrite(&p->arrow_knockback,sizeof(int),1,f);
+}
+
+static int pex_read_projectile_125(FILE *f, FlatProjectile *p) {
+    memset(p,0,sizeof(*p));
+#define PEX_RD_PROJ(field,type) do{if(fread(&p->field,sizeof(type),1,f)!=1)return 0;}while(0)
+    PEX_RD_PROJ(type,int); PEX_RD_PROJ(item_damage,int);
+    PEX_RD_PROJ(owner_type,int); PEX_RD_PROJ(owner_mob_type,int); PEX_RD_PROJ(owner_mob_index,int);
+    PEX_RD_PROJ(damage,int); PEX_RD_PROJ(critical,int);
+    PEX_RD_PROJ(x,float); PEX_RD_PROJ(y,float); PEX_RD_PROJ(z,float);
+    PEX_RD_PROJ(prev_x,float); PEX_RD_PROJ(prev_y,float); PEX_RD_PROJ(prev_z,float);
+    PEX_RD_PROJ(mx,float); PEX_RD_PROJ(my,float); PEX_RD_PROJ(mz,float);
+    PEX_RD_PROJ(yaw,float); PEX_RD_PROJ(pitch,float); PEX_RD_PROJ(prev_yaw,float); PEX_RD_PROJ(prev_pitch,float);
+    PEX_RD_PROJ(age,int); PEX_RD_PROJ(fire_ticks,int); PEX_RD_PROJ(in_ground,int);
+    PEX_RD_PROJ(tile_x,int); PEX_RD_PROJ(tile_y,int); PEX_RD_PROJ(tile_z,int);
+    PEX_RD_PROJ(in_tile,int); PEX_RD_PROJ(in_data,int); PEX_RD_PROJ(ticks_in_ground,int); PEX_RD_PROJ(ticks_in_air,int);
+    PEX_RD_PROJ(arrow_shake,int); PEX_RD_PROJ(player_arrow,int); PEX_RD_PROJ(arrow_knockback,int);
+#undef PEX_RD_PROJ
+    if(p->type<FLAT_PROJECTILE_POTION||p->type>FLAT_PROJECTILE_SNOWBALL)return 1;
+    p->active=1;
+    if(!isfinite(p->prev_x)||!isfinite(p->prev_y)||!isfinite(p->prev_z)){p->prev_x=p->x;p->prev_y=p->y;p->prev_z=p->z;}
+    if(!isfinite(p->prev_yaw)||!isfinite(p->prev_pitch)){p->prev_yaw=p->yaw;p->prev_pitch=p->pitch;}
+    return 1;
+}
+
 static void level_path_for_dir(const char *dir, char *out, size_t cap) {
     snprintf(out, cap, "%s\\level.dat", dir);
 }
@@ -396,6 +435,7 @@ static int save_snapshot_add_chunk(PexSaveSnapshot *ss, int lcx, int lcz) {
 }
 
 static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
+    player_capabilities_apply_game_mode();
     PexSaveSnapshot *ss = (PexSaveSnapshot*)calloc(1, sizeof(PexSaveSnapshot));
     if (!ss) return NULL;
 
@@ -407,6 +447,8 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     ss->world_type = g_world_type;
     ss->game_mode = g_game_mode;
     ss->dimension = g_current_dimension;
+    ss->player_capabilities = g_player_capabilities;
+    ss->player_fire_ticks = g_player_fire_ticks;
     ss->player_x = g_player_x;
     ss->player_y = g_player_y;
     ss->player_z = g_player_z;
@@ -430,6 +472,8 @@ static PexSaveSnapshot *pex_save_snapshot_create(int write_world_state) {
     memcpy(ss->chest_tiles, g_chest_tiles, sizeof(g_chest_tiles));
     memcpy(ss->furnace_tiles, g_furnace_tiles, sizeof(g_furnace_tiles));
     memcpy(ss->drops, g_drops, sizeof(g_drops));
+    memcpy(ss->xp_orbs, g_xp_orbs, sizeof(g_xp_orbs));
+    memcpy(ss->projectiles, g_projectiles, sizeof(g_projectiles));
     memcpy(ss->vehicles, g_vehicles, sizeof(g_vehicles));
     memcpy(ss->jukebox_tiles, g_jukebox_tiles, sizeof(g_jukebox_tiles));
     memcpy(ss->player_potion_effects, g_player_potion_effects, sizeof(g_player_potion_effects));
@@ -655,7 +699,7 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     if (!f) { pex_logf("save world-state failed open path=%s", path); return; }
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 29;
+    int version = 37;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -690,6 +734,8 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
     fwrite(&ss->world_time, sizeof(ss->world_time), 1, f);
     fwrite(&ss->game_mode, sizeof(ss->game_mode), 1, f);
     fwrite(&ss->dimension, sizeof(ss->dimension), 1, f);
+    fwrite(&ss->player_capabilities, sizeof(ss->player_capabilities), 1, f);
+    fwrite(&ss->player_fire_ticks, sizeof(ss->player_fire_ticks), 1, f);
 
     for (int i = 0; i < 36; i++) {
         pex_write_item_stack_125(f, &ss->inventory[i]);
@@ -757,7 +803,27 @@ static void save_snapshot_world_state(PexSaveSnapshot *ss) {
         fwrite(&e->rot, sizeof(float), 1, f);
         fwrite(&e->age, sizeof(int), 1, f);
         fwrite(&e->pickup_delay, sizeof(int), 1, f);
+        fwrite(&e->health, sizeof(int), 1, f);
     }
+
+    int xp_orb_count = 0;
+    for (int i = 0; i < MAX_XP_ORBS; ++i) if (ss->xp_orbs[i].active && ss->xp_orbs[i].value > 0) ++xp_orb_count;
+    fwrite(&xp_orb_count, sizeof(xp_orb_count), 1, f);
+    for (int i = 0; i < MAX_XP_ORBS; ++i) {
+        FlatXPOrb *o = &ss->xp_orbs[i];
+        if (!o->active || o->value <= 0) continue;
+        fwrite(&o->value, sizeof(int), 1, f);
+        fwrite(&o->x, sizeof(float), 1, f); fwrite(&o->y, sizeof(float), 1, f); fwrite(&o->z, sizeof(float), 1, f);
+        fwrite(&o->mx, sizeof(float), 1, f); fwrite(&o->my, sizeof(float), 1, f); fwrite(&o->mz, sizeof(float), 1, f);
+        fwrite(&o->rot, sizeof(float), 1, f);
+        fwrite(&o->age, sizeof(int), 1, f); fwrite(&o->color, sizeof(int), 1, f);
+        fwrite(&o->pickup_delay, sizeof(int), 1, f); fwrite(&o->health, sizeof(int), 1, f);
+    }
+
+    int projectile_count = 0;
+    for (int i=0;i<MAX_PROJECTILE_ENTITIES;++i) if(ss->projectiles[i].active) ++projectile_count;
+    fwrite(&projectile_count,sizeof(projectile_count),1,f);
+    for (int i=0;i<MAX_PROJECTILE_ENTITIES;++i) if(ss->projectiles[i].active) pex_write_projectile_125(f,&ss->projectiles[i]);
 
     int vehicle_count = 0;
     for (int i = 0; i < MAX_VEHICLE_ENTITIES; ++i) if (ss->vehicles[i].active) vehicle_count++;
@@ -899,6 +965,7 @@ static void request_chunk_save_async(void) {
 }
 
 static void save_world_state_sync(void) {
+    player_capabilities_apply_game_mode();
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     g_save_dirty = 0;
     g_last_autosave_tick = g_ingame_ticks;
@@ -918,7 +985,7 @@ static void save_world_state_sync(void) {
     if (!f) return;
 
     char magic[8] = {'L','E','V','E','L','S','T','1'};
-    int version = 29;
+    int version = 37;
     int w = FLAT_WORLD_SIZE;
     int h = FLAT_WORLD_HEIGHT;
     int y_min = FLAT_WORLD_Y_MIN;
@@ -953,6 +1020,8 @@ static void save_world_state_sync(void) {
     fwrite(&g_world_time, sizeof(g_world_time), 1, f);
     fwrite(&g_game_mode, sizeof(g_game_mode), 1, f);
     fwrite(&g_current_dimension, sizeof(g_current_dimension), 1, f);
+    fwrite(&g_player_capabilities, sizeof(g_player_capabilities), 1, f);
+    fwrite(&g_player_fire_ticks, sizeof(g_player_fire_ticks), 1, f);
 
     for (int i = 0; i < 36; i++) {
         pex_write_item_stack_125(f, &g_inventory[i]);
@@ -1021,7 +1090,27 @@ static void save_world_state_sync(void) {
         fwrite(&e->rot, sizeof(float), 1, f);
         fwrite(&e->age, sizeof(int), 1, f);
         fwrite(&e->pickup_delay, sizeof(int), 1, f);
+        fwrite(&e->health, sizeof(int), 1, f);
     }
+
+    int xp_orb_count = 0;
+    for (int i = 0; i < MAX_XP_ORBS; ++i) if (g_xp_orbs[i].active && g_xp_orbs[i].value > 0) ++xp_orb_count;
+    fwrite(&xp_orb_count, sizeof(xp_orb_count), 1, f);
+    for (int i = 0; i < MAX_XP_ORBS; ++i) {
+        FlatXPOrb *o = &g_xp_orbs[i];
+        if (!o->active || o->value <= 0) continue;
+        fwrite(&o->value, sizeof(int), 1, f);
+        fwrite(&o->x, sizeof(float), 1, f); fwrite(&o->y, sizeof(float), 1, f); fwrite(&o->z, sizeof(float), 1, f);
+        fwrite(&o->mx, sizeof(float), 1, f); fwrite(&o->my, sizeof(float), 1, f); fwrite(&o->mz, sizeof(float), 1, f);
+        fwrite(&o->rot, sizeof(float), 1, f);
+        fwrite(&o->age, sizeof(int), 1, f); fwrite(&o->color, sizeof(int), 1, f);
+        fwrite(&o->pickup_delay, sizeof(int), 1, f); fwrite(&o->health, sizeof(int), 1, f);
+    }
+
+    int projectile_count = 0;
+    for (int i=0;i<MAX_PROJECTILE_ENTITIES;++i) if(g_projectiles[i].active) ++projectile_count;
+    fwrite(&projectile_count,sizeof(projectile_count),1,f);
+    for (int i=0;i<MAX_PROJECTILE_ENTITIES;++i) if(g_projectiles[i].active) pex_write_projectile_125(f,&g_projectiles[i]);
 
     int vehicle_count = 0;
     for (int i = 0; i < MAX_VEHICLE_ENTITIES; ++i) if (g_vehicles[i].active) vehicle_count++;
@@ -1115,7 +1204,7 @@ static int load_current_world_state(void) {
     }
 
     int ok_magic =
-        (memcmp(magic, "LEVELST1", 8) == 0 && (version == 13 || version == 14 || version == 15 || version == 16 || version == 17 || version == 18 || version == 19 || version == 20 || version == 21 || version == 22 || version == 23 || version == 27 || version == 28 || version == 29)) ||
+        (memcmp(magic, "LEVELST1", 8) == 0 && version >= 13 && version <= 37) ||
         (memcmp(magic, "PXCFLAT4", 8) == 0 && version == 4) ||
         (memcmp(magic, "PXCFLAT6", 8) == 0 && version == 6) ||
         (memcmp(magic, "PXCFLAT7", 8) == 0 && version == 7) ||
@@ -1207,10 +1296,26 @@ static int load_current_world_state(void) {
         } else {
             g_current_dimension = 0;
         }
+        if(version>=37){
+            if(fread(&g_player_capabilities,sizeof(g_player_capabilities),1,f)!=1 ||
+               fread(&g_player_fire_ticks,sizeof(g_player_fire_ticks),1,f)!=1){fclose(f);return 0;}
+            g_player_capabilities.disable_damage=g_player_capabilities.disable_damage?1:0;
+            g_player_capabilities.allow_flying=g_player_capabilities.allow_flying?1:0;
+            g_player_capabilities.is_flying=g_player_capabilities.is_flying?1:0;
+            g_player_capabilities.is_creative_mode=g_player_capabilities.is_creative_mode?1:0;
+            if(g_player_fire_ticks<0)g_player_fire_ticks=0;
+        }else{
+            memset(&g_player_capabilities,0,sizeof(g_player_capabilities));
+            player_capabilities_apply_game_mode();
+            g_player_fire_ticks=0;
+        }
     } else {
         player_food_reset();
         player_xp_reset();
         g_world_time = 0;
+        memset(&g_player_capabilities,0,sizeof(g_player_capabilities));
+        player_capabilities_apply_game_mode();
+        g_player_fire_ticks=0;
     }
     player_food_sanitize();
     player_xp_sanitize();
@@ -1358,7 +1463,8 @@ static int load_current_world_state(void) {
                     fread(&e->mz, sizeof(float), 1, f) != 1 ||
                     fread(&e->rot, sizeof(float), 1, f) != 1 ||
                     fread(&e->age, sizeof(int), 1, f) != 1 ||
-                    fread(&e->pickup_delay, sizeof(int), 1, f) != 1) {
+                    fread(&e->pickup_delay, sizeof(int), 1, f) != 1 ||
+                    (version >= 30 && fread(&e->health, sizeof(int), 1, f) != 1)) {
                     memset(e, 0, sizeof(*e));
                     break;
                 }
@@ -1367,8 +1473,42 @@ static int load_current_world_state(void) {
                     e->prev_x = e->x;
                     e->prev_y = e->y;
                     e->prev_z = e->z;
+                    e->health = 5;
                 }
             }
+        }
+    }
+    memset(g_xp_orbs, 0, sizeof(g_xp_orbs));
+    if (version >= 30) {
+        int orb_count = 0;
+        if (fread(&orb_count, sizeof(orb_count), 1, f) != 1) { fclose(f); return 0; }
+        if (orb_count < 0) orb_count = 0;
+        if (orb_count > MAX_XP_ORBS) orb_count = MAX_XP_ORBS;
+        for (int i = 0; i < orb_count; ++i) {
+            FlatXPOrb *o = &g_xp_orbs[i];
+            memset(o, 0, sizeof(*o));
+            if (fread(&o->value, sizeof(int), 1, f) != 1 ||
+                fread(&o->x, sizeof(float), 1, f) != 1 || fread(&o->y, sizeof(float), 1, f) != 1 || fread(&o->z, sizeof(float), 1, f) != 1 ||
+                fread(&o->mx, sizeof(float), 1, f) != 1 || fread(&o->my, sizeof(float), 1, f) != 1 || fread(&o->mz, sizeof(float), 1, f) != 1 ||
+                fread(&o->rot, sizeof(float), 1, f) != 1 || fread(&o->age, sizeof(int), 1, f) != 1 || fread(&o->color, sizeof(int), 1, f) != 1 ||
+                fread(&o->pickup_delay, sizeof(int), 1, f) != 1 || fread(&o->health, sizeof(int), 1, f) != 1) {
+                fclose(f); return 0;
+            }
+            if (o->value > 0 && o->age < 6000) {
+                o->active = 1; o->prev_x = o->x; o->prev_y = o->y; o->prev_z = o->z;
+                if (o->health <= 0) o->health = 5;
+            }
+        }
+    }
+    memset(g_projectiles,0,sizeof(g_projectiles));
+    if(version>=37){
+        int projectile_count=0;
+        if(fread(&projectile_count,sizeof(projectile_count),1,f)!=1){fclose(f);return 0;}
+        if(projectile_count<0||projectile_count>4096){fclose(f);return 0;}
+        for(int i=0;i<projectile_count;++i){
+            FlatProjectile temp;
+            if(!pex_read_projectile_125(f,&temp)){fclose(f);return 0;}
+            if(i<MAX_PROJECTILE_ENTITIES && temp.active) g_projectiles[i]=temp;
         }
     }
     memset(g_vehicles, 0, sizeof(g_vehicles));
@@ -1470,7 +1610,7 @@ static int load_current_world_state(void) {
     g_flat_section_geometry_dirty = 0;
     reset_player_damage_visuals();
     pex_logf("world state loaded dir=%s version=%d health=%d dead=%d origin=%d,%d", g_loaded_world_dir, version, g_player_health, g_player_dead, g_flat_world_origin_x, g_flat_world_origin_z);
-    g_save_dirty = (version < 29) ? 1 : 0;
+    g_save_dirty = (version < 37) ? 1 : 0;
     return 1;
 }
 

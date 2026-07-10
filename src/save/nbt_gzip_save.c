@@ -140,6 +140,14 @@ static int write_level_dat(const char *world_dir, const char *world_name, long l
     nbt_long(&b, "LastPlayed", (long long)time(NULL) * 1000LL);
     nbt_string(&b, "LevelName", world_name);
     nbt_int(&b, "version", 19132);
+    nbt_compound(&b, "Player");
+    nbt_compound(&b, "abilities");
+    nbt_byte(&b, "invulnerable", g_game_mode == 1);
+    nbt_byte(&b, "flying", g_game_mode == 1 && g_player_capabilities.is_flying);
+    nbt_byte(&b, "mayfly", g_game_mode == 1);
+    nbt_byte(&b, "instabuild", g_game_mode == 1);
+    nbt_end(&b);
+    nbt_end(&b);
     nbt_end(&b);
     nbt_end(&b);
     char path[MAX_PATHBUF];

@@ -39,6 +39,7 @@
 
 #include "net_protocol.h"
 #include <signal.h>
+#include <stddef.h>
 
 #ifndef VK_PRIOR
 #define VK_PRIOR 0x21
@@ -803,7 +804,8 @@ typedef struct FlatFallingBlock {
 #define MAX_PASSIVE_MOBS 128
 #endif
 
-#define PEX_MOB_PATH_MAX 24
+#define PEX_MOB_PATH_MAX 256
+#define PEX_MOB_AI_TASK_MAX 28
 #define PEX_MOB_OWNER_NONE 0
 #define PEX_MOB_OWNER_SINGLEPLAYER 1
 
@@ -882,14 +884,179 @@ typedef struct PexDamageSource {
     float true_x, true_y, true_z;
 } PexDamageSource;
 
+typedef enum PexMobAITaskId {
+    PEX_MOB_TASK_NONE = 0,
+    PEX_MOB_TASK_SWIM,
+    PEX_MOB_TASK_SIT,
+    PEX_MOB_TASK_CREEPER_SWELL,
+    PEX_MOB_TASK_FLEE_SUN,
+    PEX_MOB_TASK_AVOID_PLAYER,
+    PEX_MOB_TASK_ATTACK,
+    PEX_MOB_TASK_FOLLOW_OWNER,
+    PEX_MOB_TASK_MATE,
+    PEX_MOB_TASK_TEMPT,
+    PEX_MOB_TASK_FOLLOW_PARENT,
+    PEX_MOB_TASK_MOVE_VILLAGE,
+    PEX_MOB_TASK_WANDER,
+    PEX_MOB_TASK_WATCH_PLAYER,
+    PEX_MOB_TASK_LOOK_IDLE,
+    PEX_MOB_TASK_TARGET_PLAYER,
+    PEX_MOB_TASK_TARGET_MOB,
+    PEX_MOB_TASK_TARGET_CURRENT,
+    PEX_MOB_TASK_PANIC,
+    PEX_MOB_TASK_EAT_GRASS,
+    PEX_MOB_TASK_RESTRICT_SUN,
+    PEX_MOB_TASK_LEAP_AT_TARGET,
+    PEX_MOB_TASK_AVOID_MOB,
+    PEX_MOB_TASK_BEG,
+    PEX_MOB_TASK_MOVE_INDOORS,
+    PEX_MOB_TASK_RESTRICT_OPEN_DOOR,
+    PEX_MOB_TASK_OPEN_DOOR,
+    PEX_MOB_TASK_VILLAGER_MATE,
+    PEX_MOB_TASK_PLAY,
+    PEX_MOB_TASK_FOLLOW_GOLEM,
+    PEX_MOB_TASK_LOOK_AT_VILLAGER,
+    PEX_MOB_TASK_OCELOT_SIT,
+    PEX_MOB_TASK_TARGET_OWNER_HURT_BY,
+    PEX_MOB_TASK_TARGET_OWNER_HURT_TARGET,
+    PEX_MOB_TASK_TARGET_REVENGE,
+    PEX_MOB_TASK_DEFEND_VILLAGE
+} PexMobAITaskId;
+
+typedef struct PexMobAITaskEntry {
+    unsigned char id;
+    unsigned char priority;
+    unsigned char mutex_bits;
+    unsigned char running;
+    unsigned char continuous;
+    unsigned char start_pending;
+    short reserved;
+    int timer;
+    int target_entity_id;
+    int arg0;
+    int arg1;
+    float speed;
+    float range;
+    float target_x, target_y, target_z;
+    float aux_yaw, aux_pitch;
+} PexMobAITaskEntry;
+
+typedef struct PexMobSenses {
+    int cache_tick;
+    int player_cached;
+    int player_visible;
+    int mob_cached_entity_id;
+    int mob_visible;
+} PexMobSenses;
+
+typedef struct PexMobMoveController {
+    int update;
+    float x, y, z;
+    float speed;
+} PexMobMoveController;
+
+typedef struct PexMobLookController {
+    int update;
+    float x, y, z;
+    float yaw_limit;
+    float pitch_limit;
+} PexMobLookController;
+
+typedef struct PexMobJumpController {
+    int jump;
+} PexMobJumpController;
+
+typedef struct PexMobNavigationState {
+    int total_ticks;
+    int ticks_at_last_pos;
+    int avoids_water;
+    int can_swim;
+    int pass_open_doors;
+    int pass_closed_doors;
+    int avoid_sun;
+    float speed;
+    float last_x, last_y, last_z;
+} PexMobNavigationState;
+
+/* Explicit species state.  The older generic fields remain below solely as a
+   save/render compatibility adapter for existing worlds.  Runtime AI uses
+   these named fields so unrelated species no longer share semantics. */
+typedef struct PexMobSpeciesState {
+    int sheep_sheared;
+    int sheep_color;
+    int pig_saddled;
+    int chicken_egg_timer;
+    int creeper_fuse;
+    int creeper_last_fuse;
+    int creeper_state;
+    int creeper_powered;
+    int slime_size;
+    int slime_jump_delay;
+    int slime_was_on_ground;
+    int ranged_visible_ticks;
+    int ranged_cooldown;
+    int blaze_attack_step;
+    int blaze_charged;
+    int blaze_height_offset_ticks;
+    float blaze_height_offset;
+    int ghast_course_cooldown;
+    int ghast_aggro_cooldown;
+    int ghast_attack_counter;
+    int ghast_prev_attack_counter;
+    float ghast_waypoint_x, ghast_waypoint_y, ghast_waypoint_z;
+    int pig_zombie_anger;
+    int enderman_aggressive;
+    int enderman_stare_ticks;
+    int enderman_teleport_delay;
+    int wolf_angry;
+    int wolf_begging;
+    int wolf_beg_ticks;
+    int ocelot_variant;
+    int ocelot_sneaking;
+    int ocelot_sprinting;
+    int villager_profession;
+    int villager_random_tick_divider;
+    int villager_mating;
+    int villager_playing;
+    int golem_attack_timer;
+    int golem_rose_timer;
+    int golem_player_created;
+    int pig_zombie_sound_delay;
+    int wolf_wet;
+    int wolf_shaking;
+    int wolf_shake_started;
+    float wolf_shake_time;
+    float wolf_prev_shake_time;
+    float wolf_interest;
+    float wolf_prev_interest;
+    int ocelot_sit_x, ocelot_sit_y, ocelot_sit_z;
+    int ocelot_sit_time;
+    int squid_motion_age;
+    float squid_pitch, squid_prev_pitch;
+    float squid_body_rotation, squid_prev_body_rotation;
+    float squid_phase;
+    float squid_phase_speed;
+    float squid_tentacle_angle, squid_prev_tentacle_angle;
+    float squid_motion_speed;
+    float squid_rotation_velocity;
+    float squid_random_x, squid_random_y, squid_random_z;
+    int silverfish_ally_delay;
+    int tameable_tamed;
+} PexMobSpeciesState;
+
 typedef struct PassiveMob {
     int active;
     int type;
+    int entity_id;       /* stable runtime identity; array slots may be reused */
+    int target_entity_id;/* 0=player, >0=mob entity id, -1=no target */
+    int riding_entity_id;   /* Java ridingEntity: >0 mount entity id, -1 none */
+    int ridden_by_entity_id;/* Java riddenByEntity: >0 passenger entity id, -1 none */
     float x, y, z;
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
-    float yaw, prev_yaw;
-    float render_yaw, prev_render_yaw;
+    float yaw, prev_yaw;                 /* Entity.rotationYaw: movement/body facing */
+    float head_yaw, prev_head_yaw;       /* EntityLiving.rotationYawHead */
+    float render_yaw, prev_render_yaw;   /* EntityLiving.renderYawOffset */
     float pitch, prev_pitch;
     float width, height;
     int health;
@@ -906,12 +1073,25 @@ typedef struct PassiveMob {
     int collided_vertical;
     int in_water;
     int was_in_water;
+    int in_lava;
+    int in_web;
+    int on_ladder;
+    int air;
+    int suffocation_ticks;
+    int revenge_entity_id; /* 0=player, >0=mob, -1=none */
+    int revenge_timer;
+    float fall_distance;
     int age;
     int living_sound_delay;
     float limb_swing;
     float prev_limb_swing;
     float limb_amount;
     float prev_limb_amount;
+    /* Minecraft 1.2.5 EntityBodyHelper animation state. Runtime-only: the
+       helper deliberately converges after load rather than serializing a
+       transient render interpolation cache. */
+    float body_head_yaw_anchor;
+    int body_yaw_idle_ticks;
     int has_path_target;
     float target_x, target_y, target_z;
     int sheared;
@@ -950,14 +1130,31 @@ typedef struct PassiveMob {
     int path_stuck_check_tick;
     float path_stuck_check_x, path_stuck_check_y, path_stuck_check_z;
     float path_goal_x, path_goal_y, path_goal_z;
-    int path_x[PEX_MOB_PATH_MAX];
-    int path_y[PEX_MOB_PATH_MAX];
-    int path_z[PEX_MOB_PATH_MAX];
+    /* Java PathEntity stores a dynamically-sized PathPoint array.  Keep an
+       initial reserve hint for low-memory platforms, but never truncate a
+       completed path to an arbitrary fixed node count.  These buffers are
+       runtime-only and are not serialized. */
+    int *path_x;
+    int *path_y;
+    int *path_z;
+    int path_capacity;
     /* Java 1.2.5 EntityLiving potion state for currently implemented passive mobs.
        Fixed size avoids moving the potion id constants above PassiveMob in this
        unity-style codebase.  Indices use PEX_POTION_* ids. */
     int potion_duration[32];
     int potion_amplifier[32];
+
+    PexMobSpeciesState species;
+    PexMobSenses senses;
+    PexMobNavigationState navigation;
+    PexMobMoveController move_controller;
+    PexMobLookController look_controller;
+    PexMobJumpController jump_controller;
+    int goal_task_count;
+    int target_task_count;
+    PexMobAITaskEntry goal_tasks[PEX_MOB_AI_TASK_MAX];
+    PexMobAITaskEntry target_tasks[PEX_MOB_AI_TASK_MAX];
+
     int random_mob_id; /* StivuFine Random Mobs persistent numeric skin id. */
 } PassiveMob;
 
@@ -1072,6 +1269,13 @@ static int g_world_drag_start_y = 0;
 static int g_world_drag_start_scroll = 0;
 static int g_world_type = 1; /* 0 superflat, 1 default terrain */
 static int g_game_mode = 0;  /* 0 survival, 1 creative */
+typedef struct PexPlayerCapabilities {
+    int disable_damage;
+    int is_flying;
+    int allow_flying;
+    int is_creative_mode;
+} PexPlayerCapabilities;
+static PexPlayerCapabilities g_player_capabilities = {0, 0, 0, 0};
 static int g_world_map_features = 1;
 static long long g_world_seed = 0;
 static int g_current_dimension = 0; /* 0=Overworld, -1=Nether, 1=End (PexDimension) */
@@ -1088,7 +1292,6 @@ static int g_bow_item_in_use = 0;
 static int g_bow_use_ticks = 0;
 static int g_bow_use_slot = -1;
 static int g_bow_use_damage = 0;
-static int g_creative_flying = 0;
 static int g_creative_fly_toggle_timer = 0;
 static int g_prev_jump_down = 0;
 static int g_player_sprinting = 0;
@@ -1116,11 +1319,33 @@ static float g_player_food_saturation = 5.0f;
 static float g_player_food_exhaustion = 0.0f;
 static int g_player_food_timer = 0;
 static int g_player_air = 300;
+static int g_player_fire_ticks = 0;
 static int g_player_xp_level = 0;
 static int g_player_xp_total = 0;
 static float g_player_xp_progress = 0.0f;
+static int g_player_xp_pickup_cooldown = 0; /* EntityPlayer.xpCooldown */
 
-static int player_is_creative(void) { return g_game_mode == 1; }
+static void player_capabilities_apply_game_mode(void) {
+    if (g_game_mode == 1) {
+        g_player_capabilities.disable_damage = 1;
+        g_player_capabilities.allow_flying = 1;
+        g_player_capabilities.is_creative_mode = 1;
+    } else {
+        g_player_capabilities.disable_damage = 0;
+        g_player_capabilities.allow_flying = 0;
+        g_player_capabilities.is_flying = 0;
+        g_player_capabilities.is_creative_mode = 0;
+    }
+}
+static int player_is_creative(void) {
+    player_capabilities_apply_game_mode();
+    return g_player_capabilities.is_creative_mode != 0;
+}
+static int player_damage_disabled(void) {
+    player_capabilities_apply_game_mode();
+    return g_player_capabilities.disable_damage != 0;
+}
+#define g_creative_flying (g_player_capabilities.is_flying)
 
 static int g_ingame_ticks = 0;
 static int g_hearts_life = 0; /* Java EntityLiving.heartsLife countdown, in 20 Hz ticks. */
@@ -1196,7 +1421,7 @@ static void player_food_add_stats(int food, float saturation_modifier) {
 }
 
 static int player_can_eat(int always_edible) {
-    return always_edible || g_player_food_level < 20;
+    return !player_damage_disabled() && (always_edible || g_player_food_level < 20);
 }
 
 static void player_add_exhaustion(float amount) {
@@ -1710,6 +1935,7 @@ typedef struct FlatDroppedItem {
     float rot;
     int age;
     int pickup_delay;
+    int health;       /* EntityItem.health, initialized to 5. */
     int on_ground;
 } FlatDroppedItem;
 
@@ -1788,10 +2014,10 @@ typedef struct PexMapData {
 
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #define MAX_PROJECTILE_ENTITIES 16
-#define MAX_XP_ORBS 32
+#define MAX_XP_ORBS 64
 #else
 #define MAX_PROJECTILE_ENTITIES 64
-#define MAX_XP_ORBS 128
+#define MAX_XP_ORBS 512
 #endif
 
 #define FLAT_PROJECTILE_POTION 1
@@ -1814,8 +2040,17 @@ typedef struct FlatProjectile {
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
     float yaw, pitch;
+    float prev_yaw, prev_pitch;
     int age;
+    int fire_ticks;
     int in_ground;
+    /* EntityArrow 1.2.5 state. Other projectile types leave these zero. */
+    int tile_x, tile_y, tile_z;
+    int in_tile, in_data;
+    int ticks_in_ground, ticks_in_air;
+    int arrow_shake;
+    int player_arrow;
+    int arrow_knockback;
 } FlatProjectile;
 
 typedef struct FlatXPOrb {
@@ -1824,8 +2059,12 @@ typedef struct FlatXPOrb {
     float x, y, z;
     float prev_x, prev_y, prev_z;
     float mx, my, mz;
+    float rot;
     int age;
-    int pickup_delay;
+    int color;
+    int pickup_delay; /* EntityXPOrb.field_35126_c */
+    int health;
+    int on_ground;
 } FlatXPOrb;
 
 typedef struct PickupFx {
@@ -2089,6 +2328,12 @@ static PickupFx g_pickup_fx[MAX_PICKUP_FX];
 static FlatFallingBlock g_falling_blocks[MAX_FALLING_BLOCK_ENTITIES];
 static PassiveMob g_passive_mobs[MAX_PASSIVE_MOBS];
 static int g_player_riding_passive_mob = -1;
+/* Single-player owner AI memory, matching EntityLiving.getAITarget() and
+   getLastAttackingEntity().  Multiplayer remains deliberately out of scope. */
+static int g_player_last_hurt_by_mob_entity_id = -1;
+static int g_player_last_hurt_by_mob_ticks = 0;
+static int g_player_last_attacked_mob_entity_id = -1;
+static int g_player_last_attacked_mob_ticks = 0;
 
 typedef struct PexSaveChunkSnapshot {
     int cx, cz;
@@ -2108,6 +2353,7 @@ typedef struct PexSaveSnapshot {
     int world_type;
     int game_mode;
     int dimension;
+    PexPlayerCapabilities player_capabilities;
     float player_x, player_y, player_z;
     float player_yaw, player_pitch;
     int player_health;
@@ -2116,6 +2362,7 @@ typedef struct PexSaveSnapshot {
     float player_food_saturation;
     float player_food_exhaustion;
     int player_food_timer;
+    int player_fire_ticks;
     int player_xp_level;
     int player_xp_total;
     float player_xp_progress;
@@ -2129,6 +2376,8 @@ typedef struct PexSaveSnapshot {
     ChestTile chest_tiles[MAX_CHEST_TILES];
     FurnaceTile furnace_tiles[MAX_FURNACE_TILES];
     FlatDroppedItem drops[MAX_DROP_ENTITIES];
+    FlatXPOrb xp_orbs[MAX_XP_ORBS];
+    FlatProjectile projectiles[MAX_PROJECTILE_ENTITIES];
     FlatVehicle vehicles[MAX_VEHICLE_ENTITIES];
     JukeboxTile jukebox_tiles[MAX_JUKEBOX_TILES];
     PexPotionEffectState player_potion_effects[PEX_POTION_MAX];
@@ -2153,7 +2402,7 @@ static CRITICAL_SECTION g_save_cs;
 #else
 #define MAX_DIG_PARTICLES 384
 #endif
-typedef enum ParticleKind { PARTICLE_DIG = 0, PARTICLE_BUBBLE = 1, PARTICLE_SPLASH = 2, PARTICLE_PORTAL = 3 } ParticleKind;
+typedef enum ParticleKind { PARTICLE_DIG = 0, PARTICLE_BUBBLE = 1, PARTICLE_SPLASH = 2, PARTICLE_PORTAL = 3, PARTICLE_CRIT = 4, PARTICLE_SMOKE = 5, PARTICLE_FLAME = 6, PARTICLE_EXPLODE = 7 } ParticleKind;
 
 typedef struct DigParticle {
     int active;
@@ -2165,6 +2414,7 @@ typedef struct DigParticle {
     float ox, oy, oz;
     float r, g, b;
     float scale;
+    float base_scale;
     float gravity;
     int age;
     int max_age;
@@ -2562,7 +2812,7 @@ static int font_glyph_widths_loaded = 0;
 static Texture tex_icons, tex_inventory, tex_allitems, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
-static Texture tex_mob_creeper, tex_mob_skeleton, tex_mob_spider, tex_mob_spider_eyes, tex_mob_zombie, tex_mob_slime;
+static Texture tex_mob_creeper, tex_mob_creeper_power, tex_mob_skeleton, tex_mob_spider, tex_mob_spider_eyes, tex_mob_zombie, tex_mob_slime;
 static Texture tex_mob_ghast, tex_mob_ghast_fire, tex_mob_pigzombie, tex_mob_enderman, tex_mob_enderman_eyes, tex_mob_cavespider;
 static Texture tex_mob_silverfish, tex_mob_blaze, tex_mob_lava, tex_mob_enderdragon;
 static Texture tex_mob_squid, tex_mob_wolf, tex_mob_wolf_tame, tex_mob_wolf_angry, tex_mob_mooshroom;
@@ -2570,7 +2820,7 @@ static Texture tex_mob_snowman, tex_mob_ocelot, tex_mob_cat_black, tex_mob_cat_r
 static Texture tex_mob_villager_golem, tex_mob_villager, tex_mob_villager_farmer, tex_mob_villager_librarian, tex_mob_villager_priest, tex_mob_villager_smith, tex_mob_villager_butcher;
 static Texture tex_chest_entity, tex_large_chest_entity, tex_clouds;
 static Texture tex_sun, tex_moon, tex_moon_phases;
-static Texture tex_water_overlay, tex_shadow;
+static Texture tex_water_overlay, tex_shadow, tex_xporb, tex_arrows;
 static Texture tex_grasscolor, tex_foliagecolor, tex_watercolor;
 static Texture tex_pinecolor, tex_birchcolor, tex_swampgrasscolor, tex_swampfoliagecolor;
 static int stivufine_lilypad_color = -1;
@@ -2812,6 +3062,10 @@ static float frand01(void);
 static void spawn_block_destroy_particles(int bx, int by, int bz, int block_id);
 static void spawn_block_hit_particle(int bx, int by, int bz, int face, int block_id);
 static void spawn_water_entry_particles(float x, float y, float z, float mx, float mz);
+static void add_crit_particle(float x, float y, float z, float mx, float my, float mz);
+static void add_smoke_particle(float x, float y, float z, float mx, float my, float mz, float size);
+static void add_flame_particle(float x, float y, float z, float mx, float my, float mz);
+static void add_explode_particle(float x, float y, float z, float mx, float my, float mz);
 static void update_portal_ambient_effects(void);
 static void update_dig_particles(void);
 static void draw_item_stack_gui(const ItemStack *st, int x, int y);
@@ -2845,6 +3099,8 @@ static PexMapData *pex_map_find(int id, int create);
 static void update_held_map_item_tick(void);
 static void update_projectiles(void);
 static void update_xp_orbs(void);
+static float block_slipperiness_for_item(int id);
+static int flat_entity_handle_water_025(float x, float y, float z, float *mx, float *my, float *mz);
 static PexDamageSource pex_damage_source_simple(PexDamageType type);
 static PexDamageSource pex_damage_source_mob(PassiveMob *mob);
 static PexDamageSource pex_damage_source_player(void);
@@ -2882,8 +3138,11 @@ static void draw_passive_mobs(float partial);
 static void draw_vehicles(float partial);
 static void draw_projectiles(float partial);
 static void draw_xp_orbs(float partial);
+static int java125_block_render_type(int id);
+static int java125_render_item_in_3d(int render_type);
 static void passive_mobs_read_from_file(FILE *f, int version);
 static void passive_mobs_write_to_file(FILE *f, const PassiveMob *mobs);
+static void add_bubble_particle(float x, float y, float z, float mx, float my, float mz);
 static void add_splash_particle(float x, float y, float z, float mx, float my, float mz);
 static void update_liquids(void);
 static void update_infinite_world_streaming(void);
@@ -2894,6 +3153,9 @@ static void world_stream_shared_locks_shutdown(void);
 static int world_stream_service_active(void);
 static void stream_generation_queue_clear(void);
 static int item_icon_tile(int id);
+static int item_icon_tile_for_stack(const ItemStack *st);
+static int spawn_egg_color(int damage, int layer);
+static int java125_item_block_tint(const ItemStack *st);
 static void draw_item3d_from_texture(Texture *atlas, int tile);
 static int write_level_dat(const char *world_dir, const char *world_name, long long seed, int spawn_x, int spawn_y, int spawn_z, long long size_on_disk);
 static int write_session_lock(const char *world_dir);

@@ -71,6 +71,12 @@ static void damage_held_item(ItemStack *held, int amount);
 static int jukebox_eject_record(int x, int y, int z);
 static int passive_mobs_spawn_from_egg_damage(int egg_damage, float x, float y, float z);
 static int passive_mobs_apply_dye_to_target(int dye_damage);
+static int passive_dragon_segment_part_hit_125(const PassiveMob *dragon,
+                                                float x0, float y0, float z0,
+                                                float dx, float dy, float dz,
+                                                float max_t, float expand,
+                                                float *out_t, int *out_part);
+static int g_passive_projectile_dragon_part_125 = -1;
 static void passive_mobs_on_block_broken_125(int block_id, int meta, int x, int y, int z);
 static int spawn_flat_vehicle(int type, float x, float y, float z, float yaw);
 
@@ -5036,6 +5042,30 @@ static void aabb_offset(FlatAABB *a, float dx, float dy, float dz) {
     a->minz += dz; a->maxz += dz;
 }
 
+static int flat_entity_push_out_025(float *x, float *y, float *z, float *mx, float *my, float *mz) {
+    int bx = (int)floorf(*x), by = (int)floorf(*y), bz = (int)floorf(*z);
+    if (!flat_block_is_solid(flat_get_block(bx, by, bz))) return 0;
+    float fx = *x - (float)bx, fy = *y - (float)by, fz = *z - (float)bz;
+    int best = -1;
+    float d = 999.0f;
+#define PEX_PUSH_FACE(face, dist, nx, ny, nz) do {     int tx = bx + (nx), ty = by + (ny), tz = bz + (nz);     if (!flat_block_is_solid(flat_get_block(tx, ty, tz)) && (dist) < d) { d=(dist); best=(face); } } while (0)
+    PEX_PUSH_FACE(0, fx, -1, 0, 0);
+    PEX_PUSH_FACE(1, 1.0f-fx, 1, 0, 0);
+    PEX_PUSH_FACE(2, fy, 0, -1, 0);
+    PEX_PUSH_FACE(3, 1.0f-fy, 0, 1, 0);
+    PEX_PUSH_FACE(4, fz, 0, 0, -1);
+    PEX_PUSH_FACE(5, 1.0f-fz, 0, 0, 1);
+#undef PEX_PUSH_FACE
+    float kick = 0.10f + pex_rand_float01() * 0.20f;
+    switch (best) {
+        case 0: *mx = -kick; break; case 1: *mx = kick; break;
+        case 2: *my = -kick; break; case 3: *my = kick; break;
+        case 4: *mz = -kick; break; case 5: *mz = kick; break;
+        default: return 0;
+    }
+    return 1;
+}
+
 static void dropped_item_move_entity(FlatDroppedItem *e, float dx, float dy, float dz) {
     FlatAABB box = { e->x - 0.125f, e->y - 0.125f, e->z - 0.125f, e->x + 0.125f, e->y + 0.125f, e->z + 0.125f };
     FlatAABB sweep = box;
@@ -5139,6 +5169,34 @@ static int inventory_add_stack(ItemStack st) {
     return st.count <= 0;
 }
 
+/* Java InventoryPlayer.addItemStackToInventory mutates the source stack.  EntityItem
+   therefore keeps only the remainder when the inventory has partial room. */
+static int inventory_add_stack_partial(ItemStack *st) {
+    if (!st || stack_empty(st)) return 0;
+    int before = st->count;
+    for (int i = 0; i < 36 && st->count > 0; ++i) {
+        if (stack_same_item(&g_inventory[i], st) && g_inventory[i].count < stack_limit_for_id(st->id)) {
+            int room = stack_limit_for_id(st->id) - g_inventory[i].count;
+            int move = st->count < room ? st->count : room;
+            g_inventory[i].count += move;
+            g_inventory[i].pop_time = 5;
+            st->count -= move;
+        }
+    }
+    for (int i = 0; i < 36 && st->count > 0; ++i) {
+        if (stack_empty(&g_inventory[i])) {
+            int move = st->count < stack_limit_for_id(st->id) ? st->count : stack_limit_for_id(st->id);
+            g_inventory[i] = *st;
+            g_inventory[i].count = move;
+            g_inventory[i].pop_time = 5;
+            st->count -= move;
+        }
+    }
+    if (st->count <= 0) stack_clear(st);
+    else if (st->count == before && player_is_creative()) stack_clear(st);
+    return before - (st->count > 0 ? st->count : 0);
+}
+
 static int dear_memories_text_matches(const char *text) {
     if (!text) return 0;
     while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') ++text;
@@ -5223,8 +5281,9 @@ static void spawn_item_stack(float x, float y, float z, ItemStack st, int random
     e->x = e->prev_x = x;
     e->y = e->prev_y = y;
     e->z = e->prev_z = z;
-    e->rot = (float)(rand() % 6283) / 1000.0f;
+    e->rot = pex_rand_float01() * (float)M_PI * 2.0f;
     e->pickup_delay = 10;
+    e->health = 5;
     g_save_dirty = 1;
     if (random_spread) {
         e->mx = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
@@ -6136,7 +6195,8 @@ static FlatRayHit flat_raycast(void) {
     float py = g_player_y;
     float pz = g_player_z;
     int prev_bx = (int)floorf(px), prev_by = (int)floorf(py), prev_bz = (int)floorf(pz);
-    for (float t = 0.0f; t <= 5.0f; t += 0.05f) {
+    float reach = player_is_creative() ? 5.0f : 4.0f;
+    for (float t = 0.0f; t <= reach; t += 0.05f) {
         float x = px + dx * t;
         float y = py + dy * t;
         float z = pz + dz * t;
@@ -6231,7 +6291,8 @@ static FlatRayHit flat_raycast(void) {
 static int flat_raycast_liquid_source(int *ox, int *oy, int *oz) {
     float dx, dy, dz;
     pex_touch_aware_look_vector(&dx, &dy, &dz);
-    for (float t = 0.0f; t <= 5.0f; t += 0.05f) {
+    float reach = player_is_creative() ? 5.0f : 4.0f;
+    for (float t = 0.0f; t <= reach; t += 0.05f) {
         int bx = (int)floorf(g_player_x + dx * t);
         int by = (int)floorf(g_player_y + dy * t);
         int bz = (int)floorf(g_player_z + dz * t);
@@ -6848,12 +6909,12 @@ static void break_target_block(void) {
     }
 
     flat_begin_persistent_edit();
-    if (!player_is_creative() && id == BLOCK_JUKEBOX) {
+    if (id == BLOCK_JUKEBOX) {
         jukebox_eject_record(g_break_x, g_break_y, g_break_z);
     }
-    if (!player_is_creative() && id == BLOCK_CHEST) {
+    if (id == BLOCK_CHEST) {
         chest_drop_contents(g_break_x, g_break_y, g_break_z);
-    } else if (!player_is_creative() && (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT)) {
+    } else if (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT) {
         furnace_drop_contents(g_break_x, g_break_y, g_break_z);
     }
     if (!player_is_creative() && id == BLOCK_ICE) {
@@ -7772,7 +7833,17 @@ static void pex_spawn_xp_orb(float x, float y, float z, int value) {
     int slot = -1;
     if (value <= 0) value = 1;
     for (int i = 0; i < MAX_XP_ORBS; ++i) if (!g_xp_orbs[i].active) { slot = i; break; }
-    if (slot < 0) slot = rand() % MAX_XP_ORBS;
+    if (slot < 0) {
+        /* Java has an unbounded world entity list.  The fixed C pool should
+           never destroy XP when saturated, so coalesce into the nearest orb. */
+        float best = 1.0e30f;
+        for (int i = 0; i < MAX_XP_ORBS; ++i) {
+            float dx = g_xp_orbs[i].x - x, dy = g_xp_orbs[i].y - y, dz = g_xp_orbs[i].z - z;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < best) { best = d2; slot = i; }
+        }
+        if (slot >= 0) { g_xp_orbs[slot].value += value; g_save_dirty = 1; return; }
+    }
     FlatXPOrb *o = &g_xp_orbs[slot];
     memset(o, 0, sizeof(*o));
     o->active = 1;
@@ -7780,10 +7851,13 @@ static void pex_spawn_xp_orb(float x, float y, float z, int value) {
     o->x = o->prev_x = x;
     o->y = o->prev_y = y;
     o->z = o->prev_z = z;
-    o->mx = (pex_rand_float01() - 0.5f) * 0.20f;
-    o->my = 0.15f + pex_rand_float01() * 0.15f;
-    o->mz = (pex_rand_float01() - 0.5f) * 0.20f;
-    o->pickup_delay = 10;
+    o->rot = pex_rand_float01() * 360.0f;
+    o->mx = (pex_rand_float01() * 0.20f - 0.10f) * 2.0f;
+    o->my = pex_rand_float01() * 0.20f * 2.0f;
+    o->mz = (pex_rand_float01() * 0.20f - 0.10f) * 2.0f;
+    o->health = 5;
+    o->pickup_delay = 0;
+    g_save_dirty = 1;
 }
 
 static int pex_spawn_projectile_with_speed(int type, int damage, float speed, int projectile_damage, int critical) {
@@ -7806,6 +7880,10 @@ static int pex_spawn_projectile_with_speed(int type, int damage, float speed, in
     p->owner_mob_index = -1;
     p->damage = projectile_damage;
     p->critical = critical;
+    if (type == FLAT_PROJECTILE_ARROW) {
+        p->tile_x = p->tile_y = p->tile_z = -1;
+        p->player_arrow = 1;
+    }
     p->x = p->prev_x = g_player_x + lx * 0.35f;
     p->y = p->prev_y = g_player_y - 0.10f + ly * 0.35f;
     p->z = p->prev_z = g_player_z + lz * 0.35f;
@@ -7814,6 +7892,9 @@ static int pex_spawn_projectile_with_speed(int type, int damage, float speed, in
     p->mz = lz * speed + g_player_motion_z;
     p->yaw = atan2f(lx, lz) * 57.29578f;
     p->pitch = atan2f(ly, sqrtf(lx * lx + lz * lz)) * 57.29578f;
+    p->prev_yaw = p->yaw;
+    p->prev_pitch = p->pitch;
+    g_save_dirty = 1;
     return 1;
 }
 
@@ -7865,6 +7946,9 @@ static int pex_spawn_projectile_from_entity(int type, int owner_mob_type, int ow
     p->mz = lz * speed;
     p->yaw = atan2f(lx, lz) * 57.29578f;
     p->pitch = atan2f(ly, sqrtf(lx * lx + lz * lz)) * 57.29578f;
+    p->prev_yaw = p->yaw;
+    p->prev_pitch = p->pitch;
+    g_save_dirty = 1;
     return 1;
 }
 
@@ -8014,18 +8098,6 @@ static void pex_projectile_impact(FlatProjectile *p) {
     p->active = 0;
 }
 
-static int pex_projectile_snowball_should_damage_type(int type) {
-    switch (type) {
-        case PASSIVE_MOB_CREEPER: case PASSIVE_MOB_SKELETON: case PASSIVE_MOB_SPIDER:
-        case PASSIVE_MOB_ZOMBIE: case PASSIVE_MOB_SLIME: case PASSIVE_MOB_ENDERMAN:
-        case PASSIVE_MOB_CAVE_SPIDER: case PASSIVE_MOB_SILVERFISH: case PASSIVE_MOB_BLAZE:
-        case PASSIVE_MOB_MAGMA_CUBE: case PASSIVE_MOB_GHAST: case PASSIVE_MOB_PIG_ZOMBIE:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
 static int pex_projectile_passive_hit_excluding_owner(const FlatProjectile *p, float x0, float y0, float z0,
                                                       float x1, float y1, float z1, float *out_t,
                                                       float *out_x, float *out_y, float *out_z, int *out_mob_index) {
@@ -8036,8 +8108,19 @@ static int pex_projectile_passive_hit_excluding_owner(const FlatProjectile *p, f
     for (int mi = 0; mi < MAX_PASSIVE_MOBS; ++mi) {
         PassiveMob *m = &g_passive_mobs[mi];
         if (!m->active || m->death_time > 0) continue;
-        if (p && p->owner_type == 1 && mi == p->owner_mob_index && m->type == p->owner_mob_type) continue;
+        if (p && p->owner_type == 1 && mi == p->owner_mob_index && m->type == p->owner_mob_type &&
+            !(p->type == FLAT_PROJECTILE_ARROW && p->ticks_in_air >= 5)) continue;
         float expand = 0.30f;
+        if (m->type == PASSIVE_MOB_ENDER_DRAGON) {
+            float dragon_t = 0.0f;
+            int dragon_part = -1;
+            if (passive_dragon_segment_part_hit_125(m, x0, y0, z0, dx, dy, dz, 1.0f, expand,
+                                                     &dragon_t, &dragon_part) && dragon_t < best_t) {
+                best_t = dragon_t; found = 1; best_idx = mi;
+                g_passive_projectile_dragon_part_125 = dragon_part;
+            }
+            continue;
+        }
         float minx = m->x - m->width * 0.5f - expand;
         float maxx = m->x + m->width * 0.5f + expand;
         float miny = m->y - expand;
@@ -8080,16 +8163,19 @@ static int pex_projectile_attack_damage_125(const FlatProjectile *p) {
     return damage;
 }
 
-static void pex_projectile_damage_passive_mob(int mob_index, const FlatProjectile *p, float src_x, float src_z) {
-    if (!p || mob_index < 0 || mob_index >= MAX_PASSIVE_MOBS) return;
+static int pex_projectile_damage_passive_mob(int mob_index, const FlatProjectile *p, float src_x, float src_z) {
+    if (!p || mob_index < 0 || mob_index >= MAX_PASSIVE_MOBS) return 0;
     PassiveMob *m = &g_passive_mobs[mob_index];
-    if (!m->active || m->death_time > 0) return;
-    if (p->type == FLAT_PROJECTILE_LARGE_FIREBALL) return;
+    if (!m->active || m->death_time > 0) return 0;
+    if (p->type == FLAT_PROJECTILE_LARGE_FIREBALL) return 0;
     int damage = pex_projectile_attack_damage_125(p);
+    if (m->type == PASSIVE_MOB_ENDER_DRAGON && g_passive_projectile_dragon_part_125 != 0 && damage > 0)
+        damage = damage / 4 + 1;
+    g_passive_projectile_dragon_part_125 = -1;
+    /* EntitySnowball.onImpact deals zero to every entity except Blazes (3).
+       A zero-damage snowball still bursts, but it must not injure ordinary mobs. */
     if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && m->type == PASSIVE_MOB_BLAZE) damage = 3;
-    if (damage <= 0 && p->type == FLAT_PROJECTILE_SNOWBALL && p->owner_type == 1 &&
-        p->owner_mob_type == PASSIVE_MOB_SNOWMAN && pex_projectile_snowball_should_damage_type(m->type)) damage = 1;
-    if (damage <= 0) return;
+    if (damage <= 0) return 0;
     PexDamageSource source;
     if (p->type == FLAT_PROJECTILE_ARROW) source = pex_damage_source_arrow(p);
     else if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) source = pex_damage_source_fireball(p);
@@ -8097,7 +8183,20 @@ static void pex_projectile_damage_passive_mob(int mob_index, const FlatProjectil
     source.direct_x = src_x;
     source.direct_y = p->y;
     source.direct_z = src_z;
-    (void)pex_mob_attack_entity_from(m, source, damage);
+    int accepted=pex_mob_attack_entity_from(m, source, damage);
+    if (accepted && p->fire_ticks > 0 && p->type == FLAT_PROJECTILE_ARROW && m->burn_time < 100)
+        m->burn_time = 100;
+    if(accepted && p->type==FLAT_PROJECTILE_ARROW && p->arrow_knockback>0){
+        float h=sqrtf(p->mx*p->mx+p->mz*p->mz);
+        if(h>1.0e-6f){m->mx+=p->mx*(float)p->arrow_knockback*0.6f/h;m->my+=0.1f;m->mz+=p->mz*(float)p->arrow_knockback*0.6f/h;}
+    }
+    return accepted;
+}
+
+static void pex_arrow_bounce_from_rejected_hit_125(FlatProjectile *p) {
+    if(!p)return;
+    p->mx*=-0.1f;p->my*=-0.1f;p->mz*=-0.1f;
+    p->yaw+=180.0f;p->prev_yaw+=180.0f;p->ticks_in_air=0;
 }
 
 static int pex_projectile_player_hit(const FlatProjectile *p, float x0, float y0, float z0, float x1, float y1, float z1) {
@@ -8128,12 +8227,72 @@ static int pex_difficulty_scaled_mob_damage(int base) {
     return base;
 }
 
+static int pex_arrow_try_player_pickup_125(FlatProjectile *p) {
+    if(!p||p->type!=FLAT_PROJECTILE_ARROW||!p->in_ground||!p->player_arrow||p->arrow_shake>0||g_player_dead)return 0;
+    float py=g_player_y-1.62f;
+    float dx=g_player_x-p->x,dy=py-p->y,dz=g_player_z-p->z;
+    if(dx*dx+dy*dy+dz*dz>1.0f)return 0;
+    if(!inventory_add_stack(make_stack(ITEM_ARROW,1,0)))return 0;
+    pex_sound_play_at("random.pop",p->x,p->y,p->z,0.2f,((pex_rand_float01()-pex_rand_float01())*0.7f+1.0f)*2.0f);
+    p->active=0;
+    return 1;
+}
+
+static void pex_arrow_embed_in_block_125(FlatProjectile *p,float hx,float hy,float hz) {
+    if(!p)return;
+    p->tile_x=(int)floorf(hx);p->tile_y=(int)floorf(hy);p->tile_z=(int)floorf(hz);
+    p->in_tile=flat_get_block(p->tile_x,p->tile_y,p->tile_z);
+    p->in_data=flat_get_meta(p->tile_x,p->tile_y,p->tile_z);
+    float len=sqrtf(p->mx*p->mx+p->my*p->my+p->mz*p->mz);
+    p->x=hx;p->y=hy;p->z=hz;
+    if(len>1.0e-6f){p->x-=p->mx/len*0.05f;p->y-=p->my/len*0.05f;p->z-=p->mz/len*0.05f;}
+    p->mx=p->my=p->mz=0.0f;p->in_ground=1;p->arrow_shake=7;p->critical=0;p->ticks_in_ground=0;
+    pex_sound_play_at("random.bowhit",p->x,p->y,p->z,1.0f,1.2f/(pex_rand_float01()*0.2f+0.9f));
+}
+
+static void pex_projectile_update_rotation_125(FlatProjectile *p) {
+    if (!p) return;
+    float horiz = sqrtf(p->mx * p->mx + p->mz * p->mz);
+    float target_yaw = atan2f(p->mx, p->mz) * 57.2957795f;
+    float target_pitch = atan2f(p->my, horiz) * 57.2957795f;
+    while (target_pitch - p->prev_pitch < -180.0f) p->prev_pitch -= 360.0f;
+    while (target_pitch - p->prev_pitch >= 180.0f) p->prev_pitch += 360.0f;
+    while (target_yaw - p->prev_yaw < -180.0f) p->prev_yaw -= 360.0f;
+    while (target_yaw - p->prev_yaw >= 180.0f) p->prev_yaw += 360.0f;
+    p->pitch = p->prev_pitch + (target_pitch - p->prev_pitch) * 0.2f;
+    p->yaw = p->prev_yaw + (target_yaw - p->prev_yaw) * 0.2f;
+}
+
 static void update_projectiles(void) {
     for (int i = 0; i < MAX_PROJECTILE_ENTITIES; ++i) {
         FlatProjectile *p = &g_projectiles[i];
         if (!p->active) continue;
         p->prev_x = p->x; p->prev_y = p->y; p->prev_z = p->z;
+        p->prev_yaw = p->yaw; p->prev_pitch = p->pitch;
+        if (p->fire_ticks > 0) --p->fire_ticks;
         p->age++;
+        if(p->type==FLAT_PROJECTILE_ARROW){
+            if(p->arrow_shake>0)--p->arrow_shake;
+            if(p->in_ground){
+                int id=flat_get_block(p->tile_x,p->tile_y,p->tile_z);
+                int meta=flat_get_meta(p->tile_x,p->tile_y,p->tile_z);
+                if(id==p->in_tile&&meta==p->in_data){
+                    if(++p->ticks_in_ground>=1200){p->active=0;continue;}
+                    if(pex_arrow_try_player_pickup_125(p))continue;
+                    continue;
+                }
+                p->in_ground=0;
+                p->mx*=pex_rand_float01()*0.2f;p->my*=pex_rand_float01()*0.2f;p->mz*=pex_rand_float01()*0.2f;
+                p->ticks_in_ground=0;p->ticks_in_air=0;
+            }else ++p->ticks_in_air;
+        }
+        if (p->type == FLAT_PROJECTILE_ARROW && p->critical) {
+            for (int c = 0; c < 4; ++c) {
+                float t = (float)c / 4.0f;
+                add_crit_particle(p->x + p->mx * t, p->y + p->my * t, p->z + p->mz * t,
+                                  -p->mx, -p->my + 0.2f, -p->mz);
+            }
+        }
         float nx = p->x + p->mx;
         float ny = p->y + p->my;
         float nz = p->z + p->mz;
@@ -8143,14 +8302,19 @@ static void update_projectiles(void) {
         int passive_hit_idx = -1;
         if (pex_projectile_player_hit(p, p->x, p->y, p->z, nx, ny, nz)) {
             int dmg = (p->type == FLAT_PROJECTILE_LARGE_FIREBALL) ? 0 : pex_difficulty_scaled_mob_damage(pex_projectile_attack_damage_125(p));
+            int accepted=1;
             if (dmg > 0) {
                 PexDamageSource source;
                 if (p->type == FLAT_PROJECTILE_ARROW) source = pex_damage_source_arrow(p);
                 else if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) source = pex_damage_source_fireball(p);
                 else source = pex_damage_source_thrown(p);
-                (void)player_attack_entity_from(source, dmg);
+                accepted=player_attack_entity_from(source,dmg);
+                if (accepted && p->type == FLAT_PROJECTILE_ARROW && p->fire_ticks > 0 && g_player_fire_ticks < 100)
+                    g_player_fire_ticks = 100;
             }
-            p->x = nx; p->y = ny; p->z = nz; pex_projectile_impact(p); continue;
+            p->x=nx;p->y=ny;p->z=nz;
+            if(p->type==FLAT_PROJECTILE_ARROW&&!accepted){pex_arrow_bounce_from_rejected_hit_125(p);continue;}
+            pex_projectile_impact(p);continue;
         }
         if ((p->owner_type == 0 || p->owner_type == 1) && p->age > 2 &&
             pex_projectile_passive_hit_excluding_owner(p, p->x, p->y, p->z, nx, ny, nz, &et, &ehx, &ehy, &ehz, &passive_hit_idx)) {
@@ -8169,64 +8333,109 @@ static void update_projectiles(void) {
         if (p->age > 2 && pex_dragon_crystal_projectile_hit_125(p, p->x, p->y, p->z, nx, ny, nz, hit ? hit_t : 1.0f, &et, &ehx, &ehy, &ehz)) {
             if (!hit || et < hit_t) { hit = 1; hit_t = et; hx = ehx; hy = ehy; hz = ehz; passive_hit_idx = -1; }
         }
-        if (hit) { if (passive_hit_idx >= 0) pex_projectile_damage_passive_mob(passive_hit_idx, p, p->x, p->z); p->x = hx; p->y = hy; p->z = hz; pex_projectile_impact(p); continue; }
-        p->x = nx; p->y = ny; p->z = nz;
-        int in_water = block_is_water(flat_get_block((int)floorf(p->x), (int)floorf(p->y), (int)floorf(p->z)));
-        if (in_water) {
-            p->mx *= 0.80f; p->my *= 0.80f; p->mz *= 0.80f;
-            if ((p->age & 3) == 0) add_splash_particle(p->x, p->y, p->z, 0.0f, 0.02f, 0.0f);
-        } else {
-            p->mx *= 0.99f; p->my *= 0.99f; p->mz *= 0.99f;
+        if (hit) {
+            if (passive_hit_idx >= 0) {
+                int accepted=pex_projectile_damage_passive_mob(passive_hit_idx,p,p->x,p->z);
+                p->x=hx;p->y=hy;p->z=hz;
+                if(p->type==FLAT_PROJECTILE_ARROW&&!accepted){pex_arrow_bounce_from_rejected_hit_125(p);continue;}
+                pex_projectile_impact(p);continue;
+            }
+            if(p->type==FLAT_PROJECTILE_ARROW){pex_arrow_embed_in_block_125(p,hx,hy,hz);continue;}
+            p->x = hx; p->y = hy; p->z = hz; pex_projectile_impact(p); continue;
         }
+        p->x = nx; p->y = ny; p->z = nz;
+        pex_projectile_update_rotation_125(p);
+        int cell = flat_get_block((int)floorf(p->x), (int)floorf(p->y), (int)floorf(p->z));
+        int in_water = block_is_water(cell);
+        if (cell == BLOCK_FIRE && p->type == FLAT_PROJECTILE_ARROW) p->fire_ticks = 100;
+        float drag = (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) ? 0.95f : 0.99f;
+        if (in_water) {
+            for (int b = 0; b < 4; ++b)
+                add_bubble_particle(p->x - p->mx * 0.25f, p->y - p->my * 0.25f, p->z - p->mz * 0.25f,
+                                    p->mx, p->my, p->mz);
+            drag = 0.80f;
+        }
+        p->mx *= drag; p->my *= drag; p->mz *= drag;
         if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) {
-            /* fireballs fly mostly straight in 1.2.5 */
+            add_smoke_particle(p->x, p->y + 0.5f, p->z, 0.0f, 0.0f, 0.0f, 1.0f);
         } else {
             p->my -= (p->type == FLAT_PROJECTILE_XP_BOTTLE) ? 0.07f : 0.05f;
         }
-        if (p->y < -32.0f || p->age > 1200) p->active = 0;
+        if (p->fire_ticks > 0) add_flame_particle(p->x, p->y, p->z, -p->mx * 0.05f, 0.01f, -p->mz * 0.05f);
+        if (p->y < -32.0f || (p->type != FLAT_PROJECTILE_ARROW && p->age > 1200)) p->active = 0;
     }
 }
 
+static void xp_orb_move_entity(FlatXPOrb *o, float dx, float dy, float dz) {
+    FlatAABB box = {o->x - 0.25f, o->y - 0.25f, o->z - 0.25f,
+                    o->x + 0.25f, o->y + 0.25f, o->z + 0.25f};
+    FlatAABB sweep = box;
+    if (dx < 0) sweep.minx += dx; else sweep.maxx += dx;
+    if (dy < 0) sweep.miny += dy; else sweep.maxy += dy;
+    if (dz < 0) sweep.minz += dz; else sweep.maxz += dz;
+    FlatAABB boxes[128];
+    int n = flat_get_collision_boxes(&sweep, boxes, 128);
+    float odx=dx, ody=dy, odz=dz;
+    for (int i=0;i<n;++i) dy=aabb_clip_y(&boxes[i],&box,dy);
+    aabb_offset(&box,0,dy,0);
+    for (int i=0;i<n;++i) dx=aabb_clip_x(&boxes[i],&box,dx);
+    aabb_offset(&box,dx,0,0);
+    for (int i=0;i<n;++i) dz=aabb_clip_z(&boxes[i],&box,dz);
+    aabb_offset(&box,0,0,dz);
+    o->x=(box.minx+box.maxx)*0.5f; o->y=(box.miny+box.maxy)*0.5f; o->z=(box.minz+box.maxz)*0.5f;
+    o->on_ground=(ody!=dy && ody<0.0f);
+    if (odx!=dx) o->mx=0.0f; if (ody!=dy) o->my=0.0f; if (odz!=dz) o->mz=0.0f;
+}
+
 static void update_xp_orbs(void) {
+    if (g_player_xp_pickup_cooldown > 0) --g_player_xp_pickup_cooldown;
     for (int i = 0; i < MAX_XP_ORBS; ++i) {
         FlatXPOrb *o = &g_xp_orbs[i];
         if (!o->active) continue;
-        o->prev_x = o->x; o->prev_y = o->y; o->prev_z = o->z;
-        o->age++;
-        if (o->pickup_delay > 0) o->pickup_delay--;
-        float dx = g_player_x - o->x;
-        float dy = (g_player_y - 1.0f) - o->y;
-        float dz = g_player_z - o->z;
-        float d2 = dx*dx + dy*dy + dz*dz;
-        if (d2 < 64.0f) {
-            float d = sqrtf(d2);
-            if (d < 0.001f) d = 0.001f;
-            float pull = (1.0f - d / 8.0f);
-            if (pull > 0.0f) {
-                pull *= pull * 0.10f;
-                o->mx += dx / d * pull;
-                o->my += dy / d * pull;
-                o->mz += dz / d * pull;
-            }
-        }
+        if (o->pickup_delay > 0) --o->pickup_delay;
+        o->prev_x=o->x; o->prev_y=o->y; o->prev_z=o->z;
+        (void)flat_entity_handle_water_025(o->x, o->y, o->z, &o->mx, &o->my, &o->mz);
         o->my -= 0.03f;
-        o->x += o->mx; o->y += o->my; o->z += o->mz;
-        int bx = (int)floorf(o->x), by = (int)floorf(o->y), bz = (int)floorf(o->z);
-        if (flat_block_is_solid(flat_get_block(bx, by, bz))) {
-            o->y = (float)by + 1.01f;
-            o->my *= -0.25f;
-            o->mx *= 0.70f;
-            o->mz *= 0.70f;
-        } else {
-            o->mx *= 0.98f; o->my *= 0.98f; o->mz *= 0.98f;
+        int fluid = flat_get_block((int)floorf(o->x),(int)floorf(o->y),(int)floorf(o->z));
+        if (fluid == BLOCK_LAVA || fluid == BLOCK_STILL_LAVA) {
+            o->my=0.20f;
+            o->mx=(pex_rand_float01()-pex_rand_float01())*0.20f;
+            o->mz=(pex_rand_float01()-pex_rand_float01())*0.20f;
+            pex_sound_play_at("random.fizz",o->x,o->y,o->z,0.4f,2.0f+pex_rand_float01()*0.4f);
         }
-        if (o->pickup_delay <= 0 && d2 < 1.2f) {
+        (void)flat_entity_push_out_025(&o->x,&o->y,&o->z,&o->mx,&o->my,&o->mz);
+        float dx=g_player_x-o->x;
+        float dy=g_player_y-o->y; /* g_player_y is the first-person eye position */
+        float dz=g_player_z-o->z;
+        float nx=dx/8.0f, ny=dy/8.0f, nz=dz/8.0f;
+        float nd=sqrtf(nx*nx+ny*ny+nz*nz);
+        float pull=1.0f-nd;
+        if (!g_player_dead && pull>0.0f && nd>0.00001f) {
+            pull*=pull;
+            o->mx += nx/nd*pull*0.10f;
+            o->my += ny/nd*pull*0.10f;
+            o->mz += nz/nd*pull*0.10f;
+        }
+        xp_orb_move_entity(o,o->mx,o->my,o->mz);
+        float friction=0.98f;
+        if (o->on_ground) {
+            int below=flat_get_block((int)floorf(o->x),(int)floorf(o->y-0.25f)-1,(int)floorf(o->z));
+            friction=block_slipperiness_for_item(below)*0.98f;
+        }
+        o->mx*=friction; o->my*=0.98f; o->mz*=friction;
+        if (o->on_ground) o->my*=-0.90f;
+        ++o->color; ++o->age;
+        float pdx=o->x-g_player_x, pdy=o->y-(g_player_y-0.9f), pdz=o->z-g_player_z;
+        if (!g_player_dead && o->pickup_delay==0 && g_player_xp_pickup_cooldown==0 &&
+            pdx*pdx+pdy*pdy+pdz*pdz <= 1.25f*1.25f) {
+            g_player_xp_pickup_cooldown=2;
+            pex_sound_play("random.orb",0.1f,0.5f*((pex_rand_float01()-pex_rand_float01())*0.7f+1.8f));
             player_add_experience(o->value);
-            pex_sound_play("random.orb", 0.2f, 0.5f + pex_rand_float01() * 0.4f);
-            o->active = 0;
-            g_save_dirty = 1;
+            o->active=0;
+            g_save_dirty=1;
+            continue;
         }
-        if (o->age > 6000 || o->y < -32.0f) o->active = 0;
+        if (o->age>=6000 || o->y<-32.0f) { o->active=0; g_save_dirty=1; }
     }
 }
 
@@ -8579,7 +8788,8 @@ static int flat_raycast_boat_target(FlatRayHit *out) {
     float dx, dy, dz;
     pex_touch_aware_look_vector(&dx, &dy, &dz);
     int prev_bx = (int)floorf(g_player_x), prev_by = (int)floorf(g_player_y), prev_bz = (int)floorf(g_player_z);
-    for (float t = 0.0f; t <= 5.0f; t += 0.05f) {
+    float reach = player_is_creative() ? 5.0f : 4.0f;
+    for (float t = 0.0f; t <= reach; t += 0.05f) {
         float x = g_player_x + dx * t;
         float y = g_player_y + dy * t;
         float z = g_player_z + dz * t;
@@ -8753,7 +8963,7 @@ static int try_use_nonblock_item(ItemStack *held, const FlatRayHit *hit, int tar
     return 0;
 }
 
-static void ingame_right_click(void) {
+static void ingame_right_click_impl(void) {
     if (g_screen != SCREEN_INGAME) return;
     if (g_right_click_delay_timer > 0) return;
     g_right_click_delay_timer = 4;
@@ -8905,6 +9115,24 @@ static void ingame_right_click(void) {
     restart_hand_swing();
 }
 
+static void ingame_right_click(void) {
+    int slot = g_selected_hotbar_slot;
+    ItemStack before;
+    int restore = 0;
+    memset(&before, 0, sizeof(before));
+    if (player_is_creative() && slot >= 0 && slot < 36 && !stack_empty(&g_inventory[slot])) {
+        before = g_inventory[slot];
+        restore = 1;
+    }
+    ingame_right_click_impl();
+    if (restore && slot >= 0 && slot < 36) {
+        /* PlayerControllerCreative restores stack count and damage after the
+           complete right-click transaction.  Restoring the whole stack also
+           preserves filled buckets and other container-return items. */
+        g_inventory[slot] = before;
+    }
+}
+
 static void ingame_right_release(void) {
     (void)release_bow_item_use();
 }
@@ -9018,14 +9246,17 @@ static void update_dropped_items(void) {
         int multiplayer_drop = g_mp_connected && e->net_id > 0;
         e->prev_x = e->x; e->prev_y = e->y; e->prev_z = e->z;
         if (e->pickup_delay > 0) e->pickup_delay--;
+        (void)flat_entity_handle_water_025(e->x, e->y, e->z, &e->mx, &e->my, &e->mz);
         /* Deobf EntityItem has no magnetic pull; pickup happens on entity collision. */
         e->my -= 0.04f;
         int fluid_here = flat_get_block((int)floorf(e->x), (int)floorf(e->y), (int)floorf(e->z));
         if (fluid_here == BLOCK_LAVA || fluid_here == BLOCK_STILL_LAVA) {
             e->my = 0.20f;
-            e->mx = ((float)rand() / (float)RAND_MAX - 0.5f) * 0.20f;
-            e->mz = ((float)rand() / (float)RAND_MAX - 0.5f) * 0.20f;
+            e->mx = (pex_rand_float01() - pex_rand_float01()) * 0.20f;
+            e->mz = (pex_rand_float01() - pex_rand_float01()) * 0.20f;
+            pex_sound_play_at("random.fizz", e->x, e->y, e->z, 0.4f, 2.0f + pex_rand_float01() * 0.4f);
         }
+        (void)flat_entity_push_out_025(&e->x, &e->y, &e->z, &e->mx, &e->my, &e->mz);
 
         /* Java Entity.moveEntity-style world collision: build all block AABBs
            around the swept item box, clip Y/X/Z offsets in that order, move the
@@ -9048,11 +9279,17 @@ static void update_dropped_items(void) {
         if (!g_player_dead && g_screen == SCREEN_INGAME && e->pickup_delay <= 0 && dropped_item_touches_player(e)) {
             if (multiplayer_drop) {
                 pex_net_send_pickup_drop(e->net_id);
-            } else if (inventory_add_stack(e->stack)) {
-                spawn_pickup_fx_from_drop(e);
-                pex_sound_play("random.pop", 0.20f, (((float)rand() / (float)RAND_MAX) - ((float)rand() / (float)RAND_MAX)) * 0.7f + 1.0f);
-                e->active = 0;
-                g_save_dirty = 1;
+            } else {
+                FlatDroppedItem before = *e;
+                int moved = inventory_add_stack_partial(&e->stack);
+                if (moved > 0) {
+                    /* EntityItem captures the original stack size before the
+                       inventory mutates the entity stack. */
+                    spawn_pickup_fx_from_drop(&before);
+                    pex_sound_play("random.pop", 0.20f, ((pex_rand_float01() - pex_rand_float01()) * 0.7f + 1.0f) * 2.0f);
+                    if (stack_empty(&e->stack)) e->active = 0;
+                    g_save_dirty = 1;
+                }
             }
         }
         /* Java EntityItem in this source does not merge nearby drops. */
@@ -9627,6 +9864,32 @@ static void fluid_flow_vector_at(int x, int y, int z, int is_water, float *vx, f
         *vy += ay / len;
         *vz += az / len;
     }
+}
+
+static int flat_entity_handle_water_025(float x, float y, float z, float *mx, float *my, float *mz) {
+    const float half = 0.125f;
+    float min_x = x - half, max_x = x + half;
+    float min_y = y - half, max_y = y + half;
+    float min_z = z - half, max_z = z + half;
+    int x0 = (int)floorf(min_x), x1 = (int)floorf(max_x + 1.0f);
+    int y0 = (int)floorf(min_y), y1 = (int)floorf(max_y + 1.0f);
+    int z0 = (int)floorf(min_z), z1 = (int)floorf(max_z + 1.0f);
+    float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    int touched = 0;
+    for (int yy = y0; yy < y1; ++yy) for (int zz = z0; zz < z1; ++zz) for (int xx = x0; xx < x1; ++xx) {
+        if (!fluid_same_family(flat_get_block(xx, yy, zz), 1)) continue;
+        float surface = (float)(yy + 1) - fluid_decay_height(flat_get_level(xx, yy, zz));
+        if (max_y < surface) continue;
+        touched = 1;
+        fluid_flow_vector_at(xx, yy, zz, 1, &vx, &vy, &vz);
+    }
+    float len = sqrtf(vx * vx + vy * vy + vz * vz);
+    if (len > 0.0001f) {
+        *mx += vx / len * 0.014f;
+        *my += vy / len * 0.014f;
+        *mz += vz / len * 0.014f;
+    }
+    return touched;
 }
 
 static void apply_player_fluid_velocity(int is_water) {

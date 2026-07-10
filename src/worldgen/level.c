@@ -2575,13 +2575,11 @@ static void canvas_place_biome_tree(GenCanvas *cv, JavaRandom *r, WorldBiome bio
    Java 1.2.5 structure block-placement pass.
 
    This is a deterministic, metadata-aware placement layer for the generated
-   blocks used by the three Overworld structure families.  It now implements
-   a larger component-inspired graph for strongholds, villages and mineshafts:
-   portal rooms, libraries, prisons, crossings, village wells/roads/houses/
-   farms/blacksmith/church/lamp posts, and mineshaft rooms/corridors/branches.
-   The exact Java component graph still needs line-by-line parity testing, but
-   the generated chunks now contain the important blocks, metadata and tile
-   entities needed for in-game testing.
+   blocks used by the three Overworld structure families. Villages use the
+   Minecraft 1.2.5 weighted component graph and exact block templates; the
+   stronghold and mineshaft families remain component-inspired approximations.
+   Stateless chunk generation still differs from Java's persistent StructureStart
+   objects for per-chunk random details, cached terrain offsets and entity spawns.
    ------------------------------------------------------------------------- */
 static JavaRandom worldgen_structure_random(long long seed, int sourceChunkX, int sourceChunkZ) {
     JavaRandom r;
@@ -2762,141 +2760,1109 @@ static void struct_place_simplified_stronghold(GenCanvas *cv, long long seed, in
     struct_clear_box(cv,baseX-2,y+2,baseZ-1,baseX,y+4,baseZ+4);
 }
 
-static int struct_surface_y(GenCanvas *cv, int x, int z) {
-    int y = canvas_top_solid_or_liquid(cv, x, z);
-    while(y > 1 && cv_is_water_id(canvas_get(cv,x,y-1,z))) --y;
-    return y;
+/* Minecraft 1.2.5 village layout and component port.
+   Reference: MapGenVillage, StructureVillageStart/Pieces, ComponentVillage*. */
+#ifndef BLK_WOOD_PRESSURE_PLATE
+#define BLK_WOOD_PRESSURE_PLATE 72
+#endif
+
+typedef struct VillageBox125 {
+    int minX, minY, minZ, maxX, maxY, maxZ;
+} VillageBox125;
+
+typedef enum VillagePieceKind125 {
+    V125_WELL = 0,
+    V125_PATH,
+    V125_TORCH,
+    V125_HOUSE4_GARDEN,
+    V125_CHURCH,
+    V125_HOUSE1,
+    V125_WOOD_HUT,
+    V125_HALL,
+    V125_FIELD,
+    V125_FIELD2,
+    V125_HOUSE2,
+    V125_HOUSE3
+} VillagePieceKind125;
+
+typedef struct VillagePiece125 {
+    int kind;
+    int component_type;
+    int mode;
+    VillageBox125 box;
+    int average_ground;
+    int aux0, aux1, aux2;
+} VillagePiece125;
+
+typedef struct VillageWeight125 {
+    int kind;
+    int weight;
+    int spawned;
+    int limit;
+} VillageWeight125;
+
+#define V125_MAX_PIECES 512
+#define V125_MAX_WEIGHTS 9
+
+typedef struct VillageGen125 {
+    VillagePiece125 pieces[V125_MAX_PIECES];
+    int piece_count;
+    int road_queue[V125_MAX_PIECES];
+    int road_count;
+    int building_queue[V125_MAX_PIECES];
+    int building_count;
+    VillageWeight125 weights[V125_MAX_WEIGHTS];
+    int weight_count;
+    int last_weight_kind;
+    int terrain_type;
+    int start_min_x, start_min_z;
+    BiomeManager *biomes;
+    JavaRandom *rand;
+} VillageGen125;
+
+static int v125_rand_range(JavaRandom *r, int lo, int hi) {
+    return lo + jr_next_int_bound(r, hi - lo + 1);
 }
 
-static void struct_surface_fill(GenCanvas *cv, int x, int z, int targetY, int block, int meta) {
-    int top = struct_surface_y(cv,x,z);
-    if(top < targetY) {
-        for(int y=top; y<=targetY; ++y) struct_set(cv,x,y,z,block,meta);
-    } else {
-        for(int y=top; y>targetY; --y) struct_set(cv,x,y,z,BLK_AIR,0);
-        struct_set(cv,x,targetY,z,block,meta);
+static VillageBox125 v125_box_component(int x, int y, int z,
+                                         int ox, int oy, int oz,
+                                         int sx, int sy, int sz, int mode) {
+    VillageBox125 b;
+    switch(mode) {
+        case 0:
+            b.minX=x+ox; b.minY=y+oy; b.minZ=z+oz;
+            b.maxX=x+sx-1+ox; b.maxY=y+sy-1+oy; b.maxZ=z+sz-1+oz;
+            break;
+        case 1:
+            b.minX=x-sz+1+oz; b.minY=y+oy; b.minZ=z+ox;
+            b.maxX=x+oz; b.maxY=y+sy-1+oy; b.maxZ=z+sx-1+ox;
+            break;
+        case 2:
+            b.minX=x+ox; b.minY=y+oy; b.minZ=z-sz+1+oz;
+            b.maxX=x+sx-1+ox; b.maxY=y+sy-1+oy; b.maxZ=z+oz;
+            break;
+        case 3:
+            b.minX=x+oz; b.minY=y+oy; b.minZ=z+ox;
+            b.maxX=x+sz-1+oz; b.maxY=y+sy-1+oy; b.maxZ=z+sx-1+ox;
+            break;
+        default:
+            b.minX=x+ox; b.minY=y+oy; b.minZ=z+oz;
+            b.maxX=x+sx-1+ox; b.maxY=y+sy-1+oy; b.maxZ=z+sz-1+oz;
+            break;
+    }
+    return b;
+}
+
+static int v125_box_intersects(const VillageBox125 *a, const VillageBox125 *b) {
+    return a->maxX >= b->minX && a->minX <= b->maxX &&
+           a->maxZ >= b->minZ && a->minZ <= b->maxZ &&
+           a->maxY >= b->minY && a->minY <= b->maxY;
+}
+
+static int v125_box_xsize(const VillageBox125 *b) { return b->maxX - b->minX + 1; }
+static int v125_box_zsize(const VillageBox125 *b) { return b->maxZ - b->minZ + 1; }
+static int v125_box_max_horizontal(const VillageBox125 *b) {
+    int x=v125_box_xsize(b), z=v125_box_zsize(b); return x > z ? x : z;
+}
+
+static int v125_find_intersection(const VillageGen125 *g, const VillageBox125 *b) {
+    for(int i=0;i<g->piece_count;i++) if(v125_box_intersects(&g->pieces[i].box,b)) return i;
+    return -1;
+}
+
+static int v125_biomes_viable(BiomeManager *bm, int x, int z, int radius) {
+    int minX=(x-radius)>>2, minZ=(z-radius)>>2;
+    int maxX=(x+radius)>>2, maxZ=(z+radius)>>2;
+    int w=maxX-minX+1, h=maxZ-minZ+1;
+    int *ids=genlayer_get_ints(bm->gen_biomes,minX,minZ,w,h);
+    if(!ids) return 0;
+    int ok=1;
+    for(int i=0;i<w*h;i++) if(!worldgen_is_village_biome(ids[i])) { ok=0; break; }
+    free(ids);
+    return ok;
+}
+
+static int v125_add_piece(VillageGen125 *g, const VillagePiece125 *src) {
+    if(g->piece_count >= V125_MAX_PIECES) return -1;
+    g->pieces[g->piece_count]=*src;
+    return g->piece_count++;
+}
+
+static void v125_queue_add(int *q, int *count, int idx) {
+    if(*count < V125_MAX_PIECES) q[(*count)++]=idx;
+}
+
+static int v125_queue_remove_random(int *q, int *count, JavaRandom *r) {
+    if(*count <= 0) return -1;
+    int pos=jr_next_int_bound(r,*count);
+    int out=q[pos];
+    memmove(&q[pos],&q[pos+1],(size_t)(*count-pos-1)*sizeof(q[0]));
+    --*count;
+    return out;
+}
+
+static void v125_piece_dims(int kind, int *sx, int *sy, int *sz) {
+    switch(kind) {
+        case V125_HOUSE4_GARDEN: *sx=5; *sy=6; *sz=5; break;
+        case V125_CHURCH: *sx=5; *sy=12; *sz=9; break;
+        case V125_HOUSE1: *sx=9; *sy=9; *sz=6; break;
+        case V125_WOOD_HUT: *sx=4; *sy=6; *sz=5; break;
+        case V125_HALL: *sx=9; *sy=7; *sz=11; break;
+        case V125_FIELD: *sx=13; *sy=4; *sz=9; break;
+        case V125_FIELD2: *sx=7; *sy=4; *sz=9; break;
+        case V125_HOUSE2: *sx=10; *sy=6; *sz=7; break;
+        case V125_HOUSE3: *sx=9; *sy=7; *sz=12; break;
+        case V125_TORCH: *sx=3; *sy=4; *sz=2; break;
+        default: *sx=*sy=*sz=0; break;
     }
 }
 
-static void struct_place_door(GenCanvas *cv, int x, int y, int z, int metaLower) {
-    struct_set(cv,x,y,z,BLK_WOOD_DOOR,metaLower & 15);
-    struct_set(cv,x,y+1,z,BLK_WOOD_DOOR,8);
+static int v125_make_building(VillageGen125 *g, int kind, int x, int y, int z, int mode, int component_type, VillagePiece125 *out) {
+    int sx,sy,sz; v125_piece_dims(kind,&sx,&sy,&sz);
+    VillageBox125 b=v125_box_component(x,y,z,0,0,0,sx,sy,sz,mode);
+    if((kind != V125_HOUSE4_GARDEN && kind != V125_TORCH && b.minY <= 10) ||
+       v125_find_intersection(g,&b)>=0) return 0;
+    memset(out,0,sizeof(*out));
+    out->kind=kind; out->component_type=component_type; out->mode=mode; out->box=b; out->average_ground=-1;
+    if(kind==V125_HOUSE4_GARDEN) out->aux0=jr_next(g->rand,1)!=0;
+    else if(kind==V125_WOOD_HUT) { out->aux0=jr_next(g->rand,1)!=0; out->aux1=jr_next_int_bound(g->rand,3); }
+    return 1;
 }
 
-static void struct_place_village_well(GenCanvas *cv, int x0, int y, int z0) {
-    struct_fill_box(cv,x0-3,y-1,z0-3,x0+3,y-1,z0+3,BLK_COBBLESTONE,0);
-    struct_fill_box(cv,x0-2,y,z0-2,x0+2,y,z0+2,BLK_COBBLESTONE,0);
-    struct_fill_box(cv,x0-1,y,z0-1,x0+1,y,z0+1,BLK_STILL_WATER,0);
-    for(int dx=-2; dx<=2; dx+=4) for(int dz=-2; dz<=2; dz+=4) struct_fill_box(cv,x0+dx,y+1,z0+dz,x0+dx,y+3,z0+dz,BLK_FENCE,0);
-    struct_fill_box(cv,x0-2,y+4,z0-2,x0+2,y+4,z0+2,BLK_WOOD_PLANKS,0);
-    struct_set(cv,x0,y+5,z0,BLK_FENCE,0);
+static int v125_make_torch(VillageGen125 *g, int x, int y, int z, int mode, int component_type, VillagePiece125 *out) {
+    return v125_make_building(g,V125_TORCH,x,y,z,mode,component_type,out);
 }
 
-static void struct_place_village_house(GenCanvas *cv, int x0, int y, int z0, int desert) {
-    int wall = desert ? BLK_SANDSTONE : BLK_WOOD_PLANKS;
-    int roof = desert ? BLK_SANDSTONE : BLK_WOOD_STAIRS;
-    struct_fill_box(cv,x0,y-1,z0,x0+6,y-1,z0+6,wall,0);
-    for(int yy=y; yy<=y+3; ++yy) for(int zz=z0; zz<=z0+6; ++zz) for(int xx=x0; xx<=x0+6; ++xx) {
-        int edge = xx==x0 || xx==x0+6 || zz==z0 || zz==z0+6;
-        if(edge) struct_set(cv,xx,yy,zz,wall,0); else struct_set(cv,xx,yy,zz,BLK_AIR,0);
+static int v125_available_weight(const VillageGen125 *g) {
+    int any=0,total=0;
+    for(int i=0;i<g->weight_count;i++) {
+        const VillageWeight125 *w=&g->weights[i];
+        if(w->limit==0 || w->spawned < w->limit) any=1;
+        total += w->weight;
     }
-    struct_fill_box(cv,x0,y+4,z0,x0+6,y+4,z0+6,roof,0);
-    struct_clear_box(cv,x0+3,y,z0,x0+3,y+1,z0);
-    struct_place_door(cv,x0+3,y,z0,1);
-    struct_set(cv,x0+1,y+2,z0,BLK_GLASS_PANE,0); struct_set(cv,x0+5,y+2,z0,BLK_GLASS_PANE,0);
-    struct_set(cv,x0+1,y+1,z0+5,BLK_CHEST,2);
-    struct_set(cv,x0+5,y+2,z0+3,BLK_TORCH,5);
+    return any ? total : -1;
 }
 
-static void struct_place_village_farm(GenCanvas *cv, int x0, int y, int z0) {
-    struct_fill_box(cv,x0,y-1,z0,x0+8,y-1,z0+6,BLK_DIRT,0);
-    for(int z=0; z<=6; ++z) for(int x=0; x<=8; ++x) {
-        if(x==4) struct_set(cv,x0+x,y,z0+z,BLK_STILL_WATER,0);
-        else { struct_set(cv,x0+x,y,z0+z,BLK_FARMLAND,7); if(z>0 && z<6) struct_set(cv,x0+x,y+1,z0+z,BLK_CROPS,7); }
-    }
-    struct_line_z(cv,x0-1,y,z0-1,z0+7,BLK_WOOD_PLANKS,0);
-    struct_line_z(cv,x0+9,y,z0-1,z0+7,BLK_WOOD_PLANKS,0);
+static void v125_remove_weight(VillageGen125 *g, int idx) {
+    if(idx<0 || idx>=g->weight_count) return;
+    memmove(&g->weights[idx],&g->weights[idx+1],(size_t)(g->weight_count-idx-1)*sizeof(g->weights[0]));
+    --g->weight_count;
 }
 
-static void struct_place_village_roads(GenCanvas *cv, int cx, int cz, int y) {
-    for(int dx=-24; dx<=24; ++dx) {
-        for(int w=-1; w<=1; ++w) struct_surface_fill(cv,cx+dx,cz+w,y,BLK_GRAVEL,0);
+static int v125_next_building(VillageGen125 *g, int x, int y, int z, int mode, int parent_type) {
+    if(parent_type > 50) return -1;
+    if(abs(x-g->start_min_x)>112 || abs(z-g->start_min_z)>112) return -1;
+    int total=v125_available_weight(g);
+    if(total<=0) return -1;
+    for(int attempt=0;attempt<5;attempt++) {
+        int pick=jr_next_int_bound(g->rand,total);
+        for(int wi=0;wi<g->weight_count;wi++) {
+            VillageWeight125 *w=&g->weights[wi];
+            pick -= w->weight;
+            if(pick < 0) {
+                int can=(w->limit==0 || w->spawned < w->limit);
+                if(!can || (w->kind==g->last_weight_kind && g->weight_count>1)) break;
+                VillagePiece125 p;
+                if(v125_make_building(g,w->kind,x,y,z,mode,parent_type+1,&p)) {
+                    int centerX=(p.box.minX+p.box.maxX)/2;
+                    int centerZ=(p.box.minZ+p.box.maxZ)/2;
+                    int radius=v125_box_max_horizontal(&p.box)-1;
+                    radius=radius/2+4;
+                    if(!v125_biomes_viable(g->biomes,centerX,centerZ,radius)) break;
+                    ++w->spawned;
+                    g->last_weight_kind=w->kind;
+                    int exhausted=(w->limit!=0 && w->spawned>=w->limit);
+                    int idx=v125_add_piece(g,&p);
+                    if(idx<0) return -1;
+                    v125_queue_add(g->building_queue,&g->building_count,idx);
+                    if(exhausted) v125_remove_weight(g,wi);
+                    return idx;
+                }
+                break;
+            }
+        }
     }
-    for(int dz=-24; dz<=24; ++dz) {
-        for(int w=-1; w<=1; ++w) struct_surface_fill(cv,cx+w,cz+dz,y,BLK_GRAVEL,0);
+    VillagePiece125 torch;
+    if(v125_make_torch(g,x,y,z,mode,parent_type+1,&torch)) {
+        int idx=v125_add_piece(g,&torch);
+        if(idx>=0) v125_queue_add(g->building_queue,&g->building_count,idx);
+        return idx;
+    }
+    return -1;
+}
+
+static int v125_next_path(VillageGen125 *g, int x, int y, int z, int mode, int parent_type) {
+    if(parent_type > 3 + g->terrain_type) return -1;
+    if(abs(x-g->start_min_x)>112 || abs(z-g->start_min_z)>112) return -1;
+    VillageBox125 b; int found=0;
+    for(int len=7*v125_rand_range(g->rand,3,5);len>=7;len-=7) {
+        b=v125_box_component(x,y,z,0,0,0,3,3,len,mode);
+        if(v125_find_intersection(g,&b)<0) { found=1; break; }
+    }
+    if(!found || b.minY<=10) return -1;
+    int centerX=(b.minX+b.maxX)/2, centerZ=(b.minZ+b.maxZ)/2;
+    int radius=v125_box_max_horizontal(&b)-1; radius=radius/2+4;
+    if(!v125_biomes_viable(g->biomes,centerX,centerZ,radius)) return -1;
+    VillagePiece125 p; memset(&p,0,sizeof(p));
+    p.kind=V125_PATH; p.component_type=parent_type; p.mode=mode; p.box=b; p.average_ground=v125_box_max_horizontal(&b);
+    int idx=v125_add_piece(g,&p);
+    if(idx>=0) v125_queue_add(g->road_queue,&g->road_count,idx);
+    return idx;
+}
+
+static int v125_next_nn(VillageGen125 *g, const VillagePiece125 *p, int yoff, int along) {
+    switch(p->mode) {
+        case 0: return v125_next_building(g,p->box.minX-1,p->box.minY+yoff,p->box.minZ+along,1,p->component_type);
+        case 1: return v125_next_building(g,p->box.minX+along,p->box.minY+yoff,p->box.minZ-1,2,p->component_type);
+        case 2: return v125_next_building(g,p->box.minX-1,p->box.minY+yoff,p->box.minZ+along,1,p->component_type);
+        case 3: return v125_next_building(g,p->box.minX+along,p->box.minY+yoff,p->box.minZ-1,2,p->component_type);
+    }
+    return -1;
+}
+
+static int v125_next_pp(VillageGen125 *g, const VillagePiece125 *p, int yoff, int along) {
+    switch(p->mode) {
+        case 0: return v125_next_building(g,p->box.maxX+1,p->box.minY+yoff,p->box.minZ+along,3,p->component_type);
+        case 1: return v125_next_building(g,p->box.minX+along,p->box.minY+yoff,p->box.maxZ+1,0,p->component_type);
+        case 2: return v125_next_building(g,p->box.maxX+1,p->box.minY+yoff,p->box.minZ+along,3,p->component_type);
+        case 3: return v125_next_building(g,p->box.minX+along,p->box.minY+yoff,p->box.maxZ+1,0,p->component_type);
+    }
+    return -1;
+}
+
+static void v125_build_path(VillageGen125 *g, int idx) {
+    if(idx<0 || idx>=g->piece_count) return;
+    VillagePiece125 p=g->pieces[idx];
+    int any=0;
+    for(int pos=jr_next_int_bound(g->rand,5);pos<p.average_ground-8;pos += 2+jr_next_int_bound(g->rand,5)) {
+        int child=v125_next_nn(g,&p,0,pos);
+        if(child>=0) { pos += v125_box_max_horizontal(&g->pieces[child].box); any=1; }
+    }
+    for(int pos=jr_next_int_bound(g->rand,5);pos<p.average_ground-8;pos += 2+jr_next_int_bound(g->rand,5)) {
+        int child=v125_next_pp(g,&p,0,pos);
+        if(child>=0) { pos += v125_box_max_horizontal(&g->pieces[child].box); any=1; }
+    }
+    if(any && jr_next_int_bound(g->rand,3)>0) {
+        switch(p.mode) {
+            case 0: v125_next_path(g,p.box.minX-1,p.box.minY,p.box.maxZ-2,1,p.component_type); break;
+            case 1: v125_next_path(g,p.box.minX,p.box.minY,p.box.minZ-1,2,p.component_type); break;
+            case 2: v125_next_path(g,p.box.minX-1,p.box.minY,p.box.minZ,1,p.component_type); break;
+            case 3: v125_next_path(g,p.box.maxX-2,p.box.minY,p.box.minZ-1,2,p.component_type); break;
+        }
+    }
+    if(any && jr_next_int_bound(g->rand,3)>0) {
+        switch(p.mode) {
+            case 0: v125_next_path(g,p.box.maxX+1,p.box.minY,p.box.maxZ-2,3,p.component_type); break;
+            case 1: v125_next_path(g,p.box.minX,p.box.minY,p.box.maxZ+1,0,p.component_type); break;
+            case 2: v125_next_path(g,p.box.maxX+1,p.box.minY,p.box.minZ,3,p.component_type); break;
+            case 3: v125_next_path(g,p.box.maxX-2,p.box.minY,p.box.maxZ+1,0,p.component_type); break;
+        }
+    }
+}
+
+static void v125_init_weights(VillageGen125 *g) {
+#define V125_ADD_WEIGHT(k,w,lo,hi) do { int lim=v125_rand_range(g->rand,(lo),(hi)); if(lim>0){ VillageWeight125 *q=&g->weights[g->weight_count++]; q->kind=(k);q->weight=(w);q->spawned=0;q->limit=lim;} } while(0)
+    int t=g->terrain_type;
+    V125_ADD_WEIGHT(V125_HOUSE4_GARDEN,4,2+t,4+t*2);
+    V125_ADD_WEIGHT(V125_CHURCH,20,0+t,1+t);
+    V125_ADD_WEIGHT(V125_HOUSE1,20,0+t,2+t);
+    V125_ADD_WEIGHT(V125_WOOD_HUT,3,2+t,5+t*3);
+    V125_ADD_WEIGHT(V125_HALL,15,0+t,2+t);
+    V125_ADD_WEIGHT(V125_FIELD,3,1+t,4+t);
+    V125_ADD_WEIGHT(V125_FIELD2,3,2+t,4+t*2);
+    V125_ADD_WEIGHT(V125_HOUSE2,15,0,1+t);
+    V125_ADD_WEIGHT(V125_HOUSE3,8,0+t,3+t*2);
+#undef V125_ADD_WEIGHT
+}
+
+static int v125_generate_layout(VillageGen125 *g, JavaRandom *r, BiomeManager *bm, int vcx, int vcz) {
+    memset(g,0,sizeof(*g));
+    g->terrain_type=0; g->last_weight_kind=-1; g->rand=r; g->biomes=bm;
+    v125_init_weights(g);
+    VillagePiece125 start; memset(&start,0,sizeof(start));
+    start.kind=V125_WELL; start.component_type=0; start.mode=jr_next_int_bound(r,4); start.average_ground=-1;
+    start.box.minX=(vcx<<4)+2; start.box.minY=64; start.box.minZ=(vcz<<4)+2;
+    start.box.maxX=start.box.minX+5; start.box.maxY=78; start.box.maxZ=start.box.minZ+5;
+    g->start_min_x=start.box.minX; g->start_min_z=start.box.minZ;
+    int start_idx=v125_add_piece(g,&start); if(start_idx<0) return 0;
+    VillagePiece125 *w=&g->pieces[start_idx];
+    v125_next_path(g,w->box.minX-1,w->box.maxY-4,w->box.minZ+1,1,w->component_type);
+    v125_next_path(g,w->box.maxX+1,w->box.maxY-4,w->box.minZ+1,3,w->component_type);
+    v125_next_path(g,w->box.minX+1,w->box.maxY-4,w->box.minZ-1,2,w->component_type);
+    v125_next_path(g,w->box.minX+1,w->box.maxY-4,w->box.maxZ+1,0,w->component_type);
+    while(g->road_count>0 || g->building_count>0) {
+        if(g->road_count>0) { int idx=v125_queue_remove_random(g->road_queue,&g->road_count,r); v125_build_path(g,idx); }
+        else (void)v125_queue_remove_random(g->building_queue,&g->building_count,r);
+    }
+    int nonroads=0;
+    for(int i=0;i<g->piece_count;i++) if(g->pieces[i].kind!=V125_PATH) ++nonroads;
+    return nonroads>2;
+}
+
+static int v125_x(const VillagePiece125 *p, int lx, int lz) {
+    switch(p->mode) {
+        case 0: case 2: return p->box.minX+lx;
+        case 1: return p->box.maxX-lz;
+        case 3: return p->box.minX+lz;
+        default: return lx;
+    }
+}
+static int v125_y(const VillagePiece125 *p, int ly) { return p->mode==-1?ly:p->box.minY+ly; }
+static int v125_z(const VillagePiece125 *p, int lx, int lz) {
+    switch(p->mode) {
+        case 0: return p->box.minZ+lz;
+        case 1: case 3: return p->box.minZ+lx;
+        case 2: return p->box.maxZ-lz;
+        default: return lz;
+    }
+}
+
+static int v125_meta(const VillagePiece125 *p, int block, int meta) {
+    int m=p->mode;
+    if(block==BLK_WOOD_DOOR || block==BLK_IRON_DOOR) {
+        if(m==0) { if(meta==0)return 2; if(meta==2)return 0; }
+        else if(m==1) return (meta+1)&3;
+        else if(m==3) return (meta+3)&3;
+    } else if(block==BLK_WOOD_STAIRS || block==BLK_COBBLE_STAIRS || block==BLK_NETHER_BRICK_STAIRS || block==BLK_STONE_BRICK_STAIRS) {
+        if(m==0) { if(meta==2)return 3; if(meta==3)return 2; }
+        else if(m==1) { if(meta==0)return 2;if(meta==1)return 3;if(meta==2)return 0;if(meta==3)return 1; }
+        else if(m==3) { if(meta==0)return 2;if(meta==1)return 3;if(meta==2)return 1;if(meta==3)return 0; }
+    } else if(block==BLK_LADDER) {
+        if(m==0) { if(meta==2)return 3;if(meta==3)return 2; }
+        else if(m==1) { if(meta==2)return 4;if(meta==3)return 5;if(meta==4)return 2;if(meta==5)return 3; }
+        else if(m==3) { if(meta==2)return 5;if(meta==3)return 4;if(meta==4)return 2;if(meta==5)return 3; }
+    }
+    return meta;
+}
+
+static void v125_set_local(GenCanvas *cv, VillagePiece125 *p, int id, int meta, int lx, int ly, int lz) {
+    struct_set(cv,v125_x(p,lx,lz),v125_y(p,ly),v125_z(p,lx,lz),id,meta);
+}
+static int v125_get_local(GenCanvas *cv, VillagePiece125 *p, int lx, int ly, int lz) {
+    return canvas_get(cv,v125_x(p,lx,lz),v125_y(p,ly),v125_z(p,lx,lz));
+}
+static void v125_fill(GenCanvas *cv, VillagePiece125 *p,
+                      int x1,int y1,int z1,int x2,int y2,int z2,
+                      int shell,int inside,int existing_only) {
+    for(int y=y1;y<=y2;y++) for(int x=x1;x<=x2;x++) for(int z=z1;z<=z2;z++) {
+        if(existing_only && v125_get_local(cv,p,x,y,z)==BLK_AIR) continue;
+        int edge=(y==y1||y==y2||x==x1||x==x2||z==z1||z==z2);
+        v125_set_local(cv,p,edge?shell:inside,0,x,y,z);
+    }
+}
+static void v125_clear_up(GenCanvas *cv, VillagePiece125 *p, int lx, int ly, int lz) {
+    int wx=v125_x(p,lx,lz), y=v125_y(p,ly), wz=v125_z(p,lx,lz);
+    while(y<128 && canvas_get(cv,wx,y,wz)!=BLK_AIR) struct_set(cv,wx,y++,wz,BLK_AIR,0);
+}
+static void v125_fill_down(GenCanvas *cv, VillagePiece125 *p, int id, int meta, int lx, int ly, int lz) {
+    int wx=v125_x(p,lx,lz), y=v125_y(p,ly), wz=v125_z(p,lx,lz);
+    while(y>1) {
+        int cur=canvas_get(cv,wx,y,wz);
+        if(cur!=BLK_AIR && !cv_is_liquid_id(cur)) break;
+        struct_set(cv,wx,y,wz,id,meta); --y;
+    }
+}
+static int v125_normal_cube(int id) {
+    return id==BLK_STONE||id==BLK_GRASS||id==BLK_DIRT||id==BLK_COBBLESTONE||id==BLK_WOOD_PLANKS||id==BLK_LOG||id==BLK_SANDSTONE||id==BLK_BRICK||id==BLK_BOOKSHELF||id==BLK_DOUBLE_SLAB||id==BLK_OBSIDIAN;
+}
+static void v125_place_door(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r, int lx,int ly,int lz,int facing) {
+    (void)r;
+    int x=v125_x(p,lx,lz), y=v125_y(p,ly), z=v125_z(p,lx,lz);
+    int dx=0,dz=0;
+    if(facing==0)dz=1; else if(facing==1)dx=-1; else if(facing==2)dz=-1; else if(facing==3)dx=1;
+    int left=(v125_normal_cube(canvas_get(cv,x-dx,y,z-dz))?1:0)+(v125_normal_cube(canvas_get(cv,x-dx,y+1,z-dz))?1:0);
+    int right=(v125_normal_cube(canvas_get(cv,x+dx,y,z+dz))?1:0)+(v125_normal_cube(canvas_get(cv,x+dx,y+1,z+dz))?1:0);
+    int leftDoor=canvas_get(cv,x-dx,y,z-dz)==BLK_WOOD_DOOR||canvas_get(cv,x-dx,y+1,z-dz)==BLK_WOOD_DOOR;
+    int rightDoor=canvas_get(cv,x+dx,y,z+dz)==BLK_WOOD_DOOR||canvas_get(cv,x+dx,y+1,z+dz)==BLK_WOOD_DOOR;
+    int hinge=(leftDoor&&!rightDoor)||(right>left);
+    struct_set(cv,x,y,z,BLK_WOOD_DOOR,facing);
+    struct_set(cv,x,y+1,z,BLK_WOOD_DOOR,8|(hinge?1:0));
+}
+
+static int v125_average_ground(GenCanvas *cv, const VillagePiece125 *p) {
+    long sum=0; int count=0;
+    for(int z=p->box.minZ;z<=p->box.maxZ;z++) for(int x=p->box.minX;x<=p->box.maxX;x++) {
+        if(canvas_block_index(cv,x,64,z)<0) continue;
+        int top=canvas_top_solid_or_liquid(cv,x,z);
+        if(top<64) top=64;
+        sum+=top; ++count;
+    }
+    return count? (int)(sum/count) : -1;
+}
+static int v125_ground_height_for_kind(int kind) {
+    switch(kind) {
+        case V125_WELL:return 3;
+        case V125_CHURCH:return 11;
+        case V125_FIELD:case V125_FIELD2:return 3;
+        case V125_HALL:return 6;
+        case V125_HOUSE1:return 8;
+        case V125_HOUSE2:return 5;
+        case V125_HOUSE3:return 6;
+        case V125_HOUSE4_GARDEN:case V125_WOOD_HUT:return 5;
+        case V125_TORCH:return 3;
+        default:return 0;
+    }
+}
+static int v125_prepare_ground(GenCanvas *cv, VillagePiece125 *p) {
+    if(p->kind==V125_PATH) return 1;
+    int avg=v125_average_ground(cv,p); if(avg<0)return 0;
+    int dy=avg-p->box.maxY+v125_ground_height_for_kind(p->kind);
+    p->box.minY+=dy;p->box.maxY+=dy;p->average_ground=avg;
+    return 1;
+}
+
+static void v125_place_well(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+    (void)r;
+    v125_fill(cv,p,1,0,1,4,12,4,BLK_COBBLESTONE,BLK_WATER,0);
+    v125_set_local(cv,p,BLK_AIR,0,2,12,2);v125_set_local(cv,p,BLK_AIR,0,3,12,2);
+    v125_set_local(cv,p,BLK_AIR,0,2,12,3);v125_set_local(cv,p,BLK_AIR,0,3,12,3);
+    int q[4][2]={{1,1},{4,1},{1,4},{4,4}};
+    for(int i=0;i<4;i++){v125_set_local(cv,p,BLK_FENCE,0,q[i][0],13,q[i][1]);v125_set_local(cv,p,BLK_FENCE,0,q[i][0],14,q[i][1]);}
+    v125_fill(cv,p,1,15,1,4,15,4,BLK_COBBLESTONE,BLK_COBBLESTONE,0);
+    for(int z=0;z<=5;z++)for(int x=0;x<=5;x++)if(x==0||x==5||z==0||z==5){v125_set_local(cv,p,BLK_GRAVEL,0,x,11,z);v125_clear_up(cv,p,x,12,z);}
+}
+
+static void v125_place_path(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+    (void)r;
+    for(int x=p->box.minX;x<=p->box.maxX;x++) for(int z=p->box.minZ;z<=p->box.maxZ;z++) {
+        if(canvas_block_index(cv,x,64,z)<0)continue;
+        int y=canvas_top_solid_or_liquid(cv,x,z)-1;
+        if(y>=0)struct_set(cv,x,y,z,BLK_GRAVEL,0);
     }
 }
 
 
-static void struct_place_village_blacksmith(GenCanvas *cv, int x0, int y, int z0, int desert) {
-    int wall = desert ? BLK_SANDSTONE : BLK_COBBLESTONE;
-    int roof = desert ? BLK_SANDSTONE : BLK_WOOD_PLANKS;
-    struct_fill_box(cv,x0,y-1,z0,x0+9,y-1,z0+6,BLK_COBBLESTONE,0);
-    struct_fill_box(cv,x0,y,z0,x0+9,y+3,z0+6,BLK_AIR,0);
-    for(int yy=y; yy<=y+3; ++yy) for(int zz=z0; zz<=z0+6; ++zz) for(int xx=x0; xx<=x0+9; ++xx) {
-        int edge = xx==x0 || xx==x0+9 || zz==z0 || zz==z0+6;
-        if(edge) struct_set(cv,xx,yy,zz,wall,0);
-    }
-    struct_fill_box(cv,x0,y+4,z0,x0+9,y+4,z0+6,roof,0);
-    struct_clear_box(cv,x0+4,y,z0,x0+4,y+1,z0);
-    struct_place_door(cv,x0+4,y,z0,1);
-    struct_set(cv,x0+7,y+1,z0+1,BLK_FURNACE,2);
-    struct_set(cv,x0+7,y+1,z0+2,BLK_FURNACE,2);
-    struct_set(cv,x0+2,y+1,z0+5,BLK_CHEST,3);
-    struct_set(cv,x0+5,y+1,z0+5,BLK_LAVA,0);
-    struct_fill_box(cv,x0+4,y+1,z0+4,x0+6,y+1,z0+6,BLK_IRON_BARS,0);
-    struct_set(cv,x0+2,y+2,z0,BLK_GLASS_PANE,0); struct_set(cv,x0+7,y+2,z0,BLK_GLASS_PANE,0);
+static void v125_place_church(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 1, 1, 1, 3, 3, 7, 0, 0, 0);
+		v125_fill(cv, p, 1, 5, 1, 3, 9, 3, 0, 0, 0);
+		v125_fill(cv, p, 1, 0, 0, 3, 0, 8, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 1, 0, 3, 10, 0, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 1, 1, 0, 10, 3, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 4, 1, 1, 4, 10, 3, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 0, 4, 0, 4, 7, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 4, 0, 4, 4, 4, 7, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 1, 8, 3, 4, 8, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 5, 4, 3, 10, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 5, 5, 3, 5, 7, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 9, 0, 4, 9, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 4, 0, 4, 4, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 11, 2);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 11, 2);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 2, 11, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 2, 11, 4);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 1, 1, 6);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 1, 1, 7);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 2, 1, 7);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 3, 1, 6);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 3, 1, 7);
+		v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 1, 1, 5);
+		v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 2, 1, 6);
+		v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 3, 1, 5);
+		v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 1), 1, 2, 7);
+		v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 0), 3, 2, 7);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 3, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 3, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 6, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 7, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 6, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 7, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 6, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 7, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 6, 4);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 7, 4);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 3, 6);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 3, 6);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 3, 8);
+		v125_set_local(cv, p, BLK_TORCH, 0, 2, 4, 7);
+		v125_set_local(cv, p, BLK_TORCH, 0, 1, 4, 6);
+		v125_set_local(cv, p, BLK_TORCH, 0, 3, 4, 6);
+		v125_set_local(cv, p, BLK_TORCH, 0, 2, 4, 5);
+		int var4 = v125_meta(p, BLK_LADDER, 4);
+
+		int var5;
+		for(var5 = 1; var5 <= 9; ++var5) {
+			v125_set_local(cv, p, BLK_LADDER, var4, 3, var5, 3);
+		}
+
+		v125_set_local(cv, p, 0, 0, 2, 1, 0);
+		v125_set_local(cv, p, 0, 0, 2, 2, 0);
+		v125_place_door(cv, p, r, 2, 1, 0, v125_meta(p, BLK_WOOD_DOOR, 1));
+		if(v125_get_local(cv, p, 2, 0, -1) == 0 && v125_get_local(cv, p, 2, -1, -1) != 0) {
+			v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 2, 0, -1);
+		}
+
+		for(var5 = 0; var5 < 9; ++var5) {
+			for(int var6 = 0; var6 < 5; ++var6) {
+				v125_clear_up(cv, p, var6, 12, var5);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var6, -1, var5);
+			}
+		}
+		return;
 }
 
-static void struct_place_village_church(GenCanvas *cv, int x0, int y, int z0, int desert) {
-    int wall = desert ? BLK_SANDSTONE : BLK_COBBLESTONE;
-    struct_fill_box(cv,x0,y-1,z0,x0+5,y-1,z0+8,wall,0);
-    for(int yy=y; yy<=y+5; ++yy) for(int zz=z0; zz<=z0+8; ++zz) for(int xx=x0; xx<=x0+5; ++xx) {
-        int edge = xx==x0 || xx==x0+5 || zz==z0 || zz==z0+8;
-        if(edge) struct_set(cv,xx,yy,zz,wall,0); else struct_set(cv,xx,yy,zz,BLK_AIR,0);
-    }
-    struct_fill_box(cv,x0+1,y+6,z0+1,x0+4,y+6,z0+7,wall,0);
-    struct_fill_box(cv,x0+1,y,z0+6,x0+4,y+9,z0+8,wall,0);
-    struct_clear_box(cv,x0+2,y,z0,x0+3,y+1,z0);
-    struct_place_door(cv,x0+2,y,z0,1);
-    struct_set(cv,x0+1,y+3,z0+4,BLK_GLASS_PANE,0); struct_set(cv,x0+4,y+3,z0+4,BLK_GLASS_PANE,0);
-    for(int yy=y+1; yy<=y+8; ++yy) struct_set(cv,x0+2,yy,z0+7,BLK_LADDER,4);
-    struct_set(cv,x0+2,y+10,z0+7,BLK_TORCH,5);
+
+static void v125_place_field(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 0, 1, 0, 12, 4, 8, 0, 0, 0);
+		v125_fill(cv, p, 1, 0, 1, 2, 0, 7, BLK_FARMLAND, BLK_FARMLAND, 0);
+		v125_fill(cv, p, 4, 0, 1, 5, 0, 7, BLK_FARMLAND, BLK_FARMLAND, 0);
+		v125_fill(cv, p, 7, 0, 1, 8, 0, 7, BLK_FARMLAND, BLK_FARMLAND, 0);
+		v125_fill(cv, p, 10, 0, 1, 11, 0, 7, BLK_FARMLAND, BLK_FARMLAND, 0);
+		v125_fill(cv, p, 0, 0, 0, 0, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 6, 0, 0, 6, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 12, 0, 0, 12, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 1, 0, 0, 11, 0, 0, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 1, 0, 8, 11, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 3, 0, 1, 3, 0, 7, BLK_WATER, BLK_WATER, 0);
+		v125_fill(cv, p, 9, 0, 1, 9, 0, 7, BLK_WATER, BLK_WATER, 0);
+
+		int var4;
+		for(var4 = 1; var4 <= 7; ++var4) {
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 1, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 2, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 4, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 5, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 7, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 8, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 10, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 11, 1, var4);
+		}
+
+		for(var4 = 0; var4 < 9; ++var4) {
+			for(int var5 = 0; var5 < 13; ++var5) {
+				v125_clear_up(cv, p, var5, 4, var4);
+				v125_fill_down(cv, p, BLK_DIRT, 0, var5, -1, var4);
+			}
+		}
+
+		return;
 }
 
-static void struct_place_village_lamp(GenCanvas *cv, int x, int y, int z) {
-    struct_fill_box(cv,x,y,z,x,y+3,z,BLK_FENCE,0);
-    struct_set(cv,x,y+4,z,BLK_WOOL,0);
-    struct_set(cv,x,y+5,z,BLK_TORCH,5);
+
+static void v125_place_field2(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 0, 1, 0, 6, 4, 8, 0, 0, 0);
+		v125_fill(cv, p, 1, 0, 1, 2, 0, 7, BLK_FARMLAND, BLK_FARMLAND, 0);
+		v125_fill(cv, p, 4, 0, 1, 5, 0, 7, BLK_FARMLAND, BLK_FARMLAND, 0);
+		v125_fill(cv, p, 0, 0, 0, 0, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 6, 0, 0, 6, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 1, 0, 0, 5, 0, 0, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 1, 0, 8, 5, 0, 8, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 3, 0, 1, 3, 0, 7, BLK_WATER, BLK_WATER, 0);
+
+		int var4;
+		for(var4 = 1; var4 <= 7; ++var4) {
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 1, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 2, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 4, 1, var4);
+			v125_set_local(cv, p, BLK_CROPS, v125_rand_range(r, 2, 7), 5, 1, var4);
+		}
+
+		for(var4 = 0; var4 < 9; ++var4) {
+			for(int var5 = 0; var5 < 7; ++var5) {
+				v125_clear_up(cv, p, var5, 4, var4);
+				v125_fill_down(cv, p, BLK_DIRT, 0, var5, -1, var4);
+			}
+		}
+
+		return;
 }
 
-static void struct_place_simplified_village(GenCanvas *cv, long long seed, int vcx, int vcz) {
-    JavaRandom r = worldgen_structure_random(seed, vcx, vcz);
-    int cx = (vcx << 4) + 8;
-    int cz = (vcz << 4) + 8;
-    int y = struct_surface_y(cv,cx,cz);
-    if(y < 2 || y > 110) return;
-    WorldBiome b = world_biome_list[BIOME_PLAINS];
-    (void)b;
-    int desert = 0;
-    /* Querying exact biome here avoids desert villages being made from wood. */
-    int topId = canvas_get(cv,cx,y-1,cz);
-    if(topId == BLK_SAND || topId == BLK_SANDSTONE) desert = 1;
-    struct_place_village_roads(cv,cx,cz,y);
-    struct_place_village_well(cv,cx,y,cz);
-    struct_place_village_house(cv,cx+8,y,cz-4,desert);
-    struct_place_village_house(cv,cx-15,y,cz+6,desert);
-    struct_place_village_farm(cv,cx-6,y,cz-15);
-    struct_place_village_blacksmith(cv,cx+12,y,cz+10,desert);
-    struct_place_village_church(cv,cx-24,y,cz-12,desert);
-    for(int i=0;i<4;i++) {
-        int sx = cx + (i<2 ? -18 : 18);
-        int sz = cz + (i&1 ? -18 : 18);
-        int ty = struct_surface_y(cv,sx,sz);
-        struct_place_village_lamp(cv,sx,ty,sz);
+
+static void v125_place_hall(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 1, 1, 1, 7, 4, 4, 0, 0, 0);
+		v125_fill(cv, p, 2, 1, 6, 8, 4, 10, 0, 0, 0);
+		v125_fill(cv, p, 2, 0, 6, 8, 0, 10, BLK_DIRT, BLK_DIRT, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 6, 0, 6);
+		v125_fill(cv, p, 2, 1, 6, 2, 1, 10, BLK_FENCE, BLK_FENCE, 0);
+		v125_fill(cv, p, 8, 1, 6, 8, 1, 10, BLK_FENCE, BLK_FENCE, 0);
+		v125_fill(cv, p, 3, 1, 10, 7, 1, 10, BLK_FENCE, BLK_FENCE, 0);
+		v125_fill(cv, p, 1, 0, 1, 7, 0, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 0, 0, 0, 3, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 8, 0, 0, 8, 3, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 0, 0, 7, 1, 0, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 0, 5, 7, 1, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 2, 0, 7, 3, 0, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 2, 5, 7, 3, 5, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 4, 1, 8, 4, 1, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 4, 4, 8, 4, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 5, 2, 8, 5, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 0, 4, 2);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 0, 4, 3);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 8, 4, 2);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 8, 4, 3);
+		int var4 = v125_meta(p, BLK_WOOD_STAIRS, 3);
+		int var5 = v125_meta(p, BLK_WOOD_STAIRS, 2);
+
+		int var6;
+		int var7;
+		for(var6 = -1; var6 <= 2; ++var6) {
+			for(var7 = 0; var7 <= 8; ++var7) {
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var4, var7, 4 + var6, var6);
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var5, var7, 4 + var6, 5 - var6);
+			}
+		}
+
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 2, 1);
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 2, 4);
+		v125_set_local(cv, p, BLK_LOG, 0, 8, 2, 1);
+		v125_set_local(cv, p, BLK_LOG, 0, 8, 2, 4);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 3);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 3);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 2, 5);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 3, 2, 5);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 5, 2, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 6, 2, 5);
+		v125_set_local(cv, p, BLK_FENCE, 0, 2, 1, 3);
+		v125_set_local(cv, p, BLK_WOOD_PRESSURE_PLATE, 0, 2, 2, 3);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 1, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, v125_meta(p, BLK_WOOD_STAIRS, 3), 2, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, v125_meta(p, BLK_WOOD_STAIRS, 1), 1, 1, 3);
+		v125_fill(cv, p, 5, 0, 1, 7, 0, 3, BLK_DOUBLE_SLAB, BLK_DOUBLE_SLAB, 0);
+		v125_set_local(cv, p, BLK_DOUBLE_SLAB, 0, 6, 1, 1);
+		v125_set_local(cv, p, BLK_DOUBLE_SLAB, 0, 6, 1, 2);
+		v125_set_local(cv, p, 0, 0, 2, 1, 0);
+		v125_set_local(cv, p, 0, 0, 2, 2, 0);
+		v125_set_local(cv, p, BLK_TORCH, 0, 2, 3, 1);
+		v125_place_door(cv, p, r, 2, 1, 0, v125_meta(p, BLK_WOOD_DOOR, 1));
+		if(v125_get_local(cv, p, 2, 0, -1) == 0 && v125_get_local(cv, p, 2, -1, -1) != 0) {
+			v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 2, 0, -1);
+		}
+
+		v125_set_local(cv, p, 0, 0, 6, 1, 5);
+		v125_set_local(cv, p, 0, 0, 6, 2, 5);
+		v125_set_local(cv, p, BLK_TORCH, 0, 6, 3, 4);
+		v125_place_door(cv, p, r, 6, 1, 5, v125_meta(p, BLK_WOOD_DOOR, 1));
+
+		for(var6 = 0; var6 < 5; ++var6) {
+			for(var7 = 0; var7 < 9; ++var7) {
+				v125_clear_up(cv, p, var7, 7, var6);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var7, -1, var6);
+			}
+		}
+		return;
+}
+
+
+static void v125_place_house1(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 1, 1, 1, 7, 5, 4, 0, 0, 0);
+		v125_fill(cv, p, 0, 0, 0, 8, 0, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 5, 0, 8, 5, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 6, 1, 8, 6, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 7, 2, 8, 7, 3, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		int var4 = v125_meta(p, BLK_WOOD_STAIRS, 3);
+		int var5 = v125_meta(p, BLK_WOOD_STAIRS, 2);
+
+		int var6;
+		int var7;
+		for(var6 = -1; var6 <= 2; ++var6) {
+			for(var7 = 0; var7 <= 8; ++var7) {
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var4, var7, 6 + var6, var6);
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var5, var7, 6 + var6, 5 - var6);
+			}
+		}
+
+		v125_fill(cv, p, 0, 1, 0, 0, 1, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 1, 5, 8, 1, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 8, 1, 0, 8, 1, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 2, 1, 0, 7, 1, 0, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 2, 0, 0, 4, 0, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 2, 5, 0, 4, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 8, 2, 5, 8, 4, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 8, 2, 0, 8, 4, 0, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 2, 1, 0, 4, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 2, 5, 7, 4, 5, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 8, 2, 1, 8, 4, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 2, 0, 7, 4, 0, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 2, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 5, 2, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 6, 2, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 3, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 5, 3, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 6, 3, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 3);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 3, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 3, 3);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 3);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 3, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 3, 3);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 2, 5);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 3, 2, 5);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 5, 2, 5);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 6, 2, 5);
+		v125_fill(cv, p, 1, 4, 1, 7, 4, 1, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 4, 4, 7, 4, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 3, 4, 7, 3, 4, BLK_BOOKSHELF, BLK_BOOKSHELF, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 7, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, v125_meta(p, BLK_WOOD_STAIRS, 0), 7, 1, 3);
+		var6 = v125_meta(p, BLK_WOOD_STAIRS, 3);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, var6, 6, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, var6, 5, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, var6, 4, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, var6, 3, 1, 4);
+		v125_set_local(cv, p, BLK_FENCE, 0, 6, 1, 3);
+		v125_set_local(cv, p, BLK_WOOD_PRESSURE_PLATE, 0, 6, 2, 3);
+		v125_set_local(cv, p, BLK_FENCE, 0, 4, 1, 3);
+		v125_set_local(cv, p, BLK_WOOD_PRESSURE_PLATE, 0, 4, 2, 3);
+		v125_set_local(cv, p, BLK_WORKBENCH, 0, 7, 1, 1);
+		v125_set_local(cv, p, 0, 0, 1, 1, 0);
+		v125_set_local(cv, p, 0, 0, 1, 2, 0);
+		v125_place_door(cv, p, r, 1, 1, 0, v125_meta(p, BLK_WOOD_DOOR, 1));
+		if(v125_get_local(cv, p, 1, 0, -1) == 0 && v125_get_local(cv, p, 1, -1, -1) != 0) {
+			v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 1, 0, -1);
+		}
+
+		for(var7 = 0; var7 < 6; ++var7) {
+			for(int var8 = 0; var8 < 9; ++var8) {
+				v125_clear_up(cv, p, var8, 9, var7);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var8, -1, var7);
+			}
+		}
+		return;
+}
+
+
+static void v125_place_house2(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 0, 1, 0, 9, 4, 6, 0, 0, 0);
+		v125_fill(cv, p, 0, 0, 0, 9, 0, 6, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 4, 0, 9, 4, 6, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 5, 0, 9, 5, 6, BLK_SLAB, BLK_SLAB, 0);
+		v125_fill(cv, p, 1, 5, 1, 8, 5, 5, 0, 0, 0);
+		v125_fill(cv, p, 1, 1, 0, 2, 3, 0, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 1, 0, 0, 4, 0, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 3, 1, 0, 3, 4, 0, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 0, 1, 6, 0, 4, 6, BLK_LOG, BLK_LOG, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 3, 3, 1);
+		v125_fill(cv, p, 3, 1, 2, 3, 3, 2, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 4, 1, 3, 5, 3, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 1, 1, 0, 3, 5, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 1, 6, 5, 3, 6, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 5, 1, 0, 5, 3, 0, BLK_FENCE, BLK_FENCE, 0);
+		v125_fill(cv, p, 9, 1, 0, 9, 3, 0, BLK_FENCE, BLK_FENCE, 0);
+		v125_fill(cv, p, 6, 1, 4, 9, 4, 6, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_set_local(cv, p, BLK_LAVA, 0, 7, 1, 5);
+		v125_set_local(cv, p, BLK_LAVA, 0, 8, 1, 5);
+		v125_set_local(cv, p, BLK_IRON_BARS, 0, 9, 2, 5);
+		v125_set_local(cv, p, BLK_IRON_BARS, 0, 9, 2, 4);
+		v125_fill(cv, p, 7, 2, 4, 8, 2, 5, 0, 0, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 6, 1, 3);
+		v125_set_local(cv, p, BLK_FURNACE, 0, 6, 2, 3);
+		v125_set_local(cv, p, BLK_FURNACE, 0, 6, 3, 3);
+		v125_set_local(cv, p, BLK_DOUBLE_SLAB, 0, 8, 1, 1);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 4);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 2, 6);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 2, 6);
+		v125_set_local(cv, p, BLK_FENCE, 0, 2, 1, 4);
+		v125_set_local(cv, p, BLK_WOOD_PRESSURE_PLATE, 0, 2, 2, 4);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 1, 1, 5);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, v125_meta(p, BLK_WOOD_STAIRS, 3), 2, 1, 5);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, v125_meta(p, BLK_WOOD_STAIRS, 1), 1, 1, 4);
+		int var4;
+		int var5;
+		if(!p->aux2) { p->aux2=1; v125_set_local(cv,p,BLK_CHEST,0,5,1,5); (void)jr_next_int_bound(r,6); }
+
+		for(var4 = 6; var4 <= 8; ++var4) {
+			if(v125_get_local(cv, p, var4, 0, -1) == 0 && v125_get_local(cv, p, var4, -1, -1) != 0) {
+				v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), var4, 0, -1);
+			}
+		}
+
+		for(var4 = 0; var4 < 7; ++var4) {
+			for(var5 = 0; var5 < 10; ++var5) {
+				v125_clear_up(cv, p, var5, 6, var4);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var5, -1, var4);
+			}
+		}
+		return;
+}
+
+
+static void v125_place_house3(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 1, 1, 1, 7, 4, 4, 0, 0, 0);
+		v125_fill(cv, p, 2, 1, 6, 8, 4, 10, 0, 0, 0);
+		v125_fill(cv, p, 2, 0, 5, 8, 0, 10, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 0, 1, 7, 0, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 0, 0, 0, 3, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 8, 0, 0, 8, 3, 10, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 0, 0, 7, 2, 0, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 0, 5, 2, 1, 5, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 2, 0, 6, 2, 3, 10, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 3, 0, 10, 7, 3, 10, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 2, 0, 7, 3, 0, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 2, 5, 2, 3, 5, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 4, 1, 8, 4, 1, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 4, 4, 3, 4, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 0, 5, 2, 8, 5, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 0, 4, 2);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 0, 4, 3);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 8, 4, 2);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 8, 4, 3);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 8, 4, 4);
+		int var4 = v125_meta(p, BLK_WOOD_STAIRS, 3);
+		int var5 = v125_meta(p, BLK_WOOD_STAIRS, 2);
+
+		int var6;
+		int var7;
+		for(var6 = -1; var6 <= 2; ++var6) {
+			for(var7 = 0; var7 <= 8; ++var7) {
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var4, var7, 4 + var6, var6);
+				if((var6 > -1 || var7 <= 1) && (var6 > 0 || var7 <= 3) && (var6 > 1 || var7 <= 4 || var7 >= 6)) {
+					v125_set_local(cv, p, BLK_WOOD_STAIRS, var5, var7, 4 + var6, 5 - var6);
+				}
+			}
+		}
+
+		v125_fill(cv, p, 3, 4, 5, 3, 4, 10, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 7, 4, 2, 7, 4, 10, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 4, 5, 4, 4, 5, 10, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 6, 5, 4, 6, 5, 10, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 5, 6, 3, 5, 6, 10, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		var6 = v125_meta(p, BLK_WOOD_STAIRS, 0);
+
+		int var8;
+		for(var7 = 4; var7 >= 1; --var7) {
+			v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, var7, 2 + var7, 7 - var7);
+
+			for(var8 = 8 - var7; var8 <= 10; ++var8) {
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var6, var7, 2 + var7, var8);
+			}
+		}
+
+		var7 = v125_meta(p, BLK_WOOD_STAIRS, 1);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 6, 6, 3);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 7, 5, 4);
+		v125_set_local(cv, p, BLK_WOOD_STAIRS, var7, 6, 6, 4);
+
+		int var9;
+		for(var8 = 6; var8 <= 8; ++var8) {
+			for(var9 = 5; var9 <= 10; ++var9) {
+				v125_set_local(cv, p, BLK_WOOD_STAIRS, var7, var8, 12 - var8, var9);
+			}
+		}
+
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 2, 1);
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 2, 4);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 3);
+		v125_set_local(cv, p, BLK_LOG, 0, 4, 2, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 5, 2, 0);
+		v125_set_local(cv, p, BLK_LOG, 0, 6, 2, 0);
+		v125_set_local(cv, p, BLK_LOG, 0, 8, 2, 1);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 3);
+		v125_set_local(cv, p, BLK_LOG, 0, 8, 2, 4);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 8, 2, 5);
+		v125_set_local(cv, p, BLK_LOG, 0, 8, 2, 6);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 7);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 8, 2, 8);
+		v125_set_local(cv, p, BLK_LOG, 0, 8, 2, 9);
+		v125_set_local(cv, p, BLK_LOG, 0, 2, 2, 6);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 2, 7);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 2, 8);
+		v125_set_local(cv, p, BLK_LOG, 0, 2, 2, 9);
+		v125_set_local(cv, p, BLK_LOG, 0, 4, 4, 10);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 5, 4, 10);
+		v125_set_local(cv, p, BLK_LOG, 0, 6, 4, 10);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 5, 5, 10);
+		v125_set_local(cv, p, 0, 0, 2, 1, 0);
+		v125_set_local(cv, p, 0, 0, 2, 2, 0);
+		v125_set_local(cv, p, BLK_TORCH, 0, 2, 3, 1);
+		v125_place_door(cv, p, r, 2, 1, 0, v125_meta(p, BLK_WOOD_DOOR, 1));
+		v125_fill(cv, p, 1, 0, -1, 3, 2, -1, 0, 0, 0);
+		if(v125_get_local(cv, p, 2, 0, -1) == 0 && v125_get_local(cv, p, 2, -1, -1) != 0) {
+			v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 2, 0, -1);
+		}
+
+		for(var8 = 0; var8 < 5; ++var8) {
+			for(var9 = 0; var9 < 9; ++var9) {
+				v125_clear_up(cv, p, var9, 7, var8);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var9, -1, var8);
+			}
+		}
+
+		for(var8 = 5; var8 < 11; ++var8) {
+			for(var9 = 2; var9 < 9; ++var9) {
+				v125_clear_up(cv, p, var9, 7, var8);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var9, -1, var8);
+			}
+		}
+		return;
+}
+
+
+static void v125_place_house4garden(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+    (void)r;
+v125_fill(cv, p, 0, 0, 0, 4, 0, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 0, 4, 0, 4, 4, 4, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 1, 4, 1, 3, 4, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 1, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 2, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 3, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 1, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 2, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 3, 0);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 1, 4);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 2, 4);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 0, 3, 4);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 1, 4);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 2, 4);
+		v125_set_local(cv, p, BLK_COBBLESTONE, 0, 4, 3, 4);
+		v125_fill(cv, p, 0, 1, 1, 0, 3, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 4, 1, 1, 4, 3, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 1, 4, 3, 3, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 2, 2, 4);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 4, 2, 2);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 1, 1, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 1, 2, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 1, 3, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 2, 3, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 3, 3, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 3, 2, 0);
+		v125_set_local(cv, p, BLK_WOOD_PLANKS, 0, 3, 1, 0);
+		if(v125_get_local(cv, p, 2, 0, -1) == 0 && v125_get_local(cv, p, 2, -1, -1) != 0) {
+			v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 2, 0, -1);
+		}
+
+		v125_fill(cv, p, 1, 1, 1, 3, 3, 3, 0, 0, 0);
+		if(p->aux0) {
+			v125_set_local(cv, p, BLK_FENCE, 0, 0, 5, 0);
+			v125_set_local(cv, p, BLK_FENCE, 0, 1, 5, 0);
+			v125_set_local(cv, p, BLK_FENCE, 0, 2, 5, 0);
+			v125_set_local(cv, p, BLK_FENCE, 0, 3, 5, 0);
+			v125_set_local(cv, p, BLK_FENCE, 0, 4, 5, 0);
+			v125_set_local(cv, p, BLK_FENCE, 0, 0, 5, 4);
+			v125_set_local(cv, p, BLK_FENCE, 0, 1, 5, 4);
+			v125_set_local(cv, p, BLK_FENCE, 0, 2, 5, 4);
+			v125_set_local(cv, p, BLK_FENCE, 0, 3, 5, 4);
+			v125_set_local(cv, p, BLK_FENCE, 0, 4, 5, 4);
+			v125_set_local(cv, p, BLK_FENCE, 0, 4, 5, 1);
+			v125_set_local(cv, p, BLK_FENCE, 0, 4, 5, 2);
+			v125_set_local(cv, p, BLK_FENCE, 0, 4, 5, 3);
+			v125_set_local(cv, p, BLK_FENCE, 0, 0, 5, 1);
+			v125_set_local(cv, p, BLK_FENCE, 0, 0, 5, 2);
+			v125_set_local(cv, p, BLK_FENCE, 0, 0, 5, 3);
+		}
+
+		int var4;
+		if(p->aux0) {
+			var4 = v125_meta(p, BLK_LADDER, 3);
+			v125_set_local(cv, p, BLK_LADDER, var4, 3, 1, 3);
+			v125_set_local(cv, p, BLK_LADDER, var4, 3, 2, 3);
+			v125_set_local(cv, p, BLK_LADDER, var4, 3, 3, 3);
+			v125_set_local(cv, p, BLK_LADDER, var4, 3, 4, 3);
+		}
+
+		v125_set_local(cv, p, BLK_TORCH, 0, 2, 3, 1);
+
+		for(var4 = 0; var4 < 5; ++var4) {
+			for(int var5 = 0; var5 < 5; ++var5) {
+				v125_clear_up(cv, p, var5, 6, var4);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var5, -1, var4);
+			}
+		}
+		return;
+}
+
+
+static void v125_place_woodhut(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+v125_fill(cv, p, 1, 1, 1, 3, 5, 4, 0, 0, 0);
+		v125_fill(cv, p, 0, 0, 0, 3, 0, 4, BLK_COBBLESTONE, BLK_COBBLESTONE, 0);
+		v125_fill(cv, p, 1, 0, 1, 2, 0, 3, BLK_DIRT, BLK_DIRT, 0);
+		if(p->aux0) {
+			v125_fill(cv, p, 1, 4, 1, 2, 4, 3, BLK_LOG, BLK_LOG, 0);
+		} else {
+			v125_fill(cv, p, 1, 5, 1, 2, 5, 3, BLK_LOG, BLK_LOG, 0);
+		}
+
+		v125_set_local(cv, p, BLK_LOG, 0, 1, 4, 0);
+		v125_set_local(cv, p, BLK_LOG, 0, 2, 4, 0);
+		v125_set_local(cv, p, BLK_LOG, 0, 1, 4, 4);
+		v125_set_local(cv, p, BLK_LOG, 0, 2, 4, 4);
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 4, 1);
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 4, 2);
+		v125_set_local(cv, p, BLK_LOG, 0, 0, 4, 3);
+		v125_set_local(cv, p, BLK_LOG, 0, 3, 4, 1);
+		v125_set_local(cv, p, BLK_LOG, 0, 3, 4, 2);
+		v125_set_local(cv, p, BLK_LOG, 0, 3, 4, 3);
+		v125_fill(cv, p, 0, 1, 0, 0, 3, 0, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 3, 1, 0, 3, 3, 0, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 0, 1, 4, 0, 3, 4, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 3, 1, 4, 3, 3, 4, BLK_LOG, BLK_LOG, 0);
+		v125_fill(cv, p, 0, 1, 1, 0, 3, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 3, 1, 1, 3, 3, 3, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 1, 0, 2, 3, 0, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_fill(cv, p, 1, 1, 4, 2, 3, 4, BLK_WOOD_PLANKS, BLK_WOOD_PLANKS, 0);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 0, 2, 2);
+		v125_set_local(cv, p, BLK_GLASS_PANE, 0, 3, 2, 2);
+		if(p->aux1 > 0) {
+			v125_set_local(cv, p, BLK_FENCE, 0, p->aux1, 1, 3);
+			v125_set_local(cv, p, BLK_WOOD_PRESSURE_PLATE, 0, p->aux1, 2, 3);
+		}
+
+		v125_set_local(cv, p, 0, 0, 1, 1, 0);
+		v125_set_local(cv, p, 0, 0, 1, 2, 0);
+		v125_place_door(cv, p, r, 1, 1, 0, v125_meta(p, BLK_WOOD_DOOR, 1));
+		if(v125_get_local(cv, p, 1, 0, -1) == 0 && v125_get_local(cv, p, 1, -1, -1) != 0) {
+			v125_set_local(cv, p, BLK_COBBLE_STAIRS, v125_meta(p, BLK_COBBLE_STAIRS, 3), 1, 0, -1);
+		}
+
+		for(int var4 = 0; var4 < 5; ++var4) {
+			for(int var5 = 0; var5 < 4; ++var5) {
+				v125_clear_up(cv, p, var5, 6, var4);
+				v125_fill_down(cv, p, BLK_COBBLESTONE, 0, var5, -1, var4);
+			}
+		}
+		return;
+}
+
+
+static void v125_place_torch(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+    (void)r;
+v125_fill(cv, p, 0, 0, 0, 2, 3, 1, 0, 0, 0);
+		v125_set_local(cv, p, BLK_FENCE, 0, 1, 0, 0);
+		v125_set_local(cv, p, BLK_FENCE, 0, 1, 1, 0);
+		v125_set_local(cv, p, BLK_FENCE, 0, 1, 2, 0);
+		v125_set_local(cv, p, BLK_WOOL, 15, 1, 3, 0);
+		v125_set_local(cv, p, BLK_TORCH, 15, 0, 3, 0);
+		v125_set_local(cv, p, BLK_TORCH, 15, 1, 3, 1);
+		v125_set_local(cv, p, BLK_TORCH, 15, 2, 3, 0);
+		v125_set_local(cv, p, BLK_TORCH, 15, 1, 3, -1);
+		return;
+}
+
+
+static void v125_place_piece(GenCanvas *cv, VillagePiece125 *p, JavaRandom *r) {
+    if(p->kind==V125_PATH){v125_place_path(cv,p,r);return;}
+    if(!v125_prepare_ground(cv,p))return;
+    switch(p->kind){
+        case V125_WELL:v125_place_well(cv,p,r);break;
+        case V125_TORCH:v125_place_torch(cv,p,r);break;
+        case V125_HOUSE4_GARDEN:v125_place_house4garden(cv,p,r);break;
+        case V125_CHURCH:v125_place_church(cv,p,r);break;
+        case V125_HOUSE1:v125_place_house1(cv,p,r);break;
+        case V125_WOOD_HUT:v125_place_woodhut(cv,p,r);break;
+        case V125_HALL:v125_place_hall(cv,p,r);break;
+        case V125_FIELD:v125_place_field(cv,p,r);break;
+        case V125_FIELD2:v125_place_field2(cv,p,r);break;
+        case V125_HOUSE2:v125_place_house2(cv,p,r);break;
+        case V125_HOUSE3:v125_place_house3(cv,p,r);break;
     }
-    /* Consume some random calls to keep future expansion closer to StructureVillageStart. */
-    for(int i=0;i<8;i++) jr_next_int_bound(&r, 16);
+}
+
+static void struct_place_village_125(GenCanvas *cv, TerrainProvider *tp, long long seed, int vcx, int vcz) {
+    JavaRandom r=worldgen_structure_random(seed,vcx,vcz);
+    VillageGen125 *g=(VillageGen125*)calloc(1,sizeof(*g));
+    if(!g)return;
+    if(v125_generate_layout(g,&r,&tp->biomeManager,vcx,vcz)) {
+        for(int i=0;i<g->piece_count;i++) v125_place_piece(cv,&g->pieces[i],&r);
+    }
+    free(g);
 }
 
 static void struct_place_mineshaft_corridor_x(GenCanvas *cv, JavaRandom *r, int x1, int x2, int y, int z) {
@@ -2982,7 +3948,7 @@ static void worldgen_place_structure_blocks(TerrainProvider *tp, GenCanvas *cv, 
     /* MapGenStructure.generate scans source chunks within range 8 for starts. */
     for(int x=centerCx-8; x<=centerCx+8; ++x) for(int z=centerCz-8; z<=centerCz+8; ++z) {
         if(worldgen_mineshaft_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,4)) struct_place_simplified_mineshaft(cv,(long long)tp->worldSeed,x,z);
-        if(worldgen_village_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,4)) struct_place_simplified_village(cv,(long long)tp->worldSeed,x,z);
+        if(worldgen_village_can_spawn((long long)tp->worldSeed,x,z) && structure_chunk_in_canvas_reach(cv,x,z,8)) struct_place_village_125(cv,tp,(long long)tp->worldSeed,x,z);
     }
 }
 
@@ -3686,12 +4652,47 @@ static int worldgen_chest_kind(const unsigned char *blocks, int x, int y, int z)
     if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_BOOKSHELF,8) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_STONE_BRICK,8)) return 1; /* stronghold */
     if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_RAILS,8) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_WEB,8)) return 2; /* mineshaft */
     if(worldgen_neighbor_id_local(blocks,x,y,z,BLK_NETHER_BRICK,8)) return 3; /* fortress */
-    return 0; /* village/dungeon fallback */
+    if((worldgen_neighbor_id_local(blocks,x,y,z,BLK_LAVA,8) || worldgen_neighbor_id_local(blocks,x,y,z,BLK_STILL_LAVA,8)) &&
+       worldgen_neighbor_id_local(blocks,x,y,z,BLK_FURNACE,8) &&
+       worldgen_neighbor_id_local(blocks,x,y,z,BLK_IRON_BARS,8)) return 4; /* village blacksmith */
+    return 0; /* dungeon/other fallback */
 }
 
-static int worldgen_make_loot(int kind, int wx, int y, int wz, WorldgenLootItem out[16]) {
+typedef struct VillageBlacksmithLoot125 { int id, meta, min_count, max_count, weight; } VillageBlacksmithLoot125;
+
+static int worldgen_make_blacksmith_loot_125(long long seed, int cx, int cz, int wx, int y, int wz, WorldgenLootItem out[16]) {
+    static const VillageBlacksmithLoot125 table[] = {
+        {264,0,1,3,3}, {265,0,1,5,10}, {266,0,1,3,5},
+        {297,0,1,3,15}, {260,0,1,3,15}, {257,0,1,1,5},
+        {267,0,1,1,5}, {307,0,1,1,5}, {306,0,1,1,5},
+        {308,0,1,1,5}, {309,0,1,1,5}, {49,0,3,7,5}, {6,0,3,7,5}
+    };
+    int total_weight=0; for(unsigned int i=0;i<sizeof(table)/sizeof(table[0]);++i) total_weight += table[i].weight;
+    JavaRandom r;
+    int64_t mixed = (int64_t)((uint64_t)(int64_t)seed ^
+        ((uint64_t)(int64_t)cx * UINT64_C(341873128712)) ^
+        ((uint64_t)(int64_t)cz * UINT64_C(132897987541)) ^
+        ((uint64_t)(int64_t)wx * UINT64_C(42317861)) ^
+        ((uint64_t)(int64_t)wz * UINT64_C(73428767)) ^ (uint64_t)(unsigned)y);
+    jr_set_seed(&r,mixed);
+    WorldgenLootItem slots[27]; memset(slots,0,sizeof(slots));
+    int attempts=3+jr_next_int_bound(&r,6);
+    for(int a=0;a<attempts;++a){
+        int pick=jr_next_int_bound(&r,total_weight), ti=0;
+        for(;ti<(int)(sizeof(table)/sizeof(table[0]));++ti){ if((pick-=table[ti].weight)<0)break; }
+        if(ti>=(int)(sizeof(table)/sizeof(table[0])))ti=(int)(sizeof(table)/sizeof(table[0]))-1;
+        int count=table[ti].min_count+jr_next_int_bound(&r,table[ti].max_count-table[ti].min_count+1);
+        int slot=jr_next_int_bound(&r,27);
+        slots[slot].slot=slot; slots[slot].id=table[ti].id; slots[slot].count=count; slots[slot].damage=table[ti].meta;
+    }
+    int n=0; for(int i=0;i<27 && n<16;++i) if(slots[i].id>0 && slots[i].count>0) out[n++]=slots[i];
+    return n;
+}
+
+static int worldgen_make_loot(int kind, long long seed, int cx, int cz, int wx, int y, int wz, WorldgenLootItem out[16]) {
     unsigned int h = worldgen_pos_hash(wx,y,wz,0x125125u);
     int n = 0;
+    if(kind == 4) return worldgen_make_blacksmith_loot_125(seed,cx,cz,wx,y,wz,out);
 #define ADD_LOOT(slot_, id_, count_, damage_) do { if(n < 16) { out[n].slot=(slot_); out[n].id=(id_); out[n].count=(count_); out[n].damage=(damage_); ++n; } } while(0)
     if(kind == 1) { /* stronghold library/corridor style */
         ADD_LOOT((h>>0)&26, 340, 1 + (int)((h>>4)&3), 0);      /* book */
@@ -3733,10 +4734,10 @@ static void nbt_item_stack(BinBuf *b, const WorldgenLootItem *it) {
     nbt_end(b);
 }
 
-static void nbt_chest_items(BinBuf *b, const unsigned char *blocks, int cx, int cz, int x, int y, int z) {
+static void nbt_chest_items(BinBuf *b, const unsigned char *blocks, long long seed, int cx, int cz, int x, int y, int z) {
     WorldgenLootItem items[16];
     int wx = (cx << 4) + x, wz = (cz << 4) + z;
-    int count = worldgen_make_loot(worldgen_chest_kind(blocks,x,y,z), wx, y, wz, items);
+    int count = worldgen_make_loot(worldgen_chest_kind(blocks,x,y,z), seed, cx, cz, wx, y, wz, items);
     nbt_tag(b, 9, "Items");
     bb_u8(b, 10);
     bb_u32be(b, (unsigned int)count);
@@ -3751,7 +4752,7 @@ static int worldgen_tile_entity_count(const unsigned char *blocks) {
     }
     return count;
 }
-static void worldgen_write_tile_entities(BinBuf *b, const unsigned char *blocks, int cx, int cz) {
+static void worldgen_write_tile_entities(BinBuf *b, const unsigned char *blocks, long long seed, int cx, int cz) {
     int count = worldgen_tile_entity_count(blocks);
     nbt_tag(b, 9, "TileEntities");
     bb_u8(b, 10);
@@ -3762,7 +4763,7 @@ static void worldgen_write_tile_entities(BinBuf *b, const unsigned char *blocks,
         if (id == BLK_CHEST) {
             nbt_string(b, "id", "Chest");
             nbt_int(b, "x", (cx << 4) + x); nbt_int(b, "y", y); nbt_int(b, "z", (cz << 4) + z);
-            nbt_chest_items(b, blocks, cx, cz, x, y, z);
+            nbt_chest_items(b, blocks, seed, cx, cz, x, y, z);
             nbt_end(b);
         } else {
             nbt_string(b, "id", "MobSpawner");
@@ -3804,7 +4805,7 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
     nbt_byte_array(&b, "Biomes", biome_array, 256);
     nbt_byte(&b, "TerrainPopulated", 1);
     nbt_empty_compound_list(&b, "Entities");
-    worldgen_write_tile_entities(&b, blocks, cx, cz);
+    worldgen_write_tile_entities(&b, blocks, seed, cx, cz);
     nbt_end(&b);
     nbt_end(&b);
     char bx[32], bz[32], fx[32], fz[32];

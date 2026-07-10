@@ -1627,6 +1627,8 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_chest_entity, "item\\chest.png", 0);
     try_release_texture(&tex_large_chest_entity, "item\\largechest.png", 0);
     try_release_texture(&tex_items, "gui\\items.png", 0);
+    try_release_texture(&tex_xporb, "item\\xporb.png", 0);
+    try_release_texture(&tex_arrows, "item\\arrows.png", 0);
     for (int m = 0; m < 5; m++) for (int l = 0; l < 2; l++) free_texture(&tex_armor[m][l]);
     try_release_texture(&tex_armor[0][0], "armor\\cloth_1.png", 0);
     try_release_texture(&tex_armor[0][1], "armor\\cloth_2.png", 0);
@@ -1646,6 +1648,7 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_mob_chicken, "mob\\chicken.png", 0);
     try_release_texture(&tex_mob_saddle, "mob\\saddle.png", 0);
     try_release_texture(&tex_mob_creeper, "mob\\creeper.png", 0);
+    try_release_texture(&tex_mob_creeper_power, "armor\\power.png", 1);
     try_release_texture(&tex_mob_skeleton, "mob\\skeleton.png", 0);
     try_release_texture(&tex_mob_spider, "mob\\spider.png", 0);
     try_release_texture(&tex_mob_spider_eyes, "mob\\spider_eyes.png", 0);
@@ -1743,6 +1746,7 @@ static int load_default_textures(void) {
     free_texture(&tex_mob_chicken);
     free_texture(&tex_mob_saddle);
     PEX_PSP_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
+    free_texture(&tex_xporb);
     PEX_PSP_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
     PEX_PSP_LOAD_OPT(&tex_armor[0][0], "armor_cloth_1.mcrw", 0, 64, 32);
     PEX_PSP_LOAD_OPT(&tex_armor[0][1], "armor_cloth_2.mcrw", 0, 64, 32);
@@ -1829,6 +1833,8 @@ static int load_default_textures(void) {
     free_texture(&tex_mob_saddle);
     for (int m = 0; m < 5; m++) for (int l = 0; l < 2; l++) free_texture(&tex_armor[m][l]);
     PEX_LOAD_OPT(&tex_items, "gui_items.mcrw", 0, 256, 256);
+    free_texture(&tex_xporb);
+    free_texture(&tex_arrows);
     PEX_LOAD_REQ(&tex_steve, "mob_char.mcrw", 0, 64, 32);
     PEX_LOAD_OPT(&tex_mob_pig, "mob_pig.mcrw", 0, 64, 32);
     PEX_LOAD_OPT(&tex_mob_sheep, "mob_sheep.mcrw", 0, 64, 32);
@@ -2065,6 +2071,7 @@ static Texture *stivufine_random_mob_texture_for_base(Texture *base, int random_
 
 static void apply_texture_pack_index(int index) {
     if (index < 0 || index >= g_texpack_count) index = 0;
+    free_texture(&tex_mob_creeper_power);
     stivufine_defer_quality_update = 1;
     int default_ok = load_default_textures();
     stivufine_defer_quality_update = 0;
@@ -2103,6 +2110,7 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_chest_gui, "gui\\container.png", 0);
         try_pack_texture(e, &tex_chest_gui, "gui\\chest.png", 0);
         try_pack_texture(e, &tex_chest_entity, "item\\chest.png", 0);
+        try_pack_texture(e, &tex_arrows, "item\\arrows.png", 0);
         try_pack_texture(e, &tex_large_chest_entity, "item\\largechest.png", 0);
         try_pack_texture(e, &tex_items, "gui\\items.png", 0);
         try_pack_texture(e, &tex_armor[0][0], "armor\\cloth_1.png", 0);
@@ -2124,6 +2132,7 @@ static void apply_texture_pack_index(int index) {
         try_pack_texture(e, &tex_mob_chicken, "mob\\chicken.png", 0);
         try_pack_texture(e, &tex_mob_saddle, "mob\\saddle.png", 0);
         try_pack_texture(e, &tex_mob_creeper, "mob\\creeper.png", 0);
+        try_pack_texture(e, &tex_mob_creeper_power, "armor\\power.png", 1);
         try_pack_texture(e, &tex_mob_skeleton, "mob\\skeleton.png", 0);
         try_pack_texture(e, &tex_mob_spider, "mob\\spider.png", 0);
         try_pack_texture(e, &tex_mob_spider_eyes, "mob\\spider_eyes.png", 0);

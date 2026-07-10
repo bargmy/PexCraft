@@ -2801,6 +2801,75 @@ static void add_portal_particle(float x, float y, float z, float mx, float my, f
     p->age = 0;
 }
 
+static DigParticle *alloc_effect_particle(int kind, float x, float y, float z) {
+    if (!stivufine_particle_allowed()) return NULL;
+    DigParticle *p = &g_dig_particles[g_next_dig_particle++ % MAX_DIG_PARTICLES];
+    memset(p, 0, sizeof(*p));
+    p->active = 1;
+    p->kind = kind;
+    p->x = p->prev_x = x;
+    p->y = p->prev_y = y;
+    p->z = p->prev_z = z;
+    p->r = p->g = p->b = 1.0f;
+    return p;
+}
+
+static void add_crit_particle(float x, float y, float z, float mx, float my, float mz) {
+    DigParticle *p = alloc_effect_particle(PARTICLE_CRIT, x, y, z);
+    if (!p) return;
+    p->tile = 65;
+    p->mx = (frand01() * 2.0f - 1.0f) * 0.04f + mx * 0.4f;
+    p->my = (frand01() * 2.0f - 1.0f) * 0.04f + my * 0.4f;
+    p->mz = (frand01() * 2.0f - 1.0f) * 0.04f + mz * 0.4f;
+    float c = frand01() * 0.3f + 0.6f;
+    p->r = p->g = p->b = c;
+    p->base_scale = (frand01() * 0.5f + 0.5f) * 2.0f * (12.0f / 16.0f);
+    p->scale = p->base_scale;
+    p->max_age = (int)(6.0f / (frand01() * 0.8f + 0.6f));
+    if (p->max_age < 1) p->max_age = 1;
+}
+
+static void add_smoke_particle(float x, float y, float z, float mx, float my, float mz, float size) {
+    DigParticle *p = alloc_effect_particle(PARTICLE_SMOKE, x, y, z);
+    if (!p) return;
+    p->tile = 7;
+    p->mx = (frand01() * 2.0f - 1.0f) * 0.04f + mx;
+    p->my = (frand01() * 2.0f - 1.0f) * 0.04f + my;
+    p->mz = (frand01() * 2.0f - 1.0f) * 0.04f + mz;
+    float c = frand01() * 0.3f;
+    p->r = p->g = p->b = c;
+    p->base_scale = (frand01() * 0.5f + 0.5f) * 2.0f * (12.0f / 16.0f) * size;
+    p->scale = p->base_scale;
+    p->max_age = (int)(8.0f / (frand01() * 0.8f + 0.2f) * size);
+    if (p->max_age < 1) p->max_age = 1;
+}
+
+static void add_flame_particle(float x, float y, float z, float mx, float my, float mz) {
+    DigParticle *p = alloc_effect_particle(PARTICLE_FLAME, x, y, z);
+    if (!p) return;
+    p->tile = 48;
+    p->mx = (frand01() * 2.0f - 1.0f) * 0.004f + mx;
+    p->my = (frand01() * 2.0f - 1.0f) * 0.004f + my;
+    p->mz = (frand01() * 2.0f - 1.0f) * 0.004f + mz;
+    p->base_scale = p->scale = (frand01() * 0.5f + 0.5f) * 2.0f;
+    p->max_age = (int)(8.0f / (frand01() * 0.8f + 0.2f)) + 4;
+    if (p->max_age < 1) p->max_age = 1;
+}
+
+static void add_explode_particle(float x, float y, float z, float mx, float my, float mz) {
+    DigParticle *p = alloc_effect_particle(PARTICLE_EXPLODE, x, y, z);
+    if (!p) return;
+    p->tile = 7;
+    p->mx = mx + (frand01() * 2.0f - 1.0f) * 0.05f;
+    p->my = my + (frand01() * 2.0f - 1.0f) * 0.05f;
+    p->mz = mz + (frand01() * 2.0f - 1.0f) * 0.05f;
+    float c = frand01() * 0.3f + 0.7f;
+    p->r = p->g = p->b = c;
+    p->base_scale = p->scale = frand01() * frand01() * 6.0f + 1.0f;
+    p->max_age = (int)(16.0f / (frand01() * 0.8f + 0.2f)) + 2;
+    if (p->max_age < 1) p->max_age = 1;
+}
+
 static void spawn_portal_block_particles(int bx, int by, int bz) {
     for (int i = 0; i < 4; ++i) {
         float x = (float)bx + frand01();
@@ -2871,37 +2940,51 @@ static void update_dig_particles(void) {
 
         if (p->kind == PARTICLE_BUBBLE) {
             p->my += 0.002f;
-            p->x += p->mx;
-            p->y += p->my;
-            p->z += p->mz;
-            p->mx *= 0.85f;
-            p->my *= 0.85f;
-            p->mz *= 0.85f;
+            p->x += p->mx; p->y += p->my; p->z += p->mz;
+            p->mx *= 0.85f; p->my *= 0.85f; p->mz *= 0.85f;
             if (!block_is_water(flat_get_block((int)floorf(p->x), (int)floorf(p->y), (int)floorf(p->z)))) p->active = 0;
         } else if (p->kind == PARTICLE_PORTAL) {
             float t = (float)p->age / (float)(p->max_age > 0 ? p->max_age : 1);
-            float curve = -t + t * t * 2.0f;
-            curve = 1.0f - curve;
+            float curve = 1.0f - (-t + t * t * 2.0f);
             p->x = p->ox + p->mx * curve;
             p->y = p->oy + p->my * curve + (1.0f - t);
             p->z = p->oz + p->mz * curve;
+        } else if (p->kind == PARTICLE_CRIT) {
+            p->x += p->mx; p->y += p->my; p->z += p->mz;
+            p->g *= 0.96f; p->b *= 0.90f;
+            p->mx *= 0.70f; p->my *= 0.70f; p->mz *= 0.70f;
+            p->my -= 0.02f;
+        } else if (p->kind == PARTICLE_SMOKE) {
+            p->tile = 7 - p->age * 8 / (p->max_age > 0 ? p->max_age : 1);
+            if (p->tile < 0) p->tile = 0;
+            p->my += 0.004f;
+            p->x += p->mx; p->y += p->my; p->z += p->mz;
+            p->mx *= 0.96f; p->my *= 0.96f; p->mz *= 0.96f;
+        } else if (p->kind == PARTICLE_FLAME) {
+            p->x += p->mx; p->y += p->my; p->z += p->mz;
+            p->mx *= 0.96f; p->my *= 0.96f; p->mz *= 0.96f;
+        } else if (p->kind == PARTICLE_EXPLODE) {
+            p->tile = 7 - p->age * 8 / (p->max_age > 0 ? p->max_age : 1);
+            if (p->tile < 0) p->tile = 0;
+            p->my += 0.004f;
+            p->x += p->mx; p->y += p->my; p->z += p->mz;
+            p->mx *= 0.90f; p->my *= 0.90f; p->mz *= 0.90f;
         } else {
             p->my -= (p->kind == PARTICLE_SPLASH ? 0.06f : 0.04f) * p->gravity;
-            p->x += p->mx;
-            p->y += p->my;
-            p->z += p->mz;
-
+            p->x += p->mx; p->y += p->my; p->z += p->mz;
             if (p->y < 0.02f) {
                 p->y = 0.02f;
                 if (p->kind == PARTICLE_SPLASH && frand01() < 0.5f) p->active = 0;
-                p->my = 0.0f;
-                p->mx *= 0.7f;
-                p->mz *= 0.7f;
+                p->my = 0.0f; p->mx *= 0.7f; p->mz *= 0.7f;
             }
+            p->mx *= 0.98f; p->my *= 0.98f; p->mz *= 0.98f;
+        }
 
-            p->mx *= 0.98f;
-            p->my *= 0.98f;
-            p->mz *= 0.98f;
+        if (p->active && p->kind >= PARTICLE_CRIT) {
+            int bx = (int)floorf(p->x), by = (int)floorf(p->y - 0.02f), bz = (int)floorf(p->z);
+            if (flat_block_is_solid(flat_get_block(bx, by, bz)) && p->my < 0.0f) {
+                p->my = 0.0f; p->mx *= 0.7f; p->mz *= 0.7f;
+            }
         }
     }
 }
@@ -2973,12 +3056,21 @@ static void draw_dig_particles(float partial) {
             float br = flat_light_brightness((int)floorf(px), (int)floorf(py), (int)floorf(pz));
             if (p->kind == PARTICLE_PORTAL) {
                 float life = ((float)p->age + partial) / (float)(p->max_age > 0 ? p->max_age : 1);
-                if (life < 0.0f) life = 0.0f;
-                if (life > 1.0f) life = 1.0f;
-                float grow = 1.0f - life;
-                grow = 1.0f - grow * grow;
+                if (life < 0.0f) life = 0.0f; if (life > 1.0f) life = 1.0f;
+                float grow = 1.0f - (1.0f - life) * (1.0f - life);
                 q = 0.1f * p->scale * grow;
                 br = 1.0f;
+            } else if (p->kind == PARTICLE_CRIT || p->kind == PARTICLE_SMOKE) {
+                float grow = (((float)p->age + partial) / (float)(p->max_age > 0 ? p->max_age : 1)) * 32.0f;
+                if (grow < 0.0f) grow = 0.0f; if (grow > 1.0f) grow = 1.0f;
+                q = 0.1f * p->base_scale * grow;
+            } else if (p->kind == PARTICLE_FLAME) {
+                float life = ((float)p->age + partial) / (float)(p->max_age > 0 ? p->max_age : 1);
+                if (life < 0.0f) life = 0.0f; if (life > 1.0f) life = 1.0f;
+                q = 0.1f * p->base_scale * (1.0f - life * life * 0.5f);
+                br = 1.0f;
+            } else if (p->kind == PARTICLE_EXPLODE) {
+                q = 0.1f * p->base_scale;
             }
             glColor4f(p->r * br, p->g * br, p->b * br, 1.0f);
             world_tex_vertex(px - cos_yaw * q - x_rot * q, py - yz_rot * q, pz - sin_yaw * q - z_rot * q, u0, v1);
@@ -3644,17 +3736,59 @@ static int dropped_item_copy_count(int count) {
     return 1;
 }
 
-static void dropped_item_copy_offset(int copy, float block_scale, float *x, float *y, float *z) {
-    /* Deterministic stand-in for RenderItem's Random(187L) offsets. */
-    static const float offsets[4][3] = {
-        { 0.00f,  0.00f,  0.00f},
-        { 0.12f,  0.05f, -0.09f},
-        {-0.10f, -0.03f,  0.11f},
-        { 0.04f, -0.08f,  0.06f}
-    };
-    *x = offsets[copy & 3][0] / block_scale;
-    *y = offsets[copy & 3][1] / block_scale;
-    *z = offsets[copy & 3][2] / block_scale;
+typedef struct PexJavaRandom48 { unsigned long long seed; } PexJavaRandom48;
+static void pex_java_random_seed(PexJavaRandom48 *r, unsigned long long seed) {
+    r->seed=(seed ^ 0x5DEECE66DULL)&((1ULL<<48)-1ULL);
+}
+static unsigned int pex_java_random_next(PexJavaRandom48 *r, int bits) {
+    r->seed=(r->seed*0x5DEECE66DULL+0xBULL)&((1ULL<<48)-1ULL);
+    return (unsigned int)(r->seed>>(48-bits));
+}
+static float pex_java_random_float(PexJavaRandom48 *r) {
+    return (float)pex_java_random_next(r,24)/(float)(1<<24);
+}
+static void dropped_item_copy_offset(int copy, float amplitude, float divisor, float *x, float *y, float *z) {
+    PexJavaRandom48 r; pex_java_random_seed(&r,187ULL);
+    *x=*y=*z=0.0f;
+    for (int i=1;i<=copy;++i) {
+        *x=(pex_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
+        *y=(pex_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
+        *z=(pex_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
+    }
+}
+
+static void dropped_item_set_rgb(int rgb) {
+    glColor4f((float)((rgb >> 16) & 255) / 255.0f,
+              (float)((rgb >> 8) & 255) / 255.0f,
+              (float)(rgb & 255) / 255.0f, 1.0f);
+}
+
+/* RenderItem 1.2.5 supports two item passes for potion bottles and spawn eggs.
+   Keep those layers coincident, and use metadata-aware icons/tints for normal
+   items and flat block icons. */
+static void draw_dropped_flat_stack_125(const ItemStack *st, int terrain_icon) {
+    if (!st || stack_empty(st)) return;
+    if (terrain_icon) {
+        dropped_item_set_rgb(java125_item_block_tint(st));
+        draw_dropped_terrain_sprite(world_block_item_tile(st->id));
+        glColor4f(1,1,1,1);
+        return;
+    }
+    if (st->id == ITEM_MONSTER_PLACER) {
+        dropped_item_set_rgb(spawn_egg_color(st->damage, 0));
+        draw_dropped_item_sprite(item_icon_tile(st->id));
+        dropped_item_set_rgb(spawn_egg_color(st->damage, 1));
+        draw_dropped_item_sprite(item_icon_tile(st->id) + 16);
+    } else if (st->id == ITEM_POTION) {
+        dropped_item_set_rgb(pex_potion_color_from_damage(st->damage));
+        draw_dropped_item_sprite(141);
+        glColor4f(1,1,1,1);
+        draw_dropped_item_sprite((st->damage & 16384) ? 154 : 140);
+    } else {
+        glColor4f(1,1,1,1);
+        draw_dropped_item_sprite(item_icon_tile_for_stack(st));
+    }
+    glColor4f(1,1,1,1);
 }
 
 
@@ -3731,10 +3865,45 @@ static void draw_vehicles(float partial) {
 
 static void entity_item_light_prepare(float x, float y, float z);
 
+static void draw_projectile_fire_overlay_125(float x, float y, float z) {
+    if (!tex_terrain.id) return;
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glPushMatrix();
+    glTranslatef(x, y, z);
+    glScalef(0.7f, 0.7f, 0.7f); /* EntityArrow width 0.5 * Render fire scale 1.4. */
+    glRotatef(-g_player_yaw, 0, 1, 0);
+    glColor4f(1, 1, 1, 1);
+    float half = 0.5f, yoff = 0.0f, zoff = 0.0f;
+    for (int layer = 0; layer < 2; ++layer) {
+        int tile = 31 + (layer & 1) * 16;
+        float u0, v0, u1, v1;
+        terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+        if ((layer / 2) % 2 == 0) { float t = u0; u0 = u1; u1 = t; }
+        glBegin(GL_QUADS);
+        glTexCoord2f(u1, v1); glVertex3f( half, -yoff, zoff);
+        glTexCoord2f(u0, v1); glVertex3f(-half, -yoff, zoff);
+        glTexCoord2f(u0, v0); glVertex3f(-half, 1.4f - yoff, zoff);
+        glTexCoord2f(u1, v0); glVertex3f( half, 1.4f - yoff, zoff);
+        glEnd();
+        yoff -= 0.45f; half *= 0.9f; zoff += 0.03f;
+    }
+    glPopMatrix();
+}
+
+static void draw_projectile_billboard_quad(int tile) {
+    float u0, v0, u1, v1;
+    item_tile_uv(tile, &u0, &v0, &u1, &v1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v1); glVertex3f(-0.5f, -0.25f, 0.0f);
+    glTexCoord2f(u1, v1); glVertex3f( 0.5f, -0.25f, 0.0f);
+    glTexCoord2f(u1, v0); glVertex3f( 0.5f,  0.75f, 0.0f);
+    glTexCoord2f(u0, v0); glVertex3f(-0.5f,  0.75f, 0.0f);
+    glEnd();
+}
+
 static void draw_projectiles(float partial) {
     if (!tex_items.id) return;
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex_items.id);
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
@@ -3745,85 +3914,127 @@ static void draw_projectiles(float partial) {
         float x = p->prev_x + (p->x - p->prev_x) * partial;
         float y = p->prev_y + (p->y - p->prev_y) * partial;
         float z = p->prev_z + (p->z - p->prev_z) * partial;
-        int item = ITEM_POTION;
-        if (p->type == FLAT_PROJECTILE_XP_BOTTLE) item = ITEM_EXP_BOTTLE;
-        else if (p->type == FLAT_PROJECTILE_ARROW) item = ITEM_ARROW;
-        else if (p->type == FLAT_PROJECTILE_SNOWBALL) item = ITEM_SNOWBALL;
-        else if (p->type == FLAT_PROJECTILE_SMALL_FIREBALL || p->type == FLAT_PROJECTILE_LARGE_FIREBALL) item = ITEM_FIREBALL_CHARGE;
-        int tile = item_icon_tile(item);
         entity_item_light_prepare(x, y, z);
         glPushMatrix();
         glTranslatef(x, y, z);
         if (p->type == FLAT_PROJECTILE_ARROW) {
-            float au0, av0, au1, av1;
-            item_tile_uv(tile, &au0, &av0, &au1, &av1);
-            glRotatef(p->yaw - 90.0f, 0.0f, 1.0f, 0.0f);
-            glRotatef(p->pitch, 0.0f, 0.0f, 1.0f);
+            float yaw = lerp_angle(p->prev_yaw, p->yaw, partial);
+            float pitch = p->prev_pitch + (p->pitch - p->prev_pitch) * partial;
+            glBindTexture(GL_TEXTURE_2D, tex_arrows.id ? tex_arrows.id : tex_items.id);
+            glRotatef(yaw - 90.0f, 0.0f, 1.0f, 0.0f);
+            glRotatef(pitch, 0.0f, 0.0f, 1.0f);
+            float shake = (float)p->arrow_shake - partial;
+            if (shake > 0.0f) glRotatef(-sinf(shake * 3.0f) * shake, 0.0f, 0.0f, 1.0f);
             glRotatef(45.0f, 1.0f, 0.0f, 0.0f);
             glScalef(0.05625f, 0.05625f, 0.05625f);
             glTranslatef(-4.0f, 0.0f, 0.0f);
-            /* Caller/entity brightness stays in the current GL color. */
-            glBegin(GL_QUADS);
-            float u0 = au0, u1 = au0 + (au1 - au0) * 0.35f;
-            float v0 = av0 + (av1 - av0) * 0.35f, v1 = av0 + (av1 - av0) * 0.70f;
-            glTexCoord2f(u0, v0); glVertex3f(-7.0f, -2.0f, -2.0f);
-            glTexCoord2f(u1, v0); glVertex3f(-7.0f, -2.0f,  2.0f);
-            glTexCoord2f(u1, v1); glVertex3f(-7.0f,  2.0f,  2.0f);
-            glTexCoord2f(u0, v1); glVertex3f(-7.0f,  2.0f, -2.0f);
-            glTexCoord2f(u0, v0); glVertex3f(-7.0f,  2.0f, -2.0f);
-            glTexCoord2f(u1, v0); glVertex3f(-7.0f,  2.0f,  2.0f);
-            glTexCoord2f(u1, v1); glVertex3f(-7.0f, -2.0f,  2.0f);
-            glTexCoord2f(u0, v1); glVertex3f(-7.0f, -2.0f, -2.0f);
-            for (int f = 0; f < 4; ++f) {
-                float a = (float)f * (float)M_PI * 0.5f;
-                float c = cosf(a), s = sinf(a);
-                float y0 = -2.0f * c, z0 = -2.0f * s;
-                float y1 =  2.0f * c, z1 =  2.0f * s;
-                float fu0 = au0, fu1 = au1, fv0 = av0, fv1 = av0 + (av1 - av0) * 0.35f;
-                glTexCoord2f(fu0, fv0); glVertex3f(-8.0f, y0, z0);
-                glTexCoord2f(fu1, fv0); glVertex3f( 8.0f, y0, z0);
-                glTexCoord2f(fu1, fv1); glVertex3f( 8.0f, y1, z1);
-                glTexCoord2f(fu0, fv1); glVertex3f(-8.0f, y1, z1);
+            if (tex_arrows.id) {
+                /* RenderArrow 1.2.5, /item/arrows.png (32x32). */
+                glBegin(GL_QUADS);
+                glTexCoord2f(0.0f, 0.15625f); glVertex3f(-7,-2,-2);
+                glTexCoord2f(0.15625f,0.15625f); glVertex3f(-7,-2, 2);
+                glTexCoord2f(0.15625f,0.3125f); glVertex3f(-7, 2, 2);
+                glTexCoord2f(0.0f,0.3125f); glVertex3f(-7, 2,-2);
+                glTexCoord2f(0.0f,0.15625f); glVertex3f(-7, 2,-2);
+                glTexCoord2f(0.15625f,0.15625f); glVertex3f(-7, 2, 2);
+                glTexCoord2f(0.15625f,0.3125f); glVertex3f(-7,-2, 2);
+                glTexCoord2f(0.0f,0.3125f); glVertex3f(-7,-2,-2);
+                glEnd();
+                for (int f=0; f<4; ++f) {
+                    glRotatef(90.0f,1,0,0);
+                    glBegin(GL_QUADS);
+                    glTexCoord2f(0.0f,0.0f); glVertex3f(-8,-2,0);
+                    glTexCoord2f(0.5f,0.0f); glVertex3f( 8,-2,0);
+                    glTexCoord2f(0.5f,0.15625f); glVertex3f( 8, 2,0);
+                    glTexCoord2f(0.0f,0.15625f); glVertex3f(-8, 2,0);
+                    glEnd();
+                }
+            } else {
+                /* Texture-pack fallback when arrows.png is absent. */
+                int tile=item_icon_tile(ITEM_ARROW);
+                float u0,v0,u1,v1; item_tile_uv(tile,&u0,&v0,&u1,&v1);
+                for(int f=0;f<4;++f){
+                    glBegin(GL_QUADS);
+                    glTexCoord2f(u0,v0);glVertex3f(-8,-2,0);
+                    glTexCoord2f(u1,v0);glVertex3f( 8,-2,0);
+                    glTexCoord2f(u1,v1);glVertex3f( 8, 2,0);
+                    glTexCoord2f(u0,v1);glVertex3f(-8, 2,0);
+                    glEnd();
+                    glRotatef(90.0f,1,0,0);
+                }
             }
-            glEnd();
         } else {
-            glRotatef((float)p->age * 18.0f + partial * 18.0f, 0.0f, 1.0f, 0.0f);
-            glRotatef(20.0f, 1.0f, 0.0f, 0.0f);
-            glScalef(0.25f, 0.25f, 0.25f);
-            draw_item3d_from_texture(&tex_items, tile);
+            int item=ITEM_POTION;
+            float scale=0.5f;
+            if(p->type==FLAT_PROJECTILE_XP_BOTTLE)item=ITEM_EXP_BOTTLE;
+            else if(p->type==FLAT_PROJECTILE_SNOWBALL)item=ITEM_SNOWBALL;
+            else if(p->type==FLAT_PROJECTILE_SMALL_FIREBALL){item=ITEM_FIREBALL_CHARGE;scale=0.5f;}
+            else if(p->type==FLAT_PROJECTILE_LARGE_FIREBALL){item=ITEM_FIREBALL_CHARGE;scale=2.0f;}
+            glBindTexture(GL_TEXTURE_2D,tex_items.id);
+            glScalef(scale,scale,scale);
+            glRotatef(180.0f-g_player_yaw,0,1,0);
+            glRotatef(-g_player_pitch,1,0,0);
+            if(p->type==FLAT_PROJECTILE_POTION){
+                int color=pex_potion_color_from_damage(p->item_damage);
+                glColor4f((float)((color>>16)&255)/255.0f,(float)((color>>8)&255)/255.0f,(float)(color&255)/255.0f,1.0f);
+                draw_projectile_billboard_quad(141);
+                glColor4f(1,1,1,1);
+            }
+            draw_projectile_billboard_quad(item_icon_tile(item));
         }
         glPopMatrix();
+        if (p->fire_ticks > 0) draw_projectile_fire_overlay_125(x, y, z);
     }
+    glBindTexture(GL_TEXTURE_2D,tex_items.id);
     glColor4f(1,1,1,1);
 }
 
+static int xp_orb_texture_index(int value) {
+    return value>=2477?10:value>=1237?9:value>=617?8:value>=307?7:value>=149?6:
+           value>=73?5:value>=37?4:value>=17?3:value>=7?2:value>=3?1:0;
+}
+
 static void draw_xp_orbs(float partial) {
-    glDisable(GL_TEXTURE_2D);
     glEnable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    for (int i = 0; i < MAX_XP_ORBS; ++i) {
-        FlatXPOrb *o = &g_xp_orbs[i];
-        if (!o->active) continue;
-        float x = o->prev_x + (o->x - o->prev_x) * partial;
-        float y = o->prev_y + (o->y - o->prev_y) * partial;
-        float z = o->prev_z + (o->z - o->prev_z) * partial;
-        float pulse = 0.12f + 0.03f * sinf(((float)o->age + partial) * 0.35f);
+    for (int i=0;i<MAX_XP_ORBS;++i) {
+        FlatXPOrb *o=&g_xp_orbs[i]; if(!o->active) continue;
+        float x=o->prev_x+(o->x-o->prev_x)*partial;
+        float y=o->prev_y+(o->y-o->prev_y)*partial;
+        float z=o->prev_z+(o->z-o->prev_z)*partial;
+        float phase=((float)o->color+partial)*0.5f;
+        float red=(sinf(phase)+1.0f)*0.5f;
+        float blue=(sinf(phase+(float)M_PI*4.0f/3.0f)+1.0f)*0.10f;
+        draw_java_entity_shadow(x,y,z,0.15f,12.0f/16.0f);
         glPushMatrix();
-        glTranslatef(x, y, z);
-        glRotatef(-g_player_yaw, 0.0f, 1.0f, 0.0f);
-        glColor4f(0.35f, 1.0f, 0.05f, 0.85f);
-        glBegin(GL_QUADS);
-        glVertex3f(-pulse, -pulse, 0.0f); glVertex3f(pulse, -pulse, 0.0f); glVertex3f(pulse, pulse, 0.0f); glVertex3f(-pulse, pulse, 0.0f);
-        glEnd();
-        glColor4f(1.0f, 1.0f, 0.15f, 0.75f);
-        glBegin(GL_QUADS);
-        glVertex3f(-pulse * 0.5f, -pulse * 0.5f, 0.01f); glVertex3f(pulse * 0.5f, -pulse * 0.5f, 0.01f); glVertex3f(pulse * 0.5f, pulse * 0.5f, 0.01f); glVertex3f(-pulse * 0.5f, pulse * 0.5f, 0.01f);
-        glEnd();
+        glTranslatef(x,y,z);
+        glRotatef(180.0f-g_player_yaw,0,1,0);
+        glRotatef(-g_player_pitch,1,0,0);
+        glScalef(0.30f,0.30f,0.30f);
+        if (tex_xporb.id) {
+            int t=xp_orb_texture_index(o->value);
+            float u0=(float)((t%4)*16)/64.0f, u1=u0+16.0f/64.0f;
+            float v0=(float)((t/4)*16)/64.0f, v1=v0+16.0f/64.0f;
+            glEnable(GL_TEXTURE_2D); glBindTexture(GL_TEXTURE_2D,tex_xporb.id);
+            glColor4f(red,1.0f,blue,128.0f/255.0f);
+            glBegin(GL_QUADS);
+            glTexCoord2f(u0,v1); glVertex3f(-0.5f,-0.25f,0);
+            glTexCoord2f(u1,v1); glVertex3f( 0.5f,-0.25f,0);
+            glTexCoord2f(u1,v0); glVertex3f( 0.5f, 0.75f,0);
+            glTexCoord2f(u0,v0); glVertex3f(-0.5f, 0.75f,0);
+            glEnd();
+        } else {
+            glDisable(GL_TEXTURE_2D); glColor4f(red,1.0f,blue,0.75f);
+            glBegin(GL_QUADS);
+            glVertex3f(-0.5f,-0.25f,0); glVertex3f(0.5f,-0.25f,0);
+            glVertex3f(0.5f,0.75f,0); glVertex3f(-0.5f,0.75f,0);
+            glEnd(); glEnable(GL_TEXTURE_2D);
+        }
         glPopMatrix();
     }
-    glColor4f(1,1,1,1);
-    glEnable(GL_TEXTURE_2D);
+    glColor4f(1,1,1,1); glEnable(GL_TEXTURE_2D);
 }
 
 static float entity_light_factor_at(float x, float y, float z) {
@@ -3870,52 +4081,32 @@ static void draw_dropped_items(void) {
         entity_item_light_prepare(x, y + 0.5f, z);
         glPushMatrix();
         glTranslatef(x, y + bob, z);
-        glRotatef((((float)e->age + g_frame_partial) / 20.0f + e->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
 
-        if (render_item_as_block_id(e->stack.id) && tex_terrain.id) {
-            /* Source RenderItem: block drops are 0.25 scale 3D blocks. */
-            const float block_scale = 0.25f;
+        int render_type = world_item_is_block_id(e->stack.id) ? java125_block_render_type(e->stack.id) : -1;
+        if (world_item_is_block_id(e->stack.id) && java125_render_item_in_3d(render_type) && tex_terrain.id) {
+            glRotatef((((float)e->age + g_frame_partial) / 20.0f + e->rot) * 57.29578f, 0.0f, 1.0f, 0.0f);
+            float block_scale = (render_type == 1 || render_type == 19 || render_type == 12 || render_type == 2) ? 0.5f : 0.25f;
             glScalef(block_scale, block_scale, block_scale);
-            for (int c = 0; c < copies; c++) {
+            for (int c=0;c<copies;++c) {
                 glPushMatrix();
-                float ox, oy, oz;
-                dropped_item_copy_offset(c, block_scale, &ox, &oy, &oz);
-                glTranslatef(ox * 0.45f, oy * 0.45f, oz * 0.45f);
-                glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-                draw_block_item_model(e->stack.id, -0.5f, -0.5f, -0.5f);
+                float ox,oy,oz; dropped_item_copy_offset(c,0.20f,block_scale,&ox,&oy,&oz);
+                glTranslatef(ox,oy,oz);
+                glBindTexture(GL_TEXTURE_2D,tex_terrain.id);
+                draw_block_item_model(e->stack.id,-0.5f,-0.5f,-0.5f);
                 glPopMatrix();
             }
-        } else if (world_item_is_block_id(e->stack.id) && tex_terrain.id) {
-            /* Non-cube block drops (ladder/rail/torch/etc.) use their terrain
-               tile. Do not look them up in gui/items.png, where block id 65
-               aliases an armor icon. */
-            glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
-            glScalef(0.5f, 0.5f, 0.5f);
-            int tile = world_block_item_tile(e->stack.id);
-            for (int c = 0; c < copies; c++) {
+        } else {
+            glScalef(0.5f,0.5f,0.5f);
+            int terrain_icon=world_item_is_block_id(e->stack.id);
+            for (int c=0;c<copies;++c) {
                 glPushMatrix();
-                float ox, oy, oz;
-                dropped_item_copy_offset(c, 0.5f, &ox, &oy, &oz);
-                glTranslatef(ox * 0.25f, oy * 0.25f, 0.0f);
-                draw_dropped_terrain_sprite(tile);
-                glPopMatrix();
-            }
-        } else if (tex_items.id) {
-            /* Source RenderItem for normal items: billboarded icon, 0.5 scale.
-               The previous extruded mesh made the scattered giant-line look. */
-            glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
-            glScalef(0.5f, 0.5f, 0.5f);
-            int tile = item_icon_tile(e->stack.id);
-            for (int c = 0; c < copies; c++) {
-                glPushMatrix();
-                float ox, oy, oz;
-                dropped_item_copy_offset(c, 0.5f, &ox, &oy, &oz);
-                glTranslatef(ox * 0.25f, oy * 0.25f, 0.0f);
-                draw_dropped_item_sprite(tile);
+                float ox,oy,oz; dropped_item_copy_offset(c,0.30f,1.0f,&ox,&oy,&oz);
+                glTranslatef(ox,oy,oz);
+                glRotatef(180.0f-yaw,0,1,0);
+                draw_dropped_flat_stack_125(&e->stack, terrain_icon);
                 glPopMatrix();
             }
         }
-
         glPopMatrix();
     }
 }
@@ -8833,6 +9024,36 @@ static int overlay_tile_for_block(int id) {
     return 1;
 }
 
+static void draw_player_fire_overlay_125(void) {
+    if (g_player_fire_ticks <= 0 || !tex_terrain.id) return;
+    glDisable(GL_FOG);
+    setup_gui_projection();
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
+    for (int side = 0; side < 2; ++side) {
+        int tile = 31 + side * 16;
+        float u0, v0, u1, v1;
+        terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+        float dir = (float)(side * 2 - 1);
+        glPushMatrix();
+        glTranslatef((float)g_gui_w * 0.5f - dir * (float)g_gui_w * 0.24f,
+                     (float)g_gui_h * 0.2f, 0.0f);
+        glRotatef(dir * 10.0f, 0.0f, 1.0f, 0.0f);
+        glBegin(GL_QUADS);
+        glTexCoord2f(u1, v1); glVertex3f(-(float)g_gui_w * 0.5f, -(float)g_gui_h * 0.5f, -0.5f);
+        glTexCoord2f(u0, v1); glVertex3f( (float)g_gui_w * 0.5f, -(float)g_gui_h * 0.5f, -0.5f);
+        glTexCoord2f(u0, v0); glVertex3f( (float)g_gui_w * 0.5f,  (float)g_gui_h * 0.5f, -0.5f);
+        glTexCoord2f(u1, v0); glVertex3f(-(float)g_gui_w * 0.5f,  (float)g_gui_h * 0.5f, -0.5f);
+        glEnd();
+        glPopMatrix();
+    }
+    glColor4f(1, 1, 1, 1);
+}
+
 static void draw_in_block_overlay(void) {
     int id = flat_player_suffocation_block();
     int liquid_eye = flat_player_head_block();
@@ -9660,7 +9881,10 @@ static void draw_ingame_world_view(int with_hand) {
     draw_sky_only();
     draw_flat_test_world();
     if (with_hand && !g_third_person_view) draw_first_person_hand();
-    draw_in_block_overlay();
+    if (!g_third_person_view) {
+        draw_player_fire_overlay_125();
+        draw_in_block_overlay();
+    }
     draw_portal_overlay();
     setup_gui_projection();
 }
