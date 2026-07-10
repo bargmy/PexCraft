@@ -665,27 +665,8 @@ static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
 }
 
 
-static int item_terrain_tile_has_pixels(int tile) {
-    if (!tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
-    int tx = (tile & 15) * 16;
-    int ty = (tile >> 4) * 16;
-    if (tx + 16 > tex_terrain.w || ty + 16 > tex_terrain.h) return 0;
-    int count = 0;
-    for (int yy = 0; yy < 16; yy++) {
-        for (int xx = 0; xx < 16; xx++) {
-            unsigned char *p = &tex_terrain.rgba[((ty + yy) * tex_terrain.w + (tx + xx)) * 4];
-            if (p[3] > 8) count++;
-        }
-    }
-    return count > 32;
-}
-
-static int item_chest_icon_tile(void) {
-    return chest_front_tile();
-}
-
-static int item_water_tile(void) { return item_terrain_tile_has_pixels(205) ? 205 : 14; }
-static int item_lava_tile(void) { return item_terrain_tile_has_pixels(237) ? 237 : 30; }
+static int item_water_tile(void) { return 205; }
+static int item_lava_tile(void) { return 237; }
 
 static int block_item_tile_for_id(int id) {
     /* Representative terrain.png tile for every Java 1.2.5 block ID.  Face- and

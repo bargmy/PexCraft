@@ -720,36 +720,53 @@ static int terrain_tile_liquid_like_for_texture(const Texture *t, int tile, int 
     return match * 3 >= opaque;
 }
 
-static void terrain_write_java_liquid_tile(Texture *t, int tile, int water, int flow) {
+static int terrain_liquid_region_like_for_texture(const Texture *t, int tile, int water, int tile_size) {
+    if (tile_size < 1) tile_size = 1;
+    for (int oy = 0; oy < tile_size; ++oy) {
+        for (int ox = 0; ox < tile_size; ++ox) {
+            if (!terrain_tile_liquid_like_for_texture(t, tile + ox + oy * 16, water)) return 0;
+        }
+    }
+    return 1;
+}
+
+static void terrain_write_java_liquid_tile(Texture *t, int tile, int water, int flow, int tile_size) {
     if (!t || !t->rgba || t->w <= 0 || t->h <= 0) return;
     int step_x = t->w / 16;
     int step_y = t->h / 16;
     if (step_x <= 0 || step_y <= 0) return;
+    if (tile_size < 1) tile_size = 1;
     int tx = (tile & 15) * step_x;
     int ty = (tile >> 4) * step_y;
-    if (tx + step_x > t->w || ty + step_y > t->h) return;
-    for (int y = 0; y < step_y; ++y) {
-        for (int x = 0; x < step_x; ++x) {
-            float fx = (float)x / (float)step_x;
-            float fy = (float)y / (float)step_y;
-            float wave = (sinf((fx * 6.2831853f) + (flow ? fy * 12.5663706f : fy * 3.1415927f)) +
-                          cosf((fy * 6.2831853f) - (flow ? fx * 6.2831853f : fx * 3.1415927f))) * 0.5f;
-            float v = wave * 0.5f + 0.5f;
-            if (v < 0.0f) v = 0.0f;
-            if (v > 1.0f) v = 1.0f;
-            unsigned char *p = &t->rgba[((ty + y) * t->w + (tx + x)) * 4];
-            if (water) {
-                float vv = v * v;
-                p[0] = (unsigned char)(32.0f + vv * 32.0f);
-                p[1] = (unsigned char)(50.0f + vv * 64.0f);
-                p[2] = 255;
-                p[3] = (unsigned char)(146.0f + vv * 50.0f);
-            } else {
-                float vv = v * v;
-                p[0] = (unsigned char)(155.0f + v * 100.0f);
-                p[1] = (unsigned char)(vv * 255.0f);
-                p[2] = (unsigned char)(vv * vv * 128.0f);
-                p[3] = 255;
+    if (tx + step_x * tile_size > t->w || ty + step_y * tile_size > t->h) return;
+    for (int oy = 0; oy < tile_size; ++oy) {
+        for (int ox = 0; ox < tile_size; ++ox) {
+            int dx = tx + ox * step_x;
+            int dy = ty + oy * step_y;
+            for (int y = 0; y < step_y; ++y) {
+                for (int x = 0; x < step_x; ++x) {
+                    float fx = (float)x / (float)step_x;
+                    float fy = (float)y / (float)step_y;
+                    float wave = (sinf((fx * 6.2831853f) + (flow ? fy * 12.5663706f : fy * 3.1415927f)) +
+                                  cosf((fy * 6.2831853f) - (flow ? fx * 6.2831853f : fx * 3.1415927f))) * 0.5f;
+                    float v = wave * 0.5f + 0.5f;
+                    if (v < 0.0f) v = 0.0f;
+                    if (v > 1.0f) v = 1.0f;
+                    unsigned char *p = &t->rgba[((dy + y) * t->w + (dx + x)) * 4];
+                    if (water) {
+                        float vv = v * v;
+                        p[0] = (unsigned char)(32.0f + vv * 32.0f);
+                        p[1] = (unsigned char)(50.0f + vv * 64.0f);
+                        p[2] = 255;
+                        p[3] = (unsigned char)(146.0f + vv * 50.0f);
+                    } else {
+                        float vv = v * v;
+                        p[0] = (unsigned char)(155.0f + v * 100.0f);
+                        p[1] = (unsigned char)(vv * 255.0f);
+                        p[2] = (unsigned char)(vv * vv * 128.0f);
+                        p[3] = 255;
+                    }
+                }
             }
         }
     }
@@ -758,20 +775,20 @@ static void terrain_write_java_liquid_tile(Texture *t, int tile, int water, int 
 static void normalize_terrain_liquid_tiles(void) {
     if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w < 128 || tex_terrain.h < 128) return;
     int changed = 0;
-    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 205, 1)) {
-        terrain_write_java_liquid_tile(&tex_terrain, 205, 1, 0);
+    if (!terrain_liquid_region_like_for_texture(&tex_terrain, 205, 1, 1)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 205, 1, 0, 1);
         changed = 1;
     }
-    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 206, 1)) {
-        terrain_write_java_liquid_tile(&tex_terrain, 206, 1, 1);
+    if (!terrain_liquid_region_like_for_texture(&tex_terrain, 206, 1, 2)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 206, 1, 1, 2);
         changed = 1;
     }
-    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 237, 0)) {
-        terrain_write_java_liquid_tile(&tex_terrain, 237, 0, 0);
+    if (!terrain_liquid_region_like_for_texture(&tex_terrain, 237, 0, 1)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 237, 0, 0, 1);
         changed = 1;
     }
-    if (!terrain_tile_liquid_like_for_texture(&tex_terrain, 238, 0)) {
-        terrain_write_java_liquid_tile(&tex_terrain, 238, 0, 1);
+    if (!terrain_liquid_region_like_for_texture(&tex_terrain, 238, 0, 2)) {
+        terrain_write_java_liquid_tile(&tex_terrain, 238, 0, 1, 2);
         changed = 1;
     }
     if (!changed) return;

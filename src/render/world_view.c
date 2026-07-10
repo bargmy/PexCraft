@@ -1290,33 +1290,48 @@ static void pex_liquid_fx_lava_tick(PexLiquidTextureFX *fx, int flowing, unsigne
     }
 }
 
-static void pex_upload_animated_terrain_tile(int tile, const unsigned char src[16 * 16 * 4]) {
+static void pex_upload_animated_terrain_tile(int tile, int tile_size,
+                                             const unsigned char src[16 * 16 * 4]) {
     if (!tex_terrain.id || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0 || !src) return;
+    if (tile_size < 1) tile_size = 1;
     int tx, ty, tw, th;
     stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tw, &th);
     if (tw <= 0 || th <= 0) return;
-    if (tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return;
-    for (int y = 0; y < th; ++y) {
-        int sy = (y * 16) / th;
-        unsigned char *dst = &tex_terrain.rgba[((ty + y) * tex_terrain.w + tx) * 4];
-        for (int x = 0; x < tw; ++x) {
-            int sx = (x * 16) / tw;
-            memcpy(dst + x * 4, src + (sy * 16 + sx) * 4, 4);
-        }
-    }
+    if (tx + tw * tile_size > tex_terrain.w || ty + th * tile_size > tex_terrain.h) return;
+
     unsigned char *upload = (unsigned char *)malloc((size_t)tw * (size_t)th * 4u);
     if (!upload) return;
     for (int y = 0; y < th; ++y) {
-        memcpy(upload + (size_t)y * (size_t)tw * 4u,
-               &tex_terrain.rgba[((ty + y) * tex_terrain.w + tx) * 4],
-               (size_t)tw * 4u);
+        int sy = (y * 16) / th;
+        for (int x = 0; x < tw; ++x) {
+            int sx = (x * 16) / tw;
+            memcpy(upload + ((size_t)y * (size_t)tw + (size_t)x) * 4u,
+                   src + (sy * 16 + sx) * 4, 4);
+        }
     }
+
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, tx, ty, tw, th, GL_RGBA, GL_UNSIGNED_BYTE, upload);
+
+    /* Java TextureWaterFlowFX/TextureLavaFlowFX use tileSize=2.  Duplicate the
+       generated 16x16 frame into all four atlas cells so the rotated flowing
+       top-face UVs cannot sample unrelated neighbouring block textures. */
+    for (int oy = 0; oy < tile_size; ++oy) {
+        for (int ox = 0; ox < tile_size; ++ox) {
+            int dx = tx + ox * tw;
+            int dy = ty + oy * th;
+            for (int y = 0; y < th; ++y) {
+                memcpy(&tex_terrain.rgba[((dy + y) * tex_terrain.w + dx) * 4],
+                       upload + (size_t)y * (size_t)tw * 4u,
+                       (size_t)tw * 4u);
+            }
+            glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, tw, th,
+                            GL_RGBA, GL_UNSIGNED_BYTE, upload);
+        }
+    }
     free(upload);
     stivufine_rebuild_terrain_mipmaps();
     g_portal_anim_terrain_dirty = 1;
@@ -1332,15 +1347,15 @@ static void update_liquid_texture_animation(void) {
     unsigned char tilebuf[16 * 16 * 4];
     if (do_water) {
         pex_liquid_fx_water_tick(&g_water_still_fx, 0, tilebuf);
-        pex_upload_animated_terrain_tile(205, tilebuf);
+        pex_upload_animated_terrain_tile(205, 1, tilebuf);
         pex_liquid_fx_water_tick(&g_water_flow_fx, 1, tilebuf);
-        pex_upload_animated_terrain_tile(206, tilebuf);
+        pex_upload_animated_terrain_tile(206, 2, tilebuf);
     }
     if (do_lava) {
         pex_liquid_fx_lava_tick(&g_lava_still_fx, 0, tilebuf);
-        pex_upload_animated_terrain_tile(237, tilebuf);
+        pex_upload_animated_terrain_tile(237, 1, tilebuf);
         pex_liquid_fx_lava_tick(&g_lava_flow_fx, 1, tilebuf);
-        pex_upload_animated_terrain_tile(238, tilebuf);
+        pex_upload_animated_terrain_tile(238, 2, tilebuf);
     }
     g_liquid_uploaded_tick = g_ingame_ticks;
     g_liquid_uploaded_rgba = tex_terrain.rgba;
@@ -1415,50 +1430,6 @@ static int terrain_tile_has_opaque_pixels(int tile) {
     return count > 32;
 }
 
-static int terrain_tile_liquid_like(int tile, int water) {
-    if (!tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
-    int tx, ty, tw, th;
-    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tw, &th);
-    if (tx + tw > tex_terrain.w || ty + th > tex_terrain.h) return 0;
-    int opaque = 0, match = 0, gray = 0;
-    for (int yy = 0; yy < th; yy++) {
-        for (int xx = 0; xx < tw; xx++) {
-            unsigned char *p = &tex_terrain.rgba[((ty + yy) * tex_terrain.w + (tx + xx)) * 4];
-            if (p[3] <= 8) continue;
-            int r = p[0], g = p[1], b = p[2];
-            ++opaque;
-            if (abs(r - g) < 12 && abs(g - b) < 12 && abs(r - b) < 12) ++gray;
-            if (water) {
-                if (b >= 70 && b >= r + 12 && g >= r - 8) ++match;
-            } else {
-                if (r >= 100 && g >= 35 && r >= b + 35 && g >= b + 5) ++match;
-            }
-        }
-    }
-    if (opaque < 32) return 0;
-    if (gray * 3 > opaque) return 0;
-    return match * 3 >= opaque;
-}
-
-static int terrain_liquid_tile_valid_cached(int tile, int water) {
-    static GLuint cached_tex = 0;
-    static unsigned char *cached_rgba = NULL;
-    static int values[4] = {-1, -1, -1, -1};
-    int idx = -1;
-    if (tile == 205 && water) idx = 0;
-    else if (tile == 206 && water) idx = 1;
-    else if (tile == 237 && !water) idx = 2;
-    else if (tile == 238 && !water) idx = 3;
-    if (idx < 0) return terrain_tile_liquid_like(tile, water);
-    if (cached_tex != tex_terrain.id || cached_rgba != tex_terrain.rgba) {
-        cached_tex = tex_terrain.id;
-        cached_rgba = tex_terrain.rgba;
-        for (int i = 0; i < 4; ++i) values[i] = -1;
-    }
-    if (values[idx] < 0) values[idx] = terrain_tile_liquid_like(tile, water);
-    return values[idx];
-}
-
 static int chest_top_tile(void) { return 25; }
 static int chest_side_tile(void) { return 26; }
 static int chest_front_tile(void) { return 27; }
@@ -1473,13 +1444,13 @@ static int furnace_front_lit_tile(void) { return 61; }
 static int furnace_side_tile(void) { return 45; }
 static int furnace_top_tile(void) { return 62; }
 
-/* Java 1.2.5 BlockFluid uses 205/206 for water and 237/238 for lava.  Some
-   active packs in this port contain fallback checker/generated pixels in those
-   slots, so verify the color family before accepting them. */
-static int water_top_tile(void)  { return terrain_liquid_tile_valid_cached(205, 1) ? 205 : 14; }
-static int water_side_tile(void) { return terrain_liquid_tile_valid_cached(206, 1) ? 206 : water_top_tile(); }
-static int lava_top_tile(void)   { return terrain_liquid_tile_valid_cached(237, 0) ? 237 : 30; }
-static int lava_side_tile(void)  { return terrain_liquid_tile_valid_cached(238, 0) ? 238 : lava_top_tile(); }
+/* Java 1.2.5 BlockFluid uses 205/206 for water and 237/238 for lava.
+   Texture loading normalizes missing liquid slots, so never redirect a liquid
+   face to an unrelated terrain tile. */
+static int water_top_tile(void)  { return 205; }
+static int water_side_tile(void) { return 206; }
+static int lava_top_tile(void)   { return 237; }
+static int lava_side_tile(void)  { return 238; }
 static int liquid_top_tile_for_block(int id) { return (id == BLOCK_WATER || id == BLOCK_STILL_WATER) ? water_top_tile() : lava_top_tile(); }
 static int liquid_side_tile_for_block(int id) { return (id == BLOCK_WATER || id == BLOCK_STILL_WATER) ? water_side_tile() : lava_side_tile(); }
 
@@ -6080,38 +6051,42 @@ static float liquid_flow_angle_at(int x, int y, int z, int is_water) {
 static void liquid_top_uvs_source(int tile, float angle,
                                   float *u00, float *v00, float *u01, float *v01,
                                   float *u11, float *v11, float *u10, float *v10) {
-    float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
-    float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
-    int tx = (tile & 15) * 16;
-    int ty = (tile >> 4) * 16;
-    float cu = ((float)tx + 8.0f) / tw;
-    float cv = ((float)ty + 8.0f) / th;
-    if (angle > -999.0f) {
-        cu = ((float)tx + 16.0f) / tw;
-        cv = ((float)ty + 16.0f) / th;
-    } else {
-        angle = 0.0f;
-    }
-    float sx = sinf(angle) * 8.0f / tw;
-    float cz = cosf(angle) * 8.0f / th;
-    *u00 = cu - cz - sx; *v00 = cv - cz + sx;
-    *u01 = cu - cz + sx; *v01 = cv + cz + sx;
-    *u11 = cu + cz + sx; *v11 = cv + cz - sx;
-    *u10 = cu + cz - sx; *v10 = cv - cz - sx;
+    float aw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
+    float ah = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+    int tx, ty, tile_w, tile_h;
+    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tile_w, &tile_h);
+    if (tile_w <= 0) tile_w = 16;
+    if (tile_h <= 0) tile_h = 16;
+
+    int flowing = angle > -999.0f;
+    float cu = ((float)tx + (flowing ? (float)tile_w : (float)tile_w * 0.5f)) / aw;
+    float cv = ((float)ty + (flowing ? (float)tile_h : (float)tile_h * 0.5f)) / ah;
+    if (!flowing) angle = 0.0f;
+
+    float sx = sinf(angle) * ((float)tile_w * 0.5f) / aw;
+    float cz_u = cosf(angle) * ((float)tile_w * 0.5f) / aw;
+    float sx_v = sinf(angle) * ((float)tile_h * 0.5f) / ah;
+    float cz_v = cosf(angle) * ((float)tile_h * 0.5f) / ah;
+    *u00 = cu - cz_u - sx; *v00 = cv - cz_v + sx_v;
+    *u01 = cu - cz_u + sx; *v01 = cv + cz_v + sx_v;
+    *u11 = cu + cz_u + sx; *v11 = cv + cz_v - sx_v;
+    *u10 = cu + cz_u - sx; *v10 = cv - cz_v - sx_v;
 }
 
 
 static void liquid_side_uvs_source(int tile, float h_a, float h_b,
                                    float *u0, float *u1, float *v_a, float *v_b, float *v_bottom) {
-    float tw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
-    float th = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
-    int tx = (tile & 15) * 16;
-    int ty = (tile >> 4) * 16;
-    *u0 = ((float)tx + 0.01f) / tw;
-    *u1 = ((float)tx + 15.99f) / tw;
-    *v_a = ((float)ty + (1.0f - h_a) * 16.0f) / th;
-    *v_b = ((float)ty + (1.0f - h_b) * 16.0f) / th;
-    *v_bottom = ((float)ty + 15.99f) / th;
+    float aw = tex_terrain.w ? (float)tex_terrain.w : 256.0f;
+    float ah = tex_terrain.h ? (float)tex_terrain.h : 256.0f;
+    int tx, ty, tile_w, tile_h;
+    stivufine_terrain_tile_pixel_rect(tile, &tx, &ty, &tile_w, &tile_h);
+    if (tile_w <= 0) tile_w = 16;
+    if (tile_h <= 0) tile_h = 16;
+    *u0 = ((float)tx + 0.01f) / aw;
+    *u1 = ((float)tx + (float)tile_w - 0.01f) / aw;
+    *v_a = ((float)ty + (1.0f - h_a) * (float)tile_h) / ah;
+    *v_b = ((float)ty + (1.0f - h_b) * (float)tile_h) / ah;
+    *v_bottom = ((float)ty + (float)tile_h - 0.01f) / ah;
 }
 
 static void emit_liquid_block_faces(int id, int x, int y, int z) {
@@ -6133,7 +6108,9 @@ static void emit_liquid_block_faces(int id, int x, int y, int z) {
         world_light_set_pos_for_face(x, y, z, 1);
         world_set_liquid_shade(is_water, x, z, 1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
-        liquid_top_uvs_source(top_tile, liquid_flow_angle_at(x, y, z, is_water),
+        float flow_angle = liquid_flow_angle_at(x, y, z, is_water);
+        int surface_tile = flow_angle > -999.0f ? side_tile : top_tile;
+        liquid_top_uvs_source(surface_tile, flow_angle,
                               &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
         world_tex_vertex(x0, (float)y + h00, z0, u00, v00);
         world_tex_vertex(x0, (float)y + h01, z1, u01, v01);
@@ -6215,7 +6192,9 @@ static void draw_liquid_block(int id, float x, float y, float z) {
     if (liquid_face_exposed(ix, iy, iz, 1)) {
         world_set_liquid_shade(is_water, ix, iz, 1.0f);
         float u00, v00, u01, v01, u11, v11, u10, v10;
-        liquid_top_uvs_source(top_tile, liquid_flow_angle_at(ix, iy, iz, is_water),
+        float flow_angle = liquid_flow_angle_at(ix, iy, iz, is_water);
+        int surface_tile = flow_angle > -999.0f ? side_tile : top_tile;
+        liquid_top_uvs_source(surface_tile, flow_angle,
                               &u00, &v00, &u01, &v01, &u11, &v11, &u10, &v10);
         glBegin(GL_QUADS);
         world_tex_vertex(x0, y + h00, z0, u00, v00);
