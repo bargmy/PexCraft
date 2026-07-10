@@ -434,6 +434,10 @@ static int armor_apply_damage_reduction(int incoming) {
 
 static int flat_index(int coord) { return coord - g_flat_world_origin_x; }
 static int flat_z_index(int coord) { return coord - g_flat_world_origin_z; }
+/* Physical voxel/light storage is addressed by absolute world coordinates.
+   Keep flat_index()/flat_z_index() as logical-window indexes for chunk metadata. */
+static int flat_storage_index(int coord) { return flat_storage_x_world(coord); }
+static int flat_storage_z_index(int coord) { return flat_storage_z_world(coord); }
 static int floor_div16(int v);
 static int stream_world_chunk_in_window(int wcx, int wcz, int origin_x, int origin_z);
 static int stream_local_chunk_x(int wcx);
@@ -465,6 +469,22 @@ static void flat_lighting_worker_wake(void);
 static void flat_lighting_worker_shutdown(void);
 static int flat_lighting_pending_dirty(void);
 static volatile int g_stream_remap_in_progress = 0;
+/* Protect the logical origin and all local-indexed chunk/section metadata while
+   the streaming service slides the active window.  The large voxel volumes are
+   absolute-coordinate rings and do not need this lock. */
+static CRITICAL_SECTION g_flat_world_map_cs;
+static int g_flat_world_map_cs_initialized = 0;
+static void flat_world_map_lock_ensure(void) {
+    if (g_flat_world_map_cs_initialized) return;
+    InitializeCriticalSection(&g_flat_world_map_cs);
+    g_flat_world_map_cs_initialized = 1;
+}
+static void flat_world_map_enter(void) {
+    if (g_flat_world_map_cs_initialized) EnterCriticalSection(&g_flat_world_map_cs);
+}
+static void flat_world_map_leave(void) {
+    if (g_flat_world_map_cs_initialized) LeaveCriticalSection(&g_flat_world_map_cs);
+}
 /* The light worker computes into private buffers, then briefly commits the
    finished result to the live light arrays.  Mesh jobs must not snapshot during
    that copy; if they do, their light version will also be rejected on install,
@@ -530,7 +550,9 @@ static int flat_chunk_generated_at_block(int x, int z) {
         z < g_flat_world_origin_z || z >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return 0;
     int lcx = flat_local_chunk_x(x);
     int lcz = flat_local_chunk_z(z);
-    return flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx];
+    if (!flat_local_chunk_valid(lcx, lcz) || !g_flat_world_chunk_generated[lcz][lcx]) return 0;
+    return g_flat_chunk_world_cx[lcz][lcx] == floor_div16(x) &&
+           g_flat_chunk_world_cz[lcz][lcx] == floor_div16(z);
 }
 
 static int flat_java_default_sky_light(void) {
@@ -574,7 +596,7 @@ static int flat_scan_section_nonempty(int lcx, int lcz, int sy) {
         int yi = flat_y_index(y);
         for (int z = z0; z < z0 + FLAT_RENDER_CHUNK; z++) {
             for (int x = x0; x < x0 + FLAT_RENDER_CHUNK; x++) {
-                if (g_flat_blocks[yi][z][x] != 0) return 1;
+                if (g_flat_blocks[yi][flat_storage_z_local(z)][flat_storage_x_local(x)] != 0) return 1;
             }
         }
     }
@@ -627,7 +649,7 @@ static int flat_get_block(int x, int y, int z) {
     }
     if (!flat_in_bounds(x, y, z)) return 0;
     if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
-    return g_flat_blocks[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
+    return g_flat_blocks[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)];
 }
 
 static int flat_get_meta(int x, int y, int z) {
@@ -643,7 +665,7 @@ static int flat_get_meta(int x, int y, int z) {
     }
     if (!flat_in_bounds(x, y, z)) return 0;
     if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
-    return g_flat_meta[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
+    return g_flat_meta[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)];
 }
 
 /* Fluid level metadata (Beta): 0 source, 1-7 flow decay, bit 0x8 = falling.
@@ -668,7 +690,7 @@ static int flat_get_level(int x, int y, int z) {
     }
     if (!flat_in_bounds(x, y, z)) return 0;
     if (!flat_chunk_has_render_data_at_block(x, z)) return 0;
-    return g_flat_levels[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
+    return g_flat_levels[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)];
 }
 
 
@@ -697,7 +719,7 @@ static int flat_get_sky_light(int x, int y, int z) {
     if (y > FLAT_WORLD_Y_MAX) return flat_java_default_sky_light();
     if (!flat_in_bounds(x, y, z)) return flat_java_default_sky_light();
     if (!flat_section_has_storage_at_block(x, y, z)) return flat_java_default_sky_light();
-    return g_flat_sky_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
+    return g_flat_sky_light[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)] & 15;
 }
 
 static int flat_get_block_light(int x, int y, int z) {
@@ -713,7 +735,7 @@ static int flat_get_block_light(int x, int y, int z) {
     }
     if (!flat_in_bounds(x, y, z)) return 0;
     if (!flat_section_has_storage_at_block(x, y, z)) return 0;
-    return g_flat_block_light[flat_y_index(y)][flat_z_index(z)][flat_index(x)] & 15;
+    return g_flat_block_light[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)] & 15;
 }
 
 static int flat_light_opacity_for_id(int id) {
@@ -1261,17 +1283,19 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
     g_flat_light_commit_in_progress = 1;
     for (int z = cz0; z <= cz1; ++z) {
         int fz = flat_z_index(z);
+        int pz = flat_storage_z_index(z);
         int lcz = fz / FLAT_RENDER_CHUNK;
         for (int x = cx0; x <= cx1; ++x) {
             int fx = flat_index(x);
+            int px = flat_storage_index(x);
             int lcx = fx / FLAT_RENDER_CHUNK;
             for (int y = y0; y <= y1; ++y) {
                 int yi = flat_y_index(y);
                 int idx = (((y - y0) * d) + (z - z0)) * w + (x - x0);
                 unsigned char new_sky = (unsigned char)(sky[idx] & 15);
                 unsigned char new_block = (unsigned char)(block[idx] & 15);
-                if ((g_flat_sky_light[yi][fz][fx] & 15) != new_sky ||
-                    (g_flat_block_light[yi][fz][fx] & 15) != new_block) {
+                if ((g_flat_sky_light[yi][pz][px] & 15) != new_sky ||
+                    (g_flat_block_light[yi][pz][px] & 15) != new_block) {
                     int lsy = yi / FLAT_RENDER_SECTION;
                     if (flat_section_index_valid(lsy) && flat_local_chunk_valid(lcx, lcz)) {
                         if (!changed_sections[lsy][lcz][lcx]) {
@@ -1286,8 +1310,8 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
                         if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == 0 && flat_section_index_valid(lsy - 1) && !changed_sections[lsy - 1][lcz][lcx]) { changed_sections[lsy - 1][lcz][lcx] = 1; changed_section_count++; }
                         if (((y - FLAT_WORLD_Y_MIN) & (FLAT_RENDER_SECTION - 1)) == FLAT_RENDER_SECTION - 1 && flat_section_index_valid(lsy + 1) && !changed_sections[lsy + 1][lcz][lcx]) { changed_sections[lsy + 1][lcz][lcx] = 1; changed_section_count++; }
                     }
-                    g_flat_sky_light[yi][fz][fx] = new_sky;
-                    g_flat_block_light[yi][fz][fx] = new_block;
+                    g_flat_sky_light[yi][pz][px] = new_sky;
+                    g_flat_block_light[yi][pz][px] = new_block;
                 }
             }
         }
@@ -1300,6 +1324,14 @@ static void flat_relight_region(int rx0, int rz0, int rx1, int rz1, int margin, 
             if (changed_chunks[lcz][lcx] && g_flat_world_chunk_generated[lcz][lcx]) {
                 g_flat_chunk_light_ready[lcz][lcx] = 1;
                 flat_bump_light_version(lcx, lcz);
+            }
+        }
+    }
+    for (int lcz = lcz0; lcz <= lcz1; ++lcz) {
+        for (int lcx = lcx0; lcx <= lcx1; ++lcx) {
+            if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) {
+                g_flat_chunk_light_ready[lcz][lcx] = 1;
+                g_flat_chunk_light_valid[lcz][lcx] = 1;
             }
         }
     }
@@ -1351,9 +1383,9 @@ static void flat_relight_fast_surface_chunk(int cx, int cz) {
     EnterCriticalSection(&g_flat_light_commit_cs);
     g_flat_light_commit_in_progress = 1;
     for (int z = z0; z <= z1; ++z) {
-        int fz = flat_z_index(z);
+        int fz = flat_storage_z_index(z);
         for (int x = x0; x <= x1; ++x) {
-            int fx = flat_index(x);
+            int fx = flat_storage_index(x);
             int light = flat_current_dimension_has_sky() ? 15 : 0;
             for (int y = FLAT_WORLD_Y_MAX; y >= FLAT_WORLD_Y_MIN; --y) {
                 int yi = flat_y_index(y);
@@ -1422,6 +1454,7 @@ static void flat_copy_light_buffers_to_world(int cx, int cz, const unsigned char
 
     int x0 = cx * 16 - g_flat_world_origin_x;
     int z0 = cz * 16 - g_flat_world_origin_z;
+    int px0 = flat_storage_x_world(cx * FLAT_RENDER_CHUNK);
     if (x0 >= 0 && z0 >= 0 && x0 + 16 <= FLAT_WORLD_SIZE && z0 + 16 <= FLAT_WORLD_SIZE) {
         /* Fast streaming commit path: copied chunks are full 16x16 columns inside
            the active terrain window.  The old triple-loop recomputed world x/z/y
@@ -1431,8 +1464,9 @@ static void flat_copy_light_buffers_to_world(int cx, int cz, const unsigned char
             const unsigned char *src_sky_y = sky + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK);
             const unsigned char *src_blk_y = block + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK);
             for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
-                unsigned char *dst_sky = &g_flat_sky_light[yi][z0 + lz][x0];
-                unsigned char *dst_blk = &g_flat_block_light[yi][z0 + lz][x0];
+                int pz = flat_storage_z_world(cz * FLAT_RENDER_CHUNK + lz);
+                unsigned char *dst_sky = &g_flat_sky_light[yi][pz][px0];
+                unsigned char *dst_blk = &g_flat_block_light[yi][pz][px0];
                 const unsigned char *ss = src_sky_y + lz * FLAT_RENDER_CHUNK;
                 const unsigned char *sb = src_blk_y + lz * FLAT_RENDER_CHUNK;
                 for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
@@ -1445,11 +1479,11 @@ static void flat_copy_light_buffers_to_world(int cx, int cz, const unsigned char
         for (int lx = 0; lx < 16; lx++) {
             int wx = cx * 16 + lx;
             if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-            int fx = flat_index(wx);
+            int fx = flat_storage_index(wx);
             for (int lz = 0; lz < 16; lz++) {
                 int wz = cz * 16 + lz;
                 if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-                int fz = flat_z_index(wz);
+                int fz = flat_storage_z_index(wz);
                 for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                     int bi = flat_chunk_buf_index(lx, y, lz);
                     int yi = flat_y_index(y);
@@ -1479,9 +1513,9 @@ static void flat_reset_sky_light(int lcx, int lcz) {
     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
         int yi = flat_y_index(y);
         for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
-            int fz = z0 + lz;
+            int fz = flat_storage_z_local(z0 + lz);
             for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
-                int fx = x0 + lx;
+                int fx = flat_storage_x_local(x0 + lx);
                 int id = g_flat_blocks[yi][fz][fx];
                 g_flat_sky_light[yi][fz][fx] = flat_current_dimension_has_sky() ? 15 : 0;
                 g_flat_block_light[yi][fz][fx] = (unsigned char)(flat_block_light_value_for_id(id) & 15);
@@ -1511,10 +1545,10 @@ static int flat_sky_light_needs_rebuild(int lcx, int lcz) {
        is deterministic: if a non-opaque open column cell should receive 15/14/etc,
        saved sky may be brighter because of lateral light, but it must never be
        below the direct-column value. */
-    for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz += 2) {
+    for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz++) {
         int wz = z0 + lz;
         int fz = flat_z_index(wz);
-        for (int lx = 0; lx < FLAT_RENDER_CHUNK; lx += 2) {
+        for (int lx = 0; lx < FLAT_RENDER_CHUNK; lx++) {
             int wx = x0 + lx;
             int fx = flat_index(wx);
             int direct = 15;
@@ -1591,6 +1625,7 @@ static void flat_mark_light_cell_changed(int x, int y, int z) {
     int lcz = fz / FLAT_RENDER_CHUNK;
     if (flat_local_chunk_valid(lcx, lcz)) {
         g_flat_chunk_light_ready[lcz][lcx] = g_flat_world_chunk_generated[lcz][lcx] ? 1 : 0;
+        g_flat_chunk_light_valid[lcz][lcx] = 0;
     }
     /* STRICT RENDER STATE:
        A changed light cell updates the saved light cache only.  It must not bump
@@ -1604,8 +1639,8 @@ static void flat_set_light_value_kind(int kind, int x, int y, int z, int value) 
     if (value > 15) value = 15;
     if (!flat_in_bounds(x, y, z)) return;
     int yi = flat_y_index(y);
-    int zi = flat_z_index(z);
-    int xi = flat_index(x);
+    int zi = flat_storage_z_index(z);
+    int xi = flat_storage_index(x);
     unsigned char *dst = (kind == FLAT_JAVA_LIGHT_KIND_SKY) ?
         &g_flat_sky_light[yi][zi][xi] :
         &g_flat_block_light[yi][zi][xi];
@@ -1749,8 +1784,8 @@ static void flat_set_preview_light_kind(int kind, int x, int y, int z, int value
     if (value > 15) value = 15;
     if (!flat_in_bounds(x, y, z)) return;
     int yi = flat_y_index(y);
-    int zi = flat_z_index(z);
-    int xi = flat_index(x);
+    int zi = flat_storage_z_index(z);
+    int xi = flat_storage_index(x);
     unsigned char *dst = (kind == FLAT_JAVA_LIGHT_KIND_SKY) ?
         &g_flat_sky_light[yi][zi][xi] :
         &g_flat_block_light[yi][zi][xi];
@@ -1871,7 +1906,11 @@ static long long flat_light_region_area(int x0, int z0, int x1, int z1) {
 }
 
 static int flat_light_regions_touch_or_overlap(const FlatLightDirtyRegion *r, int x0, int z0, int x1, int z1) {
-    const int gap = 2;
+    /* Merge true overlap, but keep adjacent chunk-sized repairs independent.
+       Treating a one-block gap as overlap caused a complete render-radius ring
+       to collapse back into one enormous rectangle before the worker could
+       apply its 16x16 latency cap. */
+    const int gap = 0;
     if (!r) return 0;
     return !(x1 + gap < r->x0 || x0 - gap > r->x1 ||
              z1 + gap < r->z0 || z0 - gap > r->z1);
@@ -2051,7 +2090,7 @@ static void flat_flush_pending_lighting(void) {
 
 static void flat_set_level_raw(int x, int y, int z, int level) {
     if (!flat_in_bounds(x, y, z)) return;
-    int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
+    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
     g_flat_levels[yi][zi][xi] = (unsigned char)(level & 15);
     if (block_is_liquid(g_flat_blocks[yi][zi][xi])) g_flat_meta[yi][zi][xi] = (unsigned char)(level & 15);
 }
@@ -2064,11 +2103,11 @@ static float fluid_decay_height(int level) {
 
 static void flat_set_meta_raw(int x, int y, int z, int meta) {
     if (!flat_in_bounds(x, y, z)) return;
-    unsigned char *cell = &g_flat_meta[flat_y_index(y)][flat_z_index(z)][flat_index(x)];
+    unsigned char *cell = &g_flat_meta[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)];
     if (*cell != (unsigned char)(meta & 255)) {
         *cell = (unsigned char)(meta & 255);
         if (block_is_liquid(flat_get_block(x, y, z))) {
-            g_flat_levels[flat_y_index(y)][flat_z_index(z)][flat_index(x)] = (unsigned char)(meta & 15);
+            g_flat_levels[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)] = (unsigned char)(meta & 15);
         }
         flat_mark_sections_dirty_near_block(x, y, z);
         if (flat_persistent_edit_active()) {
@@ -2354,11 +2393,11 @@ static void flat_copy_chunk_buffer(int cx, int cz, const unsigned char *buf) {
     for (int lx = 0; lx < 16; lx++) {
         int wx = cx * 16 + lx;
         if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-        int fx = flat_index(wx);
+        int fx = flat_storage_index(wx);
         for (int lz = 0; lz < 16; lz++) {
             int wz = cz * 16 + lz;
             if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-            int fz = flat_z_index(wz);
+            int fz = flat_storage_z_index(wz);
             for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                 g_flat_blocks[flat_y_index(y)][fz][fx] = buf[flat_chunk_buf_index(lx, y, lz)];
                 g_flat_meta[flat_y_index(y)][fz][fx] = 0;
@@ -2412,11 +2451,11 @@ static void flat_load_chunk_delta(int cx, int cz) {
             for (int lx = 0; lx < 16; lx++) {
                 int wx = cx * 16 + lx;
                 if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-                int fx = flat_index(wx);
+                int fx = flat_storage_index(wx);
                 for (int lz = 0; lz < 16; lz++) {
                     int wz = cz * 16 + lz;
                     if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-                    int fz = flat_z_index(wz);
+                    int fz = flat_storage_z_index(wz);
                     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                         int bi = flat_chunk_buf_index(lx, y, lz);
                         int id = g_flat_blocks[flat_y_index(y)][fz][fx];
@@ -2509,6 +2548,7 @@ static void flat_copy_chunk_buffers(int cx, int cz, const unsigned char *buf, co
     int lcz = stream_local_chunk_z(cz);
     int x0 = cx * 16 - g_flat_world_origin_x;
     int z0 = cz * 16 - g_flat_world_origin_z;
+    int px0 = flat_storage_x_world(cx * FLAT_RENDER_CHUNK);
     unsigned short nonempty_mask = 0;
 
     if (x0 >= 0 && z0 >= 0 && x0 + 16 <= FLAT_WORLD_SIZE && z0 + 16 <= FLAT_WORLD_SIZE) {
@@ -2522,9 +2562,10 @@ static void flat_copy_chunk_buffers(int cx, int cz, const unsigned char *buf, co
             const unsigned char *src_b_y = buf + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK);
             const unsigned char *src_m_y = meta ? (meta + yi * (FLAT_RENDER_CHUNK * FLAT_RENDER_CHUNK)) : NULL;
             for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
-                unsigned char *dst_b = &g_flat_blocks[yi][z0 + lz][x0];
-                unsigned char *dst_m = &g_flat_meta[yi][z0 + lz][x0];
-                unsigned char *dst_l = &g_flat_levels[yi][z0 + lz][x0];
+                int pz = flat_storage_z_world(cz * FLAT_RENDER_CHUNK + lz);
+                unsigned char *dst_b = &g_flat_blocks[yi][pz][px0];
+                unsigned char *dst_m = &g_flat_meta[yi][pz][px0];
+                unsigned char *dst_l = &g_flat_levels[yi][pz][px0];
                 const unsigned char *sb = src_b_y + lz * FLAT_RENDER_CHUNK;
                 const unsigned char *sm = src_m_y ? (src_m_y + lz * FLAT_RENDER_CHUNK) : NULL;
                 for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
@@ -2542,11 +2583,11 @@ static void flat_copy_chunk_buffers(int cx, int cz, const unsigned char *buf, co
         for (int lx = 0; lx < 16; lx++) {
             int wx = cx * 16 + lx;
             if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-            int fx = flat_index(wx);
+            int fx = flat_storage_index(wx);
             for (int lz = 0; lz < 16; lz++) {
                 int wz = cz * 16 + lz;
                 if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-                int fz = flat_z_index(wz);
+                int fz = flat_storage_z_index(wz);
                 for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                     int bi = flat_chunk_buf_index(lx, y, lz);
                     int yi = flat_y_index(y);
@@ -2586,11 +2627,11 @@ static void save_one_modified_flat_chunk(int lcx, int lcz) {
     for (int lx = 0; lx < 16; lx++) {
         int wx = cx * 16 + lx;
         if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-        int fx = flat_index(wx);
+        int fx = flat_storage_index(wx);
         for (int lz = 0; lz < 16; lz++) {
             int wz = cz * 16 + lz;
             if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-            int fz = flat_z_index(wz);
+            int fz = flat_storage_z_index(wz);
             for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                 int bi = flat_chunk_buf_index(lx, y, lz);
                 cur[bi] = (unsigned char)g_flat_blocks[flat_y_index(y)][fz][fx];
@@ -2907,7 +2948,12 @@ static int flat_chunk_light_ready(int lcx, int lcz) {
     /* Strict renderer rule: generated terrain is not drawable until a light
        buffer was explicitly published for that chunk.  Drawing terrain before
        this is what produced black/ghost chunk patches. */
-    return (g_flat_world_chunk_generated[lcz][lcx] && g_flat_chunk_light_ready[lcz][lcx]) ? 1 : 0;
+    int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+    int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+    return (g_flat_world_chunk_generated[lcz][lcx] &&
+            g_flat_chunk_world_cx[lcz][lcx] == wcx &&
+            g_flat_chunk_world_cz[lcz][lcx] == wcz &&
+            g_flat_chunk_light_ready[lcz][lcx]) ? 1 : 0;
 }
 
 static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sections) {
@@ -2915,6 +2961,7 @@ static void flat_publish_light_ready(int lcx, int lcz, int ready, int dirty_sect
     int old_ready = g_flat_chunk_light_ready[lcz][lcx];
     int new_ready = ready ? 1 : 0;
     g_flat_chunk_light_ready[lcz][lcx] = new_ready;
+    if (!new_ready) g_flat_chunk_light_valid[lcz][lcx] = 0;
 
     /* Strict light ownership: a light revision changes only on explicit publish.
        That makes lighting self-heal possible without random renderer churn. */
@@ -2993,7 +3040,7 @@ static int stream_generated_border_has_blocks(int cx, int cz, int sy, int dir) {
     for (int y = y0; y < y1; ++y) {
         for (int z = bz0; z < bz1; ++z) {
             for (int x = bx0; x < bx1; ++x) {
-                if (g_flat_blocks[y][z][x] != 0) return 1;
+                if (g_flat_blocks[y][flat_storage_z_local(z)][flat_storage_x_local(x)] != 0) return 1;
             }
         }
     }
@@ -3017,26 +3064,59 @@ static int g_stream_suppress_generated_chunk_light_dirty = 0;
    completed results waiting, that produced light_worker spikes around 1s+ and
    left generated chunks visually/gameplay-delayed even though terrain generation
    had already finished. */
-static int g_stream_runtime_chunk_light_repair = 0;
+static int g_stream_runtime_chunk_light_repair = 1;
+
+static void stream_queue_chunk_light_validation(int lcx, int lcz) {
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    int base_cx = floor_div16(g_flat_world_origin_x);
+    int base_cz = floor_div16(g_flat_world_origin_z);
+
+    /* A newly published chunk changes the light boundary for itself and each
+       already-present horizontal neighbor.  Queue deterministic, chunk-sized
+       repairs rather than relying on the renderer's sparse self-heal scan. */
+    static const int dx[5] = {0, -1, 1, 0, 0};
+    static const int dz[5] = {0, 0, 0, -1, 1};
+    for (int i = 0; i < 5; ++i) {
+        int nx = lcx + dx[i];
+        int nz = lcz + dz[i];
+        if (!flat_local_chunk_valid(nx, nz) || !g_flat_world_chunk_generated[nz][nx]) continue;
+        int wcx = base_cx + nx;
+        int wcz = base_cz + nz;
+        if (g_flat_chunk_world_cx[nz][nx] != wcx || g_flat_chunk_world_cz[nz][nx] != wcz) continue;
+        g_flat_chunk_light_valid[nz][nx] = 0;
+        flat_mark_light_dirty_region(wcx * FLAT_RENDER_CHUNK,
+                                     wcz * FLAT_RENDER_CHUNK,
+                                     wcx * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1,
+                                     wcz * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK - 1);
+    }
+}
 
 static void stream_mark_chunk_generated(int lcx, int lcz) {
     if (!flat_local_chunk_valid(lcx, lcz)) return;
-    pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, g_flat_world_origin_x / 16 + lcx, g_flat_world_origin_z / 16 + lcz);
+    int wcx = floor_div16(g_flat_world_origin_x) + lcx;
+    int wcz = floor_div16(g_flat_world_origin_z) + lcz;
+    pex_logf_trace("chunk generated mark local=%d,%d world=%d,%d", lcx, lcz, wcx, wcz);
     g_flat_world_chunk_generated[lcz][lcx] = 1;
+    g_flat_chunk_world_cx[lcz][lcx] = wcx;
+    g_flat_chunk_world_cz[lcz][lcx] = wcz;
     g_flat_chunk_initial_preload[lcz][lcx] = g_stream_generation_keep_completed ? 1 : 0;
 
     if (g_stream_generation_keep_completed) {
-        /* Initial preload chunks now arrive with computed per-column sky/block light
-           just like runtime async stream chunks.  Do not publish them as light-not-ready:
-           that created a second hidden light/mesh repair phase after the loading
-           screen and made the first seconds of gameplay feel delayed. */
+        /* Publish the worker's direct-light seed immediately, then validate the
+           chunk and its available neighbors through the bounded 16x16 lighting
+           queue.  Seeded light remains drawable, but it is no longer silently
+           treated as neighbor-perfect final light. */
         flat_publish_light_ready(lcx, lcz, 1, 1);
+        g_flat_chunk_light_valid[lcz][lcx] = 0;
+        stream_queue_chunk_light_validation(lcx, lcz);
     } else if (g_stream_suppress_generated_chunk_light_dirty) {
         /* Portal travel installs a target-dimension neighborhood synchronously so
            Teleporter-style search/create can run immediately.  Do not enqueue one
            full lighting region per installed chunk here; that merged into a huge
            32x32-window lighting pass and looked like a freeze right after entry. */
         flat_publish_light_ready(lcx, lcz, 1, 1);
+        g_flat_chunk_light_valid[lcz][lcx] = 0;
+        stream_queue_chunk_light_validation(lcx, lcz);
     } else {
         /* Runtime streaming installs light buffers that were generated with the
            chunk.  Do NOT enqueue one dirty light region per streamed chunk here.
@@ -3049,11 +3129,8 @@ static void stream_mark_chunk_generated(int lcx, int lcz) {
            with g_stream_runtime_chunk_light_repair, but the default path must make
            generated terrain visible immediately like Java's chunk render update. */
         flat_publish_light_ready(lcx, lcz, 1, 0);
-        if (g_stream_runtime_chunk_light_repair) {
-            int wcx = floor_div16(g_flat_world_origin_x) + lcx;
-            int wcz = floor_div16(g_flat_world_origin_z) + lcz;
-            flat_mark_light_dirty_region(wcx * 16, wcz * 16, wcx * 16 + 15, wcz * 16 + 15);
-        }
+        g_flat_chunk_light_valid[lcz][lcx] = 0;
+        if (g_stream_runtime_chunk_light_repair) stream_queue_chunk_light_validation(lcx, lcz);
     }
 
     /* Recompute one chunk's 16-bit occupancy mask once, then use O(1) tests.
@@ -3098,7 +3175,7 @@ static int flat_snow_layer_can_stay_at(int x, int y, int z) {
 
 static void flat_set_block_raw(int x, int y, int z, int id) {
     if (!flat_in_bounds(x, y, z)) return;
-    int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
+    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
     unsigned char *cell = &g_flat_blocks[yi][zi][xi];
     int old_id = *cell;
     /* Plain block writes clear both general metadata and liquid metadata.
@@ -3130,7 +3207,7 @@ static void wake_falling_blocks_around(int x, int y, int z);
 
 static void flat_set_fluid(int x, int y, int z, int id, int level) {
     if (!flat_in_bounds(x, y, z)) return;
-    int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
+    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
     unsigned char *cell = &g_flat_blocks[yi][zi][xi];
     int old_id = *cell;
     unsigned char *lvl = &g_flat_levels[yi][zi][xi];
@@ -3233,11 +3310,11 @@ static int wii_copy_chunk_to_flat(int cx, int cz) {
     for (int lx = 0; lx < FLAT_RENDER_CHUNK; ++lx) {
         int wx = cx * FLAT_RENDER_CHUNK + lx;
         if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-        int fx = flat_index(wx);
+        int fx = flat_storage_index(wx);
         for (int lz = 0; lz < FLAT_RENDER_CHUNK; ++lz) {
             int wz = cz * FLAT_RENDER_CHUNK + lz;
             if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-            int fz = flat_z_index(wz);
+            int fz = flat_storage_z_index(wz);
             int h = 3;
             if (g_world_type == 1) h = psp_safe_height_at(wx, wz, g_world_seed);
             if (h < 3) h = 3;
@@ -3381,11 +3458,11 @@ static void beta_preview_generate_world(void) {
                 for (int lx = 0; lx < 16; lx++) {
                     int wx = cx * 16 + lx;
                     if (wx < g_flat_world_origin_x || wx >= g_flat_world_origin_x + FLAT_WORLD_SIZE) continue;
-                    int fx = flat_index(wx);
+                    int fx = flat_storage_index(wx);
                     for (int lz = 0; lz < 16; lz++) {
                         int wz = cz * 16 + lz;
                         if (wz < g_flat_world_origin_z || wz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) continue;
-                        int fz = flat_z_index(wz);
+                        int fz = flat_storage_z_index(wz);
                         for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
                             int id = (y < 128) ? get_block_local(beta_blocks, lx, y, lz) : 0;
                             g_flat_blocks[flat_y_index(y)][fz][fx] = (unsigned char)id;
@@ -3453,7 +3530,7 @@ static void normal_place_tree(int x, int z, int ground_y) {
     }
 
     for (int y = ground_y + 1; y <= ground_y + trunk_h; y++) {
-        g_flat_blocks[flat_y_index(y)][flat_z_index(z)][flat_index(x)] = BLOCK_LOG;
+        g_flat_blocks[flat_y_index(y)][flat_storage_z_index(z)][flat_storage_index(x)] = BLOCK_LOG;
     }
 
     int top = ground_y + trunk_h;
@@ -3465,7 +3542,7 @@ static void normal_place_tree(int x, int z, int ground_y) {
                 int lx = x + dx, lz = z + dz;
                 if (!flat_in_bounds(lx, yy, lz)) continue;
                 if (flat_get_block(lx, yy, lz) == 0) {
-                    g_flat_blocks[flat_y_index(yy)][flat_z_index(lz)][flat_index(lx)] = BLOCK_LEAVES;
+                    g_flat_blocks[flat_y_index(yy)][flat_storage_z_index(lz)][flat_storage_index(lx)] = BLOCK_LEAVES;
                 }
             }
         }
@@ -3505,6 +3582,7 @@ static void flat_prepare_initial_generation(void) {
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
@@ -3724,6 +3802,7 @@ static void flat_generate_origin_blocks(void) {
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
@@ -3866,6 +3945,7 @@ static void flat_generate_traceplace_area(int center_wcx, int center_wcz, int ra
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_section_mesh_light_version, 0, sizeof(g_flat_section_mesh_light_version));
@@ -3985,7 +4065,7 @@ static void fluid_wake_at(int x, int y, int z) {
     int id = flat_get_block(x, y, z);
     if (id == BLOCK_STILL_WATER || id == BLOCK_STILL_LAVA) {
         int level = flat_get_level(x, y, z);
-        int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
+        int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
         g_flat_blocks[yi][zi][xi] = (unsigned char)(id == BLOCK_STILL_WATER ? BLOCK_WATER : BLOCK_LAVA);
         g_flat_levels[yi][zi][xi] = (unsigned char)(level & 15);
         g_flat_meta[yi][zi][xi] = (unsigned char)(level & 15);
@@ -4580,6 +4660,14 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
     int x0 = (int)floorf(minx), x1 = (int)floorf(maxx - 0.001f);
     int y0 = (int)floorf(miny), y1 = (int)floorf(maxy - 0.001f);
     int z0 = (int)floorf(minz), z1 = (int)floorf(maxz - 0.001f);
+    int collided = 0;
+
+    /* Origin/local chunk metadata can slide on the stream-service thread.
+       Ring-addressed voxel storage itself is stable, but collision must see the
+       origin and generated-slot table from the same publication.  The remap now
+       only moves small metadata tables, so this lock is normally held for well
+       under a millisecond instead of the old hundreds-of-MiB copy duration. */
+    flat_world_map_enter();
     for (int y = y0 - 1; y <= y1; y++) {
         for (int z = z0; z <= z1; z++) {
             for (int x = x0; x <= x1; x++) {
@@ -4589,25 +4677,40 @@ static int flat_player_aabb_collides(float px, float py, float pz) {
                    non-solid so this cannot trap the player inside invisible
                    chunk walls. */
                 if (!flat_chunk_generated_at_block(x, z) && y <= (int)floorf(feet)) {
-                    return 1;
+                    collided = 1;
+                    goto done;
                 }
 #if defined(PEX_PLATFORM_PSP)
-                if (psp_spawn_surface_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
+                if (psp_spawn_surface_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) {
+                    collided = 1;
+                    goto done;
+                }
 #endif
                 int bid = flat_get_block(x, y, z);
                 if (block_is_door_id(bid)) {
-                    if (door_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
+                    if (door_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z)) {
+                        collided = 1;
+                        goto done;
+                    }
                 } else if (block_has_custom_collision(bid)) {
-                    if (block_custom_collision_intersects(bid, minx, maxx, miny, maxy, minz, maxz, x, y, z)) return 1;
+                    if (block_custom_collision_intersects(bid, minx, maxx, miny, maxy, minz, maxz, x, y, z)) {
+                        collided = 1;
+                        goto done;
+                    }
                 } else if (flat_block_is_solid(bid)) {
                     if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz,
                                             (float)x, (float)y, (float)z,
-                                            (float)(x + 1), (float)(y + 1), (float)(z + 1))) return 1;
+                                            (float)(x + 1), (float)(y + 1), (float)(z + 1))) {
+                        collided = 1;
+                        goto done;
+                    }
                 }
             }
         }
     }
-    return 0;
+done:
+    flat_world_map_leave();
+    return collided;
 }
 
 
@@ -10059,10 +10162,33 @@ static void stream_async_submit_next(void) {
            g_stream_gen_queue_index < g_stream_gen_queue_count &&
            g_stream_async_job_count < STREAM_ASYNC_JOB_RING &&
            g_stream_async_job_count < job_backlog_limit) {
+        int queue_i = g_stream_gen_queue_index++;
+        int wcx = g_stream_gen_queue_cx[queue_i];
+        int wcz = g_stream_gen_queue_cz[queue_i];
+
+        /* A moving player can make an unsubmitted background entry obsolete.
+           Skip it before worker submission rather than spending generation time
+           on a chunk that can no longer install into the active cache. */
+        if (!stream_world_chunk_in_window(wcx, wcz, g_flat_world_origin_x, g_flat_world_origin_z)) {
+            g_stream_gen_queue_cx[queue_i] = 0x7fffffff;
+            g_stream_gen_queue_cz[queue_i] = 0x7fffffff;
+            continue;
+        }
+        int lcx = stream_local_chunk_x(wcx);
+        int lcz = stream_local_chunk_z(wcz);
+        if (flat_local_chunk_valid(lcx, lcz) &&
+            g_flat_world_chunk_generated[lcz][lcx] &&
+            g_flat_chunk_world_cx[lcz][lcx] == wcx &&
+            g_flat_chunk_world_cz[lcz][lcx] == wcz) {
+            g_stream_gen_queue_cx[queue_i] = 0x7fffffff;
+            g_stream_gen_queue_cz[queue_i] = 0x7fffffff;
+            continue;
+        }
+
         StreamAsyncJob *job = &g_stream_async_jobs[g_stream_async_job_tail];
         memset(job, 0, sizeof(*job));
-        job->cx = g_stream_gen_queue_cx[g_stream_gen_queue_index];
-        job->cz = g_stream_gen_queue_cz[g_stream_gen_queue_index];
+        job->cx = wcx;
+        job->cz = wcz;
         job->type = g_world_type;
         job->dimension = g_current_dimension;
         job->seed = g_world_seed;
@@ -10070,7 +10196,6 @@ static void stream_async_submit_next(void) {
         snprintf(job->world_dir, sizeof(job->world_dir), "%s", g_loaded_world_dir);
         g_stream_async_job_tail = (g_stream_async_job_tail + 1) % STREAM_ASYNC_JOB_RING;
         g_stream_async_job_count++;
-        g_stream_gen_queue_index++;
         submitted++;
     }
     LeaveCriticalSection(&g_stream_async_cs);
@@ -10136,9 +10261,15 @@ static int stream_generation_near_player_pending(int radius) {
 
     int pcx = floor_div16((int)floorf(g_player_x));
     int pcz = floor_div16((int)floorf(g_player_z));
-    int begin = g_stream_gen_queue_index;
-    if (begin < 0) begin = 0;
-    for (int i = begin; i < g_stream_gen_queue_count; ++i) {
+    /* Submitted jobs remain in the prefix of the queue until the whole batch
+       drains.  Scan that prefix too; checking only the unsubmitted tail made
+       collision/suffocation logic believe a nearby chunk was no longer pending
+       as soon as a worker picked it up. */
+    for (int i = 0; i < g_stream_gen_queue_count; ++i) {
+        if (g_stream_gen_queue_cx[i] == 0x7fffffff) continue;
+        int lcx = stream_local_chunk_x(g_stream_gen_queue_cx[i]);
+        int lcz = stream_local_chunk_z(g_stream_gen_queue_cz[i]);
+        if (flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx]) continue;
         int dx = g_stream_gen_queue_cx[i] - pcx;
         int dz = g_stream_gen_queue_cz[i] - pcz;
         if (dx < 0) dx = -dx;
@@ -10183,7 +10314,10 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     int old_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    int old_world_cx[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    int old_world_cz[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    int old_light_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     unsigned int old_light_versions[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_initial_preload[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
     int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
@@ -10210,7 +10344,10 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     memcpy(old_valid, g_flat_world_chunk_valid, sizeof(old_valid));
     memcpy(old_has_liquid, g_flat_world_chunk_has_liquid, sizeof(old_has_liquid));
     memcpy(old_generated, g_flat_world_chunk_generated, sizeof(old_generated));
+    memcpy(old_world_cx, g_flat_chunk_world_cx, sizeof(old_world_cx));
+    memcpy(old_world_cz, g_flat_chunk_world_cz, sizeof(old_world_cz));
     memcpy(old_light_ready, g_flat_chunk_light_ready, sizeof(old_light_ready));
+    memcpy(old_light_valid, g_flat_chunk_light_valid, sizeof(old_light_valid));
     memcpy(old_light_versions, g_flat_chunk_light_version, sizeof(old_light_versions));
     memcpy(old_initial_preload, g_flat_chunk_initial_preload, sizeof(old_initial_preload));
     memcpy(old_modified, g_flat_world_chunk_modified, sizeof(old_modified));
@@ -10255,7 +10392,10 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     memset(g_flat_world_chunk_valid, 0, sizeof(g_flat_world_chunk_valid));
     memset(g_flat_world_chunk_has_liquid, 0, sizeof(g_flat_world_chunk_has_liquid));
     memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_chunk_world_cx, 0, sizeof(g_flat_chunk_world_cx));
+    memset(g_flat_chunk_world_cz, 0, sizeof(g_flat_chunk_world_cz));
     memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
     memset(g_flat_chunk_light_version, 0, sizeof(g_flat_chunk_light_version));
     memset(g_flat_chunk_initial_preload, 0, sizeof(g_flat_chunk_initial_preload));
     memset(g_flat_world_chunk_modified, 0, sizeof(g_flat_world_chunk_modified));
@@ -10290,7 +10430,10 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
                 g_flat_world_chunk_valid[ncz][ncx] = old_valid[ocz][ocx];
                 g_flat_world_chunk_has_liquid[ncz][ncx] = old_has_liquid[ocz][ocx];
                 g_flat_world_chunk_generated[ncz][ncx] = old_generated[ocz][ocx];
+                g_flat_chunk_world_cx[ncz][ncx] = old_world_cx[ocz][ocx];
+                g_flat_chunk_world_cz[ncz][ncx] = old_world_cz[ocz][ocx];
                 g_flat_chunk_light_ready[ncz][ncx] = old_light_ready[ocz][ocx];
+                g_flat_chunk_light_valid[ncz][ncx] = old_light_valid[ocz][ocx];
                 g_flat_chunk_light_version[ncz][ncx] = old_light_versions[ocz][ocx];
                 g_flat_chunk_initial_preload[ncz][ncx] = old_initial_preload[ocz][ocx];
                 g_flat_world_chunk_modified[ncz][ncx] = old_modified[ocz][ocx];
@@ -10309,7 +10452,10 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
                 g_flat_world_chunk_valid[ncz][ncx] = 0;
                 g_flat_world_chunk_has_liquid[ncz][ncx] = 0;
                 g_flat_world_chunk_generated[ncz][ncx] = 0;
+                g_flat_chunk_world_cx[ncz][ncx] = wcx;
+                g_flat_chunk_world_cz[ncz][ncx] = wcz;
                 g_flat_chunk_light_ready[ncz][ncx] = 0;
+                g_flat_chunk_light_valid[ncz][ncx] = 0;
                 g_flat_chunk_light_version[ncz][ncx] = 0;
                 g_flat_chunk_initial_preload[ncz][ncx] = 0;
                 g_flat_world_chunk_modified[ncz][ncx] = 0;
@@ -10364,84 +10510,21 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
 
 static void stream_remap_block_storage(int old_origin_x, int old_origin_z,
                                                        int new_origin_x, int new_origin_z) {
-    int ox0 = old_origin_x > new_origin_x ? old_origin_x : new_origin_x;
-    int oz0 = old_origin_z > new_origin_z ? old_origin_z : new_origin_z;
-    int ox1 = (old_origin_x + FLAT_WORLD_SIZE) < (new_origin_x + FLAT_WORLD_SIZE) ?
-              (old_origin_x + FLAT_WORLD_SIZE) : (new_origin_x + FLAT_WORLD_SIZE);
-    int oz1 = (old_origin_z + FLAT_WORLD_SIZE) < (new_origin_z + FLAT_WORLD_SIZE) ?
-              (old_origin_z + FLAT_WORLD_SIZE) : (new_origin_z + FLAT_WORLD_SIZE);
-    int row_len = ox1 - ox0;
-
-    if (row_len <= 0 || oz1 <= oz0) {
-        memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
-        memset(g_flat_meta, 0, sizeof(g_flat_meta));
-        memset(g_flat_levels, 0, sizeof(g_flat_levels));
-        memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
-        memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
-        memset(g_flat_chunk_environment_light_due, 0, sizeof(g_flat_chunk_environment_light_due));
-        return;
-    }
-
-    int z_step = (new_origin_z < old_origin_z) ? -1 : 1;
-    int z_begin = (z_step > 0) ? oz0 : (oz1 - 1);
-    int z_end = (z_step > 0) ? oz1 : (oz0 - 1);
-    int old_fx = ox0 - old_origin_x;
-    int new_fx = ox0 - new_origin_x;
-
-    for (int y = 0; y < FLAT_WORLD_HEIGHT; y++) {
-        for (int z = z_begin; z != z_end; z += z_step) {
-            int old_fz = z - old_origin_z;
-            int new_fz = z - new_origin_z;
-            memmove(&g_flat_blocks[y][new_fz][new_fx], &g_flat_blocks[y][old_fz][old_fx], (size_t)row_len);
-            memmove(&g_flat_meta[y][new_fz][new_fx], &g_flat_meta[y][old_fz][old_fx], (size_t)row_len);
-            memmove(&g_flat_levels[y][new_fz][new_fx], &g_flat_levels[y][old_fz][old_fx], (size_t)row_len);
-            memmove(&g_flat_sky_light[y][new_fz][new_fx], &g_flat_sky_light[y][old_fz][old_fx], (size_t)row_len);
-            memmove(&g_flat_block_light[y][new_fz][new_fx], &g_flat_block_light[y][old_fz][old_fx], (size_t)row_len);
-        }
-
-        int dz = new_origin_z - old_origin_z;
-        if (dz > 0) {
-            int n = dz;
-            if (n > FLAT_WORLD_SIZE) n = FLAT_WORLD_SIZE;
-            memset(&g_flat_blocks[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_meta[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_levels[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_sky_light[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_block_light[y][FLAT_WORLD_SIZE - n][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-        } else if (dz < 0) {
-            int n = -dz;
-            if (n > FLAT_WORLD_SIZE) n = FLAT_WORLD_SIZE;
-            memset(&g_flat_blocks[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_meta[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_levels[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_sky_light[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-            memset(&g_flat_block_light[y][0][0], 0, (size_t)n * FLAT_WORLD_SIZE);
-        }
-
-        int dx = new_origin_x - old_origin_x;
-        if (dx > 0) {
-            int n = dx;
-            if (n > FLAT_WORLD_SIZE) n = FLAT_WORLD_SIZE;
-            int x0 = FLAT_WORLD_SIZE - n;
-            for (int z = 0; z < FLAT_WORLD_SIZE; z++) {
-                memset(&g_flat_blocks[y][z][x0], 0, (size_t)n);
-                memset(&g_flat_meta[y][z][x0], 0, (size_t)n);
-                memset(&g_flat_levels[y][z][x0], 0, (size_t)n);
-                memset(&g_flat_sky_light[y][z][x0], 0, (size_t)n);
-                memset(&g_flat_block_light[y][z][x0], 0, (size_t)n);
-            }
-        } else if (dx < 0) {
-            int n = -dx;
-            if (n > FLAT_WORLD_SIZE) n = FLAT_WORLD_SIZE;
-            for (int z = 0; z < FLAT_WORLD_SIZE; z++) {
-                memset(&g_flat_blocks[y][z][0], 0, (size_t)n);
-                memset(&g_flat_meta[y][z][0], 0, (size_t)n);
-                memset(&g_flat_levels[y][z][0], 0, (size_t)n);
-                memset(&g_flat_sky_light[y][z][0], 0, (size_t)n);
-                memset(&g_flat_block_light[y][z][0], 0, (size_t)n);
-            }
-        }
-    }
+    /*
+     * Ring storage: block/meta/fluid/light cells are keyed by absolute world
+     * coordinates modulo FLAT_WORLD_SIZE.  Overlapping world coordinates keep
+     * the same physical address across an origin slide, so there is nothing to
+     * copy or clear here.  Newly exposed chunk slots are marked ungenerated by
+     * stream_remap_render_chunks() and are fully overwritten when their worker
+     * result is installed.
+     *
+     * The previous implementation memmoved almost the entire five-volume world
+     * for every one-chunk slide (~310 MiB payload, ~600 MiB read/write traffic).
+     */
+    (void)old_origin_x;
+    (void)old_origin_z;
+    (void)new_origin_x;
+    (void)new_origin_z;
 }
 
 static int stream_local_chunk_x(int wcx) {
@@ -10489,7 +10572,9 @@ static void stream_queue_add_chunk(int wcx, int wcz) {
     int lcx = stream_local_chunk_x(wcx);
     int lcz = stream_local_chunk_z(wcz);
     if (lcx >= 0 && lcx < FLAT_RENDER_CHUNKS && lcz >= 0 && lcz < FLAT_RENDER_CHUNKS &&
-        g_flat_world_chunk_generated[lcz][lcx]) return;
+        g_flat_world_chunk_generated[lcz][lcx] &&
+        g_flat_chunk_world_cx[lcz][lcx] == wcx &&
+        g_flat_chunk_world_cz[lcz][lcx] == wcz) return;
     if (stream_queue_contains_chunk(wcx, wcz)) return;
     g_stream_gen_queue_cx[g_stream_gen_queue_count] = wcx;
     g_stream_gen_queue_cz[g_stream_gen_queue_count] = wcz;
@@ -10519,10 +10604,26 @@ static void stream_player_chunk_direction(float *out_dx, float *out_dz) {
     *out_dz = dz / len;
 }
 
+static int stream_player_lookahead_chunks(int radius) {
+    /* Motion is expressed in blocks/tick.  Keep the old eight-chunk corridor
+       for normal walking, but extend it for sprint/fly/knockback so generation
+       is based on where the player will be rather than only where they are.
+       The cap remains the requested render radius, so this cannot starve the
+       visible square with work outside it. */
+    float speed = sqrtf(g_player_motion_x * g_player_motion_x +
+                        g_player_motion_z * g_player_motion_z);
+    int ahead = radius / 2;
+    if (ahead < 6) ahead = 6;
+    int predicted = 4 + (int)ceilf((speed * 60.0f) / (float)FLAT_RENDER_CHUNK);
+    if (predicted > ahead) ahead = predicted;
+    if (ahead > radius) ahead = radius;
+    if (ahead < 2) ahead = 2;
+    return ahead;
+}
+
 static void stream_queue_chunk_safety(int base_cx, int base_cz, int pcx, int pcz, int radius) {
     if (radius < 2) radius = 2;
-    int ahead = radius;
-    if (ahead > 8) ahead = 8;
+    int ahead = stream_player_lookahead_chunks(radius);
     int width = 2;
     if (radius <= 2) width = 1;
 
@@ -10577,6 +10678,11 @@ static int stream_chunk_priority_score(int wcx, int wcz) {
     float dist2 = vx * vx + vz * vz;
 
     int score = (int)(dist2 * 32.0f + side * 10.0f - ahead * 24.0f);
+    /* Reserve the front of the queue for collision-critical terrain.  A
+       distant chunk at the edge of the render radius must never outrank the
+       3x3 player footprint or the first few chunks in the movement corridor. */
+    if (fabsf(vx) <= 1.0f && fabsf(vz) <= 1.0f) score -= 4096;
+    else if (ahead >= -0.25f && ahead <= 4.5f && side <= 1.75f) score -= 2048;
     if (ahead < -0.25f) score += 512;
     return score;
 }
@@ -10654,7 +10760,9 @@ static int stream_queue_visible_chunks_internal(int clear_existing, int max_add)
                 int lcx = pcx + dx;
                 int lcz = pcz + dz;
                 if (lcx < 0 || lcx >= FLAT_RENDER_CHUNKS || lcz < 0 || lcz >= FLAT_RENDER_CHUNKS) continue;
-                if (g_flat_world_chunk_generated[lcz][lcx]) continue;
+                if (g_flat_world_chunk_generated[lcz][lcx] &&
+                    g_flat_chunk_world_cx[lcz][lcx] == base_cx + lcx &&
+                    g_flat_chunk_world_cz[lcz][lcx] == base_cz + lcz) continue;
                 int before = g_stream_gen_queue_count;
                 stream_queue_add_chunk(base_cx + lcx, base_cz + lcz);
                 if (g_stream_gen_queue_count > before) {
@@ -10679,8 +10787,9 @@ static int stream_append_visible_chunks(void) {
 }
 
 static void stream_queue_missing_chunks(int old_origin_x, int old_origin_z) {
-    stream_generation_queue_clear();
-
+    /* Preserve submitted/active absolute-coordinate jobs across a one-chunk
+       window slide.  Clearing here used to bump the global epoch and throw away
+       useful worker results. */
     int pcx = stream_local_chunk_x(floor_div16((int)floorf(g_player_x)));
     int pcz = stream_local_chunk_z(floor_div16((int)floorf(g_player_z)));
     if (pcx < 0) pcx = 0;
@@ -10710,6 +10819,7 @@ static void stream_queue_missing_chunks(int old_origin_x, int old_origin_z) {
             }
         }
     }
+    stream_reprioritize_queue();
 }
 
 static int stream_generate_initial_batch(void) {
@@ -11094,6 +11204,7 @@ static void world_stream_service_ensure(void) {
     return;
 #else
     if (g_world_stream_service_initialized) return;
+    flat_world_map_lock_ensure();
     flat_lighting_worker_ensure();
     g_world_stream_service_initialized = 1;
     g_world_stream_service_stop = 0;
@@ -11130,6 +11241,10 @@ static void world_stream_service_shutdown(void) {
     g_world_stream_service_stop = 0;
     g_world_stream_service_busy = 0;
     flat_lighting_worker_shutdown();
+    if (g_flat_world_map_cs_initialized) {
+        DeleteCriticalSection(&g_flat_world_map_cs);
+        g_flat_world_map_cs_initialized = 0;
+    }
     pex_logf("world stream service stopped");
 #endif
 }
@@ -11166,15 +11281,13 @@ static void update_infinite_world_streaming(void) {
     } else {
         process_stream_generation_queue();
     }
-    if (stream_generation_active()) return;
-
-    /* After the fast spawn-area load, fill the requested render-distance area in
-       small batches.  The old code queued the whole render radius at once, which
-       produced logs like total=312/remaining=202 and made world systems feel
-       delayed even though the frame time was low. */
-    if (stream_queue_visible_chunks()) {
-        process_stream_generation_queue();
-        return;
+    /* Do not wait for the entire generation pipeline to become idle before
+       sliding the active window.  Worker jobs are keyed by absolute chunk
+       coordinates and useful results remain installable after a slide. */
+    if (!stream_generation_active()) {
+        /* After the fast spawn-area load, fill the requested render-distance area
+           in small batches rather than queuing the entire radius at once. */
+        if (stream_queue_visible_chunks()) process_stream_generation_queue();
     }
 
 #if defined(PEX_PLATFORM_WII)
@@ -11226,16 +11339,15 @@ static void update_infinite_world_streaming(void) {
 
     g_stream_remap_in_progress = 1;
     g_stream_suffocation_grace_until_tick = g_ingame_ticks + 20;
+    flat_world_map_enter();
     g_flat_world_origin_x = new_origin_x;
     g_flat_world_origin_z = new_origin_z;
     stream_remap_render_chunks(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
 
-    /* Preserve edited/generated blocks in the overlap of the old and new window.
-       This used to copy the entire 3D world into two huge scratch arrays and then
-       copy it back byte-by-byte, which caused the hitch during terrain streaming.
-       The row-copy remap keeps only a small 2D scratch plane and leaves exposed
-       strips as air for the async generator to fill. */
+    /* Block/meta/fluid/light storage is an absolute-coordinate ring.  This call
+       intentionally performs no bulk copy; only local-indexed metadata moved. */
     stream_remap_block_storage(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    flat_world_map_leave();
     g_stream_remap_in_progress = 0;
     if (g_stream_suffocation_grace_until_tick < g_ingame_ticks + 20) g_stream_suffocation_grace_until_tick = g_ingame_ticks + 20;
     flat_lighting_worker_wake();

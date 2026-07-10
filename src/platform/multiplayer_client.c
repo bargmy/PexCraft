@@ -1076,9 +1076,9 @@ static uint32_t pex_mp_hash_local_chunk(int chunk_x, int chunk_z) {
                 int wx = base_x + lx;
                 unsigned char b = 0, level = 0, meta = 0;
                 if (flat_in_bounds(wx, y, wz)) {
-                    b = g_flat_blocks[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)];
-                    level = g_flat_levels[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)];
-                    meta = g_flat_meta[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)];
+                    b = g_flat_blocks[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)];
+                    level = g_flat_levels[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)];
+                    meta = g_flat_meta[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)];
                 }
                 h = pex_mp_hash_triplet(h, b, level, meta);
             }
@@ -1198,9 +1198,9 @@ static int pex_mp_cache_load_chunk(int chunk_x, int chunk_z, uint32_t expected_h
                 int idx = y * PEX_NET_CHUNK_SIZE * PEX_NET_CHUNK_SIZE + lz * PEX_NET_CHUNK_SIZE + lx;
                 if (!flat_in_bounds(wx, y, wz)) continue;
                 unsigned char bid = blocks[idx];
-                g_flat_blocks[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = bid;
-                g_flat_levels[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? (levels[idx] & 15) : 0;
-                g_flat_meta[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? (levels[idx] & 15) : meta[idx];
+                g_flat_blocks[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = bid;
+                g_flat_levels[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? (levels[idx] & 15) : 0;
+                g_flat_meta[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? (levels[idx] & 15) : meta[idx];
             }
         }
     }
@@ -1229,9 +1229,9 @@ static void pex_mp_cache_save_chunk(int chunk_x, int chunk_z) {
                 int wx = base_x + lx;
                 int idx = y * PEX_NET_CHUNK_SIZE * PEX_NET_CHUNK_SIZE + lz * PEX_NET_CHUNK_SIZE + lx;
                 if (flat_in_bounds(wx, y, wz)) {
-                    blocks[idx] = g_flat_blocks[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)];
-                    levels[idx] = g_flat_levels[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)];
-                    meta[idx] = g_flat_meta[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)];
+                    blocks[idx] = g_flat_blocks[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)];
+                    levels[idx] = g_flat_levels[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)];
+                    meta[idx] = g_flat_meta[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)];
                 } else {
                     blocks[idx] = levels[idx] = meta[idx] = 0;
                 }
@@ -1674,8 +1674,8 @@ static void pex_mp_bedrock_on_level_event(void *userdata, const PexMcpeLevelEven
         int meta = (event->data >> 8) & 0xff;
         if (id > 0 && flat_in_bounds(x, y, z)) {
             int yi = flat_y_index(y);
-            int zi = flat_z_index(z);
-            int xi = flat_index(x);
+            int zi = flat_storage_z_index(z);
+            int xi = flat_storage_index(x);
             unsigned char old = g_flat_blocks[yi][zi][xi];
             g_flat_blocks[yi][zi][xi] = (unsigned char)id;
             g_flat_meta[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)(meta & 15) : (unsigned char)meta;
@@ -1740,7 +1740,7 @@ static void pex_mp_bedrock_on_gamemode(void *userdata, int gamemode) {
 static void pex_mp_bedrock_on_block_update(void *userdata, int x, int y, int z, int id, int meta) {
     (void)userdata;
     if (!flat_in_bounds(x, y, z)) return;
-    int yi = flat_y_index(y), zi = flat_z_index(z), xi = flat_index(x);
+    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
     unsigned char old = g_flat_blocks[yi][zi][xi];
     g_flat_blocks[yi][zi][xi] = (unsigned char)id;
     g_flat_meta[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)(meta & 15) : (unsigned char)meta;
@@ -2091,9 +2091,9 @@ static void pex_net_apply_chunk(const PexNetChunk *chunk) {
                 unsigned char bid = chunk->blocks[idx];
                 unsigned char level = chunk->levels[idx] & 15;
                 unsigned char meta = chunk->meta[idx];
-                g_flat_blocks[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = bid;
-                g_flat_levels[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? level : 0;
-                g_flat_meta[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? level : meta;
+                g_flat_blocks[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = bid;
+                g_flat_levels[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? level : 0;
+                g_flat_meta[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? level : meta;
             }
         }
     }
@@ -2132,9 +2132,9 @@ static void pex_net_apply_chunk_rle(const void *payload, uint32_t size) {
             unsigned char bid = runs[r].block;
             unsigned char level = runs[r].level & 15;
             unsigned char meta = runs[r].meta;
-            g_flat_blocks[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = bid;
-            g_flat_levels[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? level : 0;
-            g_flat_meta[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? level : meta;
+            g_flat_blocks[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = bid;
+            g_flat_levels[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? level : 0;
+            g_flat_meta[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? level : meta;
         }
     }
     if (idx == PEX_NET_CHUNK_BLOCKS) {
@@ -2181,14 +2181,16 @@ static void pex_net_apply_chunk_section_rle(const void *payload, uint32_t size) 
             unsigned char level = runs[r].level & 15;
             unsigned char meta = runs[r].meta;
             if (bid) non_empty = 1;
-            g_flat_blocks[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = bid;
-            g_flat_levels[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? level : 0;
-            g_flat_meta[flat_y_index(y)][flat_z_index(wz)][flat_index(wx)] = block_is_liquid(bid) ? level : meta;
+            g_flat_blocks[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = bid;
+            g_flat_levels[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? level : 0;
+            g_flat_meta[flat_y_index(y)][flat_storage_z_index(wz)][flat_storage_index(wx)] = block_is_liquid(bid) ? level : meta;
         }
     }
     if (idx != PEX_NET_SECTION_BLOCKS) return;
     if (flat_local_chunk_valid(lcx, lcz) && flat_section_index_valid(rh.section_y)) {
         g_flat_world_chunk_generated[lcz][lcx] = 1;
+        g_flat_chunk_world_cx[lcz][lcx] = rh.chunk_x;
+        g_flat_chunk_world_cz[lcz][lcx] = rh.chunk_z;
         if (non_empty) g_flat_chunk_section_non_empty_mask[lcz][lcx] |= (unsigned short)(1u << rh.section_y);
         else g_flat_chunk_section_non_empty_mask[lcz][lcx] &= (unsigned short)~(1u << rh.section_y);
         g_flat_world_chunk_dirty[lcz][lcx] = 1;
@@ -2240,7 +2242,7 @@ static void pex_net_apply_block_change(const PexNetBlockChange *ch) {
     unsigned char bid = (unsigned char)ch->block_id;
     unsigned char level = (unsigned char)(ch->level & 15);
     unsigned char meta = (unsigned char)(ch->meta & 255);
-    int yi = flat_y_index(ch->y), zi = flat_z_index(ch->z), xi = flat_index(ch->x);
+    int yi = flat_y_index(ch->y), zi = flat_storage_z_index(ch->z), xi = flat_storage_index(ch->x);
     g_flat_blocks[yi][zi][xi] = bid;
     g_flat_levels[yi][zi][xi] = block_is_liquid(bid) ? level : 0;
     g_flat_meta[yi][zi][xi] = block_is_liquid(bid) ? level : meta;
@@ -2248,6 +2250,8 @@ static void pex_net_apply_block_change(const PexNetBlockChange *ch) {
     int lcz = flat_local_chunk_z(ch->z);
     if (flat_local_chunk_valid(lcx, lcz) && !g_flat_world_chunk_generated[lcz][lcx]) {
         g_flat_world_chunk_generated[lcz][lcx] = 1;
+        g_flat_chunk_world_cx[lcz][lcx] = floor_div16(ch->x);
+        g_flat_chunk_world_cz[lcz][lcx] = floor_div16(ch->z);
     }
     flat_update_section_after_block_change(ch->x, ch->y, ch->z, bid);
     flat_mark_sections_dirty_near_block(ch->x, ch->y, ch->z);

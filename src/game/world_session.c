@@ -378,14 +378,16 @@ static int save_snapshot_add_chunk(PexSaveSnapshot *ss, int lcx, int lcz) {
         return 0;
     }
 
-    int fx0 = lcx * FLAT_RENDER_CHUNK;
-    int fz0 = lcz * FLAT_RENDER_CHUNK;
+    int world_x0 = cs->cx * FLAT_RENDER_CHUNK;
+    int world_z0 = cs->cz * FLAT_RENDER_CHUNK;
+    int fx0 = flat_storage_x_world(world_x0);
     for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
         int yi = pex_save_flat_y_index(y);
         for (int lz = 0; lz < FLAT_RENDER_CHUNK; lz++) {
             int bi = pex_save_chunk_buf_index(0, y, lz);
-            memcpy(&cs->blocks[bi], &g_flat_blocks[yi][fz0 + lz][fx0], FLAT_RENDER_CHUNK);
-            memcpy(&cs->meta[bi], &g_flat_meta[yi][fz0 + lz][fx0], FLAT_RENDER_CHUNK);
+            int fz = flat_storage_z_world(world_z0 + lz);
+            memcpy(&cs->blocks[bi], &g_flat_blocks[yi][fz][fx0], FLAT_RENDER_CHUNK);
+            memcpy(&cs->meta[bi], &g_flat_meta[yi][fz][fx0], FLAT_RENDER_CHUNK);
         }
     }
 
@@ -1326,9 +1328,14 @@ static int load_current_world_state(void) {
         /* Old saves contain a full active-window block dump.  Mark every chunk so
            the next save converts the bloated file into delta chunks. */
         flat_mark_all_chunks_modified();
+        int base_cx = pex_save_floor_div16(g_flat_world_origin_x);
+        int base_cz = pex_save_floor_div16(g_flat_world_origin_z);
         for (int lcz = 0; lcz < FLAT_RENDER_CHUNKS; lcz++)
-            for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++)
+            for (int lcx = 0; lcx < FLAT_RENDER_CHUNKS; lcx++) {
                 g_flat_world_chunk_generated[lcz][lcx] = 1;
+                g_flat_chunk_world_cx[lcz][lcx] = base_cx + lcx;
+                g_flat_chunk_world_cz[lcz][lcx] = base_cz + lcz;
+            }
         flat_mark_all_chunks_dirty();
         g_last_load_state_had_terrain = 1;
     }

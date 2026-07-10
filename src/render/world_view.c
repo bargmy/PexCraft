@@ -6695,6 +6695,7 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
 
 typedef struct AsyncSectionMeshJob {
     int cx, cz, sy;
+    int world_cx, world_cz;
     int origin_x, origin_z;
     unsigned int version;
     unsigned int light_version;
@@ -6709,6 +6710,7 @@ typedef struct AsyncSectionMeshJob {
 typedef struct AsyncSectionMeshResult {
     int ready;
     int cx, cz, sy;
+    int world_cx, world_cz;
     int origin_x, origin_z;
     unsigned int version;
     unsigned int light_version;
@@ -6722,6 +6724,17 @@ typedef struct AsyncSectionMeshResult {
     int d3d11_prebuilt;
     PexD3D11Mesh d3d11_mesh0, d3d11_mesh1;
 } AsyncSectionMeshResult;
+
+static int async_mesh_current_local(int world_cx, int world_cz, int *out_cx, int *out_cz) {
+    int cx = world_cx - floor_div16(g_flat_world_origin_x);
+    int cz = world_cz - floor_div16(g_flat_world_origin_z);
+    if (!flat_local_chunk_valid(cx, cz)) return 0;
+    if (!g_flat_world_chunk_generated[cz][cx]) return 0;
+    if (g_flat_chunk_world_cx[cz][cx] != world_cx || g_flat_chunk_world_cz[cz][cx] != world_cz) return 0;
+    if (out_cx) *out_cx = cx;
+    if (out_cz) *out_cz = cz;
+    return 1;
+}
 
 static void async_section_mesh_free_result(AsyncSectionMeshResult *r) {
     if (!r) return;
@@ -6987,6 +7000,8 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             r.cx = job.cx;
             r.cz = job.cz;
             r.sy = job.sy;
+            r.world_cx = job.world_cx;
+            r.world_cz = job.world_cz;
             r.origin_x = job.origin_x;
             r.origin_z = job.origin_z;
             r.version = job.version;
@@ -7004,15 +7019,18 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
         } else {
             /* A failed capture used to leave g_flat_section_mesh_building set
                forever.  Clear it so the render pass can retry next frame. */
+            int current_cx = -1, current_cz = -1;
+            flat_world_map_enter();
             if (job.sy >= 0 && job.sy < FLAT_RENDER_SECTIONS_Y &&
-                job.cz >= 0 && job.cz < FLAT_RENDER_CHUNKS && job.cx >= 0 && job.cx < FLAT_RENDER_CHUNKS &&
-                g_flat_section_mesh_version[job.sy][job.cz][job.cx] == job.version &&
-                g_flat_chunk_light_version[job.cz][job.cx] == job.light_version) {
-                g_flat_section_mesh_building[job.sy][job.cz][job.cx] = 0;
-                g_flat_section_building_mesh_version[job.sy][job.cz][job.cx] = 0;
-                g_flat_section_building_light_version[job.sy][job.cz][job.cx] = 0;
-                g_flat_section_dirty[job.sy][job.cz][job.cx] = 1;
+                async_mesh_current_local(job.world_cx, job.world_cz, &current_cx, &current_cz) &&
+                g_flat_section_mesh_version[job.sy][current_cz][current_cx] == job.version &&
+                g_flat_chunk_light_version[current_cz][current_cx] == job.light_version) {
+                g_flat_section_mesh_building[job.sy][current_cz][current_cx] = 0;
+                g_flat_section_building_mesh_version[job.sy][current_cz][current_cx] = 0;
+                g_flat_section_building_light_version[job.sy][current_cz][current_cx] = 0;
+                g_flat_section_dirty[job.sy][current_cz][current_cx] = 1;
             }
+            flat_world_map_leave();
         }
         flat_direct_free_builder(&mb0);
         flat_direct_free_builder(&mb1);
@@ -7093,6 +7111,8 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
     job.sy = sy;
     job.origin_x = g_flat_world_origin_x;
     job.origin_z = g_flat_world_origin_z;
+    job.world_cx = floor_div16(job.origin_x) + cx;
+    job.world_cz = floor_div16(job.origin_z) + cz;
     job.version = g_flat_section_mesh_version[sy][cz][cx];
     job.light_version = g_flat_chunk_light_version[cz][cx];
     job.priority = priority ? 1 : 0;
@@ -7117,25 +7137,30 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
         for (int iz = 0; iz < ASYNC_SECTION_MESH_D; iz++) {
             int wz = sz0 + iz;
             int fz = wz - job.origin_z;
+            int pz = flat_storage_z_world(wz);
             int z_ok = (fz >= 0 && fz < FLAT_WORLD_SIZE);
             for (int ix = 0; ix < ASYNC_SECTION_MESH_W; ix++) {
                 int wx = sx0 + ix;
                 int fx = wx - job.origin_x;
+                int px = flat_storage_x_world(wx);
                 int idx = ((iy * ASYNC_SECTION_MESH_D) + iz) * ASYNC_SECTION_MESH_W + ix;
                 unsigned char b = 0, m = 0, lv = 0, skyv = 0, blv = 0;
                 if (y_ok && z_ok && fx >= 0 && fx < FLAT_WORLD_SIZE) {
                     int lcx = fx / FLAT_RENDER_CHUNK;
                     int lcz = fz / FLAT_RENDER_CHUNK;
-                    int chunk_ok = flat_local_chunk_valid(lcx, lcz) && g_flat_world_chunk_generated[lcz][lcx];
+                    int chunk_ok = flat_local_chunk_valid(lcx, lcz) &&
+                        g_flat_world_chunk_generated[lcz][lcx] &&
+                        g_flat_chunk_world_cx[lcz][lcx] == floor_div16(wx) &&
+                        g_flat_chunk_world_cz[lcz][lcx] == floor_div16(wz);
                     if (chunk_ok) {
-                        b = g_flat_blocks[yi][fz][fx];
-                        m = g_flat_meta[yi][fz][fx];
-                        lv = g_flat_levels[yi][fz][fx];
+                        b = g_flat_blocks[yi][pz][px];
+                        m = g_flat_meta[yi][pz][px];
+                        lv = g_flat_levels[yi][pz][px];
                         int lsy = (wy - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
                         int storage_ok = flat_section_index_valid(lsy) &&
                             ((g_flat_chunk_section_non_empty_mask[lcz][lcx] & (unsigned short)(1u << lsy)) != 0);
-                        skyv = storage_ok ? (unsigned char)(g_flat_sky_light[yi][fz][fx] & 15) : (unsigned char)default_sky;
-                        blv = storage_ok ? (unsigned char)(g_flat_block_light[yi][fz][fx] & 15) : 0;
+                        skyv = storage_ok ? (unsigned char)(g_flat_sky_light[yi][pz][px] & 15) : (unsigned char)default_sky;
+                        blv = storage_ok ? (unsigned char)(g_flat_block_light[yi][pz][px] & 15) : 0;
                     } else {
                         skyv = (unsigned char)default_sky;
                     }
@@ -7168,11 +7193,12 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
                will be resubmitted later. */
             int drop = (g_async_section_mesh_job_tail - 1 + ASYNC_SECTION_MESH_JOB_QUEUE_MAX) % ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
             AsyncSectionMeshJob dropped = g_async_section_mesh_jobs[drop];
+            int dropped_cx = -1, dropped_cz = -1;
             if (dropped.sy >= 0 && dropped.sy < FLAT_RENDER_SECTIONS_Y &&
-                dropped.cz >= 0 && dropped.cz < FLAT_RENDER_CHUNKS && dropped.cx >= 0 && dropped.cx < FLAT_RENDER_CHUNKS) {
-                g_flat_section_mesh_building[dropped.sy][dropped.cz][dropped.cx] = 0;
-                g_flat_section_building_mesh_version[dropped.sy][dropped.cz][dropped.cx] = 0;
-                g_flat_section_building_light_version[dropped.sy][dropped.cz][dropped.cx] = 0;
+                async_mesh_current_local(dropped.world_cx, dropped.world_cz, &dropped_cx, &dropped_cz)) {
+                g_flat_section_mesh_building[dropped.sy][dropped_cz][dropped_cx] = 0;
+                g_flat_section_building_mesh_version[dropped.sy][dropped_cz][dropped_cx] = 0;
+                g_flat_section_building_light_version[dropped.sy][dropped_cz][dropped_cx] = 0;
             }
             memset(&g_async_section_mesh_jobs[drop], 0, sizeof(g_async_section_mesh_jobs[0]));
             g_async_section_mesh_job_tail = drop;
@@ -7218,6 +7244,8 @@ static int async_mesh_submit_priority(int sy, int cx, int cz) {
 
 static void async_section_mesh_install_ready(int max_uploads) {
     if (!g_async_section_mesh_initialized || max_uploads <= 0) return;
+    int processed = 0;
+    double deadline = now_seconds() + (max_uploads >= 16 ? 0.0060 : 0.0015);
     while (max_uploads-- > 0) {
         AsyncSectionMeshResult r;
         memset(&r, 0, sizeof(r));
@@ -7233,64 +7261,71 @@ static void async_section_mesh_install_ready(int max_uploads) {
 
         double install_start = profile_begin();
         int valid = 0;
-        if (r.origin_x == g_flat_world_origin_x && r.origin_z == g_flat_world_origin_z &&
-            r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS &&
-            g_flat_section_mesh_version[r.sy][r.cz][r.cx] == r.version &&
-            g_flat_chunk_light_version[r.cz][r.cx] == r.light_version &&
-            flat_chunk_light_ready(r.cx, r.cz)) {
+        int install_cx = -1, install_cz = -1;
+        if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y &&
+            async_mesh_current_local(r.world_cx, r.world_cz, &install_cx, &install_cz) &&
+            g_flat_section_mesh_version[r.sy][install_cz][install_cx] == r.version &&
+            g_flat_chunk_light_version[install_cz][install_cx] == r.light_version &&
+            flat_chunk_light_ready(install_cx, install_cz)) {
             /* Accept only the exact terrain_rev + light_rev snapshot that is
-               current for this local section.  Any stale result is freed. */
+               current for this absolute chunk.  A one-chunk ring slide changes
+               only its local slot, so useful worker output is not discarded. */
             valid = 1;
         }
         if (valid) {
             int installed = 1;
             if (r.d3d11_prebuilt && pex_using_d3d11()) {
-                PexMeshHandle *slot0 = (PexMeshHandle*)&g_flat_section_direct_mesh[r.sy][r.cz][r.cx][0];
-                PexMeshHandle *slot1 = (PexMeshHandle*)&g_flat_section_direct_mesh[r.sy][r.cz][r.cx][1];
+                PexMeshHandle *slot0 = (PexMeshHandle*)&g_flat_section_direct_mesh[r.sy][install_cz][install_cx][0];
+                PexMeshHandle *slot1 = (PexMeshHandle*)&g_flat_section_direct_mesh[r.sy][install_cz][install_cx][1];
                 if (r.skip0) d3d11_destroy_mesh_deferred(slot0);
                 else if (!d3d11_adopt_mesh(slot0, &r.d3d11_mesh0)) installed = 0;
                 if (r.skip1) d3d11_destroy_mesh_deferred(slot1);
                 else if (!d3d11_adopt_mesh(slot1, &r.d3d11_mesh1)) installed = 0;
             } else if (flat_direct_backend()) {
-                flat_direct_upload_builder(r.sy, r.cz, r.cx, 0, &r.mb0);
-                flat_direct_upload_builder(r.sy, r.cz, r.cx, 1, &r.mb1);
+                flat_direct_upload_builder(r.sy, install_cz, install_cx, 0, &r.mb0);
+                flat_direct_upload_builder(r.sy, install_cz, install_cx, 1, &r.mb1);
             } else {
-                flat_gl_cpu_mesh_install(r.sy, r.cz, r.cx, 0, &r.mb0, r.skip0, r.version, r.origin_x, r.origin_z);
-                flat_gl_cpu_mesh_install(r.sy, r.cz, r.cx, 1, &r.mb1, r.skip1, r.version, r.origin_x, r.origin_z);
+                flat_gl_cpu_mesh_install(r.sy, install_cz, install_cx, 0, &r.mb0, r.skip0, r.version, g_flat_world_origin_x, g_flat_world_origin_z);
+                flat_gl_cpu_mesh_install(r.sy, install_cz, install_cx, 1, &r.mb1, r.skip1, r.version, g_flat_world_origin_x, g_flat_world_origin_z);
             }
-            g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
-            g_flat_section_building_mesh_version[r.sy][r.cz][r.cx] = 0;
-            g_flat_section_building_light_version[r.sy][r.cz][r.cx] = 0;
+            g_flat_section_mesh_building[r.sy][install_cz][install_cx] = 0;
+            g_flat_section_building_mesh_version[r.sy][install_cz][install_cx] = 0;
+            g_flat_section_building_light_version[r.sy][install_cz][install_cx] = 0;
             if (installed) {
-                g_flat_section_dirty[r.sy][r.cz][r.cx] = 0;
-                g_flat_section_valid[r.sy][r.cz][r.cx] = 1;
-                g_flat_section_skip_pass[r.sy][r.cz][r.cx][0] = r.skip0;
-                g_flat_section_skip_pass[r.sy][r.cz][r.cx][1] = r.skip1;
+                g_flat_section_dirty[r.sy][install_cz][install_cx] = 0;
+                g_flat_section_valid[r.sy][install_cz][install_cx] = 1;
+                g_flat_section_skip_pass[r.sy][install_cz][install_cx][0] = r.skip0;
+                g_flat_section_skip_pass[r.sy][install_cz][install_cx][1] = r.skip1;
                 /* Mark this section settled for the exact light revision baked
                    into the worker snapshot. */
-                g_flat_section_mesh_light_version[r.sy][r.cz][r.cx] = r.light_version;
-                pex_logf_trace("chunk mesh installed sy=%d local=%d,%d skip=%d,%d version=%u", r.sy, r.cx, r.cz, r.skip0, r.skip1, r.version);
+                g_flat_section_mesh_light_version[r.sy][install_cz][install_cx] = r.light_version;
+                pex_logf_trace("chunk mesh installed sy=%d world=%d,%d local=%d,%d skip=%d,%d version=%u", r.sy, r.world_cx, r.world_cz, install_cx, install_cz, r.skip0, r.skip1, r.version);
             } else {
-                g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
+                g_flat_section_dirty[r.sy][install_cz][install_cx] = 1;
             }
-        } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y && r.cz >= 0 && r.cz < FLAT_RENDER_CHUNKS && r.cx >= 0 && r.cx < FLAT_RENDER_CHUNKS) {
+        } else if (r.sy >= 0 && r.sy < FLAT_RENDER_SECTIONS_Y &&
+                   async_mesh_current_local(r.world_cx, r.world_cz, &install_cx, &install_cz)) {
             /* STRICT RENDER STATE:
                A stale async result must never make an already-good section dirty.
                If a newer geometry version exists, that newer edit/remap already owns
                the dirty/building state.  Only clear/retry when the result still
                matches the current version and there is no valid mesh to keep. */
-            if (g_flat_section_building_mesh_version[r.sy][r.cz][r.cx] == r.version &&
-                g_flat_section_building_light_version[r.sy][r.cz][r.cx] == r.light_version) {
-                g_flat_section_mesh_building[r.sy][r.cz][r.cx] = 0;
-                g_flat_section_building_mesh_version[r.sy][r.cz][r.cx] = 0;
-                g_flat_section_building_light_version[r.sy][r.cz][r.cx] = 0;
-                if (!g_flat_section_valid[r.sy][r.cz][r.cx]) g_flat_section_dirty[r.sy][r.cz][r.cx] = 1;
+            if (g_flat_section_building_mesh_version[r.sy][install_cz][install_cx] == r.version &&
+                g_flat_section_building_light_version[r.sy][install_cz][install_cx] == r.light_version) {
+                g_flat_section_mesh_building[r.sy][install_cz][install_cx] = 0;
+                g_flat_section_building_mesh_version[r.sy][install_cz][install_cx] = 0;
+                g_flat_section_building_light_version[r.sy][install_cz][install_cx] = 0;
+                if (!g_flat_section_valid[r.sy][install_cz][install_cx]) g_flat_section_dirty[r.sy][install_cz][install_cx] = 1;
             }
             if (g_loggy_enabled) g_loggy_mesh_stale_results++;
-            pex_logf_trace("chunk mesh discarded stale result sy=%d local=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.cx, r.cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][r.cz][r.cx]);
+            pex_logf_trace("chunk mesh discarded stale result sy=%d world=%d,%d result_origin=%d,%d current_origin=%d,%d version=%u current_version=%u", r.sy, r.world_cx, r.world_cz, r.origin_x, r.origin_z, g_flat_world_origin_x, g_flat_world_origin_z, r.version, g_flat_section_mesh_version[r.sy][install_cz][install_cx]);
+        } else if (g_loggy_enabled) {
+            g_loggy_mesh_stale_results++;
         }
         async_section_mesh_free_result(&r);
         profile_add_time(PROF_MESH_RESULT_INSTALL, install_start);
+        processed++;
+        if (processed > 0 && now_seconds() >= deadline) break;
     }
 }
 
@@ -7577,8 +7612,14 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
     int sf_updates = stivufine_chunk_updates();
     int rebuilds_left = (recent_edit && stivufine_dynamic_chunk_updates_enabled()) ? sf_updates + 2 : sf_updates;
     if (streaming && !recent_edit) {
-        int stream_budget = direct ? 1 : 2;
-        if (rebuilds_left > stream_budget) rebuilds_left = stream_budget;
+        /* Fixed one-section-per-frame submission could not keep up with three
+           terrain workers.  Submission is still bounded by the deadline below,
+           but allow several near-visible sections to enter the worker queue in
+           one frame so generated chunks do not remain invisible for seconds. */
+        int stream_budget = direct ? 6 : 8;
+        if (g_prof_mesh_jobs_last > 24) stream_budget = 4;
+        if (g_prof_mesh_results_last > 24) stream_budget = 3;
+        if (rebuilds_left < stream_budget) rebuilds_left = stream_budget;
     }
     double deadline = now_seconds() + (recent_edit ? 0.0060 : (streaming ? 0.0015 : 0.0030));
 
@@ -7590,8 +7631,8 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
        already-finished priority edit meshes before background stream results.
        Keep the normal budget low to avoid frame hitches. */
     if (async_mesh) {
-        int install_budget = recent_edit ? 8 : 2;
-        if (!recent_edit && !streaming && g_prof_mesh_results_last > 12) install_budget = 4;
+        int install_budget = recent_edit ? 8 : (streaming ? 4 : 2);
+        if (!recent_edit && g_prof_mesh_results_last > 12) install_budget = streaming ? 8 : 4;
         async_section_mesh_install_ready(install_budget);
     }
 #endif
@@ -9055,6 +9096,12 @@ static void draw_flat_test_world(void) {
     apply_player_camera(g_frame_partial);
     apply_source_like_fog();
 
+    /* The stream service may slide local chunk/section metadata off-thread.
+       Hold a short read-side critical section across cull/rebuild/draw so one
+       frame cannot observe half of a metadata remap.  Voxel data itself is an
+       absolute-coordinate ring and is not copied during this lock. */
+    flat_world_map_enter();
+
     /* Java-style WorldRenderer grid: build/draw 16x16x16 render sections.
        Missing/dirty geometry is rebuilt with a small per-frame budget; terrain
        generation is handled by the streaming worker, never by rendering. */
@@ -9090,6 +9137,7 @@ static void draw_flat_test_world(void) {
     draw_flat_section_passes(g_flat_visible_sections, visible_count);
     draw_flat_visual_edit_overlays();
     profile_add_time(PROF_WORLD_DRAW, prof_part);
+    flat_world_map_leave();
 
     prof_part = profile_begin();
     double entity_part = profile_begin();

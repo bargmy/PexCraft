@@ -1299,7 +1299,7 @@ static double g_system_info_last_time = -10.0;
 #define MAX_FALLING_BLOCK_ENTITIES 64
 #endif
 #else
-#define FLAT_WORLD_SIZE 512
+#define FLAT_WORLD_SIZE 576
 #define FLAT_WORLD_Y_MIN 0
 #define FLAT_WORLD_Y_MAX 255
 #define MAX_DROP_ENTITIES 256
@@ -1930,10 +1930,19 @@ static int g_flat_world_chunk_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS]
    treated as empty finished chunks or the loader can waste time warming up
    huge air-only areas at high render distance. */
 static int g_flat_world_chunk_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+/* Absolute identity of the terrain currently published in each logical slot.
+   The generated bit alone is not enough while the streaming window moves: a
+   stale local slot can otherwise be mistaken for the new world coordinate for
+   one frame. */
+static int g_flat_chunk_world_cx[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static int g_flat_chunk_world_cz[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 /* A generated chunk may exist before its neighbor-aware skylight has settled.
    Meshes stamp the light version they were built from so spawn/preload chunks
    cannot keep random brightness until a player block edit happens to dirty them. */
 static int g_flat_chunk_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+/* ready = a complete seed buffer exists and may be rendered; valid = the
+   neighbor-aware propagation pass has committed for the current neighbors. */
+static int g_flat_chunk_light_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static unsigned int g_flat_chunk_light_version[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 /* Diagnostic tag for chunks published by the loading-screen spawn preload.
    This is not gameplay logic; it lets F3+V distinguish the chunks that should
@@ -1975,6 +1984,33 @@ static int g_flat_world_chunk_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_flat_world_geometry_dirty = 1;
 static int g_flat_world_origin_x = FLAT_WORLD_MIN;
 static int g_flat_world_origin_z = FLAT_WORLD_MIN;
+/*
+ * The terrain volumes are a physical ring, not a sliding array.  A world X/Z
+ * coordinate always maps to the same physical cell modulo FLAT_WORLD_SIZE.
+ * Moving the active window therefore changes only the logical origin and the
+ * small per-chunk metadata tables; the 3D block/light arrays are never memmoved.
+ *
+ * Desktop uses a 36x36-chunk (576-block) ring so render distance 16 has
+ * room for the full 33-chunk diameter plus safety slots.  Use mathematical
+ * modulo so the same mapping also works for negative world coordinates and the
+ * smaller console window sizes.
+ */
+static int flat_storage_ring_index(int world_coord) {
+    int r = world_coord % FLAT_WORLD_SIZE;
+    return r < 0 ? r + FLAT_WORLD_SIZE : r;
+}
+static int flat_storage_x_world(int world_x) {
+    return flat_storage_ring_index(world_x);
+}
+static int flat_storage_z_world(int world_z) {
+    return flat_storage_ring_index(world_z);
+}
+static int flat_storage_x_local(int local_x) {
+    return flat_storage_x_world(g_flat_world_origin_x + local_x);
+}
+static int flat_storage_z_local(int local_z) {
+    return flat_storage_z_world(g_flat_world_origin_z + local_z);
+}
 static int g_stream_last_center_chunk_x = 999999;
 static int g_stream_last_center_chunk_z = 999999;
 #define STREAM_GEN_QUEUE_MAX (FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS)
