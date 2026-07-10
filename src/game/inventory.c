@@ -721,7 +721,7 @@ static int flat_light_opacity_for_id(int id) {
        This is intentionally separate from collision/render occlusion: glass does
        not block light, leaves block one level, and water/ice block three levels. */
     if (id == 0) return 0;
-    if (id == BLOCK_WATER || id == BLOCK_STILL_WATER) return g_opts.hpti_clear_water ? 1 : 3;
+    if (id == BLOCK_WATER || id == BLOCK_STILL_WATER) return g_opts.sf_clear_water ? 1 : 3;
     if (id == BLOCK_ICE) return 3;
     if (id == BLOCK_LEAVES || id == BLOCK_WEB) return 1;
     if (id == BLOCK_GLASS || id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS ||
@@ -962,7 +962,7 @@ static unsigned int flat_current_lightmap_version(void) {
        coordinates stable and updates EntityRenderer's lightmap texture when the
        sun changes; this must never be used to dirty or invalidate sections. */
     int sun = (int)(flat_light_sun_brightness(1.0f) * 32.0f + 0.5f);
-    int gamma = (int)(g_opts.hpti_gamma * 255.0f + 0.5f);
+    int gamma = (int)(g_opts.sf_gamma * 255.0f + 0.5f);
     if (sun < 0) sun = 0;
     if (sun > 32) sun = 32;
     if (gamma < 0) gamma = 0;
@@ -972,7 +972,7 @@ static unsigned int flat_current_lightmap_version(void) {
 
 static void flat_lightmap_color(int packed, float *r, float *g, float *b) {
     /* CPU-side equivalent of EntityRenderer.updateLightmap() for the normal
-       overworld, torchFlickerX=0, no lightning.  Java/HptiBine apply gamma by
+       overworld, torchFlickerX=0, no lightning.  Java/StivuFine apply gamma by
        blending each channel toward 1.0 - (1.0 - channel)^4, then applying the
        final 0.96 + 0.03 pass.  This renderer still bakes the current lightmap
        result into section vertex colors, so lightmap changes refresh draw-time
@@ -993,7 +993,7 @@ static void flat_lightmap_color(int packed, float *r, float *g, float *b) {
     bb = bb * 0.96f + 0.03f;
     if (rr > 1.0f) rr = 1.0f; if (gg > 1.0f) gg = 1.0f; if (bb > 1.0f) bb = 1.0f;
     {
-        float gamma = g_opts.hpti_gamma;
+        float gamma = g_opts.sf_gamma;
         float ir = 1.0f - rr;
         float ig = 1.0f - gg;
         float ib = 1.0f - bb;
@@ -2658,14 +2658,14 @@ static void flat_mark_all_chunks_dirty(void) {
     g_flat_section_geometry_dirty = 0;
 }
 
-static void hptibine_update_water_opacity(void) {
-    /* HptiBine 1.2.5 updateWaterOpacity():
+static void stivufine_update_water_opacity(void) {
+    /* StivuFine 1.2.5 updateWaterOpacity():
        - vanilla water light opacity is 3;
        - Clear Water sets moving/still water light opacity to 1;
        - loaded chunks have their skylight regenerated;
        - renderers are reloaded.
        PexCraft derives opacity from flat_light_opacity_for_id(), so changing
-       g_opts.hpti_clear_water is enough for future lighting.  This pass
+       g_opts.sf_clear_water is enough for future lighting.  This pass
        regenerates the active generated chunks now and invalidates their meshes,
        matching the Java visible-world refresh behavior. */
     int base_cx = floor_div16(g_flat_world_origin_x);

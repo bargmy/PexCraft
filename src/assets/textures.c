@@ -1116,7 +1116,7 @@ static int load_release_textures_from_pack(void) {
     try_release_texture(&tex_shadow, "misc\\shadow.png", 0);
     try_release_texture(&tex_grasscolor, "misc\\grasscolor.png", 0);
     try_release_texture(&tex_foliagecolor, "misc\\foliagecolor.png", 0);
-    /* HptiBine custom color maps are texture-pack overlays, not vanilla base
+    /* StivuFine custom color maps are texture-pack overlays, not vanilla base
        assets.  Reset them when returning to the base pack so stale custom maps
        cannot survive Custom Colors OFF or a texture-pack switch. */
     free_texture(&tex_watercolor);
@@ -1124,6 +1124,7 @@ static int load_release_textures_from_pack(void) {
     free_texture(&tex_birchcolor);
     free_texture(&tex_swampgrasscolor);
     free_texture(&tex_swampfoliagecolor);
+    stivufine_lilypad_color = -1;
     try_release_texture(&tex_particles, "particles.png", 0);
     ok = try_release_texture(&tex_title_logo, "title\\mclogo.png", 0) && ok;
     ok = try_release_texture(&tex_mojang, "title\\mojang.png", 0) && ok;
@@ -1202,6 +1203,7 @@ static int load_default_textures(void) {
     free_texture(&tex_birchcolor);
     free_texture(&tex_swampgrasscolor);
     free_texture(&tex_swampfoliagecolor);
+    stivufine_lilypad_color = -1;
     PEX_PSP_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
     psp_drop_gui_texture_cpu_copies();
     #if defined(PEX_PLATFORM_PSP)
@@ -1273,12 +1275,68 @@ static int load_default_textures(void) {
     free_texture(&tex_birchcolor);
     free_texture(&tex_swampgrasscolor);
     free_texture(&tex_swampfoliagecolor);
+    stivufine_lilypad_color = -1;
     PEX_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
     if (missing_required) log_msg("Started with %d fallback required assets; showing resource download UI", missing_required);
 #undef PEX_LOAD_REQ
 #undef PEX_LOAD_OPT
     return 1;
 #endif
+}
+
+
+static char *stivufine_trim_ascii(char *s) {
+    char *e;
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') ++s;
+    e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) *--e = 0;
+    return s;
+}
+
+static int stivufine_parse_rgb_hex(const char *s, int *out) {
+    char buf[16];
+    int n = 0;
+    if (!s) return 0;
+    while (*s == ' ' || *s == '\t') ++s;
+    if (*s == '#') ++s;
+    if ((s[0] == '0') && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    while (((*s >= '0' && *s <= '9') || (*s >= 'a' && *s <= 'f') || (*s >= 'A' && *s <= 'F')) && n < 6) buf[n++] = *s++;
+    if (n != 6) return 0;
+    buf[n] = 0;
+    *out = (int)strtol(buf, NULL, 16) & 0xFFFFFF;
+    return 1;
+}
+
+static void stivufine_load_color_properties(TexturePackEntry *e) {
+    char path[MAX_PATHBUF];
+    FILE *f;
+    char line[512];
+    if (!e || e->is_default || !stivufine_custom_colors_enabled()) return;
+    snprintf(path, sizeof(path), "%s/color.properties", e->path);
+    f = fopen(path, "r");
+    if (!f) {
+        snprintf(path, sizeof(path), "%s\\color.properties", e->path);
+        f = fopen(path, "r");
+    }
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) {
+        char *hash = strchr(line, '#');
+        char *sep;
+        char *key;
+        char *val;
+        if (hash) *hash = 0;
+        sep = strchr(line, '=');
+        if (!sep) sep = strchr(line, ':');
+        if (!sep) continue;
+        *sep++ = 0;
+        key = stivufine_trim_ascii(line);
+        val = stivufine_trim_ascii(sep);
+        if (!strcmp(key, "lilypad")) {
+            int rgb;
+            if (stivufine_parse_rgb_hex(val, &rgb)) stivufine_lilypad_color = rgb;
+        }
+    }
+    fclose(f);
 }
 
 static void try_pack_texture(TexturePackEntry *e, Texture *tex, const char *rel, int repeat) {
@@ -1298,6 +1356,7 @@ static void apply_texture_pack_index(int index) {
     free_texture(&tex_birchcolor);
     free_texture(&tex_swampgrasscolor);
     free_texture(&tex_swampfoliagecolor);
+    stivufine_lilypad_color = -1;
     g_selected_texpack = index;
     snprintf(g_current_texpack, sizeof(g_current_texpack), "%s", g_texpacks[index].name);
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", g_texpacks[index].name);
@@ -1315,7 +1374,7 @@ static void apply_texture_pack_index(int index) {
         normalize_terrain_liquid_tiles();
         try_pack_texture(e, &tex_gui, "gui\\gui.png", 0);
         try_pack_texture(e, &tex_bg, "gui\\background.png", 1);
-        if (hptibine_custom_fonts_enabled())
+        if (stivufine_custom_fonts_enabled())
             try_pack_texture(e, &tex_font, "font\\default.png", 0);
         try_pack_texture(e, &tex_pack, "pack.png", 0);
         try_pack_texture(e, &tex_icons, "gui\\icons.png", 0);
@@ -1387,7 +1446,7 @@ static void apply_texture_pack_index(int index) {
         /* Java RenderGlobal.renderSky uses additive alpha for sun/moon sprites. */
         try_pack_texture(e, &tex_water_overlay, "misc\\water.png", 1);
         try_pack_texture(e, &tex_shadow, "misc\\shadow.png", 0);
-        if (hptibine_custom_colors_enabled()) {
+        if (stivufine_custom_colors_enabled()) {
             try_pack_texture(e, &tex_grasscolor, "misc\\grasscolor.png", 0);
             try_pack_texture(e, &tex_foliagecolor, "misc\\foliagecolor.png", 0);
             try_pack_texture(e, &tex_watercolor, "misc\\watercolorX.png", 0);

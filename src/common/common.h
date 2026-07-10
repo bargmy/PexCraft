@@ -331,12 +331,12 @@ typedef enum ScreenId {
     SCREEN_TITLE,
     SCREEN_OPTIONS,
     SCREEN_OPTIONS_MORE,
-    SCREEN_HPTIBINE,
-    SCREEN_HPTIBINE_DETAILS,
-    SCREEN_HPTIBINE_QUALITY,
-    SCREEN_HPTIBINE_ANIMATIONS,
-    SCREEN_HPTIBINE_PERFORMANCE,
-    SCREEN_HPTIBINE_OTHER,
+    SCREEN_STIVUFINE,
+    SCREEN_STIVUFINE_DETAILS,
+    SCREEN_STIVUFINE_QUALITY,
+    SCREEN_STIVUFINE_ANIMATIONS,
+    SCREEN_STIVUFINE_PERFORMANCE,
+    SCREEN_STIVUFINE_OTHER,
     SCREEN_ASSETS,
     SCREEN_LANGUAGE,
     SCREEN_SET_NAME,
@@ -451,107 +451,107 @@ static const char *pex_tv_remote_action_label(int action) {
 }
 
 
-typedef enum HptiBineOptionId {
-    HPTI_GRAPHICS = 0,
-    HPTI_RENDER_DISTANCE_FINE,
-    HPTI_AO_LEVEL,
-    HPTI_FRAMERATE_LIMIT,
-    HPTI_ANAGLYPH,
-    HPTI_VIEW_BOBBING,
-    HPTI_GUI_SCALE,
-    HPTI_ADVANCED_OPENGL,
-    HPTI_GAMMA,
-    HPTI_RENDER_CLOUDS,
-    HPTI_FOG_FANCY,
-    HPTI_FOG_START,
+typedef enum StivuFineOptionId {
+    SF_GRAPHICS = 0,
+    SF_RENDER_DISTANCE_FINE,
+    SF_AO_LEVEL,
+    SF_FRAMERATE_LIMIT,
+    SF_ANAGLYPH,
+    SF_VIEW_BOBBING,
+    SF_GUI_SCALE,
+    SF_ADVANCED_OPENGL,
+    SF_GAMMA,
+    SF_RENDER_CLOUDS,
+    SF_FOG_FANCY,
+    SF_FOG_START,
 
-    HPTI_CLOUDS,
-    HPTI_CLOUD_HEIGHT,
-    HPTI_TREES,
-    HPTI_GRASS,
-    HPTI_WATER,
-    HPTI_RAIN,
-    HPTI_SKY,
-    HPTI_STARS,
-    HPTI_SUN_MOON,
-    HPTI_SHOW_CAPES,
-    HPTI_DEPTH_FOG,
+    SF_CLOUDS,
+    SF_CLOUD_HEIGHT,
+    SF_TREES,
+    SF_GRASS,
+    SF_WATER,
+    SF_RAIN,
+    SF_SKY,
+    SF_STARS,
+    SF_SUN_MOON,
+    SF_SHOW_CAPES,
+    SF_DEPTH_FOG,
 
-    HPTI_MIPMAP_LEVEL,
-    HPTI_MIPMAP_TYPE,
-    HPTI_CLEAR_WATER,
-    HPTI_RANDOM_MOBS,
-    HPTI_BETTER_GRASS,
-    HPTI_BETTER_SNOW,
-    HPTI_CUSTOM_FONTS,
-    HPTI_CUSTOM_COLORS,
-    HPTI_SWAMP_COLORS,
-    HPTI_SMOOTH_BIOMES,
-    HPTI_CONNECTED_TEXTURES,
-    HPTI_NATURAL_TEXTURES,
-    HPTI_AA_LEVEL,
-    HPTI_AF_LEVEL,
+    SF_MIPMAP_LEVEL,
+    SF_MIPMAP_TYPE,
+    SF_CLEAR_WATER,
+    SF_RANDOM_MOBS,
+    SF_BETTER_GRASS,
+    SF_BETTER_SNOW,
+    SF_CUSTOM_FONTS,
+    SF_CUSTOM_COLORS,
+    SF_SWAMP_COLORS,
+    SF_SMOOTH_BIOMES,
+    SF_CONNECTED_TEXTURES,
+    SF_NATURAL_TEXTURES,
+    SF_AA_LEVEL,
+    SF_AF_LEVEL,
 
-    HPTI_ANIMATED_WATER,
-    HPTI_ANIMATED_LAVA,
-    HPTI_ANIMATED_FIRE,
-    HPTI_ANIMATED_PORTAL,
-    HPTI_ANIMATED_REDSTONE,
-    HPTI_ANIMATED_EXPLOSION,
-    HPTI_ANIMATED_FLAME,
-    HPTI_ANIMATED_SMOKE,
-    HPTI_VOID_PARTICLES,
-    HPTI_WATER_PARTICLES,
-    HPTI_RAIN_SPLASH,
-    HPTI_PORTAL_PARTICLES,
-    HPTI_PARTICLES,
-    HPTI_DRIPPING_WATER_LAVA,
-    HPTI_ANIMATED_TERRAIN,
-    HPTI_ANIMATED_ITEMS,
-    HPTI_ANIMATED_TEXTURES,
+    SF_ANIMATED_WATER,
+    SF_ANIMATED_LAVA,
+    SF_ANIMATED_FIRE,
+    SF_ANIMATED_PORTAL,
+    SF_ANIMATED_REDSTONE,
+    SF_ANIMATED_EXPLOSION,
+    SF_ANIMATED_FLAME,
+    SF_ANIMATED_SMOKE,
+    SF_VOID_PARTICLES,
+    SF_WATER_PARTICLES,
+    SF_RAIN_SPLASH,
+    SF_PORTAL_PARTICLES,
+    SF_PARTICLES,
+    SF_DRIPPING_WATER_LAVA,
+    SF_ANIMATED_TERRAIN,
+    SF_ANIMATED_ITEMS,
+    SF_ANIMATED_TEXTURES,
 
-    HPTI_SMOOTH_FPS,
-    HPTI_SMOOTH_INPUT,
-    HPTI_LOAD_FAR,
-    HPTI_PRELOADED_CHUNKS,
-    HPTI_CHUNK_UPDATES,
-    HPTI_CHUNK_UPDATES_DYNAMIC,
+    SF_SMOOTH_FPS,
+    SF_SMOOTH_INPUT,
+    SF_LOAD_FAR,
+    SF_PRELOADED_CHUNKS,
+    SF_CHUNK_UPDATES,
+    SF_CHUNK_UPDATES_DYNAMIC,
 
-    HPTI_FAST_DEBUG_INFO,
-    HPTI_PROFILER,
-    HPTI_WEATHER,
-    HPTI_TIME,
-    HPTI_FULLSCREEN_MODE,
-    HPTI_AUTOSAVE_TICKS,
+    SF_FAST_DEBUG_INFO,
+    SF_PROFILER,
+    SF_WEATHER,
+    SF_TIME,
+    SF_FULLSCREEN_MODE,
+    SF_AUTOSAVE_TICKS,
 
-    HPTI_COUNT
-} HptiBineOptionId;
+    SF_COUNT
+} StivuFineOptionId;
 
-#define HPTI_BUTTON_BASE 5000
-#define HPTI_NAV_DETAILS 5101
-#define HPTI_NAV_QUALITY 5102
-#define HPTI_NAV_ANIMATIONS 5111
-#define HPTI_NAV_PERFORMANCE 5112
-#define HPTI_NAV_TEXPACKS 5121
-#define HPTI_NAV_OTHER 5122
+#define SF_BUTTON_BASE 5000
+#define SF_NAV_DETAILS 5101
+#define SF_NAV_QUALITY 5102
+#define SF_NAV_ANIMATIONS 5111
+#define SF_NAV_PERFORMANCE 5112
+#define SF_NAV_TEXPACKS 5121
+#define SF_NAV_OTHER 5122
 
-typedef enum HptiBineMode {
-    HPTI_DEFAULT = 0,
-    HPTI_FAST = 1,
-    HPTI_FANCY = 2,
-    HPTI_OFF = 3
-} HptiBineMode;
+typedef enum StivuFineMode {
+    SF_DEFAULT = 0,
+    SF_FAST = 1,
+    SF_FANCY = 2,
+    SF_OFF = 3
+} StivuFineMode;
 
-typedef enum HptiBineAnimationMode {
-    HPTI_ANIM_ON = 0,
-    HPTI_ANIM_DYNAMIC = 1,
-    HPTI_ANIM_OFF = 2
-} HptiBineAnimationMode;
+typedef enum StivuFineAnimationMode {
+    SF_ANIM_ON = 0,
+    SF_ANIM_DYNAMIC = 1,
+    SF_ANIM_OFF = 2
+} StivuFineAnimationMode;
 
 /* Unity-build helpers defined in settings/options.c and used by earlier
    included modules such as textures.c. */
-static int hptibine_custom_fonts_enabled(void);
-static int hptibine_custom_colors_enabled(void);
+static int stivufine_custom_fonts_enabled(void);
+static int stivufine_custom_colors_enabled(void);
 
 typedef enum OptionId {
     OPT_MUSIC = 0,
@@ -606,51 +606,51 @@ typedef struct Options {
     int fullscreen;
     int show_fps;
     int renderer_backend; /* RendererBackend saved to options.txt; restart required after changing */
-    /* HptiBine (HptiBine graphics) graphics settings.  Unsupported
+    /* StivuFine (StivuFine graphics) graphics settings.  Unsupported
        features stay present in the UI as disabled/gray entries, but the stored
-       values mirror HptiBine names so old optionshptibine_legacy.txt files can be imported. */
-    int hpti_fog_type;
-    float hpti_fog_start;
-    float hpti_ao_level;
-    int hpti_clouds;
-    float hpti_cloud_height;
-    int hpti_trees;
-    int hpti_grass;
-    int hpti_water;
-    int hpti_rain;
-    int hpti_sky;
-    int hpti_stars;
-    int hpti_sun_moon;
-    int hpti_depth_fog;
-    int hpti_animated_water;
-    int hpti_animated_lava;
-    int hpti_animated_fire;
-    int hpti_animated_portal;
-    int hpti_animated_redstone;
-    int hpti_animated_explosion;
-    int hpti_animated_flame;
-    int hpti_animated_smoke;
-    int hpti_void_particles;
-    int hpti_water_particles;
-    int hpti_rain_splash;
-    int hpti_portal_particles;
-    int hpti_dripping_water_lava;
-    int hpti_animated_terrain;
-    int hpti_animated_items;
-    int hpti_animated_textures;
-    int hpti_particles;
-    int hpti_chunk_updates;
-    int hpti_chunk_updates_dynamic;
-    int hpti_fast_debug_info;
-    int hpti_profiler;
-    int hpti_weather;
-    float hpti_gamma;
-    int hpti_clear_water;
-    int hpti_better_snow;
-    int hpti_swamp_colors;
-    int hpti_smooth_biomes;
-    int hpti_custom_fonts;
-    int hpti_custom_colors;
+       values mirror StivuFine names so old optionsstivufine_legacy.txt files can be imported. */
+    int sf_fog_type;
+    float sf_fog_start;
+    float sf_ao_level;
+    int sf_clouds;
+    float sf_cloud_height;
+    int sf_trees;
+    int sf_grass;
+    int sf_water;
+    int sf_rain;
+    int sf_sky;
+    int sf_stars;
+    int sf_sun_moon;
+    int sf_depth_fog;
+    int sf_animated_water;
+    int sf_animated_lava;
+    int sf_animated_fire;
+    int sf_animated_portal;
+    int sf_animated_redstone;
+    int sf_animated_explosion;
+    int sf_animated_flame;
+    int sf_animated_smoke;
+    int sf_void_particles;
+    int sf_water_particles;
+    int sf_rain_splash;
+    int sf_portal_particles;
+    int sf_dripping_water_lava;
+    int sf_animated_terrain;
+    int sf_animated_items;
+    int sf_animated_textures;
+    int sf_particles;
+    int sf_chunk_updates;
+    int sf_chunk_updates_dynamic;
+    int sf_fast_debug_info;
+    int sf_profiler;
+    int sf_weather;
+    float sf_gamma;
+    int sf_clear_water;
+    int sf_better_snow;
+    int sf_swamp_colors;
+    int sf_smooth_biomes;
+    int sf_custom_fonts;
+    int sf_custom_colors;
 
     int ignore_classic_resources_warning;
     int download_classic_textures;
@@ -2505,6 +2505,7 @@ static Texture tex_sun, tex_moon, tex_moon_phases;
 static Texture tex_water_overlay, tex_shadow;
 static Texture tex_grasscolor, tex_foliagecolor, tex_watercolor;
 static Texture tex_pinecolor, tex_birchcolor, tex_swampgrasscolor, tex_swampfoliagecolor;
+static int stivufine_lilypad_color = -1;
 static Texture tex_particles;
 static Texture tex_title_logo, tex_mojang, tex_panorama[6];
 static int font_widths[256];
@@ -2681,7 +2682,7 @@ static void flat_center_origin_near(float px, float pz);
 static void flat_generate_origin_blocks(void);
 static void flat_generate_portal_travel_blocks(float px, float pz);
 static void flat_relight_chunks_near(float px, float pz, int radius_chunks);
-static void hptibine_update_water_opacity(void);
+static void stivufine_update_water_opacity(void);
 static void flat_prepare_initial_generation(void);
 static void flat_begin_initial_generation(void);
 static void flat_continue_initial_generation(void);

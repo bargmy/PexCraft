@@ -7,7 +7,7 @@ static char *trim(char *s) {
     return s;
 }
 
-static void hptibine_set_defaults(void);
+static void stivufine_set_defaults(void);
 static float get_option_float(OptionId opt);
 static void set_option_float(OptionId opt, float v);
 
@@ -54,7 +54,7 @@ static void set_default_options(void) {
     snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
     pex_set_language_code(g_opts.language);
     for (int i = 0; i < 10; i++) g_opts.keys[i] = default_keys[i];
-    hptibine_set_defaults();
+    stivufine_set_defaults();
 }
 
 static float parse_float_java(const char *s) {
@@ -97,344 +97,344 @@ static const char *renderer_backend_label(int backend) {
 }
 
 
-typedef enum HptiBineCategory {
-    HPTI_CAT_MAIN = 0,
-    HPTI_CAT_DETAILS,
-    HPTI_CAT_QUALITY,
-    HPTI_CAT_ANIMATIONS,
-    HPTI_CAT_PERFORMANCE,
-    HPTI_CAT_OTHER
-} HptiBineCategory;
+typedef enum StivuFineCategory {
+    SF_CAT_MAIN = 0,
+    SF_CAT_DETAILS,
+    SF_CAT_QUALITY,
+    SF_CAT_ANIMATIONS,
+    SF_CAT_PERFORMANCE,
+    SF_CAT_OTHER
+} StivuFineCategory;
 
-typedef enum HptiBineOptionKind {
-    HPTI_KIND_BUTTON = 0,
-    HPTI_KIND_SLIDER = 1
-} HptiBineOptionKind;
+typedef enum StivuFineOptionKind {
+    SF_KIND_BUTTON = 0,
+    SF_KIND_SLIDER = 1
+} StivuFineOptionKind;
 
-typedef struct HptiBineOptionDef {
-    HptiBineOptionId id;
+typedef struct StivuFineOptionDef {
+    StivuFineOptionId id;
     const char *label;
-    HptiBineCategory category;
-    HptiBineOptionKind kind;
+    StivuFineCategory category;
+    StivuFineOptionKind kind;
     int implemented;
-} HptiBineOptionDef;
+} StivuFineOptionDef;
 
-static const HptiBineOptionDef hptibine_defs[] = {
-    { HPTI_GRAPHICS, "Graphics", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 1 },
-    { HPTI_RENDER_DISTANCE_FINE, "Render Distance", HPTI_CAT_MAIN, HPTI_KIND_SLIDER, 1 },
-    { HPTI_AO_LEVEL, "Smooth Lighting", HPTI_CAT_MAIN, HPTI_KIND_SLIDER, 1 },
-    { HPTI_FRAMERATE_LIMIT, "Max FPS", HPTI_CAT_MAIN, HPTI_KIND_SLIDER, 1 },
-    { HPTI_ANAGLYPH, "3D Anaglyph", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 0 },
-    { HPTI_VIEW_BOBBING, "View Bobbing", HPTI_CAT_MAIN, HPTI_KIND_BUTTON, 1 },
-    { HPTI_GUI_SCALE, "GUI Scale", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ADVANCED_OPENGL, "Advanced OpenGL", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
-    { HPTI_GAMMA, "Brightness", HPTI_CAT_QUALITY, HPTI_KIND_SLIDER, 1 },
-        { HPTI_FOG_FANCY, "Fog", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_FOG_START, "Fog Start", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+static const StivuFineOptionDef stivufine_defs[] = {
+    { SF_GRAPHICS, "Graphics", SF_CAT_MAIN, SF_KIND_BUTTON, 1 },
+    { SF_RENDER_DISTANCE_FINE, "Render Distance", SF_CAT_MAIN, SF_KIND_SLIDER, 1 },
+    { SF_AO_LEVEL, "Smooth Lighting", SF_CAT_MAIN, SF_KIND_SLIDER, 1 },
+    { SF_FRAMERATE_LIMIT, "Max FPS", SF_CAT_MAIN, SF_KIND_SLIDER, 1 },
+    { SF_ANAGLYPH, "3D Anaglyph", SF_CAT_MAIN, SF_KIND_BUTTON, 0 },
+    { SF_VIEW_BOBBING, "View Bobbing", SF_CAT_MAIN, SF_KIND_BUTTON, 1 },
+    { SF_GUI_SCALE, "GUI Scale", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_ADVANCED_OPENGL, "Advanced OpenGL", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 0 },
+    { SF_GAMMA, "Brightness", SF_CAT_QUALITY, SF_KIND_SLIDER, 1 },
+        { SF_FOG_FANCY, "Fog", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
+    { SF_FOG_START, "Fog Start", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
 
-    { HPTI_CLOUDS, "Clouds", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_CLOUD_HEIGHT, "Cloud Height", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_TREES, "Trees", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-        { HPTI_WATER, "Water", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_RAIN, "Rain & Snow", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_SKY, "Sky", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_STARS, "Stars", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_SUN_MOON, "Sun & Moon", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_SHOW_CAPES, "Show Capes", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_DEPTH_FOG, "Depth Fog", HPTI_CAT_DETAILS, HPTI_KIND_BUTTON, 0 },
+    { SF_CLOUDS, "Clouds", SF_CAT_DETAILS, SF_KIND_BUTTON, 1 },
+    { SF_CLOUD_HEIGHT, "Cloud Height", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
+    { SF_TREES, "Trees", SF_CAT_DETAILS, SF_KIND_BUTTON, 1 },
+        { SF_WATER, "Water", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
+    { SF_RAIN, "Rain & Snow", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
+    { SF_SKY, "Sky", SF_CAT_DETAILS, SF_KIND_BUTTON, 1 },
+    { SF_STARS, "Stars", SF_CAT_DETAILS, SF_KIND_BUTTON, 1 },
+    { SF_SUN_MOON, "Sun & Moon", SF_CAT_DETAILS, SF_KIND_BUTTON, 1 },
+    { SF_SHOW_CAPES, "Show Capes", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
+    { SF_DEPTH_FOG, "Depth Fog", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
 
-    { HPTI_MIPMAP_LEVEL, "Mipmap Level", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_MIPMAP_TYPE, "Mipmap Type", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_CLEAR_WATER, "Clear Water", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_RANDOM_MOBS, "Random Mobs", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_BETTER_GRASS, "Better Grass", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_BETTER_SNOW, "Better Snow", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_CUSTOM_FONTS, "Custom Fonts", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_CUSTOM_COLORS, "Custom Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_SWAMP_COLORS, "Swamp Colors", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_SMOOTH_BIOMES, "Smooth Biomes", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 1 },
-    { HPTI_CONNECTED_TEXTURES, "Connected Textures", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_NATURAL_TEXTURES, "Natural Textures", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_AA_LEVEL, "Antialiasing", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
-    { HPTI_AF_LEVEL, "Anisotropic Filtering", HPTI_CAT_QUALITY, HPTI_KIND_BUTTON, 0 },
+    { SF_MIPMAP_LEVEL, "Mipmap Level", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_MIPMAP_TYPE, "Mipmap Type", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_CLEAR_WATER, "Clear Water", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_RANDOM_MOBS, "Random Mobs", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_BETTER_GRASS, "Better Grass", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_BETTER_SNOW, "Better Snow", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_CUSTOM_FONTS, "Custom Fonts", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_CUSTOM_COLORS, "Custom Colors", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_SWAMP_COLORS, "Swamp Colors", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_SMOOTH_BIOMES, "Smooth Biomes", SF_CAT_QUALITY, SF_KIND_BUTTON, 1 },
+    { SF_CONNECTED_TEXTURES, "Connected Textures", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_NATURAL_TEXTURES, "Natural Textures", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_AA_LEVEL, "Antialiasing", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
+    { SF_AF_LEVEL, "Anisotropic Filtering", SF_CAT_QUALITY, SF_KIND_BUTTON, 0 },
 
-    { HPTI_ANIMATED_WATER, "Water Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_ANIMATED_LAVA, "Lava Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_ANIMATED_FIRE, "Fire Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ANIMATED_PORTAL, "Portal Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_ANIMATED_REDSTONE, "Redstone Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ANIMATED_EXPLOSION, "Explosion Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ANIMATED_FLAME, "Flame Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ANIMATED_SMOKE, "Smoke Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_VOID_PARTICLES, "Void Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_WATER_PARTICLES, "Water Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_RAIN_SPLASH, "Rain Splash", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_PORTAL_PARTICLES, "Portal Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_PARTICLES, "Particles", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_DRIPPING_WATER_LAVA, "Dripping Water/Lava", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ANIMATED_TERRAIN, "Terrain Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
-    { HPTI_ANIMATED_ITEMS, "Items Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 0 },
-    { HPTI_ANIMATED_TEXTURES, "Textures Animated", HPTI_CAT_ANIMATIONS, HPTI_KIND_BUTTON, 1 },
+    { SF_ANIMATED_WATER, "Water Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_ANIMATED_LAVA, "Lava Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_ANIMATED_FIRE, "Fire Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_ANIMATED_PORTAL, "Portal Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_ANIMATED_REDSTONE, "Redstone Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_ANIMATED_EXPLOSION, "Explosion Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_ANIMATED_FLAME, "Flame Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_ANIMATED_SMOKE, "Smoke Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_VOID_PARTICLES, "Void Particles", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_WATER_PARTICLES, "Water Particles", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_RAIN_SPLASH, "Rain Splash", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_PORTAL_PARTICLES, "Portal Particles", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_PARTICLES, "Particles", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_DRIPPING_WATER_LAVA, "Dripping Water/Lava", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_ANIMATED_TERRAIN, "Terrain Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
+    { SF_ANIMATED_ITEMS, "Items Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 0 },
+    { SF_ANIMATED_TEXTURES, "Textures Animated", SF_CAT_ANIMATIONS, SF_KIND_BUTTON, 1 },
 
-    { HPTI_SMOOTH_FPS, "Smooth FPS", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
-    { HPTI_SMOOTH_INPUT, "Smooth Input", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
-    { HPTI_LOAD_FAR, "Load Far", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
-    { HPTI_PRELOADED_CHUNKS, "Preloaded Chunks", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 0 },
-    { HPTI_CHUNK_UPDATES, "Chunk Updates", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 1 },
-    { HPTI_CHUNK_UPDATES_DYNAMIC, "Dynamic Updates", HPTI_CAT_PERFORMANCE, HPTI_KIND_BUTTON, 1 },
+    { SF_SMOOTH_FPS, "Smooth FPS", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 0 },
+    { SF_SMOOTH_INPUT, "Smooth Input", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 0 },
+    { SF_LOAD_FAR, "Load Far", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 0 },
+    { SF_PRELOADED_CHUNKS, "Preloaded Chunks", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 0 },
+    { SF_CHUNK_UPDATES, "Chunk Updates", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 1 },
+    { SF_CHUNK_UPDATES_DYNAMIC, "Dynamic Updates", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 1 },
 
-    { HPTI_FAST_DEBUG_INFO, "Fast Debug Info", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
-    { HPTI_PROFILER, "Debug Profiler", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
-    { HPTI_WEATHER, "Weather", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
-    { HPTI_TIME, "Time", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
-    { HPTI_FULLSCREEN_MODE, "Fullscreen", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 },
-    { HPTI_AUTOSAVE_TICKS, "Autosave", HPTI_CAT_OTHER, HPTI_KIND_BUTTON, 0 }
+    { SF_FAST_DEBUG_INFO, "Fast Debug Info", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_PROFILER, "Debug Profiler", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_WEATHER, "Weather", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_TIME, "Time", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_FULLSCREEN_MODE, "Fullscreen", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_AUTOSAVE_TICKS, "Autosave", SF_CAT_OTHER, SF_KIND_BUTTON, 0 }
 };
 
-static const HptiBineOptionDef *hptibine_find_def(HptiBineOptionId id) {
-    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_defs); ++i) if (hptibine_defs[i].id == id) return &hptibine_defs[i];
+static const StivuFineOptionDef *stivufine_find_def(StivuFineOptionId id) {
+    for (int i = 0; i < (int)ARRAY_COUNT(stivufine_defs); ++i) if (stivufine_defs[i].id == id) return &stivufine_defs[i];
     return NULL;
 }
 
-static int hptibine_screen_category(ScreenId screen) {
-    if (screen == SCREEN_HPTIBINE) return HPTI_CAT_MAIN;
-    if (screen == SCREEN_HPTIBINE_DETAILS) return HPTI_CAT_DETAILS;
-    if (screen == SCREEN_HPTIBINE_QUALITY) return HPTI_CAT_QUALITY;
-    if (screen == SCREEN_HPTIBINE_ANIMATIONS) return HPTI_CAT_ANIMATIONS;
-    if (screen == SCREEN_HPTIBINE_PERFORMANCE) return HPTI_CAT_PERFORMANCE;
-    if (screen == SCREEN_HPTIBINE_OTHER) return HPTI_CAT_OTHER;
+static int stivufine_screen_category(ScreenId screen) {
+    if (screen == SCREEN_STIVUFINE) return SF_CAT_MAIN;
+    if (screen == SCREEN_STIVUFINE_DETAILS) return SF_CAT_DETAILS;
+    if (screen == SCREEN_STIVUFINE_QUALITY) return SF_CAT_QUALITY;
+    if (screen == SCREEN_STIVUFINE_ANIMATIONS) return SF_CAT_ANIMATIONS;
+    if (screen == SCREEN_STIVUFINE_PERFORMANCE) return SF_CAT_PERFORMANCE;
+    if (screen == SCREEN_STIVUFINE_OTHER) return SF_CAT_OTHER;
     return -1;
 }
 
-static const char *hptibine_screen_title_key(ScreenId screen, const char **fallback) {
-    if (fallback) *fallback = "HptiBine";
-    if (screen == SCREEN_HPTIBINE_DETAILS) { if (fallback) *fallback = "Detail Settings"; return "hb.options.detailsTitle"; }
-    if (screen == SCREEN_HPTIBINE_QUALITY) { if (fallback) *fallback = "Quality Settings"; return "hb.options.qualityTitle"; }
-    if (screen == SCREEN_HPTIBINE_ANIMATIONS) { if (fallback) *fallback = "Animation Settings"; return "hb.options.animationsTitle"; }
-    if (screen == SCREEN_HPTIBINE_PERFORMANCE) { if (fallback) *fallback = "Performance Settings"; return "hb.options.performanceTitle"; }
-    if (screen == SCREEN_HPTIBINE_OTHER) { if (fallback) *fallback = "Other Settings"; return "hb.options.otherTitle"; }
+static const char *stivufine_screen_title_key(ScreenId screen, const char **fallback) {
+    if (fallback) *fallback = "StivuFine";
+    if (screen == SCREEN_STIVUFINE_DETAILS) { if (fallback) *fallback = "Detail Settings"; return "sf.options.detailsTitle"; }
+    if (screen == SCREEN_STIVUFINE_QUALITY) { if (fallback) *fallback = "Quality Settings"; return "sf.options.qualityTitle"; }
+    if (screen == SCREEN_STIVUFINE_ANIMATIONS) { if (fallback) *fallback = "Animation Settings"; return "sf.options.animationsTitle"; }
+    if (screen == SCREEN_STIVUFINE_PERFORMANCE) { if (fallback) *fallback = "Performance Settings"; return "sf.options.performanceTitle"; }
+    if (screen == SCREEN_STIVUFINE_OTHER) { if (fallback) *fallback = "Other Settings"; return "sf.options.otherTitle"; }
     return NULL;
 }
 
-static const char *hptibine_screen_title(ScreenId screen) {
+static const char *stivufine_screen_title(ScreenId screen) {
     static char title[96];
-    const char *fallback = "HptiBine";
-    const char *key = hptibine_screen_title_key(screen, &fallback);
-    if (!key) return "HptiBine";
-    snprintf(title, sizeof(title), "HptiBine %s", tr_key_default(key, fallback));
+    const char *fallback = "StivuFine";
+    const char *key = stivufine_screen_title_key(screen, &fallback);
+    if (!key) return "StivuFine";
+    snprintf(title, sizeof(title), "StivuFine %s", tr_key_default(key, fallback));
     return title;
 }
 
-static const char *hptibine_option_lang_key(HptiBineOptionId id) {
+static const char *stivufine_option_lang_key(StivuFineOptionId id) {
     switch (id) {
-        case HPTI_GRAPHICS: return "options.graphics";
-        case HPTI_RENDER_DISTANCE_FINE: return "options.renderDistance";
-        case HPTI_AO_LEVEL: return "options.ao";
-        case HPTI_FRAMERATE_LIMIT: return "options.framerateLimit";
-        case HPTI_ANAGLYPH: return "options.anaglyph";
-        case HPTI_VIEW_BOBBING: return "options.viewBobbing";
-        case HPTI_GAMMA: return "options.gamma";
-        case HPTI_FOG_FANCY: return "hb.options.FOG_FANCY";
-        case HPTI_FOG_START: return "hb.options.FOG_START";
-        case HPTI_CLOUDS: return "hb.options.CLOUDS";
-        case HPTI_CLOUD_HEIGHT: return "hb.options.CLOUD_HEIGHT";
-        case HPTI_TREES: return "hb.options.TREES";
-        case HPTI_WATER: return "hb.options.WATER";
-        case HPTI_RAIN: return "hb.options.RAIN";
-        case HPTI_SKY: return "hb.options.SKY";
-        case HPTI_STARS: return "hb.options.STARS";
-        case HPTI_SUN_MOON: return "hb.options.SUN_MOON";
-        case HPTI_SHOW_CAPES: return "hb.options.SHOW_CAPES";
-        case HPTI_DEPTH_FOG: return "hb.options.DEPTH_FOG";
-        case HPTI_MIPMAP_LEVEL: return "hb.options.MIPMAP_LEVEL";
-        case HPTI_MIPMAP_TYPE: return "hb.options.MIPMAP_TYPE";
-        case HPTI_CLEAR_WATER: return "hb.options.CLEAR_WATER";
-        case HPTI_RANDOM_MOBS: return "hb.options.RANDOM_MOBS";
-        case HPTI_BETTER_GRASS: return "hb.options.BETTER_GRASS";
-        case HPTI_BETTER_SNOW: return "hb.options.BETTER_SNOW";
-        case HPTI_CUSTOM_FONTS: return "hb.options.CUSTOM_FONTS";
-        case HPTI_CUSTOM_COLORS: return "hb.options.CUSTOM_COLORS";
-        case HPTI_SWAMP_COLORS: return "hb.options.SWAMP_COLORS";
-        case HPTI_SMOOTH_BIOMES: return "hb.options.SMOOTH_BIOMES";
-        case HPTI_CONNECTED_TEXTURES: return "hb.options.CONNECTED_TEXTURES";
-        case HPTI_NATURAL_TEXTURES: return "hb.options.NATURAL_TEXTURES";
-        case HPTI_AA_LEVEL: return "hb.options.AA_LEVEL";
-        case HPTI_AF_LEVEL: return "hb.options.AF_LEVEL";
-        case HPTI_ANIMATED_WATER: return "hb.options.ANIMATED_WATER";
-        case HPTI_ANIMATED_LAVA: return "hb.options.ANIMATED_LAVA";
-        case HPTI_ANIMATED_FIRE: return "hb.options.ANIMATED_FIRE";
-        case HPTI_ANIMATED_PORTAL: return "hb.options.ANIMATED_PORTAL";
-        case HPTI_ANIMATED_REDSTONE: return "hb.options.ANIMATED_REDSTONE";
-        case HPTI_ANIMATED_EXPLOSION: return "hb.options.ANIMATED_EXPLOSION";
-        case HPTI_ANIMATED_FLAME: return "hb.options.ANIMATED_FLAME";
-        case HPTI_ANIMATED_SMOKE: return "hb.options.ANIMATED_SMOKE";
-        case HPTI_VOID_PARTICLES: return "hb.options.VOID_PARTICLES";
-        case HPTI_WATER_PARTICLES: return "hb.options.WATER_PARTICLES";
-        case HPTI_RAIN_SPLASH: return "hb.options.RAIN_SPLASH";
-        case HPTI_PORTAL_PARTICLES: return "hb.options.PORTAL_PARTICLES";
-        case HPTI_PARTICLES: return "options.particles";
-        case HPTI_DRIPPING_WATER_LAVA: return "hb.options.DRIPPING_WATER_LAVA";
-        case HPTI_ANIMATED_TERRAIN: return "hb.options.ANIMATED_TERRAIN";
-        case HPTI_ANIMATED_ITEMS: return "hb.options.ANIMATED_ITEMS";
-        case HPTI_ANIMATED_TEXTURES: return "hb.options.ANIMATED_TEXTURES";
-        case HPTI_SMOOTH_FPS: return "hb.options.SMOOTH_FPS";
-        case HPTI_SMOOTH_INPUT: return "hb.options.SMOOTH_INPUT";
-        case HPTI_LOAD_FAR: return "hb.options.LOAD_FAR";
-        case HPTI_PRELOADED_CHUNKS: return "hb.options.PRELOADED_CHUNKS";
-        case HPTI_CHUNK_UPDATES: return "hb.options.CHUNK_UPDATES";
-        case HPTI_CHUNK_UPDATES_DYNAMIC: return "hb.options.CHUNK_UPDATES_DYNAMIC";
-        case HPTI_FAST_DEBUG_INFO: return "hb.options.FAST_DEBUG_INFO";
-        case HPTI_PROFILER: return "hb.options.PROFILER";
-        case HPTI_WEATHER: return "hb.options.WEATHER";
-        case HPTI_TIME: return "hb.options.TIME";
-        case HPTI_FULLSCREEN_MODE: return "hb.options.FULLSCREEN_MODE";
-        case HPTI_AUTOSAVE_TICKS: return "hb.options.AUTOSAVE_TICKS";
+        case SF_GRAPHICS: return "options.graphics";
+        case SF_RENDER_DISTANCE_FINE: return "options.renderDistance";
+        case SF_AO_LEVEL: return "options.ao";
+        case SF_FRAMERATE_LIMIT: return "options.framerateLimit";
+        case SF_ANAGLYPH: return "options.anaglyph";
+        case SF_VIEW_BOBBING: return "options.viewBobbing";
+        case SF_GAMMA: return "options.gamma";
+        case SF_FOG_FANCY: return "sf.options.FOG_FANCY";
+        case SF_FOG_START: return "sf.options.FOG_START";
+        case SF_CLOUDS: return "sf.options.CLOUDS";
+        case SF_CLOUD_HEIGHT: return "sf.options.CLOUD_HEIGHT";
+        case SF_TREES: return "sf.options.TREES";
+        case SF_WATER: return "sf.options.WATER";
+        case SF_RAIN: return "sf.options.RAIN";
+        case SF_SKY: return "sf.options.SKY";
+        case SF_STARS: return "sf.options.STARS";
+        case SF_SUN_MOON: return "sf.options.SUN_MOON";
+        case SF_SHOW_CAPES: return "sf.options.SHOW_CAPES";
+        case SF_DEPTH_FOG: return "sf.options.DEPTH_FOG";
+        case SF_MIPMAP_LEVEL: return "sf.options.MIPMAP_LEVEL";
+        case SF_MIPMAP_TYPE: return "sf.options.MIPMAP_TYPE";
+        case SF_CLEAR_WATER: return "sf.options.CLEAR_WATER";
+        case SF_RANDOM_MOBS: return "sf.options.RANDOM_MOBS";
+        case SF_BETTER_GRASS: return "sf.options.BETTER_GRASS";
+        case SF_BETTER_SNOW: return "sf.options.BETTER_SNOW";
+        case SF_CUSTOM_FONTS: return "sf.options.CUSTOM_FONTS";
+        case SF_CUSTOM_COLORS: return "sf.options.CUSTOM_COLORS";
+        case SF_SWAMP_COLORS: return "sf.options.SWAMP_COLORS";
+        case SF_SMOOTH_BIOMES: return "sf.options.SMOOTH_BIOMES";
+        case SF_CONNECTED_TEXTURES: return "sf.options.CONNECTED_TEXTURES";
+        case SF_NATURAL_TEXTURES: return "sf.options.NATURAL_TEXTURES";
+        case SF_AA_LEVEL: return "sf.options.AA_LEVEL";
+        case SF_AF_LEVEL: return "sf.options.AF_LEVEL";
+        case SF_ANIMATED_WATER: return "sf.options.ANIMATED_WATER";
+        case SF_ANIMATED_LAVA: return "sf.options.ANIMATED_LAVA";
+        case SF_ANIMATED_FIRE: return "sf.options.ANIMATED_FIRE";
+        case SF_ANIMATED_PORTAL: return "sf.options.ANIMATED_PORTAL";
+        case SF_ANIMATED_REDSTONE: return "sf.options.ANIMATED_REDSTONE";
+        case SF_ANIMATED_EXPLOSION: return "sf.options.ANIMATED_EXPLOSION";
+        case SF_ANIMATED_FLAME: return "sf.options.ANIMATED_FLAME";
+        case SF_ANIMATED_SMOKE: return "sf.options.ANIMATED_SMOKE";
+        case SF_VOID_PARTICLES: return "sf.options.VOID_PARTICLES";
+        case SF_WATER_PARTICLES: return "sf.options.WATER_PARTICLES";
+        case SF_RAIN_SPLASH: return "sf.options.RAIN_SPLASH";
+        case SF_PORTAL_PARTICLES: return "sf.options.PORTAL_PARTICLES";
+        case SF_PARTICLES: return "options.particles";
+        case SF_DRIPPING_WATER_LAVA: return "sf.options.DRIPPING_WATER_LAVA";
+        case SF_ANIMATED_TERRAIN: return "sf.options.ANIMATED_TERRAIN";
+        case SF_ANIMATED_ITEMS: return "sf.options.ANIMATED_ITEMS";
+        case SF_ANIMATED_TEXTURES: return "sf.options.ANIMATED_TEXTURES";
+        case SF_SMOOTH_FPS: return "sf.options.SMOOTH_FPS";
+        case SF_SMOOTH_INPUT: return "sf.options.SMOOTH_INPUT";
+        case SF_LOAD_FAR: return "sf.options.LOAD_FAR";
+        case SF_PRELOADED_CHUNKS: return "sf.options.PRELOADED_CHUNKS";
+        case SF_CHUNK_UPDATES: return "sf.options.CHUNK_UPDATES";
+        case SF_CHUNK_UPDATES_DYNAMIC: return "sf.options.CHUNK_UPDATES_DYNAMIC";
+        case SF_FAST_DEBUG_INFO: return "sf.options.FAST_DEBUG_INFO";
+        case SF_PROFILER: return "sf.options.PROFILER";
+        case SF_WEATHER: return "sf.options.WEATHER";
+        case SF_TIME: return "sf.options.TIME";
+        case SF_FULLSCREEN_MODE: return "sf.options.FULLSCREEN_MODE";
+        case SF_AUTOSAVE_TICKS: return "sf.options.AUTOSAVE_TICKS";
         default: return NULL;
     }
 }
 
-static const char *hptibine_option_localized_name(const HptiBineOptionDef *d) {
+static const char *stivufine_option_localized_name(const StivuFineOptionDef *d) {
     const char *key;
-    if (!d) return "HptiBine";
-    key = hptibine_option_lang_key(d->id);
+    if (!d) return "StivuFine";
+    key = stivufine_option_lang_key(d->id);
     return key ? tr_key_default(key, d->label) : d->label;
 }
 
-static const char *hptibine_ui_on(void) { return tr_key_default("options.on", "ON"); }
-static const char *hptibine_ui_off(void) { return tr_key_default("options.off", "OFF"); }
-static const char *hptibine_ui_fast(void) { return tr_key_default("options.graphics.fast", "Fast"); }
-static const char *hptibine_ui_fancy(void) { return tr_key_default("options.graphics.fancy", "Fancy"); }
-static const char *hptibine_ui_default(void) { return tr_key_default("generator.default", "Default"); }
+static const char *stivufine_ui_on(void) { return tr_key_default("options.on", "ON"); }
+static const char *stivufine_ui_off(void) { return tr_key_default("options.off", "OFF"); }
+static const char *stivufine_ui_fast(void) { return tr_key_default("options.graphics.fast", "Fast"); }
+static const char *stivufine_ui_fancy(void) { return tr_key_default("options.graphics.fancy", "Fancy"); }
+static const char *stivufine_ui_default(void) { return tr_key_default("generator.default", "Default"); }
 
-static int hptibine_option_count_for_screen(ScreenId screen) {
-    int cat = hptibine_screen_category(screen);
+static int stivufine_option_count_for_screen(ScreenId screen) {
+    int cat = stivufine_screen_category(screen);
     int count = 0;
     if (cat < 0) return 0;
-    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_defs); ++i) if ((int)hptibine_defs[i].category == cat) count++;
+    for (int i = 0; i < (int)ARRAY_COUNT(stivufine_defs); ++i) if ((int)stivufine_defs[i].category == cat) count++;
     return count;
 }
 
-static HptiBineOptionId hptibine_option_at(ScreenId screen, int index) {
-    int cat = hptibine_screen_category(screen);
+static StivuFineOptionId stivufine_option_at(ScreenId screen, int index) {
+    int cat = stivufine_screen_category(screen);
     int count = 0;
-    if (cat < 0) return HPTI_GRAPHICS;
-    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_defs); ++i) {
-        if ((int)hptibine_defs[i].category != cat) continue;
-        if (count == index) return hptibine_defs[i].id;
+    if (cat < 0) return SF_GRAPHICS;
+    for (int i = 0; i < (int)ARRAY_COUNT(stivufine_defs); ++i) {
+        if ((int)stivufine_defs[i].category != cat) continue;
+        if (count == index) return stivufine_defs[i].id;
         count++;
     }
-    return HPTI_GRAPHICS;
+    return SF_GRAPHICS;
 }
 
-static int hptibine_option_enabled(HptiBineOptionId id) {
-    const HptiBineOptionDef *d = hptibine_find_def(id);
+static int stivufine_option_enabled(StivuFineOptionId id) {
+    const StivuFineOptionDef *d = stivufine_find_def(id);
     return d ? d->implemented : 0;
 }
 
-static int hptibine_option_is_slider(HptiBineOptionId id) {
-    const HptiBineOptionDef *d = hptibine_find_def(id);
-    return d && d->implemented && d->kind == HPTI_KIND_SLIDER;
+static int stivufine_option_is_slider(StivuFineOptionId id) {
+    const StivuFineOptionDef *d = stivufine_find_def(id);
+    return d && d->implemented && d->kind == SF_KIND_SLIDER;
 }
 
-static const char *hptibine_mode_default_fast_fancy_off(int v) {
-    if (v == HPTI_FAST) return hptibine_ui_fast();
-    if (v == HPTI_FANCY) return hptibine_ui_fancy();
-    if (v == HPTI_OFF) return hptibine_ui_off();
-    return hptibine_ui_default();
+static const char *stivufine_mode_default_fast_fancy_off(int v) {
+    if (v == SF_FAST) return stivufine_ui_fast();
+    if (v == SF_FANCY) return stivufine_ui_fancy();
+    if (v == SF_OFF) return stivufine_ui_off();
+    return stivufine_ui_default();
 }
 
-static const char *hptibine_mode_default_fast_fancy(int v) {
-    if (v == HPTI_FAST) return hptibine_ui_fast();
-    if (v == HPTI_FANCY) return hptibine_ui_fancy();
-    return hptibine_ui_default();
+static const char *stivufine_mode_default_fast_fancy(int v) {
+    if (v == SF_FAST) return stivufine_ui_fast();
+    if (v == SF_FANCY) return stivufine_ui_fancy();
+    return stivufine_ui_default();
 }
 
-static const char *hptibine_on_off(int v) { return v ? hptibine_ui_on() : hptibine_ui_off(); }
+static const char *stivufine_on_off(int v) { return v ? stivufine_ui_on() : stivufine_ui_off(); }
 
-static const char *hptibine_anim_mode_label(int v) {
-    if (v == HPTI_ANIM_DYNAMIC) return tr_key_default("hb.options.animation.dynamic", "Dynamic");
-    if (v == HPTI_ANIM_OFF) return hptibine_ui_off();
-    return hptibine_ui_on();
+static const char *stivufine_anim_mode_label(int v) {
+    if (v == SF_ANIM_DYNAMIC) return tr_key_default("sf.options.animation.dynamic", "Dynamic");
+    if (v == SF_ANIM_OFF) return stivufine_ui_off();
+    return stivufine_ui_on();
 }
 
-static int hptibine_parse_bool(const char *v) {
+static int stivufine_parse_bool(const char *v) {
     return v && (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes") || !strcmp(v, "on") || !strcmp(v, "ON"));
 }
 
-static void hptibine_set_defaults(void) {
-    g_opts.hpti_fog_type = 1;
-    g_opts.hpti_fog_start = 0.8f;
-    g_opts.hpti_ao_level = 1.0f;
-    g_opts.hpti_clouds = HPTI_DEFAULT;
-    g_opts.hpti_cloud_height = 0.0f;
-    g_opts.hpti_trees = HPTI_DEFAULT;
-    g_opts.hpti_grass = HPTI_OFF;
-    g_opts.hpti_water = HPTI_DEFAULT;
-    g_opts.hpti_rain = HPTI_DEFAULT;
-    g_opts.hpti_sky = 1;
-    g_opts.hpti_stars = 1;
-    g_opts.hpti_sun_moon = 1;
-    g_opts.hpti_depth_fog = 1;
-    g_opts.hpti_animated_water = HPTI_ANIM_ON;
-    g_opts.hpti_animated_lava = HPTI_ANIM_ON;
-    g_opts.hpti_animated_fire = 1;
-    g_opts.hpti_animated_portal = 1;
-    g_opts.hpti_animated_redstone = 1;
-    g_opts.hpti_animated_explosion = 1;
-    g_opts.hpti_animated_flame = 1;
-    g_opts.hpti_animated_smoke = 1;
-    g_opts.hpti_void_particles = 1;
-    g_opts.hpti_water_particles = 1;
-    g_opts.hpti_rain_splash = 1;
-    g_opts.hpti_portal_particles = 1;
-    g_opts.hpti_dripping_water_lava = 1;
-    g_opts.hpti_animated_terrain = 1;
-    g_opts.hpti_animated_items = 1;
-    g_opts.hpti_animated_textures = 1;
-    g_opts.hpti_particles = 0;
-    g_opts.hpti_chunk_updates = 1;
-    g_opts.hpti_chunk_updates_dynamic = 0;
-    g_opts.hpti_fast_debug_info = 0;
-    g_opts.hpti_profiler = 0;
-    g_opts.hpti_weather = 1;
-    g_opts.hpti_gamma = 0.0f;
-    g_opts.hpti_clear_water = 0;
-    g_opts.hpti_better_snow = 0;
-    g_opts.hpti_swamp_colors = 1;
-    g_opts.hpti_smooth_biomes = 1;
-    g_opts.hpti_custom_fonts = 1;
-    g_opts.hpti_custom_colors = 1;
+static void stivufine_set_defaults(void) {
+    g_opts.sf_fog_type = 1;
+    g_opts.sf_fog_start = 0.8f;
+    g_opts.sf_ao_level = 1.0f;
+    g_opts.sf_clouds = SF_DEFAULT;
+    g_opts.sf_cloud_height = 0.0f;
+    g_opts.sf_trees = SF_DEFAULT;
+    g_opts.sf_grass = SF_OFF;
+    g_opts.sf_water = SF_DEFAULT;
+    g_opts.sf_rain = SF_DEFAULT;
+    g_opts.sf_sky = 1;
+    g_opts.sf_stars = 1;
+    g_opts.sf_sun_moon = 1;
+    g_opts.sf_depth_fog = 1;
+    g_opts.sf_animated_water = SF_ANIM_ON;
+    g_opts.sf_animated_lava = SF_ANIM_ON;
+    g_opts.sf_animated_fire = 1;
+    g_opts.sf_animated_portal = 1;
+    g_opts.sf_animated_redstone = 1;
+    g_opts.sf_animated_explosion = 1;
+    g_opts.sf_animated_flame = 1;
+    g_opts.sf_animated_smoke = 1;
+    g_opts.sf_void_particles = 1;
+    g_opts.sf_water_particles = 1;
+    g_opts.sf_rain_splash = 1;
+    g_opts.sf_portal_particles = 1;
+    g_opts.sf_dripping_water_lava = 1;
+    g_opts.sf_animated_terrain = 1;
+    g_opts.sf_animated_items = 1;
+    g_opts.sf_animated_textures = 1;
+    g_opts.sf_particles = 0;
+    g_opts.sf_chunk_updates = 1;
+    g_opts.sf_chunk_updates_dynamic = 0;
+    g_opts.sf_fast_debug_info = 0;
+    g_opts.sf_profiler = 0;
+    g_opts.sf_weather = 1;
+    g_opts.sf_gamma = 0.0f;
+    g_opts.sf_clear_water = 0;
+    g_opts.sf_better_snow = 0;
+    g_opts.sf_swamp_colors = 1;
+    g_opts.sf_smooth_biomes = 1;
+    g_opts.sf_custom_fonts = 1;
+    g_opts.sf_custom_colors = 1;
 }
 
-static void hptibine_clamp_options(void) {
-    if (g_opts.hpti_fog_type < 1 || g_opts.hpti_fog_type > 3) g_opts.hpti_fog_type = 1;
-    if (g_opts.hpti_fog_start < 0.2f) g_opts.hpti_fog_start = 0.2f;
-    if (g_opts.hpti_fog_start > 0.8f) g_opts.hpti_fog_start = 0.8f;
-    if (g_opts.hpti_ao_level < 0.0f) g_opts.hpti_ao_level = 0.0f;
-    if (g_opts.hpti_ao_level > 1.0f) g_opts.hpti_ao_level = 1.0f;
-    if (g_opts.hpti_clouds < 0 || g_opts.hpti_clouds > 3) g_opts.hpti_clouds = 0;
-    if (g_opts.hpti_cloud_height < 0.0f) g_opts.hpti_cloud_height = 0.0f;
-    if (g_opts.hpti_cloud_height > 1.0f) g_opts.hpti_cloud_height = 1.0f;
-    if (g_opts.hpti_trees < 0 || g_opts.hpti_trees > 2) g_opts.hpti_trees = 0;
-    if (g_opts.hpti_grass < 1 || g_opts.hpti_grass > 3) g_opts.hpti_grass = 3;
-    if (g_opts.hpti_water < 0 || g_opts.hpti_water > 2) g_opts.hpti_water = 0;
-    if (g_opts.hpti_rain < 0 || g_opts.hpti_rain > 3) g_opts.hpti_rain = 0;
-    if (g_opts.hpti_animated_water < 0 || g_opts.hpti_animated_water > 2) g_opts.hpti_animated_water = 0;
-    if (g_opts.hpti_animated_lava < 0 || g_opts.hpti_animated_lava > 2) g_opts.hpti_animated_lava = 0;
-    if (g_opts.hpti_particles < 0 || g_opts.hpti_particles > 2) g_opts.hpti_particles = 0;
-    if (g_opts.hpti_gamma < 0.0f) g_opts.hpti_gamma = 0.0f;
-    if (g_opts.hpti_gamma > 1.0f) g_opts.hpti_gamma = 1.0f;
-    if (g_opts.hpti_clear_water < 0 || g_opts.hpti_clear_water > 1) g_opts.hpti_clear_water = 0;
-    if (g_opts.hpti_better_snow < 0 || g_opts.hpti_better_snow > 1) g_opts.hpti_better_snow = 0;
-    if (g_opts.hpti_swamp_colors < 0 || g_opts.hpti_swamp_colors > 1) g_opts.hpti_swamp_colors = 1;
-    if (g_opts.hpti_smooth_biomes < 0 || g_opts.hpti_smooth_biomes > 1) g_opts.hpti_smooth_biomes = 1;
-    if (g_opts.hpti_custom_fonts < 0 || g_opts.hpti_custom_fonts > 1) g_opts.hpti_custom_fonts = 1;
-    if (g_opts.hpti_custom_colors < 0 || g_opts.hpti_custom_colors > 1) g_opts.hpti_custom_colors = 1;
-    if (g_opts.hpti_chunk_updates < 1) g_opts.hpti_chunk_updates = 1;
-    if (g_opts.hpti_chunk_updates > 5) g_opts.hpti_chunk_updates = 5;
+static void stivufine_clamp_options(void) {
+    if (g_opts.sf_fog_type < 1 || g_opts.sf_fog_type > 3) g_opts.sf_fog_type = 1;
+    if (g_opts.sf_fog_start < 0.2f) g_opts.sf_fog_start = 0.2f;
+    if (g_opts.sf_fog_start > 0.8f) g_opts.sf_fog_start = 0.8f;
+    if (g_opts.sf_ao_level < 0.0f) g_opts.sf_ao_level = 0.0f;
+    if (g_opts.sf_ao_level > 1.0f) g_opts.sf_ao_level = 1.0f;
+    if (g_opts.sf_clouds < 0 || g_opts.sf_clouds > 3) g_opts.sf_clouds = 0;
+    if (g_opts.sf_cloud_height < 0.0f) g_opts.sf_cloud_height = 0.0f;
+    if (g_opts.sf_cloud_height > 1.0f) g_opts.sf_cloud_height = 1.0f;
+    if (g_opts.sf_trees < 0 || g_opts.sf_trees > 2) g_opts.sf_trees = 0;
+    if (g_opts.sf_grass < 1 || g_opts.sf_grass > 3) g_opts.sf_grass = 3;
+    if (g_opts.sf_water < 0 || g_opts.sf_water > 2) g_opts.sf_water = 0;
+    if (g_opts.sf_rain < 0 || g_opts.sf_rain > 3) g_opts.sf_rain = 0;
+    if (g_opts.sf_animated_water < 0 || g_opts.sf_animated_water > 2) g_opts.sf_animated_water = 0;
+    if (g_opts.sf_animated_lava < 0 || g_opts.sf_animated_lava > 2) g_opts.sf_animated_lava = 0;
+    if (g_opts.sf_particles < 0 || g_opts.sf_particles > 2) g_opts.sf_particles = 0;
+    if (g_opts.sf_gamma < 0.0f) g_opts.sf_gamma = 0.0f;
+    if (g_opts.sf_gamma > 1.0f) g_opts.sf_gamma = 1.0f;
+    if (g_opts.sf_clear_water < 0 || g_opts.sf_clear_water > 1) g_opts.sf_clear_water = 0;
+    if (g_opts.sf_better_snow < 0 || g_opts.sf_better_snow > 1) g_opts.sf_better_snow = 0;
+    if (g_opts.sf_swamp_colors < 0 || g_opts.sf_swamp_colors > 1) g_opts.sf_swamp_colors = 1;
+    if (g_opts.sf_smooth_biomes < 0 || g_opts.sf_smooth_biomes > 1) g_opts.sf_smooth_biomes = 1;
+    if (g_opts.sf_custom_fonts < 0 || g_opts.sf_custom_fonts > 1) g_opts.sf_custom_fonts = 1;
+    if (g_opts.sf_custom_colors < 0 || g_opts.sf_custom_colors > 1) g_opts.sf_custom_colors = 1;
+    if (g_opts.sf_chunk_updates < 1) g_opts.sf_chunk_updates = 1;
+    if (g_opts.sf_chunk_updates > 5) g_opts.sf_chunk_updates = 5;
 }
 
-static void hptibine_load_file_named(const char *name) {
+static void stivufine_load_file_named(const char *name) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     (void)name;
 #else
@@ -449,199 +449,199 @@ static void hptibine_load_file_named(const char *name) {
         *p++ = 0;
         char *k = trim(line);
         char *v = trim(p);
-        if (!strcmp(k, "hbFogType")) g_opts.hpti_fog_type = atoi(v);
-        else if (!strcmp(k, "hbFogStart")) g_opts.hpti_fog_start = parse_float_java(v);
-        else if (!strcmp(k, "hbAoLevel")) g_opts.hpti_ao_level = parse_float_java(v);
-        else if (!strcmp(k, "hbClouds")) g_opts.hpti_clouds = atoi(v);
-        else if (!strcmp(k, "hbCloudsHeight")) g_opts.hpti_cloud_height = parse_float_java(v);
-        else if (!strcmp(k, "hbTrees")) g_opts.hpti_trees = atoi(v);
-        else if (!strcmp(k, "hbGrass") || !strcmp(k, "hbBetterGrass")) { g_opts.hpti_grass = atoi(v); if (g_opts.hpti_grass <= 0) g_opts.hpti_grass = 3; }
-        else if (!strcmp(k, "hbWater")) g_opts.hpti_water = atoi(v);
-        else if (!strcmp(k, "hbRain")) g_opts.hpti_rain = atoi(v);
-        else if (!strcmp(k, "hbSky")) g_opts.hpti_sky = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbStars")) g_opts.hpti_stars = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbSunMoon")) g_opts.hpti_sun_moon = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbDepthFog")) g_opts.hpti_depth_fog = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedWater")) g_opts.hpti_animated_water = atoi(v);
-        else if (!strcmp(k, "hbAnimatedLava")) g_opts.hpti_animated_lava = atoi(v);
-        else if (!strcmp(k, "hbAnimatedFire")) g_opts.hpti_animated_fire = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedPortal")) g_opts.hpti_animated_portal = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedRedstone")) g_opts.hpti_animated_redstone = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedExplosion")) g_opts.hpti_animated_explosion = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedFlame")) g_opts.hpti_animated_flame = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedSmoke")) g_opts.hpti_animated_smoke = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbVoidParticles")) g_opts.hpti_void_particles = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbWaterParticles")) g_opts.hpti_water_particles = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbRainSplash")) g_opts.hpti_rain_splash = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbPortalParticles")) g_opts.hpti_portal_particles = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbDrippingWaterLava")) g_opts.hpti_dripping_water_lava = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedTerrain")) g_opts.hpti_animated_terrain = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedItems")) g_opts.hpti_animated_items = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbAnimatedTextures")) g_opts.hpti_animated_textures = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbChunkUpdates")) g_opts.hpti_chunk_updates = atoi(v);
-        else if (!strcmp(k, "hbChunkUpdatesDynamic")) g_opts.hpti_chunk_updates_dynamic = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbFastDebugInfo")) g_opts.hpti_fast_debug_info = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbProfiler")) g_opts.hpti_profiler = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbWeather")) g_opts.hpti_weather = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbClearWater")) g_opts.hpti_clear_water = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbBetterSnow")) g_opts.hpti_better_snow = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbSwampColors")) g_opts.hpti_swamp_colors = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbSmoothBiomes")) g_opts.hpti_smooth_biomes = hptibine_parse_bool(v);
-        else if (!strcmp(k, "gamma") || !strcmp(k, "hbGamma") || !strcmp(k, "hbBrightness")) g_opts.hpti_gamma = parse_float_java(v);
-        else if (!strcmp(k, "hbCustomFonts")) g_opts.hpti_custom_fonts = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbCustomColors")) g_opts.hpti_custom_colors = hptibine_parse_bool(v);
-        else if (!strcmp(k, "particles") || !strcmp(k, "particleSetting")) g_opts.hpti_particles = atoi(v);
+        if (!strcmp(k, "sfFogType")) g_opts.sf_fog_type = atoi(v);
+        else if (!strcmp(k, "sfFogStart")) g_opts.sf_fog_start = parse_float_java(v);
+        else if (!strcmp(k, "sfAoLevel")) g_opts.sf_ao_level = parse_float_java(v);
+        else if (!strcmp(k, "sfClouds")) g_opts.sf_clouds = atoi(v);
+        else if (!strcmp(k, "sfCloudsHeight")) g_opts.sf_cloud_height = parse_float_java(v);
+        else if (!strcmp(k, "sfTrees")) g_opts.sf_trees = atoi(v);
+        else if (!strcmp(k, "sfGrass") || !strcmp(k, "sfBetterGrass")) { g_opts.sf_grass = atoi(v); if (g_opts.sf_grass <= 0) g_opts.sf_grass = 3; }
+        else if (!strcmp(k, "sfWater")) g_opts.sf_water = atoi(v);
+        else if (!strcmp(k, "sfRain")) g_opts.sf_rain = atoi(v);
+        else if (!strcmp(k, "sfSky")) g_opts.sf_sky = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfStars")) g_opts.sf_stars = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfSunMoon")) g_opts.sf_sun_moon = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfDepthFog")) g_opts.sf_depth_fog = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedWater")) g_opts.sf_animated_water = atoi(v);
+        else if (!strcmp(k, "sfAnimatedLava")) g_opts.sf_animated_lava = atoi(v);
+        else if (!strcmp(k, "sfAnimatedFire")) g_opts.sf_animated_fire = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedPortal")) g_opts.sf_animated_portal = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedRedstone")) g_opts.sf_animated_redstone = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedExplosion")) g_opts.sf_animated_explosion = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedFlame")) g_opts.sf_animated_flame = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedSmoke")) g_opts.sf_animated_smoke = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfVoidParticles")) g_opts.sf_void_particles = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfWaterParticles")) g_opts.sf_water_particles = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfRainSplash")) g_opts.sf_rain_splash = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfPortalParticles")) g_opts.sf_portal_particles = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfDrippingWaterLava")) g_opts.sf_dripping_water_lava = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedTerrain")) g_opts.sf_animated_terrain = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedItems")) g_opts.sf_animated_items = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfAnimatedTextures")) g_opts.sf_animated_textures = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfChunkUpdates")) g_opts.sf_chunk_updates = atoi(v);
+        else if (!strcmp(k, "sfChunkUpdatesDynamic")) g_opts.sf_chunk_updates_dynamic = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfFastDebugInfo")) g_opts.sf_fast_debug_info = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfProfiler")) g_opts.sf_profiler = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfWeather")) g_opts.sf_weather = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfClearWater")) g_opts.sf_clear_water = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfBetterSnow")) g_opts.sf_better_snow = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfSwampColors")) g_opts.sf_swamp_colors = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfSmoothBiomes")) g_opts.sf_smooth_biomes = stivufine_parse_bool(v);
+        else if (!strcmp(k, "gamma") || !strcmp(k, "sfGamma") || !strcmp(k, "sfBrightness")) g_opts.sf_gamma = parse_float_java(v);
+        else if (!strcmp(k, "sfCustomFonts")) g_opts.sf_custom_fonts = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfCustomColors")) g_opts.sf_custom_colors = stivufine_parse_bool(v);
+        else if (!strcmp(k, "particles") || !strcmp(k, "particleSetting")) g_opts.sf_particles = atoi(v);
     }
     fclose(f);
-    hptibine_clamp_options();
+    stivufine_clamp_options();
     }
 #endif
 }
 
-static void load_hptibine_options(void) {
-    hptibine_load_file_named("optionshptibine_legacy.txt");
-    hptibine_load_file_named("optionshptibine.txt");
+static void load_stivufine_options(void) {
+    stivufine_load_file_named("optionsstivufine_legacy.txt");
+    stivufine_load_file_named("optionsstivufine.txt");
 }
 
-static void save_hptibine_options(void) {
+static void save_stivufine_options(void) {
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     return;
 #else
-    hptibine_clamp_options();
+    stivufine_clamp_options();
     char path[MAX_PATHBUF];
-    path_join(path, sizeof(path), g_mc_dir, "optionshptibine.txt");
+    path_join(path, sizeof(path), g_mc_dir, "optionsstivufine.txt");
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "# HptiBine settings (HptiBine hb* keys)\n");
-    fprintf(f, "hbFogType:%d\n", g_opts.hpti_fog_type);
-    fprintf(f, "hbFogStart:%g\n", g_opts.hpti_fog_start);
-    fprintf(f, "hbAoLevel:%g\n", g_opts.hpti_ao_level);
-    fprintf(f, "hbClouds:%d\n", g_opts.hpti_clouds);
-    fprintf(f, "hbCloudsHeight:%g\n", g_opts.hpti_cloud_height);
-    fprintf(f, "hbTrees:%d\n", g_opts.hpti_trees);
-    fprintf(f, "hbGrass:%d\n", g_opts.hpti_grass);
-    fprintf(f, "hbBetterGrass:%d\n", g_opts.hpti_grass);
-    fprintf(f, "hbWater:%d\n", g_opts.hpti_water);
-    fprintf(f, "hbRain:%d\n", g_opts.hpti_rain);
-    fprintf(f, "hbSky:%s\n", g_opts.hpti_sky ? "true" : "false");
-    fprintf(f, "hbStars:%s\n", g_opts.hpti_stars ? "true" : "false");
-    fprintf(f, "hbSunMoon:%s\n", g_opts.hpti_sun_moon ? "true" : "false");
-    fprintf(f, "hbDepthFog:%s\n", g_opts.hpti_depth_fog ? "true" : "false");
-    fprintf(f, "hbAnimatedWater:%d\n", g_opts.hpti_animated_water);
-    fprintf(f, "hbAnimatedLava:%d\n", g_opts.hpti_animated_lava);
-    fprintf(f, "hbAnimatedFire:%s\n", g_opts.hpti_animated_fire ? "true" : "false");
-    fprintf(f, "hbAnimatedPortal:%s\n", g_opts.hpti_animated_portal ? "true" : "false");
-    fprintf(f, "hbAnimatedRedstone:%s\n", g_opts.hpti_animated_redstone ? "true" : "false");
-    fprintf(f, "hbAnimatedExplosion:%s\n", g_opts.hpti_animated_explosion ? "true" : "false");
-    fprintf(f, "hbAnimatedFlame:%s\n", g_opts.hpti_animated_flame ? "true" : "false");
-    fprintf(f, "hbAnimatedSmoke:%s\n", g_opts.hpti_animated_smoke ? "true" : "false");
-    fprintf(f, "hbVoidParticles:%s\n", g_opts.hpti_void_particles ? "true" : "false");
-    fprintf(f, "hbWaterParticles:%s\n", g_opts.hpti_water_particles ? "true" : "false");
-    fprintf(f, "hbRainSplash:%s\n", g_opts.hpti_rain_splash ? "true" : "false");
-    fprintf(f, "hbPortalParticles:%s\n", g_opts.hpti_portal_particles ? "true" : "false");
-    fprintf(f, "hbDrippingWaterLava:%s\n", g_opts.hpti_dripping_water_lava ? "true" : "false");
-    fprintf(f, "hbAnimatedTerrain:%s\n", g_opts.hpti_animated_terrain ? "true" : "false");
-    fprintf(f, "hbAnimatedItems:%s\n", g_opts.hpti_animated_items ? "true" : "false");
-    fprintf(f, "hbAnimatedTextures:%s\n", g_opts.hpti_animated_textures ? "true" : "false");
-    fprintf(f, "particles:%d\n", g_opts.hpti_particles);
-    fprintf(f, "hbChunkUpdates:%d\n", g_opts.hpti_chunk_updates);
-    fprintf(f, "hbChunkUpdatesDynamic:%s\n", g_opts.hpti_chunk_updates_dynamic ? "true" : "false");
-    fprintf(f, "hbFastDebugInfo:%s\n", g_opts.hpti_fast_debug_info ? "true" : "false");
-    fprintf(f, "hbProfiler:%s\n", g_opts.hpti_profiler ? "true" : "false");
-    fprintf(f, "hbWeather:%s\n", g_opts.hpti_weather ? "true" : "false");
-    fprintf(f, "hbClearWater:%s\n", g_opts.hpti_clear_water ? "true" : "false");
-    fprintf(f, "hbBetterSnow:%s\n", g_opts.hpti_better_snow ? "true" : "false");
-    fprintf(f, "hbSwampColors:%s\n", g_opts.hpti_swamp_colors ? "true" : "false");
-    fprintf(f, "hbSmoothBiomes:%s\n", g_opts.hpti_smooth_biomes ? "true" : "false");
-    fprintf(f, "gamma:%g\n", g_opts.hpti_gamma);
-    fprintf(f, "hbGamma:%g\n", g_opts.hpti_gamma);
-    fprintf(f, "hbCustomFonts:%s\n", g_opts.hpti_custom_fonts ? "true" : "false");
-    fprintf(f, "hbCustomColors:%s\n", g_opts.hpti_custom_colors ? "true" : "false");
+    fprintf(f, "# StivuFine settings (StivuFine sf* keys)\n");
+    fprintf(f, "sfFogType:%d\n", g_opts.sf_fog_type);
+    fprintf(f, "sfFogStart:%g\n", g_opts.sf_fog_start);
+    fprintf(f, "sfAoLevel:%g\n", g_opts.sf_ao_level);
+    fprintf(f, "sfClouds:%d\n", g_opts.sf_clouds);
+    fprintf(f, "sfCloudsHeight:%g\n", g_opts.sf_cloud_height);
+    fprintf(f, "sfTrees:%d\n", g_opts.sf_trees);
+    fprintf(f, "sfGrass:%d\n", g_opts.sf_grass);
+    fprintf(f, "sfBetterGrass:%d\n", g_opts.sf_grass);
+    fprintf(f, "sfWater:%d\n", g_opts.sf_water);
+    fprintf(f, "sfRain:%d\n", g_opts.sf_rain);
+    fprintf(f, "sfSky:%s\n", g_opts.sf_sky ? "true" : "false");
+    fprintf(f, "sfStars:%s\n", g_opts.sf_stars ? "true" : "false");
+    fprintf(f, "sfSunMoon:%s\n", g_opts.sf_sun_moon ? "true" : "false");
+    fprintf(f, "sfDepthFog:%s\n", g_opts.sf_depth_fog ? "true" : "false");
+    fprintf(f, "sfAnimatedWater:%d\n", g_opts.sf_animated_water);
+    fprintf(f, "sfAnimatedLava:%d\n", g_opts.sf_animated_lava);
+    fprintf(f, "sfAnimatedFire:%s\n", g_opts.sf_animated_fire ? "true" : "false");
+    fprintf(f, "sfAnimatedPortal:%s\n", g_opts.sf_animated_portal ? "true" : "false");
+    fprintf(f, "sfAnimatedRedstone:%s\n", g_opts.sf_animated_redstone ? "true" : "false");
+    fprintf(f, "sfAnimatedExplosion:%s\n", g_opts.sf_animated_explosion ? "true" : "false");
+    fprintf(f, "sfAnimatedFlame:%s\n", g_opts.sf_animated_flame ? "true" : "false");
+    fprintf(f, "sfAnimatedSmoke:%s\n", g_opts.sf_animated_smoke ? "true" : "false");
+    fprintf(f, "sfVoidParticles:%s\n", g_opts.sf_void_particles ? "true" : "false");
+    fprintf(f, "sfWaterParticles:%s\n", g_opts.sf_water_particles ? "true" : "false");
+    fprintf(f, "sfRainSplash:%s\n", g_opts.sf_rain_splash ? "true" : "false");
+    fprintf(f, "sfPortalParticles:%s\n", g_opts.sf_portal_particles ? "true" : "false");
+    fprintf(f, "sfDrippingWaterLava:%s\n", g_opts.sf_dripping_water_lava ? "true" : "false");
+    fprintf(f, "sfAnimatedTerrain:%s\n", g_opts.sf_animated_terrain ? "true" : "false");
+    fprintf(f, "sfAnimatedItems:%s\n", g_opts.sf_animated_items ? "true" : "false");
+    fprintf(f, "sfAnimatedTextures:%s\n", g_opts.sf_animated_textures ? "true" : "false");
+    fprintf(f, "particles:%d\n", g_opts.sf_particles);
+    fprintf(f, "sfChunkUpdates:%d\n", g_opts.sf_chunk_updates);
+    fprintf(f, "sfChunkUpdatesDynamic:%s\n", g_opts.sf_chunk_updates_dynamic ? "true" : "false");
+    fprintf(f, "sfFastDebugInfo:%s\n", g_opts.sf_fast_debug_info ? "true" : "false");
+    fprintf(f, "sfProfiler:%s\n", g_opts.sf_profiler ? "true" : "false");
+    fprintf(f, "sfWeather:%s\n", g_opts.sf_weather ? "true" : "false");
+    fprintf(f, "sfClearWater:%s\n", g_opts.sf_clear_water ? "true" : "false");
+    fprintf(f, "sfBetterSnow:%s\n", g_opts.sf_better_snow ? "true" : "false");
+    fprintf(f, "sfSwampColors:%s\n", g_opts.sf_swamp_colors ? "true" : "false");
+    fprintf(f, "sfSmoothBiomes:%s\n", g_opts.sf_smooth_biomes ? "true" : "false");
+    fprintf(f, "gamma:%g\n", g_opts.sf_gamma);
+    fprintf(f, "sfGamma:%g\n", g_opts.sf_gamma);
+    fprintf(f, "sfCustomFonts:%s\n", g_opts.sf_custom_fonts ? "true" : "false");
+    fprintf(f, "sfCustomColors:%s\n", g_opts.sf_custom_colors ? "true" : "false");
     fclose(f);
 #endif
 }
 
-static int hptibine_cloud_mode(void) {
-    if (g_opts.hpti_clouds == HPTI_FAST || g_opts.hpti_clouds == HPTI_FANCY || g_opts.hpti_clouds == HPTI_OFF) return g_opts.hpti_clouds;
-    return g_opts.fancy_graphics ? HPTI_FANCY : HPTI_FAST;
+static int stivufine_cloud_mode(void) {
+    if (g_opts.sf_clouds == SF_FAST || g_opts.sf_clouds == SF_FANCY || g_opts.sf_clouds == SF_OFF) return g_opts.sf_clouds;
+    return g_opts.fancy_graphics ? SF_FANCY : SF_FAST;
 }
 
-static int hptibine_fancy_trees_enabled(void) {
-    if (g_opts.hpti_trees == HPTI_FAST) return 0;
-    if (g_opts.hpti_trees == HPTI_FANCY) return 1;
+static int stivufine_fancy_trees_enabled(void) {
+    if (g_opts.sf_trees == SF_FAST) return 0;
+    if (g_opts.sf_trees == SF_FANCY) return 1;
     return g_opts.fancy_graphics;
 }
 
-static int hptibine_better_grass_enabled(void) { return g_opts.hpti_grass != HPTI_OFF; }
-static int hptibine_better_grass_fancy_enabled(void) { return g_opts.hpti_grass == HPTI_FANCY; }
-static int hptibine_fancy_grass_enabled(void) { return g_opts.fancy_graphics || hptibine_better_grass_fancy_enabled(); }
+static int stivufine_better_grass_enabled(void) { return g_opts.sf_grass != SF_OFF; }
+static int stivufine_better_grass_fancy_enabled(void) { return g_opts.sf_grass == SF_FANCY; }
+static int stivufine_fancy_grass_enabled(void) { return g_opts.fancy_graphics || stivufine_better_grass_fancy_enabled(); }
 
-static int hptibine_custom_fonts_enabled(void) { return g_opts.hpti_custom_fonts; }
-static int hptibine_custom_colors_enabled(void) { return g_opts.hpti_custom_colors; }
-static int hptibine_better_snow_enabled(void) { return g_opts.hpti_better_snow; }
-static int hptibine_swamp_colors_enabled(void) { return g_opts.hpti_swamp_colors; }
-static int hptibine_smooth_biomes_enabled(void) { return g_opts.hpti_smooth_biomes; }
+static int stivufine_custom_fonts_enabled(void) { return g_opts.sf_custom_fonts; }
+static int stivufine_custom_colors_enabled(void) { return g_opts.sf_custom_colors; }
+static int stivufine_better_snow_enabled(void) { return g_opts.sf_better_snow; }
+static int stivufine_swamp_colors_enabled(void) { return g_opts.sf_swamp_colors; }
+static int stivufine_smooth_biomes_enabled(void) { return g_opts.sf_smooth_biomes; }
 
-static int hptibine_smooth_lighting_enabled(void) {
-    return g_opts.hpti_ao_level > 0.0001f;
+static int stivufine_smooth_lighting_enabled(void) {
+    return g_opts.sf_ao_level > 0.0001f;
 }
 
-static int hptibine_textures_animated(void) {
-    return g_opts.hpti_animated_textures && g_opts.hpti_animated_terrain;
+static int stivufine_textures_animated(void) {
+    return g_opts.sf_animated_textures && g_opts.sf_animated_terrain;
 }
 
-static int hptibine_animate_water_texture(void) {
-    return hptibine_textures_animated() && g_opts.hpti_animated_water != HPTI_ANIM_OFF;
+static int stivufine_animate_water_texture(void) {
+    return stivufine_textures_animated() && g_opts.sf_animated_water != SF_ANIM_OFF;
 }
 
-static int hptibine_animate_lava_texture(void) {
-    return hptibine_textures_animated() && g_opts.hpti_animated_lava != HPTI_ANIM_OFF;
+static int stivufine_animate_lava_texture(void) {
+    return stivufine_textures_animated() && g_opts.sf_animated_lava != SF_ANIM_OFF;
 }
 
-static int hptibine_animate_portal_texture(void) {
-    return hptibine_textures_animated() && g_opts.hpti_animated_portal;
+static int stivufine_animate_portal_texture(void) {
+    return stivufine_textures_animated() && g_opts.sf_animated_portal;
 }
 
-static int hptibine_particle_allowed(void) {
-    if (g_opts.hpti_particles <= 0) return 1;
-    if (g_opts.hpti_particles == 1) return (rand() & 1) == 0;
+static int stivufine_particle_allowed(void) {
+    if (g_opts.sf_particles <= 0) return 1;
+    if (g_opts.sf_particles == 1) return (rand() & 1) == 0;
     return (rand() & 3) == 0;
 }
 
-static int hptibine_water_particles_enabled(void) { return g_opts.hpti_water_particles && hptibine_particle_allowed(); }
-static int hptibine_portal_particles_enabled(void) { return g_opts.hpti_portal_particles && hptibine_particle_allowed(); }
-static int hptibine_chunk_updates(void) { hptibine_clamp_options(); return g_opts.hpti_chunk_updates; }
-static int hptibine_dynamic_chunk_updates_enabled(void) { return g_opts.hpti_chunk_updates_dynamic; }
+static int stivufine_water_particles_enabled(void) { return g_opts.sf_water_particles && stivufine_particle_allowed(); }
+static int stivufine_portal_particles_enabled(void) { return g_opts.sf_portal_particles && stivufine_particle_allowed(); }
+static int stivufine_chunk_updates(void) { stivufine_clamp_options(); return g_opts.sf_chunk_updates; }
+static int stivufine_dynamic_chunk_updates_enabled(void) { return g_opts.sf_chunk_updates_dynamic; }
 
-static float get_hptibine_option_float(HptiBineOptionId opt) {
-    if (opt == HPTI_RENDER_DISTANCE_FINE) {
+static float get_stivufine_option_float(StivuFineOptionId opt) {
+    if (opt == SF_RENDER_DISTANCE_FINE) {
         int c = g_opts.render_distance;
         if (c < 2) c = 2;
         if (c > 32) c = 32;
         return (float)(c - 2) / 30.0f;
     }
-    if (opt == HPTI_AO_LEVEL) return g_opts.hpti_ao_level;
-    if (opt == HPTI_GAMMA) return g_opts.hpti_gamma;
-    if (opt == HPTI_FRAMERATE_LIMIT) return get_option_float(OPT_LIMIT_FRAMERATE);
+    if (opt == SF_AO_LEVEL) return g_opts.sf_ao_level;
+    if (opt == SF_GAMMA) return g_opts.sf_gamma;
+    if (opt == SF_FRAMERATE_LIMIT) return get_option_float(OPT_LIMIT_FRAMERATE);
     return 0.0f;
 }
 
-static void set_hptibine_option_float(HptiBineOptionId opt, float v) {
+static void set_stivufine_option_float(StivuFineOptionId opt, float v) {
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
-    if (opt == HPTI_RENDER_DISTANCE_FINE) set_option_float(OPT_RENDER_DISTANCE, v);
-    else if (opt == HPTI_AO_LEVEL) {
-        g_opts.hpti_ao_level = v;
+    if (opt == SF_RENDER_DISTANCE_FINE) set_option_float(OPT_RENDER_DISTANCE, v);
+    else if (opt == SF_AO_LEVEL) {
+        g_opts.sf_ao_level = v;
         flat_mark_all_chunks_dirty();
         save_options();
-    } else if (opt == HPTI_GAMMA) {
-        g_opts.hpti_gamma = v;
+    } else if (opt == SF_GAMMA) {
+        g_opts.sf_gamma = v;
         flat_mark_all_chunks_dirty();
         save_options();
-    } else if (opt == HPTI_FRAMERATE_LIMIT) set_option_float(OPT_LIMIT_FRAMERATE, v);
+    } else if (opt == SF_FRAMERATE_LIMIT) set_option_float(OPT_LIMIT_FRAMERATE, v);
 }
 
-static void hptibine_render_distance_label(char *out, size_t cap) {
+static void stivufine_render_distance_label(char *out, size_t cap) {
     int blocks = g_opts.render_distance * 16;
     const char *name = tr_key_default("options.renderDistance.tiny", "Tiny");
     const char *label = tr_key_default("options.renderDistance", "Render Distance");
@@ -649,150 +649,150 @@ static void hptibine_render_distance_label(char *out, size_t cap) {
     if (blocks >= 64) { name = tr_key_default("options.renderDistance.short", "Short"); base = 64; }
     if (blocks >= 128) { name = tr_key_default("options.renderDistance.normal", "Normal"); base = 128; }
     if (blocks >= 256) { name = tr_key_default("options.renderDistance.far", "Far"); base = 256; }
-    if (blocks >= 512) { name = tr_key_default("hb.options.renderDistance.extreme", "Extreme"); base = 512; }
+    if (blocks >= 512) { name = tr_key_default("sf.options.renderDistance.extreme", "Extreme"); base = 512; }
     int diff = blocks - base;
     if (diff == 0) snprintf(out, cap, "%s: %s", label, name);
     else snprintf(out, cap, "%s: %s +%d", label, name, diff);
 }
 
-static void get_hptibine_option_label(HptiBineOptionId opt, char *out, size_t cap) {
-    const HptiBineOptionDef *d = hptibine_find_def(opt);
-    const char *name = hptibine_option_localized_name(d);
+static void get_stivufine_option_label(StivuFineOptionId opt, char *out, size_t cap) {
+    const StivuFineOptionDef *d = stivufine_find_def(opt);
+    const char *name = stivufine_option_localized_name(d);
     if (!d || !d->implemented) { snprintf(out, cap, "%s: N/A", name); return; }
     switch (opt) {
-        case HPTI_GRAPHICS: snprintf(out, cap, "%s: %s", name, g_opts.fancy_graphics ? hptibine_ui_fancy() : hptibine_ui_fast()); break;
-        case HPTI_RENDER_DISTANCE_FINE: hptibine_render_distance_label(out, cap); break;
-        case HPTI_AO_LEVEL:
-            if (g_opts.hpti_ao_level <= 0.0f) snprintf(out, cap, "%s: %s", name, hptibine_ui_off());
-            else snprintf(out, cap, "%s: %d%%", name, (int)(g_opts.hpti_ao_level * 100.0f + 0.5f));
+        case SF_GRAPHICS: snprintf(out, cap, "%s: %s", name, g_opts.fancy_graphics ? stivufine_ui_fancy() : stivufine_ui_fast()); break;
+        case SF_RENDER_DISTANCE_FINE: stivufine_render_distance_label(out, cap); break;
+        case SF_AO_LEVEL:
+            if (g_opts.sf_ao_level <= 0.0f) snprintf(out, cap, "%s: %s", name, stivufine_ui_off());
+            else snprintf(out, cap, "%s: %d%%", name, (int)(g_opts.sf_ao_level * 100.0f + 0.5f));
             break;
-        case HPTI_FRAMERATE_LIMIT:
+        case SF_FRAMERATE_LIMIT:
             if (g_opts.max_fps <= 0) snprintf(out, cap, "%s: %s", name, tr_key_default("options.framerateLimit.max", "Unlimited"));
             else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
             break;
-        case HPTI_GAMMA:
-            if (g_opts.hpti_gamma <= 0.0f) snprintf(out, cap, "%s: %s", name, tr_key_default("options.gamma.min", "Moody"));
-            else if (g_opts.hpti_gamma >= 1.0f) snprintf(out, cap, "%s: %s", name, tr_key_default("options.gamma.max", "Bright"));
-            else snprintf(out, cap, "%s: +%d%%", name, (int)(g_opts.hpti_gamma * 100.0f));
+        case SF_GAMMA:
+            if (g_opts.sf_gamma <= 0.0f) snprintf(out, cap, "%s: %s", name, tr_key_default("options.gamma.min", "Moody"));
+            else if (g_opts.sf_gamma >= 1.0f) snprintf(out, cap, "%s: %s", name, tr_key_default("options.gamma.max", "Bright"));
+            else snprintf(out, cap, "%s: +%d%%", name, (int)(g_opts.sf_gamma * 100.0f));
             break;
-        case HPTI_CLEAR_WATER: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_clear_water)); break;
-        case HPTI_BETTER_SNOW: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_better_snow)); break;
-        case HPTI_SWAMP_COLORS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_swamp_colors)); break;
-        case HPTI_SMOOTH_BIOMES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_smooth_biomes)); break;
-        case HPTI_ANAGLYPH: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.anaglyph)); break;
-        case HPTI_VIEW_BOBBING: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.view_bobbing)); break;
-        case HPTI_RENDER_CLOUDS: snprintf(out, cap, "%s: %s", name, hptibine_cloud_mode() == HPTI_OFF ? hptibine_ui_off() : hptibine_ui_on()); break;
-        case HPTI_CLOUDS: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy_off(g_opts.hpti_clouds)); break;
-        case HPTI_TREES: snprintf(out, cap, "%s: %s", name, hptibine_mode_default_fast_fancy(g_opts.hpti_trees)); break;
-        case HPTI_GRASS:
-        case HPTI_BETTER_GRASS: snprintf(out, cap, "%s: %s", name, g_opts.hpti_grass == HPTI_FAST ? hptibine_ui_fast() : (g_opts.hpti_grass == HPTI_FANCY ? hptibine_ui_fancy() : hptibine_ui_off())); break;
-        case HPTI_CUSTOM_FONTS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_custom_fonts)); break;
-        case HPTI_CUSTOM_COLORS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_custom_colors)); break;
-        case HPTI_SKY: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_sky)); break;
-        case HPTI_STARS: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_stars)); break;
-        case HPTI_SUN_MOON: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_sun_moon)); break;
-        case HPTI_ANIMATED_WATER: snprintf(out, cap, "%s: %s", name, hptibine_anim_mode_label(g_opts.hpti_animated_water)); break;
-        case HPTI_ANIMATED_LAVA: snprintf(out, cap, "%s: %s", name, hptibine_anim_mode_label(g_opts.hpti_animated_lava)); break;
-        case HPTI_ANIMATED_PORTAL: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_animated_portal)); break;
-        case HPTI_WATER_PARTICLES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_water_particles)); break;
-        case HPTI_PORTAL_PARTICLES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_portal_particles)); break;
-        case HPTI_PARTICLES:
-            snprintf(out, cap, "%s: %s", name, g_opts.hpti_particles == 2 ? tr_key_default("options.particles.minimal", "Minimal") : (g_opts.hpti_particles == 1 ? tr_key_default("options.particles.decreased", "Decreased") : tr_key_default("options.particles.all", "All")));
+        case SF_CLEAR_WATER: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_clear_water)); break;
+        case SF_BETTER_SNOW: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_better_snow)); break;
+        case SF_SWAMP_COLORS: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_swamp_colors)); break;
+        case SF_SMOOTH_BIOMES: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_smooth_biomes)); break;
+        case SF_ANAGLYPH: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.anaglyph)); break;
+        case SF_VIEW_BOBBING: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.view_bobbing)); break;
+        case SF_RENDER_CLOUDS: snprintf(out, cap, "%s: %s", name, stivufine_cloud_mode() == SF_OFF ? stivufine_ui_off() : stivufine_ui_on()); break;
+        case SF_CLOUDS: snprintf(out, cap, "%s: %s", name, stivufine_mode_default_fast_fancy_off(g_opts.sf_clouds)); break;
+        case SF_TREES: snprintf(out, cap, "%s: %s", name, stivufine_mode_default_fast_fancy(g_opts.sf_trees)); break;
+        case SF_GRASS:
+        case SF_BETTER_GRASS: snprintf(out, cap, "%s: %s", name, g_opts.sf_grass == SF_FAST ? stivufine_ui_fast() : (g_opts.sf_grass == SF_FANCY ? stivufine_ui_fancy() : stivufine_ui_off())); break;
+        case SF_CUSTOM_FONTS: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_custom_fonts)); break;
+        case SF_CUSTOM_COLORS: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_custom_colors)); break;
+        case SF_SKY: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_sky)); break;
+        case SF_STARS: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_stars)); break;
+        case SF_SUN_MOON: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_sun_moon)); break;
+        case SF_ANIMATED_WATER: snprintf(out, cap, "%s: %s", name, stivufine_anim_mode_label(g_opts.sf_animated_water)); break;
+        case SF_ANIMATED_LAVA: snprintf(out, cap, "%s: %s", name, stivufine_anim_mode_label(g_opts.sf_animated_lava)); break;
+        case SF_ANIMATED_PORTAL: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_animated_portal)); break;
+        case SF_WATER_PARTICLES: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_water_particles)); break;
+        case SF_PORTAL_PARTICLES: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_portal_particles)); break;
+        case SF_PARTICLES:
+            snprintf(out, cap, "%s: %s", name, g_opts.sf_particles == 2 ? tr_key_default("options.particles.minimal", "Minimal") : (g_opts.sf_particles == 1 ? tr_key_default("options.particles.decreased", "Decreased") : tr_key_default("options.particles.all", "All")));
             break;
-        case HPTI_ANIMATED_TERRAIN: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_animated_terrain)); break;
-        case HPTI_ANIMATED_TEXTURES: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_animated_textures)); break;
-        case HPTI_CHUNK_UPDATES: snprintf(out, cap, "%s: %d", name, g_opts.hpti_chunk_updates); break;
-        case HPTI_CHUNK_UPDATES_DYNAMIC: snprintf(out, cap, "%s: %s", name, hptibine_on_off(g_opts.hpti_chunk_updates_dynamic)); break;
+        case SF_ANIMATED_TERRAIN: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_animated_terrain)); break;
+        case SF_ANIMATED_TEXTURES: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_animated_textures)); break;
+        case SF_CHUNK_UPDATES: snprintf(out, cap, "%s: %d", name, g_opts.sf_chunk_updates); break;
+        case SF_CHUNK_UPDATES_DYNAMIC: snprintf(out, cap, "%s: %s", name, stivufine_on_off(g_opts.sf_chunk_updates_dynamic)); break;
         default: snprintf(out, cap, "%s: N/A", name); break;
     }
 }
 
-static void bump_hptibine_option(HptiBineOptionId opt, int delta) {
+static void bump_stivufine_option(StivuFineOptionId opt, int delta) {
     (void)delta;
-    if (!hptibine_option_enabled(opt)) return;
+    if (!stivufine_option_enabled(opt)) return;
     switch (opt) {
-        case HPTI_GRAPHICS:
+        case SF_GRAPHICS:
             g_opts.fancy_graphics = !g_opts.fancy_graphics;
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_ANAGLYPH:
+        case SF_ANAGLYPH:
             g_opts.anaglyph = !g_opts.anaglyph;
             apply_vsync_setting();
             break;
-        case HPTI_VIEW_BOBBING:
+        case SF_VIEW_BOBBING:
             g_opts.view_bobbing = !g_opts.view_bobbing;
             break;
-        case HPTI_RENDER_CLOUDS:
-            g_opts.hpti_clouds = (hptibine_cloud_mode() == HPTI_OFF) ? HPTI_DEFAULT : HPTI_OFF;
+        case SF_RENDER_CLOUDS:
+            g_opts.sf_clouds = (stivufine_cloud_mode() == SF_OFF) ? SF_DEFAULT : SF_OFF;
             break;
-        case HPTI_CLOUDS:
-            g_opts.hpti_clouds = (g_opts.hpti_clouds + 1) & 3;
+        case SF_CLOUDS:
+            g_opts.sf_clouds = (g_opts.sf_clouds + 1) & 3;
             break;
-        case HPTI_TREES:
-            g_opts.hpti_trees++;
-            if (g_opts.hpti_trees > 2) g_opts.hpti_trees = 0;
+        case SF_TREES:
+            g_opts.sf_trees++;
+            if (g_opts.sf_trees > 2) g_opts.sf_trees = 0;
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_GRASS:
-        case HPTI_BETTER_GRASS:
-            g_opts.hpti_grass++;
-            if (g_opts.hpti_grass > 3) g_opts.hpti_grass = 1;
+        case SF_GRASS:
+        case SF_BETTER_GRASS:
+            g_opts.sf_grass++;
+            if (g_opts.sf_grass > 3) g_opts.sf_grass = 1;
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_SKY: g_opts.hpti_sky = !g_opts.hpti_sky; break;
-        case HPTI_STARS: g_opts.hpti_stars = !g_opts.hpti_stars; break;
-        case HPTI_SUN_MOON: g_opts.hpti_sun_moon = !g_opts.hpti_sun_moon; break;
-        case HPTI_ANIMATED_WATER:
-            g_opts.hpti_animated_water++;
-            if (g_opts.hpti_animated_water > 2) g_opts.hpti_animated_water = 0;
+        case SF_SKY: g_opts.sf_sky = !g_opts.sf_sky; break;
+        case SF_STARS: g_opts.sf_stars = !g_opts.sf_stars; break;
+        case SF_SUN_MOON: g_opts.sf_sun_moon = !g_opts.sf_sun_moon; break;
+        case SF_ANIMATED_WATER:
+            g_opts.sf_animated_water++;
+            if (g_opts.sf_animated_water > 2) g_opts.sf_animated_water = 0;
             break;
-        case HPTI_ANIMATED_LAVA:
-            g_opts.hpti_animated_lava++;
-            if (g_opts.hpti_animated_lava > 2) g_opts.hpti_animated_lava = 0;
+        case SF_ANIMATED_LAVA:
+            g_opts.sf_animated_lava++;
+            if (g_opts.sf_animated_lava > 2) g_opts.sf_animated_lava = 0;
             break;
-        case HPTI_ANIMATED_PORTAL: g_opts.hpti_animated_portal = !g_opts.hpti_animated_portal; break;
-        case HPTI_WATER_PARTICLES: g_opts.hpti_water_particles = !g_opts.hpti_water_particles; break;
-        case HPTI_PORTAL_PARTICLES: g_opts.hpti_portal_particles = !g_opts.hpti_portal_particles; break;
-        case HPTI_PARTICLES:
-            g_opts.hpti_particles = (g_opts.hpti_particles + 1) % 3;
+        case SF_ANIMATED_PORTAL: g_opts.sf_animated_portal = !g_opts.sf_animated_portal; break;
+        case SF_WATER_PARTICLES: g_opts.sf_water_particles = !g_opts.sf_water_particles; break;
+        case SF_PORTAL_PARTICLES: g_opts.sf_portal_particles = !g_opts.sf_portal_particles; break;
+        case SF_PARTICLES:
+            g_opts.sf_particles = (g_opts.sf_particles + 1) % 3;
             break;
-        case HPTI_ANIMATED_TERRAIN: g_opts.hpti_animated_terrain = !g_opts.hpti_animated_terrain; break;
-        case HPTI_ANIMATED_TEXTURES: g_opts.hpti_animated_textures = !g_opts.hpti_animated_textures; break;
-        case HPTI_CUSTOM_FONTS:
-            g_opts.hpti_custom_fonts = !g_opts.hpti_custom_fonts;
+        case SF_ANIMATED_TERRAIN: g_opts.sf_animated_terrain = !g_opts.sf_animated_terrain; break;
+        case SF_ANIMATED_TEXTURES: g_opts.sf_animated_textures = !g_opts.sf_animated_textures; break;
+        case SF_CUSTOM_FONTS:
+            g_opts.sf_custom_fonts = !g_opts.sf_custom_fonts;
             apply_texture_pack_index(g_selected_texpack);
             break;
-        case HPTI_CUSTOM_COLORS:
-            g_opts.hpti_custom_colors = !g_opts.hpti_custom_colors;
+        case SF_CUSTOM_COLORS:
+            g_opts.sf_custom_colors = !g_opts.sf_custom_colors;
             apply_texture_pack_index(g_selected_texpack);
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_CLEAR_WATER:
-            g_opts.hpti_clear_water = !g_opts.hpti_clear_water;
-            hptibine_update_water_opacity();
+        case SF_CLEAR_WATER:
+            g_opts.sf_clear_water = !g_opts.sf_clear_water;
+            stivufine_update_water_opacity();
             break;
-        case HPTI_BETTER_SNOW:
-            g_opts.hpti_better_snow = !g_opts.hpti_better_snow;
+        case SF_BETTER_SNOW:
+            g_opts.sf_better_snow = !g_opts.sf_better_snow;
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_SWAMP_COLORS:
-            g_opts.hpti_swamp_colors = !g_opts.hpti_swamp_colors;
+        case SF_SWAMP_COLORS:
+            g_opts.sf_swamp_colors = !g_opts.sf_swamp_colors;
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_SMOOTH_BIOMES:
-            g_opts.hpti_smooth_biomes = !g_opts.hpti_smooth_biomes;
+        case SF_SMOOTH_BIOMES:
+            g_opts.sf_smooth_biomes = !g_opts.sf_smooth_biomes;
             flat_mark_all_chunks_dirty();
             break;
-        case HPTI_CHUNK_UPDATES:
-            g_opts.hpti_chunk_updates++;
-            if (g_opts.hpti_chunk_updates > 5) g_opts.hpti_chunk_updates = 1;
+        case SF_CHUNK_UPDATES:
+            g_opts.sf_chunk_updates++;
+            if (g_opts.sf_chunk_updates > 5) g_opts.sf_chunk_updates = 1;
             break;
-        case HPTI_CHUNK_UPDATES_DYNAMIC:
-            g_opts.hpti_chunk_updates_dynamic = !g_opts.hpti_chunk_updates_dynamic;
+        case SF_CHUNK_UPDATES_DYNAMIC:
+            g_opts.sf_chunk_updates_dynamic = !g_opts.sf_chunk_updates_dynamic;
             break;
         default: break;
     }
-    hptibine_clamp_options();
+    stivufine_clamp_options();
     save_options();
 }
 
@@ -831,11 +831,11 @@ static void load_options(void) {
         else if (!strcmp(k, "limitFramerate")) { if (!strcmp(v, "true")) g_opts.max_fps = 60; }
         else if (!strcmp(k, "maxFps")) g_opts.max_fps = atoi(v);
         else if (!strcmp(k, "fov") || !strcmp(k, "fieldOfView")) g_opts.fov = parse_float_java(v);
-        else if (!strcmp(k, "gamma")) g_opts.hpti_gamma = parse_float_java(v);
-        else if (!strcmp(k, "hbClearWater")) g_opts.hpti_clear_water = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbBetterSnow")) g_opts.hpti_better_snow = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbSwampColors")) g_opts.hpti_swamp_colors = hptibine_parse_bool(v);
-        else if (!strcmp(k, "hbSmoothBiomes")) g_opts.hpti_smooth_biomes = hptibine_parse_bool(v);
+        else if (!strcmp(k, "gamma")) g_opts.sf_gamma = parse_float_java(v);
+        else if (!strcmp(k, "sfClearWater")) g_opts.sf_clear_water = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfBetterSnow")) g_opts.sf_better_snow = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfSwampColors")) g_opts.sf_swamp_colors = stivufine_parse_bool(v);
+        else if (!strcmp(k, "sfSmoothBiomes")) g_opts.sf_smooth_biomes = stivufine_parse_bool(v);
         else if (!strcmp(k, "difficulty")) g_opts.difficulty = atoi(v) & 3;
         else if (!strcmp(k, "fancyGraphics")) g_opts.fancy_graphics = !strcmp(v, "true");
         else if (!strcmp(k, "fullscreen") || !strcmp(k, "enableFullscreen")) g_opts.fullscreen = !strcmp(v, "true");
@@ -877,13 +877,13 @@ static void load_options(void) {
     }
     fclose(f);
     }
-    load_hptibine_options();
-    if (g_opts.hpti_gamma < 0.0f) g_opts.hpti_gamma = 0.0f;
-    if (g_opts.hpti_gamma > 1.0f) g_opts.hpti_gamma = 1.0f;
-    if (g_opts.hpti_clear_water < 0 || g_opts.hpti_clear_water > 1) g_opts.hpti_clear_water = 0;
-    if (g_opts.hpti_better_snow < 0 || g_opts.hpti_better_snow > 1) g_opts.hpti_better_snow = 0;
-    if (g_opts.hpti_swamp_colors < 0 || g_opts.hpti_swamp_colors > 1) g_opts.hpti_swamp_colors = 1;
-    if (g_opts.hpti_smooth_biomes < 0 || g_opts.hpti_smooth_biomes > 1) g_opts.hpti_smooth_biomes = 1;
+    load_stivufine_options();
+    if (g_opts.sf_gamma < 0.0f) g_opts.sf_gamma = 0.0f;
+    if (g_opts.sf_gamma > 1.0f) g_opts.sf_gamma = 1.0f;
+    if (g_opts.sf_clear_water < 0 || g_opts.sf_clear_water > 1) g_opts.sf_clear_water = 0;
+    if (g_opts.sf_better_snow < 0 || g_opts.sf_better_snow > 1) g_opts.sf_better_snow = 0;
+    if (g_opts.sf_swamp_colors < 0 || g_opts.sf_swamp_colors > 1) g_opts.sf_swamp_colors = 1;
+    if (g_opts.sf_smooth_biomes < 0 || g_opts.sf_smooth_biomes > 1) g_opts.sf_smooth_biomes = 1;
     if (g_opts.render_distance < 2) g_opts.render_distance = 8;
     if (g_opts.render_distance > 32) g_opts.render_distance = 32;
     if (g_opts.max_fps < 0) g_opts.max_fps = 0;
@@ -946,11 +946,11 @@ static void save_options(void) {
         if (fov_setting > 1.0f) fov_setting = 1.0f;
         fprintf(f, "fov:%g\n", fov_setting);
     }
-    fprintf(f, "gamma:%g\n", g_opts.hpti_gamma);
-    fprintf(f, "hbClearWater:%s\n", g_opts.hpti_clear_water ? "true" : "false");
-    fprintf(f, "hbBetterSnow:%s\n", g_opts.hpti_better_snow ? "true" : "false");
-    fprintf(f, "hbSwampColors:%s\n", g_opts.hpti_swamp_colors ? "true" : "false");
-    fprintf(f, "hbSmoothBiomes:%s\n", g_opts.hpti_smooth_biomes ? "true" : "false");
+    fprintf(f, "gamma:%g\n", g_opts.sf_gamma);
+    fprintf(f, "sfClearWater:%s\n", g_opts.sf_clear_water ? "true" : "false");
+    fprintf(f, "sfBetterSnow:%s\n", g_opts.sf_better_snow ? "true" : "false");
+    fprintf(f, "sfSwampColors:%s\n", g_opts.sf_swamp_colors ? "true" : "false");
+    fprintf(f, "sfSmoothBiomes:%s\n", g_opts.sf_smooth_biomes ? "true" : "false");
     fprintf(f, "difficulty:%d\n", g_opts.difficulty);
     fprintf(f, "fancyGraphics:%s\n", g_opts.fancy_graphics ? "true" : "false");
     fprintf(f, "fullscreen:%s\n", g_opts.fullscreen ? "true" : "false");
@@ -974,7 +974,7 @@ static void save_options(void) {
     for (int i = 0; i < 10; i++) fprintf(f, "key_%s:%d\n", orig[i], vk_to_lwjgl(g_opts.keys[i]));
     fclose(f);
     }
-    save_hptibine_options();
+    save_stivufine_options();
 }
 
 static float get_option_float(OptionId opt) {

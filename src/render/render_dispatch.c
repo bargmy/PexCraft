@@ -77,12 +77,12 @@ static void draw_current_screen(float partial) {
         case SCREEN_TITLE: draw_title_screen(partial); break;
         case SCREEN_OPTIONS: draw_options_screen(); break;
         case SCREEN_OPTIONS_MORE: draw_options_more_screen(); break;
-        case SCREEN_HPTIBINE:
-        case SCREEN_HPTIBINE_DETAILS:
-        case SCREEN_HPTIBINE_QUALITY:
-        case SCREEN_HPTIBINE_ANIMATIONS:
-        case SCREEN_HPTIBINE_PERFORMANCE:
-        case SCREEN_HPTIBINE_OTHER: draw_hptibine_screen(); break;
+        case SCREEN_STIVUFINE:
+        case SCREEN_STIVUFINE_DETAILS:
+        case SCREEN_STIVUFINE_QUALITY:
+        case SCREEN_STIVUFINE_ANIMATIONS:
+        case SCREEN_STIVUFINE_PERFORMANCE:
+        case SCREEN_STIVUFINE_OTHER: draw_stivufine_screen(); break;
         case SCREEN_ASSETS: draw_assets_screen(); break;
         case SCREEN_LANGUAGE: draw_language_screen(); break;
         case SCREEN_SET_NAME: draw_set_name_screen(); break;

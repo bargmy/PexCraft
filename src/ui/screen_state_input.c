@@ -849,9 +849,9 @@ static void rebuild_screen(void) {
 
         {
             int nav_y = g_gui_h / 6 + 100;
-            /* Video Settings is now the combined vanilla + HptiBine video menu.
+            /* Video Settings is now the combined vanilla + StivuFine video menu.
                Keep the public button name vanilla instead of exposing a separate
-               HptiBine entry on the parent Options screen. */
+               StivuFine entry on the parent Options screen. */
             add_button_full(300, g_gui_w / 2 - 100, nav_y,      200, 20, tr("Video Settings..."), BUTTON_NORMAL);
             add_button_full(100, g_gui_w / 2 - 100, nav_y + 24, 200, 20, tr("Controls..."), BUTTON_NORMAL);
             add_button_full(302, g_gui_w / 2 - 100, nav_y + 48, 98, 20, tr("Language"), BUTTON_NORMAL);
@@ -866,8 +866,8 @@ static void rebuild_screen(void) {
             OPT_GRAPHICS, OPT_RENDER_DISTANCE, OPT_VIEW_BOBBING, OPT_LIMIT_FRAMERATE,
             OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDERER
         };
-        const HptiBineOptionId hpti_video_options[] = {
-            HPTI_AO_LEVEL
+        const StivuFineOptionId sf_video_options[] = {
+            SF_AO_LEVEL
         };
         int y0 = g_gui_h / 6;
         if (g_gui_h <= 240) y0 -= 6;
@@ -884,50 +884,50 @@ static void rebuild_screen(void) {
             if (opt == OPT_RENDERER) b->enabled = 0;
 #endif
         }
-        for (int i = 0; i < ARRAY_COUNT(hpti_video_options); i++) {
-            HptiBineOptionId opt = hpti_video_options[i];
+        for (int i = 0; i < ARRAY_COUNT(sf_video_options); i++) {
+            StivuFineOptionId opt = sf_video_options[i];
             int row = (ARRAY_COUNT(video_options) + i) >> 1;
             int x = g_gui_w / 2 - 155 + (i % 2) * 160;
             int y = y0 + 22 * row;
             char label[MAX_LABEL];
-            get_hptibine_option_label(opt, label, sizeof(label));
-            Button *b = add_button_full(HPTI_BUTTON_BASE + (int)opt, x, y, 150, 20, label,
-                                        hptibine_option_is_slider(opt) ? BUTTON_SLIDER : BUTTON_NORMAL);
-            b->enabled = hptibine_option_enabled(opt);
-            if (b->kind == BUTTON_SLIDER) b->slider_value = get_hptibine_option_float(opt);
+            get_stivufine_option_label(opt, label, sizeof(label));
+            Button *b = add_button_full(SF_BUTTON_BASE + (int)opt, x, y, 150, 20, label,
+                                        stivufine_option_is_slider(opt) ? BUTTON_SLIDER : BUTTON_NORMAL);
+            b->enabled = stivufine_option_enabled(opt);
+            if (b->kind == BUTTON_SLIDER) b->slider_value = get_stivufine_option_float(opt);
         }
         {
-            int nav_y = y0 + 22 * ((ARRAY_COUNT(video_options) + ARRAY_COUNT(hpti_video_options) + 1) >> 1) + 4;
-            add_button_full(HPTI_NAV_DETAILS,     g_gui_w / 2 - 155, nav_y,      150, 20, tr_key_default("hb.options.details", "Details..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_QUALITY,     g_gui_w / 2 + 5,   nav_y,      150, 20, tr_key_default("hb.options.quality", "Quality..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_ANIMATIONS,  g_gui_w / 2 - 155, nav_y + 22, 150, 20, tr_key_default("hb.options.animations", "Animations..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_PERFORMANCE, g_gui_w / 2 + 5,   nav_y + 22, 150, 20, tr_key_default("hb.options.performance", "Performance..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_TEXPACKS,    g_gui_w / 2 - 155, nav_y + 44, 150, 20, tr_key_default("texturePack.title", "Texture Packs..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_OTHER,       g_gui_w / 2 + 5,   nav_y + 44, 150, 20, tr_key_default("hb.options.other", "Other..."), BUTTON_NORMAL);
+            int nav_y = y0 + 22 * ((ARRAY_COUNT(video_options) + ARRAY_COUNT(sf_video_options) + 1) >> 1) + 4;
+            add_button_full(SF_NAV_DETAILS,     g_gui_w / 2 - 155, nav_y,      150, 20, tr_key_default("sf.options.details", "Details..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_QUALITY,     g_gui_w / 2 + 5,   nav_y,      150, 20, tr_key_default("sf.options.quality", "Quality..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_ANIMATIONS,  g_gui_w / 2 - 155, nav_y + 22, 150, 20, tr_key_default("sf.options.animations", "Animations..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_PERFORMANCE, g_gui_w / 2 + 5,   nav_y + 22, 150, 20, tr_key_default("sf.options.performance", "Performance..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_TEXPACKS,    g_gui_w / 2 - 155, nav_y + 44, 150, 20, tr_key_default("texturePack.title", "Texture Packs..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_OTHER,       g_gui_w / 2 + 5,   nav_y + 44, 150, 20, tr_key_default("sf.options.other", "Other..."), BUTTON_NORMAL);
         }
-        add_button_full(122, g_gui_w / 2 - 100, g_gui_h - 28, 98, 20, tr_key_default("hb.options.info", "Info..."), BUTTON_NORMAL);
+        add_button_full(122, g_gui_w / 2 - 100, g_gui_h - 28, 98, 20, tr_key_default("sf.options.info", "Info..."), BUTTON_NORMAL);
         add_button_full(199, g_gui_w / 2 + 2,   g_gui_h - 28, 98, 20, tr("Done"), BUTTON_NORMAL);
-    } else if (hptibine_screen_category(g_screen) >= 0) {
-        int count = hptibine_option_count_for_screen(g_screen);
+    } else if (stivufine_screen_category(g_screen) >= 0) {
+        int count = stivufine_option_count_for_screen(g_screen);
         for (int i = 0; i < count; ++i) {
-            HptiBineOptionId opt = hptibine_option_at(g_screen, i);
+            StivuFineOptionId opt = stivufine_option_at(g_screen, i);
             int x = g_gui_w / 2 - 155 + (i % 2) * 160;
             int y = g_gui_h / 6 + 21 * (i / 2) - 10;
             char label[MAX_LABEL];
-            get_hptibine_option_label(opt, label, sizeof(label));
-            Button *b = add_button_full(HPTI_BUTTON_BASE + (int)opt, x, y, 150, 20, label,
-                                        hptibine_option_is_slider(opt) ? BUTTON_SLIDER : BUTTON_NORMAL);
-            b->enabled = hptibine_option_enabled(opt);
-            if (b->kind == BUTTON_SLIDER) b->slider_value = get_hptibine_option_float(opt);
+            get_stivufine_option_label(opt, label, sizeof(label));
+            Button *b = add_button_full(SF_BUTTON_BASE + (int)opt, x, y, 150, 20, label,
+                                        stivufine_option_is_slider(opt) ? BUTTON_SLIDER : BUTTON_NORMAL);
+            b->enabled = stivufine_option_enabled(opt);
+            if (b->kind == BUTTON_SLIDER) b->slider_value = get_stivufine_option_float(opt);
         }
-        if (g_screen == SCREEN_HPTIBINE) {
+        if (g_screen == SCREEN_STIVUFINE) {
             int y = g_gui_h / 6 + 21 * (count / 2) - 10;
-            add_button_full(HPTI_NAV_DETAILS,     g_gui_w / 2 - 155, y,      150, 20, tr_key_default("hb.options.details", "Details..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_QUALITY,     g_gui_w / 2 + 5,   y,      150, 20, tr_key_default("hb.options.quality", "Quality..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_ANIMATIONS,  g_gui_w / 2 - 155, y + 21, 150, 20, tr_key_default("hb.options.animations", "Animations..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_PERFORMANCE, g_gui_w / 2 + 5,   y + 21, 150, 20, tr_key_default("hb.options.performance", "Performance..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_TEXPACKS,    g_gui_w / 2 - 155, y + 42, 150, 20, tr_key_default("texturePack.title", "Texture Packs..."), BUTTON_NORMAL);
-            add_button_full(HPTI_NAV_OTHER,       g_gui_w / 2 + 5,   y + 42, 150, 20, tr_key_default("hb.options.other", "Other..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_DETAILS,     g_gui_w / 2 - 155, y,      150, 20, tr_key_default("sf.options.details", "Details..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_QUALITY,     g_gui_w / 2 + 5,   y,      150, 20, tr_key_default("sf.options.quality", "Quality..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_ANIMATIONS,  g_gui_w / 2 - 155, y + 21, 150, 20, tr_key_default("sf.options.animations", "Animations..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_PERFORMANCE, g_gui_w / 2 + 5,   y + 21, 150, 20, tr_key_default("sf.options.performance", "Performance..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_TEXPACKS,    g_gui_w / 2 - 155, y + 42, 150, 20, tr_key_default("texturePack.title", "Texture Packs..."), BUTTON_NORMAL);
+            add_button_full(SF_NAV_OTHER,       g_gui_w / 2 + 5,   y + 42, 150, 20, tr_key_default("sf.options.other", "Other..."), BUTTON_NORMAL);
         }
         add_button_full(200, g_gui_w / 2 - 100, g_gui_h - 28, 200, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_ASSETS) {
@@ -1159,10 +1159,10 @@ static void update_slider(Button *b, int mx) {
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
     b->slider_value = v;
-    if (b->id >= HPTI_BUTTON_BASE && b->id < HPTI_BUTTON_BASE + HPTI_COUNT) {
-        HptiBineOptionId opt = (HptiBineOptionId)(b->id - HPTI_BUTTON_BASE);
-        set_hptibine_option_float(opt, v);
-        get_hptibine_option_label(opt, b->label, sizeof(b->label));
+    if (b->id >= SF_BUTTON_BASE && b->id < SF_BUTTON_BASE + SF_COUNT) {
+        StivuFineOptionId opt = (StivuFineOptionId)(b->id - SF_BUTTON_BASE);
+        set_stivufine_option_float(opt, v);
+        get_stivufine_option_label(opt, b->label, sizeof(b->label));
     } else {
         set_option_float(b->opt, v);
         get_option_label(b->opt, b->label, sizeof(b->label));
@@ -1233,19 +1233,19 @@ static void on_button(Button *b) {
         else if (b->id == 303) { pex_name_screen_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_SET_NAME); }
         else if (b->id == 304) { pex_tv_remote_map_prepare(SCREEN_OPTIONS, 0); set_screen(SCREEN_TV_REMOTE_MAP); }
         else if (b->id == 305) set_screen(SCREEN_ASSETS);
-    } else if (hptibine_screen_category(g_screen) >= 0) {
-        if (b->id >= HPTI_BUTTON_BASE && b->id < HPTI_BUTTON_BASE + HPTI_COUNT) {
-            HptiBineOptionId opt = (HptiBineOptionId)(b->id - HPTI_BUTTON_BASE);
+    } else if (stivufine_screen_category(g_screen) >= 0) {
+        if (b->id >= SF_BUTTON_BASE && b->id < SF_BUTTON_BASE + SF_COUNT) {
+            StivuFineOptionId opt = (StivuFineOptionId)(b->id - SF_BUTTON_BASE);
             if (b->kind == BUTTON_NORMAL) {
-                bump_hptibine_option(opt, 1);
-                get_hptibine_option_label(opt, b->label, sizeof(b->label));
+                bump_stivufine_option(opt, 1);
+                get_stivufine_option_label(opt, b->label, sizeof(b->label));
             }
-        } else if (b->id == HPTI_NAV_DETAILS) set_screen(SCREEN_HPTIBINE_DETAILS);
-        else if (b->id == HPTI_NAV_QUALITY) set_screen(SCREEN_HPTIBINE_QUALITY);
-        else if (b->id == HPTI_NAV_ANIMATIONS) set_screen(SCREEN_HPTIBINE_ANIMATIONS);
-        else if (b->id == HPTI_NAV_PERFORMANCE) set_screen(SCREEN_HPTIBINE_PERFORMANCE);
-        else if (b->id == HPTI_NAV_TEXPACKS) set_screen(SCREEN_TEXPACK);
-        else if (b->id == HPTI_NAV_OTHER) set_screen(SCREEN_HPTIBINE_OTHER);
+        } else if (b->id == SF_NAV_DETAILS) set_screen(SCREEN_STIVUFINE_DETAILS);
+        else if (b->id == SF_NAV_QUALITY) set_screen(SCREEN_STIVUFINE_QUALITY);
+        else if (b->id == SF_NAV_ANIMATIONS) set_screen(SCREEN_STIVUFINE_ANIMATIONS);
+        else if (b->id == SF_NAV_PERFORMANCE) set_screen(SCREEN_STIVUFINE_PERFORMANCE);
+        else if (b->id == SF_NAV_TEXPACKS) set_screen(SCREEN_TEXPACK);
+        else if (b->id == SF_NAV_OTHER) set_screen(SCREEN_STIVUFINE_OTHER);
         else if (b->id == 200) { save_options(); set_screen(SCREEN_OPTIONS_MORE); }
     } else if (g_screen == SCREEN_ASSETS) {
         int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
@@ -1268,18 +1268,18 @@ static void on_button(Button *b) {
                 bump_option(b->opt, 1);
                 get_option_label(b->opt, b->label, sizeof(b->label));
             }
-        } else if (b->id >= HPTI_BUTTON_BASE && b->id < HPTI_BUTTON_BASE + HPTI_COUNT) {
-            HptiBineOptionId opt = (HptiBineOptionId)(b->id - HPTI_BUTTON_BASE);
+        } else if (b->id >= SF_BUTTON_BASE && b->id < SF_BUTTON_BASE + SF_COUNT) {
+            StivuFineOptionId opt = (StivuFineOptionId)(b->id - SF_BUTTON_BASE);
             if (b->kind == BUTTON_NORMAL) {
-                bump_hptibine_option(opt, 1);
-                get_hptibine_option_label(opt, b->label, sizeof(b->label));
+                bump_stivufine_option(opt, 1);
+                get_stivufine_option_label(opt, b->label, sizeof(b->label));
             }
-        } else if (b->id == HPTI_NAV_DETAILS) set_screen(SCREEN_HPTIBINE_DETAILS);
-        else if (b->id == HPTI_NAV_QUALITY) set_screen(SCREEN_HPTIBINE_QUALITY);
-        else if (b->id == HPTI_NAV_ANIMATIONS) set_screen(SCREEN_HPTIBINE_ANIMATIONS);
-        else if (b->id == HPTI_NAV_PERFORMANCE) set_screen(SCREEN_HPTIBINE_PERFORMANCE);
-        else if (b->id == HPTI_NAV_TEXPACKS) set_screen(SCREEN_TEXPACK);
-        else if (b->id == HPTI_NAV_OTHER) set_screen(SCREEN_HPTIBINE_OTHER);
+        } else if (b->id == SF_NAV_DETAILS) set_screen(SCREEN_STIVUFINE_DETAILS);
+        else if (b->id == SF_NAV_QUALITY) set_screen(SCREEN_STIVUFINE_QUALITY);
+        else if (b->id == SF_NAV_ANIMATIONS) set_screen(SCREEN_STIVUFINE_ANIMATIONS);
+        else if (b->id == SF_NAV_PERFORMANCE) set_screen(SCREEN_STIVUFINE_PERFORMANCE);
+        else if (b->id == SF_NAV_TEXPACKS) set_screen(SCREEN_TEXPACK);
+        else if (b->id == SF_NAV_OTHER) set_screen(SCREEN_STIVUFINE_OTHER);
         else if (b->id == 122) set_screen(SCREEN_SYSTEM_INFO);
         else if (b->id == 199) { save_options(); set_screen(SCREEN_OPTIONS); }
     } else if (g_screen == SCREEN_LANGUAGE) {
@@ -2146,8 +2146,8 @@ static void handle_keydown(WPARAM vk) {
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
-        else if (g_screen == SCREEN_HPTIBINE) set_screen(SCREEN_OPTIONS_MORE);
-        else if (hptibine_screen_category(g_screen) >= 0) set_screen(SCREEN_OPTIONS_MORE);
+        else if (g_screen == SCREEN_STIVUFINE) set_screen(SCREEN_OPTIONS_MORE);
+        else if (stivufine_screen_category(g_screen) >= 0) set_screen(SCREEN_OPTIONS_MORE);
         else if (g_screen == SCREEN_ASSETS) { if (legacy_assets_is_downloading()) legacy_assets_request_cancel(); set_screen(SCREEN_OPTIONS); }
         else if (g_screen == SCREEN_SET_NAME) { if (!g_name_screen_first_run) set_screen(g_name_return_screen); }
         else if (g_screen == SCREEN_TV_REMOTE_MAP) { if (!g_opts.tv_remote_mapped) pex_tv_remote_apply_defaults(); if (g_tv_remote_return_screen != SCREEN_TITLE) set_screen(g_tv_remote_return_screen); else set_screen(pex_startup_screen()); }

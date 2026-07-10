@@ -678,8 +678,6 @@ static const PexLangSupplement pex_lang_supplements[] = {
 };
 
 
-#include "hptibine_lang.inc"
-
 static int pex_lang_current_is(const char *code) {
     const char *cur = NULL;
     if (g_lang_list_loaded && g_lang_index >= 0 && g_lang_index < g_pex_lang_count) cur = g_pex_langs[g_lang_index].code;
@@ -699,12 +697,6 @@ static int pex_lang_value_ascii_only(const char *value) {
 
 static const char *pex_lang_lookup_supplemental_key(const char *key, const char *exact_value) {
     if (!key || !*key) return NULL;
-    for (int i = 0; i < (int)ARRAY_COUNT(hptibine_lang_supplements); ++i) {
-        if (!pex_lang_current_is(hptibine_lang_supplements[i].lang)) continue;
-        if (!pex_lang_str_eq(hptibine_lang_supplements[i].key, key)) continue;
-        if (!exact_value || !*exact_value || pex_lang_value_ascii_only(exact_value)) return hptibine_lang_supplements[i].value;
-        return NULL;
-    }
     for (int i = 0; i < (int)ARRAY_COUNT(pex_lang_supplements); ++i) {
         if (!pex_lang_current_is(pex_lang_supplements[i].lang)) continue;
         if (!pex_lang_str_eq(pex_lang_supplements[i].key, key)) continue;
