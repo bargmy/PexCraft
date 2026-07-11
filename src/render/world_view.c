@@ -3736,24 +3736,24 @@ static int dropped_item_copy_count(int count) {
     return 1;
 }
 
-typedef struct PexJavaRandom48 { unsigned long long seed; } PexJavaRandom48;
-static void pex_java_random_seed(PexJavaRandom48 *r, unsigned long long seed) {
+typedef struct PexRenderJavaRandom48 { unsigned long long seed; } PexRenderJavaRandom48;
+static void pex_render_java_random_seed(PexRenderJavaRandom48 *r, unsigned long long seed) {
     r->seed=(seed ^ 0x5DEECE66DULL)&((1ULL<<48)-1ULL);
 }
-static unsigned int pex_java_random_next(PexJavaRandom48 *r, int bits) {
+static unsigned int pex_render_java_random_next(PexRenderJavaRandom48 *r, int bits) {
     r->seed=(r->seed*0x5DEECE66DULL+0xBULL)&((1ULL<<48)-1ULL);
     return (unsigned int)(r->seed>>(48-bits));
 }
-static float pex_java_random_float(PexJavaRandom48 *r) {
-    return (float)pex_java_random_next(r,24)/(float)(1<<24);
+static float pex_render_java_random_float(PexRenderJavaRandom48 *r) {
+    return (float)pex_render_java_random_next(r,24)/(float)(1<<24);
 }
 static void dropped_item_copy_offset(int copy, float amplitude, float divisor, float *x, float *y, float *z) {
-    PexJavaRandom48 r; pex_java_random_seed(&r,187ULL);
+    PexRenderJavaRandom48 r; pex_render_java_random_seed(&r,187ULL);
     *x=*y=*z=0.0f;
     for (int i=1;i<=copy;++i) {
-        *x=(pex_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
-        *y=(pex_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
-        *z=(pex_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
+        *x=(pex_render_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
+        *y=(pex_render_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
+        *z=(pex_render_java_random_float(&r)*2.0f-1.0f)*amplitude/divisor;
     }
 }
 
