@@ -2687,6 +2687,9 @@ static int g_prof_mob_living_ticked_last = 0;
 static int g_prof_mob_living_deferred_last = 0;
 static int g_prof_mob_path_solves_last = 0;
 static int g_prof_mob_path_nodes_last = 0;
+static int g_prof_mob_path_failed_last = 0;
+static int g_prof_mob_path_peak_nodes_last = 0;
+static double g_prof_mob_path_ms_last = 0.0;
 
 static int g_prof_packets_last = 0;
 static int g_prof_chunks_last = 0;

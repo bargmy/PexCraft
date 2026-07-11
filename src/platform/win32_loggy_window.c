@@ -480,6 +480,8 @@ static void loggy_build_text(void) {
                   g_prof_mob_spawn_calls_last, g_prof_mob_spawn_columns_last,
                   g_prof_mob_spawn_probe_hits_last, g_prof_mob_spawn_probe_misses_last,
                   g_prof_spawn_y_cache_hits, g_prof_spawn_y_cache_misses);
+    loggy_appendf(&out, &left, "  path_ms=%.3f path_failed=%d path_peak_nodes=%d\n",
+                  g_prof_mob_path_ms_last, g_prof_mob_path_failed_last, g_prof_mob_path_peak_nodes_last);
     loggy_appendf(&out, &left, "  daylight_mesh_ms=%.3f village_scan_blocks=%d\n",
                   g_prof_display_ms[PROF_DAYLIGHT_MESH], g_prof_village_scan_blocks_last);
 

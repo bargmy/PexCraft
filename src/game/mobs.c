@@ -3102,6 +3102,11 @@ typedef struct Pex125PathContext {
     int entity_type;
 } Pex125PathContext;
 
+/* PathFinder is main-thread-only.  Keep its growable work buffers between
+   solves, matching Java's persistent PathFinder/Path objects and avoiding
+   thousands of malloc/free/rehash operations during ordinary mob updates. */
+static Pex125PathContext g_passive_path_scratch_125;
+
 static int passive_path_point_hash_125(int x, int y, int z) {
     unsigned int ux = (unsigned int)(x & 32767);
     unsigned int uz = (unsigned int)(z & 32767);
@@ -3178,12 +3183,19 @@ static int passive_path_ctx_init_125(Pex125PathContext *ctx) {
     return 1;
 }
 
-static void passive_path_ctx_free_125(Pex125PathContext *ctx) {
-    if (!ctx) return;
-    free(ctx->points);
-    free(ctx->heap);
-    free(ctx->hash_head);
-    memset(ctx, 0, sizeof(*ctx));
+static int passive_path_ctx_reset_125(Pex125PathContext *ctx) {
+    if (!ctx) return 0;
+    if (!ctx->points || !ctx->heap || !ctx->hash_head || ctx->hash_size <= 0)
+        return passive_path_ctx_init_125(ctx);
+    ctx->point_count = 0;
+    ctx->heap_count = 0;
+    for (int i = 0; i < ctx->hash_size; ++i) ctx->hash_head[i] = -1;
+    ctx->allow_wooden_door = 0;
+    ctx->movement_block_allowed = 0;
+    ctx->pathing_in_water = 0;
+    ctx->can_entity_drown = 0;
+    ctx->entity_type = 0;
+    return 1;
 }
 
 static int passive_path_open_point_125(Pex125PathContext *ctx, int x, int y, int z) {
@@ -3376,8 +3388,9 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     if (m->type == PASSIVE_MOB_ENDER_DRAGON) return 0;
     ++g_prof_mob_path_solves_last;
     if (m->type == PASSIVE_MOB_GHAST || m->type == PASSIVE_MOB_SQUID) return 0;
-    Pex125PathContext ctx;
-    if (!passive_path_ctx_init_125(&ctx)) return 0;
+    double path_started = now_seconds();
+    Pex125PathContext ctx = g_passive_path_scratch_125;
+    if (!passive_path_ctx_reset_125(&ctx)) return 0;
     ctx.allow_wooden_door = m->navigation.pass_open_doors;
     ctx.movement_block_allowed = m->navigation.pass_closed_doors;
     ctx.pathing_in_water = m->navigation.avoids_water;
@@ -3442,7 +3455,11 @@ static int passive_path_find(PassiveMob *m, float txf, float tyf, float tzf) {
     }
     if (closest != start) result = passive_path_create_output_125(m, &ctx, start, closest);
 done:
-    passive_path_ctx_free_125(&ctx);
+    if (ctx.point_count > g_prof_mob_path_peak_nodes_last)
+        g_prof_mob_path_peak_nodes_last = ctx.point_count;
+    if (!result) ++g_prof_mob_path_failed_last;
+    g_prof_mob_path_ms_last += (now_seconds() - path_started) * 1000.0;
+    g_passive_path_scratch_125 = ctx;
     return result;
 }
 
@@ -3735,7 +3752,10 @@ static int passive_path_drive(PassiveMob *m) {
         m->path_stuck_check_y = m->y;
         m->path_stuck_check_z = m->z;
     }
-    if (m->path_len <= 0 || m->path_index >= m->path_len || m->path_recalc_cooldown <= 0 || m->stuck_ticks > 100) {
+    int path_missing = (m->path_len <= 0 || m->path_index >= m->path_len);
+    int should_repath = path_missing ? (m->path_recalc_cooldown <= 0)
+                                     : (m->path_recalc_cooldown <= 0 || m->stuck_ticks > 100);
+    if (should_repath) {
         int solved = passive_path_find(m, m->path_goal_x, m->path_goal_y, m->path_goal_z);
         if (solved) passive_navigation_trim_sunny_path_125(m);
         if (!solved && (m->path_len <= 0 || m->path_index >= m->path_len)) {
@@ -5496,14 +5516,17 @@ static void passive_navigation_clear(PassiveMob *m) {
 
 static void passive_navigation_set_goal(PassiveMob *m, float x, float y, float z, float speed) {
     if (!m) return;
+    int had_goal = m->has_path_target;
     float dx = x - m->path_goal_x;
     float dy = y - m->path_goal_y;
     float dz = z - m->path_goal_z;
     passive_mob_set_path_goal(m, x, y, z);
     m->navigation.speed = speed;
-    if (dx * dx + dy * dy + dz * dz > 1.0f || m->path_len <= 0 || m->path_index >= m->path_len) {
+    /* A new or materially moved destination should solve immediately.  A
+       failed/completed path must retain its retry cooldown; otherwise every
+       unreachable mob launches a full A* search on every 20 Hz tick. */
+    if (!had_goal || dx * dx + dy * dy + dz * dz > 1.0f)
         m->path_recalc_cooldown = 0;
-    }
 }
 
 static void passive_navigation_update(PassiveMob *m) {
@@ -7378,6 +7401,9 @@ static void update_passive_mobs(void) {
     g_prof_mob_living_deferred_last = 0;
     g_prof_mob_path_solves_last = 0;
     g_prof_mob_path_nodes_last = 0;
+    g_prof_mob_path_failed_last = 0;
+    g_prof_mob_path_peak_nodes_last = 0;
+    g_prof_mob_path_ms_last = 0.0;
 
     passive_mobs_enforce_cap();
 

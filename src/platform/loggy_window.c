@@ -281,6 +281,16 @@ static void loggy_build_text(void) {
     loggy_appendf(&out, &left, "  falling active=%d spawned=%d cells=%d particles=%d drops=%d liquids_ms=%.3f world_stream_ms=%.3f\n",
                   g_prof_falling_active_last, g_prof_falling_spawns_last, g_prof_falling_cells_last,
                   active_particles, active_drops, g_prof_display_ms[PROF_LIQUIDS], g_prof_display_ms[PROF_WORLD_STREAM]);
+    loggy_appendf(&out, &left, "  mobs active=%d ticked=%d path_solves=%d failed=%d nodes=%d peak=%d path_ms=%.3f\n",
+                  g_passive_perf_last_active, g_prof_mob_living_ticked_last,
+                  g_prof_mob_path_solves_last, g_prof_mob_path_failed_last,
+                  g_prof_mob_path_nodes_last, g_prof_mob_path_peak_nodes_last,
+                  g_prof_mob_path_ms_last);
+    loggy_appendf(&out, &left, "  mob_spawn_ms=%.3f mob_living_ms=%.3f spawn_probes=%d columns=%d cache=%d/%d village_scan_blocks=%d\n",
+                  g_prof_mob_spawn_ms_last, g_prof_mob_living_ms_last,
+                  g_prof_mob_spawn_calls_last, g_prof_mob_spawn_columns_last,
+                  g_prof_mob_spawn_probe_hits_last, g_prof_mob_spawn_probe_misses_last,
+                  g_prof_village_scan_blocks_last);
 
     loggy_appendf(&out, &left, "\nHOT QUEUE SAMPLE:\n");
     int maxq = q_remaining < 16 ? q_remaining : 16;
