@@ -44,6 +44,7 @@ int pex_java47_send_player_state(double x, double feet_y, double z, float yaw, f
 int pex_java47_send_chat(const char *text);
 int pex_java47_send_swing(void);
 int pex_java47_send_attack(int entity_id);
+int pex_java47_send_interact(int entity_id, float hit_x, float hit_y, float hit_z);
 int pex_java47_send_dig(int status, int x, int y, int z, int face);
 int pex_java47_send_place(int x, int y, int z, int face, int item_id, int count, int damage,
                           float cursor_x, float cursor_y, float cursor_z);
@@ -59,6 +60,9 @@ int pex_java47_send_creative_slot(int pex_slot, const ItemStack *stack);
 int pex_java47_get_equipment(int entity_id, int *item_id, int *count, int *damage, int *slot);
 int pex_java47_entity_is_player(int entity_id);
 int pex_java47_try_attack_mob(float max_dist);
+int pex_java47_try_interact_entity(float max_dist);
+ItemStack *pex_java47_get_open_container_slot(int local_slot);
+int pex_java47_open_container_slot_count(void);
 int pex_java47_translate_block_id(int java_block_id);
 int pex_java47_translate_item_id(int java_item_id);
 int pex_java47_translate_mob_type(int java_mob_type);

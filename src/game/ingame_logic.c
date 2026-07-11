@@ -1,12 +1,174 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+static void hud_push_chat_line(const char *text) {
+    if (!text || !text[0]) return;
+    memmove(&g_chat_lines[1], &g_chat_lines[0], sizeof(ChatLine) * (MAX_CHAT_LINES - 1));
+    snprintf(g_chat_lines[0].text, sizeof(g_chat_lines[0].text), "%s", text);
+    g_chat_lines[0].age = 0;
+    if (g_chat_count < MAX_CHAT_LINES) g_chat_count++;
+}
+
+static int hud_chat_format_token_len(const unsigned char *p) {
+    if (!p || !p[0]) return 0;
+    if (p[0] == 0xC2 && p[1] == 0xA7 && p[2]) return 3;
+    if (p[0] == 0xA7 && p[1]) return 2;
+    return 0;
+}
+
+static int hud_chat_utf8_len(const unsigned char *p) {
+    if (!p || !p[0]) return 0;
+    if (p[0] < 0x80) return 1;
+    if ((p[0] & 0xE0) == 0xC0 && p[1]) return 2;
+    if ((p[0] & 0xF0) == 0xE0 && p[1] && p[2]) return 3;
+    if ((p[0] & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) return 4;
+    return 1;
+}
+
+static int hud_chat_visible_width(const char *text) {
+    char plain[512];
+    size_t n = 0;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p && n + 1 < sizeof(plain)) {
+        int fmt = hud_chat_format_token_len(p);
+        if (fmt) { p += fmt; continue; }
+        int bytes = hud_chat_utf8_len(p);
+        if (bytes <= 0) break;
+        if (n + (size_t)bytes >= sizeof(plain)) break;
+        memcpy(plain + n, p, (size_t)bytes);
+        n += (size_t)bytes;
+        p += bytes;
+    }
+    plain[n] = 0;
+    return text_width_chat_plain(plain);
+}
+
+static void hud_chat_begin_wrapped_line(char *line, size_t cap, size_t *line_len, char active_code) {
+    *line_len = 0;
+    line[0] = 0;
+    if (active_code && cap >= 4) {
+        line[0] = (char)0xC2;
+        line[1] = (char)0xA7;
+        line[2] = active_code;
+        line[3] = 0;
+        *line_len = 3;
+    }
+}
+
+static void hud_chat_emit_wrapped_line(char *line, size_t *line_len) {
+    while (*line_len > 0 && (line[*line_len - 1] == ' ' || line[*line_len - 1] == '\t')) {
+        line[--(*line_len)] = 0;
+    }
+    if (hud_chat_visible_width(line) > 0) hud_push_chat_line(line);
+}
+
 static void hud_add_chat(const char *msg) {
     if (!msg || !msg[0]) return;
     pex_logf("chat: %s", msg);
-    memmove(&g_chat_lines[1], &g_chat_lines[0], sizeof(ChatLine) * (MAX_CHAT_LINES - 1));
-    snprintf(g_chat_lines[0].text, sizeof(g_chat_lines[0].text), "%s", msg);
-    g_chat_lines[0].age = 0;
-    if (g_chat_count < MAX_CHAT_LINES) g_chat_count++;
+
+    int max_width = g_gui_w - 8;
+    if (max_width > 318) max_width = 318;
+    if (max_width < 80) max_width = 80;
+
+    char line[256];
+    size_t line_len = 0;
+    char active_code = 0;
+    hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+
+    const unsigned char *p = (const unsigned char *)msg;
+    while (*p) {
+        if (*p == '\r') { p++; continue; }
+        if (*p == '\n') {
+            hud_chat_emit_wrapped_line(line, &line_len);
+            hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+            p++;
+            continue;
+        }
+
+        int fmt = hud_chat_format_token_len(p);
+        if (fmt) {
+            char code = (char)p[fmt - 1];
+            if (line_len + (size_t)fmt < sizeof(line)) {
+                memcpy(line + line_len, p, (size_t)fmt);
+                line_len += (size_t)fmt;
+                line[line_len] = 0;
+            }
+            if (code == 'r' || code == 'R') active_code = 0;
+            else active_code = code;
+            p += fmt;
+            continue;
+        }
+
+        if (*p == ' ' || *p == '\t') {
+            if (hud_chat_visible_width(line) > 0 && line_len + 1 < sizeof(line)) {
+                line[line_len++] = ' ';
+                line[line_len] = 0;
+            }
+            p++;
+            continue;
+        }
+
+        /* Consume a word. Formatting tokens intentionally terminate a word so
+           their zero-width state can be handled by the outer loop. */
+        const unsigned char *word = p;
+        size_t word_len = 0;
+        while (word[word_len] && word[word_len] != ' ' && word[word_len] != '\t' &&
+               word[word_len] != '\r' && word[word_len] != '\n' &&
+               !hud_chat_format_token_len(word + word_len)) {
+            int bytes = hud_chat_utf8_len(word + word_len);
+            if (bytes <= 0) break;
+            word_len += (size_t)bytes;
+        }
+
+        char trial[768];
+        if (line_len + word_len + 1 < sizeof(trial)) {
+            memcpy(trial, line, line_len);
+            memcpy(trial + line_len, word, word_len);
+            trial[line_len + word_len] = 0;
+        } else {
+            trial[0] = 0;
+        }
+
+        if (trial[0] && hud_chat_visible_width(trial) <= max_width && line_len + word_len < sizeof(line)) {
+            memcpy(line + line_len, word, word_len);
+            line_len += word_len;
+            line[line_len] = 0;
+            p += word_len;
+            continue;
+        }
+
+        if (hud_chat_visible_width(line) > 0) {
+            hud_chat_emit_wrapped_line(line, &line_len);
+            hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+        }
+
+        /* A single unbroken word can still exceed the HUD. Split it only at
+           UTF-8 codepoint boundaries. */
+        size_t used = 0;
+        while (used < word_len) {
+            int bytes = hud_chat_utf8_len(word + used);
+            if (bytes <= 0 || used + (size_t)bytes > word_len) bytes = 1;
+            if (line_len + (size_t)bytes >= sizeof(line)) {
+                hud_chat_emit_wrapped_line(line, &line_len);
+                hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+            }
+            memcpy(line + line_len, word + used, (size_t)bytes);
+            line_len += (size_t)bytes;
+            line[line_len] = 0;
+            if (hud_chat_visible_width(line) > max_width) {
+                line_len -= (size_t)bytes;
+                line[line_len] = 0;
+                hud_chat_emit_wrapped_line(line, &line_len);
+                hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+                memcpy(line + line_len, word + used, (size_t)bytes);
+                line_len += (size_t)bytes;
+                line[line_len] = 0;
+            }
+            used += (size_t)bytes;
+        }
+        p += word_len;
+    }
+
+    hud_chat_emit_wrapped_line(line, &line_len);
 }
 
 static int death_reason_code_from_text(const char *reason) {

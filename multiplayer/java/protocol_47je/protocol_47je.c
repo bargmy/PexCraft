@@ -7,6 +7,7 @@
 #define J47_PROFILE_MAX 128
 #define J47_ENTITY_MAX 512
 #define J47_WINDOW_MAX_SLOTS 128
+#define J47_ITEM_NBT_MAX 2048
 
 /* The Java adapter is unity-included after game/mobs.c and before
    platform/multiplayer_client.c. These declarations bind the protocol layer to
@@ -36,6 +37,14 @@ typedef struct J47Profile {
     char name[32];
 } J47Profile;
 
+typedef struct J47RawItem {
+    int id;
+    int count;
+    int damage;
+    size_t nbt_len;
+    unsigned char nbt[J47_ITEM_NBT_MAX];
+} J47RawItem;
+
 typedef enum J47EntityKind {
     J47_ENTITY_NONE = 0,
     J47_ENTITY_PLAYER,
@@ -56,6 +65,11 @@ typedef struct J47Entity {
     int held_item_count;
     int held_item_damage;
     int held_slot;
+    int is_armor_stand;
+    int metadata_flags;
+    int proxy_item_drop_slot;
+    ItemStack equipment[5];
+    char custom_name[96];
     double x, y, z;
     float yaw, pitch, head_yaw;
 } J47Entity;
@@ -69,6 +83,7 @@ typedef struct J47Window {
     char type[40];
     char title[96];
     ItemStack slots[J47_WINDOW_MAX_SLOTS];
+    J47RawItem raw_slots[J47_WINDOW_MAX_SLOTS];
 } J47Window;
 
 typedef struct PexJava47Session {
@@ -113,6 +128,8 @@ typedef struct PexJava47Session {
     size_t tx_cap;
     J47Profile profiles[J47_PROFILE_MAX];
     J47Entity entities[J47_ENTITY_MAX];
+    J47RawItem raw_player_slots[46];
+    J47RawItem raw_cursor;
     J47Window window;
 } PexJava47Session;
 
@@ -857,17 +874,215 @@ static int j47_skip_nbt(J47Reader *r) {
     return j47_nbt_skip_payload(r, root, 0);
 }
 
+static void j47_translate_block_state_parts(int id, int meta, int *out_id, int *out_meta) {
+    int mapped_id = id;
+    int mapped_meta = meta & 15;
+
+    /* Protocol 47 is still pre-flattening, but several old IDs gained new
+       metadata values after 1.2.5. Translate those before the simple ID map. */
+    if (id == 1) {
+        switch (meta & 7) {
+            case 1: mapped_id = BLOCK_STONE; mapped_meta = 0; break;                 /* granite */
+            case 2: mapped_id = BLOCK_STONE_BRICK; mapped_meta = 0; break;           /* polished granite */
+            case 3: mapped_id = BLOCK_STONE; mapped_meta = 0; break;                 /* diorite */
+            case 4: mapped_id = BLOCK_STONE_BRICK; mapped_meta = 0; break;           /* polished diorite */
+            case 5: mapped_id = BLOCK_COBBLESTONE; mapped_meta = 0; break;           /* andesite */
+            case 6: mapped_id = BLOCK_STONE_BRICK; mapped_meta = 0; break;           /* polished andesite */
+            default: mapped_meta = 0; break;
+        }
+    } else if (id == 3) {
+        if ((meta & 3) == 2) { mapped_id = BLOCK_MYCELIUM; mapped_meta = 0; }         /* podzol */
+        else mapped_meta = 0;                                                        /* dirt/coarse dirt */
+    } else if (id == 5) {
+        if ((meta & 7) == 4) mapped_meta = BLOCK_META_WOOD_JUNGLE;                   /* acacia -> jungle */
+        else if ((meta & 7) == 5) mapped_meta = BLOCK_META_WOOD_SPRUCE;              /* dark oak -> spruce */
+    } else if (id == 6) {
+        int grow = meta & 8;
+        int kind = meta & 7;
+        if (kind == 4) kind = BLOCK_META_WOOD_JUNGLE;
+        else if (kind == 5) kind = BLOCK_META_WOOD_SPRUCE;
+        mapped_meta = grow | kind;
+    } else if (id == 12) {
+        mapped_meta = 0;                                                             /* red sand -> sand */
+    } else if (id == 19) {
+        mapped_meta = 0;                                                             /* wet sponge -> sponge */
+    } else if (id == 38) {
+        mapped_id = ((meta & 15) == 3 || (meta & 15) == 8) ? BLOCK_YELLOW_FLOWER : BLOCK_RED_ROSE;
+        mapped_meta = 0;
+    } else if (id == 43 || id == 44) {
+        int top = meta & 8;
+        int kind = meta & 7;
+        if (kind == 6) kind = 4;                                                      /* nether brick -> brick slab */
+        else if (kind == 7) kind = 0;                                                 /* quartz -> stone slab */
+        mapped_meta = top | kind;
+    } else if (id == 95) {
+        mapped_id = BLOCK_GLASS;                                                      /* 1.8 stained glass, not locked chest */
+        mapped_meta = 0;
+    } else if (id >= 0 && id <= 124) {
+        /* Existing 1.2.5 block. Keep its compatible metadata. */
+    } else {
+        switch (id) {
+            case 125: mapped_id = BLOCK_PLANKS; mapped_meta = (meta & 7) > 3 ? BLOCK_META_WOOD_JUNGLE : (meta & 7); break;
+            case 126: mapped_id = BLOCK_SLAB; mapped_meta = (meta & 8) | 2; break;     /* wooden slab shape */
+            case 127: mapped_id = BLOCK_TORCH; mapped_meta = 0; break;
+            case 128: mapped_id = BLOCK_STONE_BRICK_STAIRS; mapped_meta = meta & 7; break;
+            case 129: mapped_id = BLOCK_DIAMOND_ORE; mapped_meta = 0; break;
+            case 130: mapped_id = BLOCK_CHEST; break;
+            case 131: mapped_id = BLOCK_LEVER; mapped_meta = meta & 15; break;
+            case 132: mapped_id = BLOCK_REDSTONE_WIRE; mapped_meta = meta & 15; break;
+            case 133: mapped_id = BLOCK_DIAMOND_BLOCK; mapped_meta = 0; break;
+            case 134: case 135: case 136: mapped_id = BLOCK_WOOD_STAIRS; mapped_meta = meta & 7; break;
+            case 137: mapped_id = BLOCK_DISPENSER; mapped_meta = meta & 7; break;
+            case 138: mapped_id = BLOCK_GLOWSTONE; mapped_meta = 0; break;
+            case 139: mapped_id = BLOCK_FENCE; mapped_meta = 0; break;
+            case 140: mapped_id = BLOCK_BROWN_MUSHROOM; mapped_meta = 0; break;
+            case 141: case 142: mapped_id = BLOCK_CROPS; mapped_meta = meta & 7; break;
+            case 143: mapped_id = BLOCK_STONE_BUTTON; mapped_meta = meta & 15; break;
+            case 144: mapped_id = BLOCK_PUMPKIN; mapped_meta = meta & 3; break;
+            case 145: mapped_id = BLOCK_ENCHANTMENT_TABLE; mapped_meta = 0; break;
+            case 146: mapped_id = BLOCK_CHEST; break;
+            case 147: case 148: mapped_id = BLOCK_STONE_PRESSURE_PLATE; mapped_meta = meta ? 1 : 0; break;
+            case 149: mapped_id = BLOCK_REDSTONE_REPEATER_OFF; mapped_meta = meta & 15; break;
+            case 150: mapped_id = BLOCK_REDSTONE_REPEATER_ON; mapped_meta = meta & 15; break;
+            case 151: case 178: mapped_id = BLOCK_SLAB; mapped_meta = 0; break;
+            case 152: mapped_id = BLOCK_REDSTONE_LAMP_ON; mapped_meta = 0; break;
+            case 153: mapped_id = BLOCK_COAL_ORE; mapped_meta = 0; break;
+            case 154: mapped_id = BLOCK_CAULDRON; mapped_meta = meta & 3; break;
+            case 155: mapped_id = BLOCK_IRON_BLOCK; mapped_meta = 0; break;
+            case 156: mapped_id = BLOCK_STONE_BRICK_STAIRS; mapped_meta = meta & 7; break;
+            case 157: mapped_id = BLOCK_POWERED_RAIL; mapped_meta = meta & 15; break;
+            case 158: mapped_id = BLOCK_DISPENSER; mapped_meta = meta & 7; break;
+            case 159: mapped_id = BLOCK_WOOL; mapped_meta = meta & 15; break;
+            case 160: mapped_id = BLOCK_GLASS_PANE; mapped_meta = 0; break;
+            case 161: {
+                int flags = meta & 12;
+                mapped_id = BLOCK_LEAVES;
+                mapped_meta = flags | ((meta & 1) ? BLOCK_META_WOOD_SPRUCE : BLOCK_META_WOOD_JUNGLE);
+                break;
+            }
+            case 162: {
+                int axis = meta & 12;
+                mapped_id = BLOCK_LOG;
+                mapped_meta = axis | ((meta & 1) ? BLOCK_META_WOOD_SPRUCE : BLOCK_META_WOOD_JUNGLE);
+                break;
+            }
+            case 163: case 164: mapped_id = BLOCK_WOOD_STAIRS; mapped_meta = meta & 7; break;
+            case 165: mapped_id = BLOCK_WOOL; mapped_meta = 5; break;                  /* lime wool */
+            case 166: mapped_id = BLOCK_GLASS; mapped_meta = 0; break;                /* visible barrier */
+            case 167: mapped_id = BLOCK_TRAPDOOR; mapped_meta = meta & 15; break;
+            case 168: mapped_id = BLOCK_MOSSY_COBBLESTONE; mapped_meta = 0; break;
+            case 169: mapped_id = BLOCK_GLOWSTONE; mapped_meta = 0; break;
+            case 170: mapped_id = BLOCK_WOOL; mapped_meta = 4; break;                  /* yellow wool */
+            case 171: mapped_id = BLOCK_SNOW_LAYER; mapped_meta = 0; break;
+            case 172: mapped_id = BLOCK_CLAY; mapped_meta = 0; break;
+            case 173: mapped_id = BLOCK_OBSIDIAN; mapped_meta = 0; break;
+            case 174: mapped_id = BLOCK_ICE; mapped_meta = 0; break;
+            case 175:
+                if ((meta & 7) == 0) mapped_id = BLOCK_YELLOW_FLOWER;
+                else if ((meta & 7) == 2 || (meta & 7) == 3) mapped_id = BLOCK_TALL_GRASS;
+                else mapped_id = BLOCK_RED_ROSE;
+                mapped_meta = ((meta & 7) == 3) ? BLOCK_META_TALL_GRASS_FERN : 0;
+                break;
+            case 176: mapped_id = BLOCK_SIGN_POST; mapped_meta = meta & 15; break;
+            case 177: mapped_id = BLOCK_WALL_SIGN; mapped_meta = meta & 7; break;
+            case 179: mapped_id = BLOCK_SANDSTONE; mapped_meta = (meta & 3) <= 2 ? (meta & 3) : 0; break;
+            case 180: mapped_id = BLOCK_STONE_BRICK_STAIRS; mapped_meta = meta & 7; break;
+            case 181: mapped_id = BLOCK_SANDSTONE; mapped_meta = 0; break;
+            case 182: mapped_id = BLOCK_SLAB; mapped_meta = (meta & 8) | 1; break;
+            case 183: case 184: case 185: case 186: case 187:
+                mapped_id = BLOCK_FENCE_GATE; mapped_meta = meta & 15; break;
+            case 188: case 189: case 190: case 191: case 192:
+                mapped_id = BLOCK_FENCE; mapped_meta = 0; break;
+            case 193: case 194: case 195: case 196: case 197:
+                mapped_id = BLOCK_WOOD_DOOR; mapped_meta = meta & 15; break;
+            default: mapped_id = BLOCK_STONE; mapped_meta = 0; break;
+        }
+    }
+
+    if (out_id) *out_id = mapped_id;
+    if (out_meta) *out_meta = mapped_meta;
+}
+
 int pex_java47_translate_block_id(int id) {
-    return (id >= 0 && id <= 124) ? id : BLOCK_STONE;
+    int mapped = BLOCK_STONE;
+    j47_translate_block_state_parts(id, 0, &mapped, NULL);
+    return mapped;
+}
+
+static void j47_translate_item_stack(int id, int damage, int *out_id, int *out_damage) {
+    int mapped_id = id;
+    int mapped_damage = damage;
+
+    if (id <= 0) {
+        mapped_id = 0;
+        mapped_damage = 0;
+    } else if (id <= 255) {
+        j47_translate_block_state_parts(id, damage, &mapped_id, &mapped_damage);
+    } else if (id <= 385) {
+        if (id == ITEM_FISH_RAW) {
+            int fish = damage & 3;
+            mapped_id = fish == 3 ? ITEM_SPIDER_EYE : ITEM_FISH_RAW;                  /* pufferfish is visibly unsafe */
+            mapped_damage = 0;
+        } else if (id == ITEM_FISH_COOKED) {
+            mapped_damage = 0;
+        }
+    } else {
+        mapped_damage = 0;
+        switch (id) {
+            case 386: case 387: mapped_id = ITEM_BOOK; break;
+            case 388: mapped_id = ITEM_DIAMOND; break;
+            case 389: mapped_id = ITEM_PAINTING; break;
+            case 390: mapped_id = ITEM_BRICK; break;
+            case 391: case 392: mapped_id = ITEM_APPLE_RED; break;
+            case 393: mapped_id = ITEM_BREAD; break;
+            case 394: mapped_id = ITEM_SPIDER_EYE; break;
+            case 395: mapped_id = ITEM_MAP; break;
+            case 396: mapped_id = ITEM_APPLE_GOLD; break;
+            case 397: mapped_id = BLOCK_PUMPKIN; break;
+            case 398: mapped_id = ITEM_FISHING_ROD; break;
+            case 399: mapped_id = ITEM_DIAMOND; break;
+            case 400: mapped_id = ITEM_CAKE; break;
+            case 401: mapped_id = ITEM_FIREBALL_CHARGE; break;
+            case 402: mapped_id = ITEM_GUNPOWDER; break;
+            case 403: mapped_id = ITEM_BOOK; break;
+            case 404: mapped_id = ITEM_REDSTONE_REPEATER; break;
+            case 405: mapped_id = ITEM_BRICK; break;
+            case 406: mapped_id = ITEM_FLINT; break;
+            case 407: mapped_id = ITEM_MINECART_EMPTY; break;
+            case 408: mapped_id = ITEM_MINECART_CRATE; break;
+            case 409: mapped_id = ITEM_FLINT; break;
+            case 410: mapped_id = ITEM_DIAMOND; break;
+            case 411: mapped_id = ITEM_CHICKEN_RAW; break;
+            case 412: mapped_id = ITEM_CHICKEN_COOKED; break;
+            case 413: mapped_id = ITEM_BOWL_SOUP; break;
+            case 414: mapped_id = ITEM_GHAST_TEAR; break;
+            case 415: mapped_id = ITEM_LEATHER; break;
+            case 416: mapped_id = ITEM_SIGN; break;
+            case 417: mapped_id = ITEM_PLATE_IRON; break;
+            case 418: mapped_id = ITEM_PLATE_GOLD; break;
+            case 419: mapped_id = ITEM_PLATE_DIAMOND; break;
+            case 420: mapped_id = ITEM_STRING; break;
+            case 421: mapped_id = ITEM_SIGN; break;
+            case 422: mapped_id = ITEM_MINECART_EMPTY; break;
+            case 423: mapped_id = ITEM_PORK_RAW; break;
+            case 424: mapped_id = ITEM_PORK_COOKED; break;
+            case 425: mapped_id = ITEM_SIGN; break;
+            case 427: case 428: case 429: case 430: case 431: mapped_id = ITEM_DOOR_WOOD; break;
+            default:
+                if (id >= 2256 && id <= 2267) mapped_id = id;
+                else mapped_id = ITEM_PAPER;                                           /* abstract server/menu item */
+                break;
+        }
+    }
+
+    if (out_id) *out_id = mapped_id;
+    if (out_damage) *out_damage = mapped_damage;
 }
 
 int pex_java47_translate_item_id(int id) {
-    if (id <= 0) return 0;
-    if (id <= 124) return id;
-    if (id <= 255) return BLOCK_STONE;
-    if (id <= 385) return id;
-    if (id >= 2256 && id <= 2267) return id;
-    return BLOCK_STONE;
+    int mapped = ITEM_PAPER;
+    j47_translate_item_stack(id, 0, &mapped, NULL);
+    return mapped;
 }
 
 int pex_java47_translate_mob_type(int type) {
@@ -901,27 +1116,60 @@ int pex_java47_translate_mob_type(int type) {
     }
 }
 
-static int j47_read_item(J47Reader *r, ItemStack *out) {
+static int j47_read_item_ex(J47Reader *r, ItemStack *out, J47RawItem *raw_out) {
     ItemStack st;
+    J47RawItem raw;
     memset(&st, 0, sizeof(st));
+    memset(&raw, 0, sizeof(raw));
     int16_t raw_id = (int16_t)j47_r_be16(r);
     if (r->failed) return 0;
-    if (raw_id < 0) { if (out) *out = st; return 1; }
-    st.id = pex_java47_translate_item_id(raw_id);
-    st.count = (int)(int8_t)j47_r_u8(r);
-    st.damage = (int)(int16_t)j47_r_be16(r);
+    if (raw_id < 0) {
+        if (out) *out = st;
+        if (raw_out) *raw_out = raw;
+        return 1;
+    }
+    raw.id = raw_id;
+    raw.count = (int)(int8_t)j47_r_u8(r);
+    raw.damage = (int)(int16_t)j47_r_be16(r);
+    st.count = raw.count;
+    j47_translate_item_stack(raw.id, raw.damage, &st.id, &st.damage);
+    size_t nbt_start = r->pos;
     if (!j47_skip_nbt(r)) return 0;
+    size_t nbt_len = r->pos - nbt_start;
+    if (nbt_len <= sizeof(raw.nbt)) {
+        raw.nbt_len = nbt_len;
+        if (nbt_len) memcpy(raw.nbt, r->data + nbt_start, nbt_len);
+    }
     if (st.count < 1) st.count = 1;
+    if (raw.count < 1) raw.count = 1;
     if (out) *out = st;
+    if (raw_out) *raw_out = raw;
     return !r->failed;
+}
+
+static int j47_read_item(J47Reader *r, ItemStack *out) {
+    return j47_read_item_ex(r, out, NULL);
+}
+
+static void j47_write_raw_item(J47Writer *w, const J47RawItem *raw, int count_override) {
+    if (!raw || raw->id <= 0 || (count_override == 0) || (count_override < 0 && raw->count <= 0)) {
+        j47_w_be16(w, -1);
+        return;
+    }
+    int count = count_override > 0 ? count_override : raw->count;
+    j47_w_be16(w, raw->id);
+    j47_w_u8(w, count);
+    j47_w_be16(w, raw->damage);
+    if (raw->nbt_len > 0) j47_w_bytes(w, raw->nbt, raw->nbt_len);
+    else j47_w_u8(w, 0);
 }
 
 static void j47_write_item(J47Writer *w, int item_id, int count, int damage) {
     if (item_id <= 0 || count <= 0) { j47_w_be16(w, -1); return; }
-    j47_w_be16(w, pex_java47_translate_item_id(item_id));
+    j47_w_be16(w, item_id);
     j47_w_u8(w, count);
     j47_w_be16(w, damage);
-    j47_w_u8(w, 0); /* TAG_End: no NBT */
+    j47_w_u8(w, 0); /* TAG_End: local 1.2.5 items do not have arbitrary NBT. */
 }
 
 static int j47_read_block_pos(J47Reader *r, int *x, int *y, int *z) {
@@ -979,6 +1227,7 @@ static J47Entity *j47_entity_alloc(int entity_id) {
         g_j47.entities[i].player_slot = -1;
         g_j47.entities[i].mob_slot = -1;
         g_j47.entities[i].drop_slot = -1;
+        g_j47.entities[i].proxy_item_drop_slot = -1;
         return &g_j47.entities[i];
     }
     return NULL;
@@ -999,6 +1248,9 @@ static void j47_entity_remove(int entity_id) {
         g_passive_mobs[e->mob_slot].active = 0;
     } else if (e->kind == J47_ENTITY_DROP && e->drop_slot >= 0 && e->drop_slot < MAX_DROP_ENTITIES) {
         g_drops[e->drop_slot].active = 0;
+    }
+    if (e->proxy_item_drop_slot >= 0 && e->proxy_item_drop_slot < MAX_DROP_ENTITIES) {
+        g_drops[e->proxy_item_drop_slot].active = 0;
     }
     memset(e, 0, sizeof(*e));
 }
@@ -1055,6 +1307,47 @@ static int j47_player_alloc(void) {
     return g_mp_player_count++;
 }
 
+static void j47_sync_proxy_item_visual(J47Entity *e) {
+    if (!e || !e->used || !e->is_armor_stand) return;
+    int chosen = -1;
+    /* Armor-stand menu displays overwhelmingly use the helmet or hand slot.
+       Prefer those, then fall back through the remaining armor slots. */
+    static const int order[5] = {4, 0, 3, 2, 1};
+    for (int i = 0; i < 5; i++) {
+        int slot = order[i];
+        if (!stack_empty(&e->equipment[slot])) { chosen = slot; break; }
+    }
+    if (chosen < 0) {
+        if (e->proxy_item_drop_slot >= 0 && e->proxy_item_drop_slot < MAX_DROP_ENTITIES)
+            g_drops[e->proxy_item_drop_slot].active = 0;
+        e->proxy_item_drop_slot = -1;
+        e->held_item_id = e->held_item_count = e->held_item_damage = 0;
+        e->held_slot = 0;
+        return;
+    }
+
+    if (e->proxy_item_drop_slot < 0 || e->proxy_item_drop_slot >= MAX_DROP_ENTITIES ||
+        !g_drops[e->proxy_item_drop_slot].active) {
+        e->proxy_item_drop_slot = j47_drop_alloc();
+        if (e->proxy_item_drop_slot < 0) return;
+        memset(&g_drops[e->proxy_item_drop_slot], 0, sizeof(g_drops[e->proxy_item_drop_slot]));
+        g_drops[e->proxy_item_drop_slot].active = 1;
+        g_drops[e->proxy_item_drop_slot].net_id = -e->entity_id;
+        g_drops[e->proxy_item_drop_slot].pickup_delay = 32767;
+    }
+
+    FlatDroppedItem *d = &g_drops[e->proxy_item_drop_slot];
+    d->stack = e->equipment[chosen];
+    d->x = d->prev_x = (float)e->x;
+    d->y = d->prev_y = (float)e->y + (chosen == 4 ? 1.35f : 0.85f);
+    d->z = d->prev_z = (float)e->z;
+    d->mx = d->my = d->mz = 0.0f;
+    e->held_item_id = d->stack.id;
+    e->held_item_count = d->stack.count;
+    e->held_item_damage = d->stack.damage;
+    e->held_slot = chosen;
+}
+
 static int j47_mob_alloc_slot(void) {
     PassiveMob *m = passive_mob_alloc();
     if (!m) return -1;
@@ -1063,8 +1356,9 @@ static int j47_mob_alloc_slot(void) {
 
 static void j47_set_block_state(int x, int y, int z, int state) {
     if (!flat_in_bounds(x, y, z)) return;
-    int id = pex_java47_translate_block_id((state >> 4) & 0xfff);
-    int meta = state & 15;
+    int id = BLOCK_STONE;
+    int meta = 0;
+    j47_translate_block_state_parts((state >> 4) & 0xfff, state & 15, &id, &meta);
     int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
     int old = g_flat_blocks[yi][zi][xi];
     g_flat_blocks[yi][zi][xi] = (unsigned char)id;
@@ -1130,7 +1424,8 @@ static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const
         if (visible) for (int ly = 0; ly < 16; ly++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
             int idx = (ly << 8) | (z << 4) | x;
             int state = states[idx * 2] | (states[idx * 2 + 1] << 8);
-            int id = pex_java47_translate_block_id((state >> 4) & 0xfff), meta = state & 15;
+            int id = BLOCK_STONE, meta = 0;
+            j47_translate_block_state_parts((state >> 4) & 0xfff, state & 15, &id, &meta);
             int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
             int yi = flat_y_index(wy), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
             g_flat_blocks[yi][zi][xi] = (unsigned char)id;
@@ -1176,11 +1471,15 @@ static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const
     }
 }
 
+static void j47_apply_player_slot_raw(int java_slot, const ItemStack *st, const J47RawItem *raw);
 static void j47_apply_player_slot(int java_slot, const ItemStack *st);
 
 
 static int j47_window_is_container_type(const char *type) {
-    return type && (!strcmp(type, "minecraft:container") || !strcmp(type, "minecraft:chest"));
+    /* PexCraft has native crafting-table and furnace screens. Every other
+       protocol-47 window is represented by the nearest generic chest layout,
+       including hopper, dispenser, beacon, anvil, horse and plugin menus. */
+    return type && strcmp(type, "minecraft:crafting_table") && strcmp(type, "minecraft:furnace");
 }
 
 static int j47_map_pex_slot_to_java(int pex_slot) {
@@ -1216,39 +1515,83 @@ static int j47_map_pex_slot_to_java(int pex_slot) {
     return -32768;
 }
 
-static void j47_apply_open_window_slot(int slot, const ItemStack *st) {
+
+static const J47RawItem *j47_raw_for_java_slot(int java_slot) {
+    if (java_slot < 0) return NULL;
+    if (g_j47.window.open && java_slot < J47_WINDOW_MAX_SLOTS) {
+        const J47RawItem *raw = &g_j47.window.raw_slots[java_slot];
+        if (raw->id > 0) return raw;
+    }
+    if (!g_j47.window.open && java_slot < (int)(sizeof(g_j47.raw_player_slots) / sizeof(g_j47.raw_player_slots[0]))) {
+        const J47RawItem *raw = &g_j47.raw_player_slots[java_slot];
+        if (raw->id > 0) return raw;
+    }
+    return NULL;
+}
+
+static const J47RawItem *j47_raw_for_selected_hotbar(int display_id, int display_damage) {
+    int java_slot = 36 + g_selected_hotbar_slot;
+    if (java_slot < 36 || java_slot > 44) return NULL;
+    const J47RawItem *raw = &g_j47.raw_player_slots[java_slot];
+    if (raw->id <= 0) return NULL;
+    int mapped_id = 0, mapped_damage = 0;
+    j47_translate_item_stack(raw->id, raw->damage, &mapped_id, &mapped_damage);
+    if (mapped_id != display_id || mapped_damage != display_damage) return NULL;
+    return raw;
+}
+
+static void j47_write_held_or_local_item(J47Writer *w, int item_id, int count, int damage) {
+    const J47RawItem *raw = j47_raw_for_selected_hotbar(item_id, damage);
+    if (raw) j47_write_raw_item(w, raw, count);
+    else j47_write_item(w, item_id, count, damage);
+}
+
+static void j47_apply_open_window_slot_raw(int slot, const ItemStack *st, const J47RawItem *raw) {
     if (!st || slot < 0) return;
-    if (slot < J47_WINDOW_MAX_SLOTS) g_j47.window.slots[slot] = *st;
+    if (slot < J47_WINDOW_MAX_SLOTS) {
+        g_j47.window.slots[slot] = *st;
+        if (raw) g_j47.window.raw_slots[slot] = *raw;
+        else if (stack_empty(st)) memset(&g_j47.window.raw_slots[slot], 0, sizeof(g_j47.window.raw_slots[slot]));
+    }
 
     if (j47_window_is_container_type(g_j47.window.type)) {
         int container = g_j47.window.container_slots;
-        if (slot < container) {
-            ItemStack *dst = chest_get_open_slot_ptr(slot);
-            if (dst) *dst = *st;
-        } else {
+        if (slot >= container) {
             int relative = slot - container;
-            if (relative < 27) j47_apply_player_slot(9 + relative, st);
-            else if (relative < 36) j47_apply_player_slot(36 + relative - 27, st);
+            if (relative < 27) j47_apply_player_slot_raw(9 + relative, st, raw);
+            else if (relative < 36) j47_apply_player_slot_raw(36 + relative - 27, st, raw);
         }
     } else if (!strcmp(g_j47.window.type, "minecraft:crafting_table")) {
         if (slot >= 1 && slot <= 9) g_workbench_grid[slot - 1] = *st;
-        else if (slot >= 10 && slot <= 36) j47_apply_player_slot(9 + slot - 10, st);
-        else if (slot >= 37 && slot <= 45) j47_apply_player_slot(36 + slot - 37, st);
+        else if (slot >= 10 && slot <= 36) j47_apply_player_slot_raw(9 + slot - 10, st, raw);
+        else if (slot >= 37 && slot <= 45) j47_apply_player_slot_raw(36 + slot - 37, st, raw);
     } else if (!strcmp(g_j47.window.type, "minecraft:furnace")) {
         if (slot >= 0 && slot <= 2) {
             ItemStack *dst = furnace_get_slot_ptr(slot);
             if (dst) *dst = *st;
-        } else if (slot >= 3 && slot <= 29) j47_apply_player_slot(9 + slot - 3, st);
-        else if (slot >= 30 && slot <= 38) j47_apply_player_slot(36 + slot - 30, st);
+        } else if (slot >= 3 && slot <= 29) j47_apply_player_slot_raw(9 + slot - 3, st, raw);
+        else if (slot >= 30 && slot <= 38) j47_apply_player_slot_raw(36 + slot - 30, st, raw);
     }
 }
 
-static void j47_apply_player_slot(int java_slot, const ItemStack *st) {
+static void j47_apply_open_window_slot(int slot, const ItemStack *st) {
+    j47_apply_open_window_slot_raw(slot, st, NULL);
+}
+
+static void j47_apply_player_slot_raw(int java_slot, const ItemStack *st, const J47RawItem *raw) {
     if (!st) return;
+    if (java_slot >= 0 && java_slot < (int)(sizeof(g_j47.raw_player_slots) / sizeof(g_j47.raw_player_slots[0]))) {
+        if (raw) g_j47.raw_player_slots[java_slot] = *raw;
+        else if (stack_empty(st)) memset(&g_j47.raw_player_slots[java_slot], 0, sizeof(g_j47.raw_player_slots[java_slot]));
+    }
     if (java_slot >= 36 && java_slot <= 44) g_inventory[java_slot - 36] = *st;
     else if (java_slot >= 9 && java_slot <= 35) g_inventory[java_slot] = *st;
     else if (java_slot >= 5 && java_slot <= 8) g_armor_inventory[8 - java_slot] = *st;
     armor_sync_player_armor();
+}
+
+static void j47_apply_player_slot(int java_slot, const ItemStack *st) {
+    j47_apply_player_slot_raw(java_slot, st, NULL);
 }
 
 static void j47_apply_window_items(int window_id, ItemStack *items, int count) {
@@ -1322,13 +1665,14 @@ static void j47_spawn_object(J47Reader *r) {
     double x = (double)j47_r_be32(r) / 32.0;
     double y = (double)j47_r_be32(r) / 32.0;
     double z = (double)j47_r_be32(r) / 32.0;
-    (void)j47_r_u8(r); (void)j47_r_u8(r);
+    float pitch = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
+    float yaw = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
     int data = j47_r_be32(r);
     int vx=0,vy=0,vz=0;
     if (data > 0) { vx=(int16_t)j47_r_be16(r); vy=(int16_t)j47_r_be16(r); vz=(int16_t)j47_r_be16(r); }
     if (r->failed) return;
     J47Entity *e = j47_entity_alloc(entity_id); if (!e) return;
-    e->kind = J47_ENTITY_OTHER; e->java_type = type; e->x=x; e->y=y; e->z=z;
+    e->kind = J47_ENTITY_OTHER; e->java_type = type; e->x=x; e->y=y; e->z=z; e->yaw=yaw; e->pitch=pitch;
     if (type == 2) { /* dropped item: item metadata arrives in S1C */
         int slot = j47_drop_alloc();
         if (slot >= 0) {
@@ -1336,6 +1680,23 @@ static void j47_spawn_object(J47Reader *r) {
             d->x=d->prev_x=(float)x; d->y=d->prev_y=(float)y; d->z=d->prev_z=(float)z;
             d->mx=(float)vx/8000.0f; d->my=(float)vy/8000.0f; d->mz=(float)vz/8000.0f; d->stack.id=BLOCK_STONE; d->stack.count=1;
             e->kind=J47_ENTITY_DROP; e->drop_slot=slot;
+        }
+    } else if (type == 78) { /* EntityArmorStand: protocol-47 spawn-object type */
+        int slot = j47_mob_alloc_slot();
+        if (slot >= 0) {
+            /* PexCraft has no armor-stand model. A pig proxy supplies a visible,
+               targetable entity while equipment is rendered as a local item
+               display above it. The real Java entity ID remains authoritative. */
+            passive_mob_init(&g_passive_mobs[slot], PASSIVE_MOB_PIG, (float)x, (float)y, (float)z);
+            PassiveMob *m = &g_passive_mobs[slot];
+            m->entity_id = entity_id;
+            m->yaw = m->prev_yaw = yaw;
+            m->pitch = m->prev_pitch = pitch;
+            m->head_yaw = m->prev_head_yaw = yaw;
+            m->render_yaw = m->prev_render_yaw = yaw;
+            e->kind = J47_ENTITY_MOB;
+            e->mob_slot = slot;
+            e->is_armor_stand = 1;
         }
     }
 }
@@ -1352,22 +1713,41 @@ static void j47_apply_entity_position(J47Entity *e, double x, double y, double z
     } else if (e->kind==J47_ENTITY_DROP && e->drop_slot>=0 && e->drop_slot<MAX_DROP_ENTITIES) {
         FlatDroppedItem *d=&g_drops[e->drop_slot]; d->prev_x=d->x;d->prev_y=d->y;d->prev_z=d->z;d->x=(float)x;d->y=(float)y;d->z=(float)z;
     }
+    if (e->is_armor_stand) j47_sync_proxy_item_visual(e);
 }
 
 static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
     J47Entity *e=j47_entity_find(entity_id);
     for (;;) {
-        int h=(int)j47_r_u8(r); if(r->failed||h==0x7f) return;
+        int h=(int)j47_r_u8(r);
+        if(r->failed||h==0x7f) break;
         int type=(h>>5)&7, index=h&31;
-        if(type==5){ItemStack st;if(!j47_read_item(r,&st))return;if(e&&e->kind==J47_ENTITY_DROP&&index==10&&e->drop_slot>=0){g_drops[e->drop_slot].stack=st;}}
-        else if(type==0){int v=(int8_t)j47_r_u8(r);if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=v;}
-        else if(type==1)(void)j47_r_be16(r);
-        else if(type==2)(void)j47_r_be32(r);
-        else if(type==3){float v=j47_r_float(r);if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=(int)ceilf(v);}
-        else if(type==4){char tmp[512];if(!j47_r_string(r,tmp,sizeof(tmp)))return;}
-        else if(type==6){(void)j47_r_be32(r);(void)j47_r_be32(r);(void)j47_r_be32(r);}
-        else if(type==7){(void)j47_r_float(r);(void)j47_r_float(r);(void)j47_r_float(r);}
+        if(type==5){
+            ItemStack st;
+            if(!j47_read_item(r,&st))return;
+            if(e&&e->kind==J47_ENTITY_DROP&&index==10&&e->drop_slot>=0)g_drops[e->drop_slot].stack=st;
+        } else if(type==0){
+            int v=(int8_t)j47_r_u8(r);
+            if(e&&index==0)e->metadata_flags=v;
+            if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=v;
+        } else if(type==1){
+            (void)j47_r_be16(r);
+        } else if(type==2){
+            (void)j47_r_be32(r);
+        } else if(type==3){
+            float v=j47_r_float(r);
+            if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=(int)ceilf(v);
+        } else if(type==4){
+            char tmp[512];
+            if(!j47_r_string(r,tmp,sizeof(tmp)))return;
+            if(e&&index==2)snprintf(e->custom_name,sizeof(e->custom_name),"%.*s",(int)sizeof(e->custom_name)-1,tmp);
+        } else if(type==6){
+            (void)j47_r_be32(r);(void)j47_r_be32(r);(void)j47_r_be32(r);
+        } else if(type==7){
+            (void)j47_r_float(r);(void)j47_r_float(r);(void)j47_r_float(r);
+        }
     }
+    if(e&&e->is_armor_stand)j47_sync_proxy_item_visual(e);
 }
 
 static int j47_send_position_look_immediate(double x, double feet_y, double z,
@@ -1442,7 +1822,26 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x01:{g_j47.local_entity_id=j47_r_be32(r);g_mp_player_id=g_j47.local_entity_id;int gm=(int)j47_r_u8(r);g_j47.game_mode=gm&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_j47.dimension=(int8_t)j47_r_u8(r);g_j47.difficulty=(int)j47_r_u8(r);(void)j47_r_u8(r);char wt[64];j47_r_string(r,wt,sizeof(wt));g_j47.has_join_game=1;g_j47.progress=35;j47_set_status("Downloading terrain");if(!r->failed&&!j47_send_client_identity())j47_fail("Could not send Java client settings");break;}
         case 0x02:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){(void)j47_r_u8(r);j47_json_collect_text(json,text,sizeof(text));if(text[0])hud_add_chat(text);}break;}
         case 0x03:{(void)j47_r_be64(r);g_world_time=j47_r_be64(r);break;}
-        case 0x04:{int32_t id;if(j47_r_varint(r,&id)){int slot=(int16_t)j47_r_be16(r);ItemStack st;if(j47_read_item(r,&st)&&slot==0){J47Entity*e=j47_entity_find(id);if(e){e->held_item_id=st.id;e->held_item_count=st.count;e->held_item_damage=st.damage;e->held_slot=0;PexNetRenderPlayerState*rp=pex_net_find_render_player(id);if(rp){rp->held_item_id=st.id;rp->held_item_count=st.count;rp->held_item_damage=st.damage;rp->held_slot=0;}}}}break;}
+        case 0x04:{
+            int32_t id;
+            if(j47_r_varint(r,&id)){
+                int slot=(int16_t)j47_r_be16(r);
+                ItemStack st;
+                if(j47_read_item(r,&st)){
+                    J47Entity*e=j47_entity_find(id);
+                    if(e){
+                        if(slot>=0&&slot<5)e->equipment[slot]=st;
+                        if(slot==0){
+                            e->held_item_id=st.id;e->held_item_count=st.count;e->held_item_damage=st.damage;e->held_slot=0;
+                            PexNetRenderPlayerState*rp=pex_net_find_render_player(id);
+                            if(rp){rp->held_item_id=st.id;rp->held_item_count=st.count;rp->held_item_damage=st.damage;rp->held_slot=0;}
+                        }
+                        if(e->is_armor_stand)j47_sync_proxy_item_visual(e);
+                    }
+                }
+            }
+            break;
+        }
         case 0x05:{int x,y,z;j47_read_block_pos(r,&x,&y,&z);break;}
         case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
         case 0x07:{g_j47.dimension=j47_r_be32(r);g_j47.difficulty=(int)j47_r_u8(r);g_j47.game_mode=(int)j47_r_u8(r)&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_player_dead=0;g_player_death_time=0;g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;char wt[64];j47_r_string(r,wt,sizeof(wt));j47_reset_world_for_respawn();break;}
@@ -1476,9 +1875,19 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
             j47_json_collect_text(title_json,g_j47.window.title,sizeof(g_j47.window.title));
             g_j47.window.container_slots=j47_r_u8(r);
             if(!strcmp(g_j47.window.type,"EntityHorse"))j47_r_be32(r);
-            if(j47_window_is_container_type(g_j47.window.type)) {
-                g_open_chest_rows = g_j47.window.container_slots >= 54 ? 6 : 3;
-                if(g_j47.window.title[0]) snprintf(g_open_chest_title,sizeof(g_open_chest_title),"%.*s",(int)sizeof(g_open_chest_title)-1,g_j47.window.title);
+            if(r->failed){memset(&g_j47.window,0,sizeof(g_j47.window));break;}
+
+            if(!strcmp(g_j47.window.type,"minecraft:crafting_table")){
+                memset(g_workbench_grid,0,sizeof(g_workbench_grid));
+                set_screen(SCREEN_WORKBENCH);
+            } else if(!strcmp(g_j47.window.type,"minecraft:furnace")){
+                set_screen(SCREEN_FURNACE);
+            } else {
+                g_open_chest_rows = g_j47.window.container_slots > 27 ? 6 : 3;
+                snprintf(g_open_chest_title,sizeof(g_open_chest_title),"%.*s",
+                         (int)sizeof(g_open_chest_title)-1,
+                         g_j47.window.title[0]?g_j47.window.title:"Container");
+                set_screen(SCREEN_CHEST);
             }
             break;
         }
@@ -1486,15 +1895,26 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x2F:{
             int wid=(int)(int8_t)j47_r_u8(r);
             int slot=(int16_t)j47_r_be16(r);
-            ItemStack st;
-            if(j47_read_item(r,&st)){
-                if(wid==-1 && slot==-1) g_carried_stack=st;
-                else if(wid==0 || wid==-2) j47_apply_player_slot(slot,&st);
-                else if(g_j47.window.open && wid==g_j47.window.window_id) j47_apply_open_window_slot(slot,&st);
+            ItemStack st;J47RawItem raw;
+            if(j47_read_item_ex(r,&st,&raw)){
+                if(wid==-1 && slot==-1){g_carried_stack=st;g_j47.raw_cursor=raw;}
+                else if(wid==0 || wid==-2)j47_apply_player_slot_raw(slot,&st,&raw);
+                else if(g_j47.window.open && wid==g_j47.window.window_id)j47_apply_open_window_slot_raw(slot,&st,&raw);
             }
             break;
         }
-        case 0x30:{int wid=j47_r_u8(r);int count=(int16_t)j47_r_be16(r);if(count<0||count>4096)break;ItemStack*items=calloc((size_t)count,sizeof(ItemStack));if(!items)break;for(int i=0;i<count&&!r->failed;i++)j47_read_item(r,&items[i]);if(!r->failed)j47_apply_window_items(wid,items,count);free(items);break;}
+        case 0x30:{
+            int wid=j47_r_u8(r);int count=(int16_t)j47_r_be16(r);
+            if(count<0||count>4096)break;
+            if(g_j47.window.open&&wid==g_j47.window.window_id)g_j47.window.total_slots=count<J47_WINDOW_MAX_SLOTS?count:J47_WINDOW_MAX_SLOTS;
+            for(int i=0;i<count&&!r->failed;i++){
+                ItemStack st;J47RawItem raw;
+                if(!j47_read_item_ex(r,&st,&raw))break;
+                if(wid==0)j47_apply_player_slot_raw(i,&st,&raw);
+                else if(g_j47.window.open&&wid==g_j47.window.window_id)j47_apply_open_window_slot_raw(i,&st,&raw);
+            }
+            break;
+        }
         case 0x31:{int wid=j47_r_u8(r);int property=(int16_t)j47_r_be16(r);int value=(int16_t)j47_r_be16(r);if(g_j47.window.open&&wid==g_j47.window.window_id&&!strcmp(g_j47.window.type,"minecraft:furnace")){FurnaceTile*ft=furnace_open_tile();if(ft){if(property==0)ft->burn_time=value;else if(property==1)ft->current_item_burn_time=value;else if(property==2)ft->cook_time=value;}}break;}
         case 0x32:{int wid=j47_r_u8(r);int action=(int16_t)j47_r_be16(r);int accepted=j47_r_u8(r);if(!accepted){J47Writer w;j47_writer_init(&w,8);j47_w_u8(&w,wid);j47_w_be16(&w,action);j47_w_u8(&w,1);j47_send_packet(0x0F,w.data,w.len);j47_writer_free(&w);}break;}
         case 0x38:j47_handle_player_list(r);break;
@@ -1573,6 +1993,20 @@ int pex_java47_local_entity_id(void){return g_j47.local_entity_id;}
 int pex_java47_get_equipment(int entity_id,int *item_id,int *count,int *damage,int *slot){J47Entity*e=j47_entity_find(entity_id);if(!e)return 0;if(item_id)*item_id=e->held_item_id;if(count)*count=e->held_item_count;if(damage)*damage=e->held_item_damage;if(slot)*slot=e->held_slot;return 1;}
 int pex_java47_entity_is_player(int entity_id){J47Entity*e=j47_entity_find(entity_id);return e&&e->kind==J47_ENTITY_PLAYER;}
 
+ItemStack *pex_java47_get_open_container_slot(int local_slot){
+    if(!g_j47.window.open||!j47_window_is_container_type(g_j47.window.type)||local_slot<0||
+       local_slot>=g_j47.window.container_slots||local_slot>=J47_WINDOW_MAX_SLOTS)return NULL;
+    return &g_j47.window.slots[local_slot];
+}
+
+int pex_java47_open_container_slot_count(void){
+    if(!g_j47.window.open||!j47_window_is_container_type(g_j47.window.type))return 0;
+    int n=g_j47.window.container_slots;
+    if(n<0)n=0;
+    if(n>J47_WINDOW_MAX_SLOTS)n=J47_WINDOW_MAX_SLOTS;
+    return n;
+}
+
 static int j47_send_entity_action(int action){J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,g_j47.local_entity_id);j47_w_varint(&w,action);j47_w_varint(&w,0);int ok=j47_send_packet(0x0B,w.data,w.len);j47_writer_free(&w);return ok;}
 
 int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float pitch,int on_ground,int sneaking,int sprinting,int held_slot){
@@ -1597,8 +2031,25 @@ int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float
 int pex_java47_send_chat(const char*text){if(g_j47.state!=PEX_JAVA47_PLAY||!text)return 0;J47Writer w;j47_writer_init(&w,300);j47_w_string_n(&w,text,100);int ok=j47_send_packet(0x01,w.data,w.len);j47_writer_free(&w);return ok;}
 int pex_java47_send_swing(void){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;return j47_send_packet(0x0A,NULL,0);}
 int pex_java47_send_attack(int entity_id){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,entity_id);j47_w_varint(&w,1);int ok=j47_send_packet(0x02,w.data,w.len);j47_writer_free(&w);return ok;}
+
+int pex_java47_send_interact(int entity_id,float hit_x,float hit_y,float hit_z){
+    if(g_j47.state!=PEX_JAVA47_PLAY)return 0;
+    J47Entity *entity=j47_entity_find(entity_id);
+    J47Writer w;j47_writer_init(&w,32);j47_w_varint(&w,entity_id);
+    if(entity&&entity->is_armor_stand){
+        /* Vanilla 1.8.8 handles armor stands through INTERACT_AT. Sending a
+           second generic interaction can make plugin menus fire twice. */
+        j47_w_varint(&w,2);
+        j47_w_float(&w,hit_x);j47_w_float(&w,hit_y);j47_w_float(&w,hit_z);
+    }else{
+        /* Villagers, fake-player NPCs and other ordinary entities use the
+           generic right-click action. */
+        j47_w_varint(&w,0);
+    }
+    int ok=j47_send_packet(0x02,w.data,w.len);j47_writer_free(&w);return ok;
+}
 int pex_java47_send_dig(int status,int x,int y,int z,int face){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,24);j47_w_varint(&w,status);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);int ok=j47_send_packet(0x07,w.data,w.len);j47_writer_free(&w);return ok;}
-int pex_java47_send_place(int x,int y,int z,int face,int item_id,int count,int damage,float cursor_x,float cursor_y,float cursor_z){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,48);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);j47_write_item(&w,item_id,count,damage);int cx=(int)(cursor_x*16.0f);int cy=(int)(cursor_y*16.0f);int cz=(int)(cursor_z*16.0f);if(cx<0)cx=0;if(cx>15)cx=15;if(cy<0)cy=0;if(cy>15)cy=15;if(cz<0)cz=0;if(cz>15)cz=15;j47_w_u8(&w,cx);j47_w_u8(&w,cy);j47_w_u8(&w,cz);int ok=j47_send_packet(0x08,w.data,w.len);j47_writer_free(&w);return ok;}
+int pex_java47_send_place(int x,int y,int z,int face,int item_id,int count,int damage,float cursor_x,float cursor_y,float cursor_z){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,48);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);j47_write_held_or_local_item(&w,item_id,count,damage);int cx=(int)(cursor_x*16.0f);int cy=(int)(cursor_y*16.0f);int cz=(int)(cursor_z*16.0f);if(cx<0)cx=0;if(cx>15)cx=15;if(cy<0)cy=0;if(cy>15)cy=15;if(cz<0)cz=0;if(cz>15)cz=15;j47_w_u8(&w,cx);j47_w_u8(&w,cy);j47_w_u8(&w,cz);int ok=j47_send_packet(0x08,w.data,w.len);j47_writer_free(&w);return ok;}
 int pex_java47_send_drop(int whole_stack){return pex_java47_send_dig(whole_stack?3:4,0,0,0,0);}
 int pex_java47_send_use_item(int item_id,int count,int damage){return pex_java47_send_place(-1,-1,-1,255,item_id,count,damage,0.0f,0.0f,0.0f);}
 int pex_java47_send_release_use_item(void){return pex_java47_send_dig(5,0,0,0,0);}
@@ -1617,8 +2068,11 @@ int pex_java47_send_window_click(int pex_slot,int button,int mode,const ItemStac
     j47_w_u8(&w,button);
     j47_w_be16(&w,action);
     j47_w_u8(&w,mode);
-    if(clicked_result&&!stack_empty(clicked_result))j47_write_item(&w,clicked_result->id,clicked_result->count,clicked_result->damage);
-    else j47_write_item(&w,0,0,0);
+    if(clicked_result&&!stack_empty(clicked_result)){
+        const J47RawItem *raw=j47_raw_for_java_slot(java_slot);
+        if(raw)j47_write_raw_item(&w,raw,clicked_result->count);
+        else j47_write_item(&w,clicked_result->id,clicked_result->count,clicked_result->damage);
+    } else j47_write_item(&w,0,0,0);
     int ok=j47_send_packet(0x0E,w.data,w.len);j47_writer_free(&w);return ok;
 }
 
@@ -1641,4 +2095,79 @@ int pex_java47_try_attack_mob(float max_dist){
     int best_id=0;
     for(int i=0;i<J47_ENTITY_MAX;i++){J47Entity*e=&g_j47.entities[i];if(!e->used||e->kind!=J47_ENTITY_MOB||e->mob_slot<0)continue;PassiveMob*m=&g_passive_mobs[e->mob_slot];if(!m->active)continue;float mn[3]={m->x-m->width*.5f,m->y,m->z-m->width*.5f},mx[3]={m->x+m->width*.5f,m->y+m->height,m->z+m->width*.5f},o[3]={g_player_x,g_player_y,g_player_z},d[3]={lx,ly,lz};float tmin=0,tmax=best;int hit=1;for(int a=0;a<3;a++){if(fabsf(d[a])<1e-5f){if(o[a]<mn[a]||o[a]>mx[a]){hit=0;break;}}else{float inv=1/d[a],t1=(mn[a]-o[a])*inv,t2=(mx[a]-o[a])*inv;if(t1>t2){float q=t1;t1=t2;t2=q;}if(t1>tmin)tmin=t1;if(t2<tmax)tmax=t2;if(tmin>tmax){hit=0;break;}}}if(hit&&tmin>=0&&tmin<best){best=tmin;best_id=e->entity_id;}}
     if(best_id){pex_java47_send_swing();pex_java47_send_attack(best_id);restart_hand_swing();return 1;}return 0;
+}
+
+
+static int j47_ray_aabb(const float origin[3], const float dir[3], const float mn[3], const float mx[3],
+                        float max_t, float *out_t) {
+    float tmin = 0.0f, tmax = max_t;
+    for (int axis = 0; axis < 3; axis++) {
+        if (fabsf(dir[axis]) < 0.00001f) {
+            if (origin[axis] < mn[axis] || origin[axis] > mx[axis]) return 0;
+        } else {
+            float inv = 1.0f / dir[axis];
+            float t1 = (mn[axis] - origin[axis]) * inv;
+            float t2 = (mx[axis] - origin[axis]) * inv;
+            if (t1 > t2) { float tmp=t1; t1=t2; t2=tmp; }
+            if (t1 > tmin) tmin=t1;
+            if (t2 < tmax) tmax=t2;
+            if (tmin > tmax) return 0;
+        }
+    }
+    if (tmin < 0.0f || tmin > max_t) return 0;
+    if (out_t) *out_t=tmin;
+    return 1;
+}
+
+int pex_java47_try_interact_entity(float max_dist) {
+    if(g_j47.state!=PEX_JAVA47_PLAY||g_player_dead)return 0;
+    if(max_dist<=0.0f)max_dist=player_is_creative()?5.0f:4.0f;
+
+    FlatRayHit block=flat_raycast();
+    if(block.hit){
+        float dx=block.hx-g_player_x,dy=block.hy-g_player_y,dz=block.hz-g_player_z;
+        float block_dist=sqrtf(dx*dx+dy*dy+dz*dz);
+        if(block_dist<max_dist)max_dist=block_dist;
+    }
+
+    float look_x,look_y,look_z;
+    pex_touch_aware_look_vector(&look_x,&look_y,&look_z);
+    float origin[3]={g_player_x,g_player_y,g_player_z};
+    float dir[3]={look_x,look_y,look_z};
+    float best=max_dist;
+    J47Entity *best_entity=NULL;
+
+    for(int i=0;i<J47_ENTITY_MAX;i++){
+        J47Entity *e=&g_j47.entities[i];
+        if(!e->used||e->entity_id==g_j47.local_entity_id||e->kind==J47_ENTITY_DROP)continue;
+        float width=0.7f,height=1.8f,feet_y=(float)e->y;
+        if(e->kind==J47_ENTITY_PLAYER){width=0.7f;height=1.8f;}
+        else if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0&&e->mob_slot<MAX_PASSIVE_MOBS){
+            PassiveMob *m=&g_passive_mobs[e->mob_slot];
+            if(!m->active||m->death_time>0)continue;
+            if(e->is_armor_stand){
+                /* Keep the real armor-stand interaction volume rather than the
+                   shorter pig renderer, so a helmet/menu icon can be clicked. */
+                width=0.65f;height=2.0f;feet_y=(float)e->y;
+            }else{
+                width=m->width>0.1f?m->width:0.9f;
+                height=m->height>0.1f?m->height:0.9f;
+                feet_y=m->y;
+            }
+        }
+        float half=width*0.5f;
+        float mn[3]={(float)e->x-half,feet_y,(float)e->z-half};
+        float mx[3]={(float)e->x+half,feet_y+height,(float)e->z+half};
+        float t=best;
+        if(j47_ray_aabb(origin,dir,mn,mx,best,&t)&&t<best){best=t;best_entity=e;}
+    }
+
+    if(!best_entity)return 0;
+    float hit_x=origin[0]+dir[0]*best-(float)best_entity->x;
+    float hit_y=origin[1]+dir[1]*best-(float)best_entity->y;
+    float hit_z=origin[2]+dir[2]*best-(float)best_entity->z;
+    pex_java47_send_swing();
+    pex_java47_send_interact(best_entity->entity_id,hit_x,hit_y,hit_z);
+    restart_hand_swing();
+    return 1;
 }

@@ -2613,7 +2613,11 @@ static void passive_mobs_dismount_player(void) {
 }
 
 static int passive_mobs_player_interact(void) {
-    if (g_mp_connected || g_player_dead) return 0;
+    if (g_player_dead) return 0;
+    if (g_mp_connected) {
+        float reach = player_is_creative() ? 5.0f : 4.0f;
+        return pex_java47_try_interact_entity(reach);
+    }
     if (g_player_riding_passive_mob >= 0) {
         passive_mobs_dismount_player();
         restart_hand_swing();

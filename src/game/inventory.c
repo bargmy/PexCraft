@@ -5451,10 +5451,14 @@ static int chest_open_at(int x, int y, int z) {
 }
 
 static int chest_open_slot_count(void) {
+    int java_slots = pex_java47_open_container_slot_count();
+    if (java_slots > 0) return java_slots;
     return g_open_chest_count * 27;
 }
 
 static ItemStack *chest_get_open_slot_ptr(int local_slot) {
+    ItemStack *java_slot = pex_java47_get_open_container_slot(local_slot);
+    if (java_slot) return java_slot;
     if (local_slot < 0 || local_slot >= chest_open_slot_count()) return NULL;
     int chest_part = local_slot / 27;
     int slot = local_slot % 27;
@@ -9296,6 +9300,13 @@ static void update_dropped_items(void) {
     for (int i = 0; i < MAX_DROP_ENTITIES; i++) {
         FlatDroppedItem *e = &g_drops[i];
         if (!e->active) continue;
+        /* Negative network IDs are protocol-adapter display proxies (for
+           example an armor stand's helmet/menu icon). They are visual-only:
+           do not apply dropped-item gravity, pickup, merging, or despawn. */
+        if (g_mp_connected && e->net_id < 0) {
+            e->prev_x = e->x; e->prev_y = e->y; e->prev_z = e->z;
+            continue;
+        }
         int multiplayer_drop = g_mp_connected && e->net_id > 0;
         e->prev_x = e->x; e->prev_y = e->y; e->prev_z = e->z;
         if (e->pickup_delay > 0) e->pickup_delay--;

@@ -1925,6 +1925,10 @@ typedef struct ItemStack {
     int enchant_level[PEX_ITEMSTACK_ENCHANT_MAX];
 } ItemStack;
 
+int pex_java47_try_interact_entity(float max_dist);
+ItemStack *pex_java47_get_open_container_slot(int local_slot);
+int pex_java47_open_container_slot_count(void);
+
 static void armor_sync_player_armor(void);
 static int armor_stack_type(int id);
 static int armor_stack_material_index(int id);
