@@ -1019,7 +1019,7 @@ static JavaRandom worldgen_set_random_seed(long long seed, int x, int z, int sal
     return r;
 }
 
-int worldgen_village_can_spawn(long long seed, int chunkX, int chunkZ) {
+static int worldgen_village_is_grid_candidate(long long seed, int chunkX, int chunkZ) {
     int spacing = 32, separation = 8;
     int ox = chunkX, oz = chunkZ;
     if (chunkX < 0) chunkX -= spacing - 1;
@@ -1029,7 +1029,12 @@ int worldgen_village_can_spawn(long long seed, int chunkX, int chunkZ) {
     JavaRandom r = worldgen_set_random_seed(seed, gridX, gridZ, 10387312);
     int candX = gridX * spacing + jr_next_int_bound(&r, spacing - separation);
     int candZ = gridZ * spacing + jr_next_int_bound(&r, spacing - separation);
-    if (ox != candX || oz != candZ) return 0;
+    return ox == candX && oz == candZ;
+}
+
+int worldgen_village_can_spawn(long long seed, int chunkX, int chunkZ) {
+    int ox = chunkX, oz = chunkZ;
+    if (!worldgen_village_is_grid_candidate(seed, ox, oz)) return 0;
     BiomeManager bm;
     memset(&bm, 0, sizeof(bm));
     world_biomes_init();
@@ -3099,6 +3104,41 @@ static int v125_generate_layout(VillageGen125 *g, JavaRandom *r, BiomeManager *b
     return nonroads>2;
 }
 
+/* MapGenVillage.Start is retained only when its generated component graph is
+   sizeable (more than two non-road pieces).  Structure placement uses this
+   exact test; locators must use it too or they can point at a legal candidate
+   chunk whose start was discarded and therefore contains no village. */
+static int worldgen_village_sizeable_start(long long seed, int chunkX, int chunkZ,
+                                            int *anchorX, int *anchorZ) {
+    if (!worldgen_village_can_spawn(seed, chunkX, chunkZ)) return 0;
+
+    BiomeManager bm;
+    memset(&bm, 0, sizeof(bm));
+    world_biomes_init();
+    biome_manager_init(&bm, (int64_t)seed);
+
+    JavaRandom r = worldgen_structure_random(seed, chunkX, chunkZ);
+    VillageGen125 *g = (VillageGen125*)calloc(1, sizeof(*g));
+    if (!g) {
+        free(bm.temp);
+        return 0;
+    }
+
+    int ok = v125_generate_layout(g, &r, &bm, chunkX, chunkZ);
+    if (ok && g->piece_count > 0) {
+        const VillagePiece125 *well = &g->pieces[0];
+        /* The well's outer ring is gravel and provides a much better locator
+           anchor than the candidate chunk center, which can be untouched
+           terrain several blocks away from the generated structure. */
+        if (anchorX) *anchorX = well->box.minX;
+        if (anchorZ) *anchorZ = well->box.minZ + 2;
+    }
+
+    free(g);
+    free(bm.temp);
+    return ok;
+}
+
 static int v125_x(const VillagePiece125 *p, int lx, int lz) {
     switch(p->mode) {
         case 0: case 2: return p->box.minX+lx;
@@ -4587,16 +4627,24 @@ int worldgen_trace_target(long long seed, const char *kind, int fromBlockX, int 
         return 1;
     }
     if (strcmp(kind, "village") == 0) {
-        int bestCx=0,bestCz=0,best=0x7fffffff, found=0;
+        int bestCx=0,bestCz=0,bestX=0,bestZ=0,best=0x7fffffff, found=0;
         for (int r=0; r<=128 && !found; ++r) {
             for (int dz=-r; dz<=r; ++dz) for (int dx=-r; dx<=r; ++dx) {
                 if (abs(dx) != r && abs(dz) != r) continue;
                 int cx=fromCx+dx, cz=fromCz+dz;
-                if (worldgen_village_can_spawn(seed,cx,cz)) { int d=dx*dx+dz*dz; if (d < best) { best=d; bestCx=cx; bestCz=cz; found=1; } }
+                /* Cheaply reject the 1023/1024 chunks that cannot be starts
+                   before running biome and component-layout generation. */
+                if (!worldgen_village_is_grid_candidate(seed, cx, cz)) continue;
+                int ax=0, az=0;
+                if (worldgen_village_sizeable_start(seed,cx,cz,&ax,&az)) {
+                    int d=dx*dx+dz*dz;
+                    if (d < best) { best=d; bestCx=cx; bestCz=cz; bestX=ax; bestZ=az; found=1; }
+                }
             }
         }
         if (!found) return 0;
-        out->found=1; out->kind=2; out->chunkX=bestCx; out->chunkZ=bestCz; out->blockX=(bestCx<<4)+8; out->blockZ=(bestCz<<4)+8; out->footY=80; out->surface=1;
+        out->found=1; out->kind=2; out->chunkX=bestCx; out->chunkZ=bestCz;
+        out->blockX=bestX; out->blockZ=bestZ; out->footY=80; out->surface=1;
         snprintf(out->label,sizeof(out->label),"village");
         return 1;
     }
