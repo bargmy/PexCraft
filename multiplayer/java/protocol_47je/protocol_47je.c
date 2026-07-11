@@ -177,6 +177,23 @@ static int j47_socket_would_block(void) {
     return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS || e == WSAEALREADY;
 }
 
+static int j47_socket_peer_closed_error(void) {
+    int e = WSAGetLastError();
+#ifdef WSAECONNRESET
+    if (e == WSAECONNRESET) return 1;
+#endif
+#ifdef WSAECONNABORTED
+    if (e == WSAECONNABORTED) return 1;
+#endif
+#ifdef WSAENOTCONN
+    if (e == WSAENOTCONN) return 1;
+#endif
+#ifdef WSAESHUTDOWN
+    if (e == WSAESHUTDOWN) return 1;
+#endif
+    return 0;
+}
+
 static int j47_wait_socket(SOCKET s, int write_ready, int timeout_ms) {
     fd_set set;
     FD_ZERO(&set);
@@ -1207,8 +1224,20 @@ static int j47_receive_available(void) {
             g_j47.rx_len += (size_t)n;
             continue;
         }
-        if (n == 0) { j47_fail("Java server closed the connection"); return 0; }
+        if (n == 0) {
+            /* Java servers normally write S40/Login Disconnect and then close
+               immediately.  Keep the bytes already read so the disconnect JSON
+               is decoded before the transport close is reported. */
+            g_j47.peer_closed = 1;
+            return 1;
+        }
         if (j47_socket_would_block()) return 1;
+        if (j47_socket_peer_closed_error()) {
+            /* Some platforms surface the same orderly server shutdown as
+               ECONNRESET/WSAECONNRESET instead of recv()==0. */
+            g_j47.peer_closed = 1;
+            return 1;
+        }
         j47_fail("Java network receive failed");
         return 0;
     }
@@ -2788,7 +2817,7 @@ static int j47_process_rx(void){
            one socket read. Processing the entire backlog before the game tick
            starves local movement, so bound play-state work per rendered frame
            while leaving the remaining complete frames buffered. */
-        if(g_j47.state==PEX_JAVA47_PLAY &&
+        if(!g_j47.peer_closed && g_j47.state==PEX_JAVA47_PLAY &&
            (packet_count>=256 || now_seconds()-started>=0.004))break;
     }
     if(consumed){memmove(g_j47.rx,g_j47.rx+consumed,g_j47.rx_len-consumed);g_j47.rx_len-=consumed;}return 1;
@@ -2813,8 +2842,11 @@ int pex_java47_tick(void){
     if(!j47_receive_available())return 0;
     if(!j47_process_rx())return 0;
     if(g_j47.peer_closed){
+        /* If a valid disconnect packet was buffered, j47_process_rx() has
+           already converted it into the real server-provided reason.  Reach
+           this fallback only when the peer closed without such a packet. */
         if(g_j47.rx_len) j47_fail("Java server closed with a truncated packet");
-        else j47_fail("Java server closed the connection");
+        else j47_fail("Java server closed the connection without a disconnect reason");
         return 0;
     }
     return j47_flush_tx();
