@@ -286,10 +286,14 @@ static void loggy_build_text(void) {
                   g_prof_mob_path_solves_last, g_prof_mob_path_failed_last,
                   g_prof_mob_path_nodes_last, g_prof_mob_path_peak_nodes_last,
                   g_prof_mob_path_ms_last);
-    loggy_appendf(&out, &left, "  mob_spawn_ms=%.3f spawner_ms=%.3f spawners=%d scan_blocks=%d mob_living_ms=%.3f\n",
-                  g_prof_mob_spawn_ms_last, g_prof_mob_spawner_ms_last,
-                  g_prof_mob_spawner_active_last, g_prof_mob_spawner_scan_blocks_last,
-                  g_prof_mob_living_ms_last);
+    loggy_appendf(&out, &left, "  mob_spawn_ms=%.3f village=%.3f natural=%.3f spawner=%.3f end=%.3f mob_living_ms=%.3f\n",
+                  g_prof_mob_spawn_ms_last, g_prof_mob_village_ms_last,
+                  g_prof_mob_natural_spawn_ms_last, g_prof_mob_spawner_ms_last,
+                  g_prof_mob_ender_ms_last, g_prof_mob_living_ms_last);
+    loggy_appendf(&out, &left, "  village_refresh=%.3f candidates=%d biome_queries=%d spawners=%d scan_blocks=%d\n",
+                  g_prof_village_refresh_ms_last, g_prof_village_refresh_candidates_last,
+                  g_prof_village_refresh_biome_queries_last, g_prof_mob_spawner_active_last,
+                  g_prof_mob_spawner_scan_blocks_last);
     loggy_appendf(&out, &left, "  spawn_probes=%d columns=%d cache=%d/%d village_scan_blocks=%d\n",
                   g_prof_mob_spawn_calls_last, g_prof_mob_spawn_columns_last,
                   g_prof_mob_spawn_probe_hits_last, g_prof_mob_spawn_probe_misses_last,

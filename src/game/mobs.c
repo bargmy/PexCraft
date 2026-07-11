@@ -17,6 +17,8 @@ static int passive_mob_teleport_random_125(PassiveMob *m, float range);
 static int passive_path_can_stand_at(int type, int x, int y, int z);
 static void passive_mobs_tick_spawners_125(void);
 static void passive_spawner_discovery_reset_125(void);
+static void passive_village_location_cache_reset_125(void);
+static void passive_village_runtime_reset_125(void);
 static void passive_mob_spawner_remove_tile_125(int x, int y, int z);
 static void passive_mobs_ensure_ender_dragon_125(void);
 static void passive_dragon_tick_living_125(PassiveMob *m);
@@ -256,18 +258,113 @@ static int passive_spawn_cap_for_category(int cat) {
     }
 }
 
-static int passive_current_biome_id_at(int x, int z) {
-    static BiomeManager bm;
-    static long long seed = 0;
-    static int ready = 0;
-    if (!ready || seed != g_world_seed) {
-        memset(&bm, 0, sizeof(bm));
-        biome_manager_init(&bm, (int64_t)g_world_seed);
-        seed = g_world_seed;
-        ready = 1;
+#define PEX_MOB_BIOME_CACHE_CHUNKS 384
+typedef struct PexMobBiomeChunkCache125 {
+    int valid;
+    long long seed;
+    int dimension;
+    int chunk_x, chunk_z;
+    unsigned int stamp;
+    unsigned char ids[256];
+} PexMobBiomeChunkCache125;
+static PexMobBiomeChunkCache125 g_passive_biome_cache_125[PEX_MOB_BIOME_CACHE_CHUNKS];
+static unsigned int g_passive_biome_cache_stamp_125 = 1;
+static int g_passive_biome_cache_build_budget_125 = 0;
+static BiomeManager g_passive_biome_manager_125;
+static int g_passive_biome_manager_ready_125 = 0;
+static long long g_passive_biome_manager_seed_125 = 0;
+
+static void passive_biome_cache_reset_125(void) {
+    memset(g_passive_biome_cache_125, 0, sizeof(g_passive_biome_cache_125));
+    g_passive_biome_cache_stamp_125 = 1;
+    if (g_passive_biome_manager_ready_125) free(g_passive_biome_manager_125.temp);
+    memset(&g_passive_biome_manager_125, 0, sizeof(g_passive_biome_manager_125));
+    g_passive_biome_manager_ready_125 = 0;
+    g_passive_biome_manager_seed_125 = 0;
+}
+
+static PexMobBiomeChunkCache125 *passive_biome_cache_find_125(int cx, int cz) {
+    for (int i = 0; i < PEX_MOB_BIOME_CACHE_CHUNKS; ++i) {
+        PexMobBiomeChunkCache125 *e = &g_passive_biome_cache_125[i];
+        if (e->valid && e->seed == g_world_seed && e->dimension == g_current_dimension &&
+            e->chunk_x == cx && e->chunk_z == cz) {
+            e->stamp = ++g_passive_biome_cache_stamp_125;
+            return e;
+        }
     }
-    WorldBiome *b = biome_manager_get(&bm, x, z, 1, 1);
-    return b ? b[0].id : BIOME_PLAINS;
+    return NULL;
+}
+
+static PexMobBiomeChunkCache125 *passive_biome_cache_build_125(int cx, int cz) {
+    int slot = -1;
+    unsigned int oldest = 0xffffffffu;
+    for (int i = 0; i < PEX_MOB_BIOME_CACHE_CHUNKS; ++i) {
+        PexMobBiomeChunkCache125 *e = &g_passive_biome_cache_125[i];
+        if (!e->valid) { slot = i; break; }
+        if (e->stamp < oldest) { oldest = e->stamp; slot = i; }
+    }
+    if (slot < 0) return NULL;
+    PexMobBiomeChunkCache125 *e = &g_passive_biome_cache_125[slot];
+    memset(e, 0, sizeof(*e));
+    e->valid = 1;
+    e->seed = g_world_seed;
+    e->dimension = g_current_dimension;
+    e->chunk_x = cx;
+    e->chunk_z = cz;
+    e->stamp = ++g_passive_biome_cache_stamp_125;
+    if (g_current_dimension == PEX_DIM_NETHER) {
+        memset(e->ids, BIOME_HELL, sizeof(e->ids));
+        return e;
+    }
+    if (g_current_dimension == PEX_DIM_END) {
+        memset(e->ids, BIOME_SKY, sizeof(e->ids));
+        return e;
+    }
+    if (!g_passive_biome_manager_ready_125 || g_passive_biome_manager_seed_125 != g_world_seed) {
+        if (g_passive_biome_manager_ready_125) free(g_passive_biome_manager_125.temp);
+        memset(&g_passive_biome_manager_125, 0, sizeof(g_passive_biome_manager_125));
+        biome_manager_init(&g_passive_biome_manager_125, (int64_t)g_world_seed);
+        g_passive_biome_manager_ready_125 = 1;
+        g_passive_biome_manager_seed_125 = g_world_seed;
+    }
+    WorldBiome *biomes = biome_manager_get(&g_passive_biome_manager_125, cx * 16, cz * 16, 16, 16);
+    if (!biomes) { e->valid = 0; return NULL; }
+    for (int i = 0; i < 256; ++i) e->ids[i] = (unsigned char)(biomes[i].id & 255);
+    return e;
+}
+
+static int passive_biome_cache_get_125(int x, int z, int allow_build, int *out_biome) {
+    int cx = floor_div16(x);
+    int cz = floor_div16(z);
+    PexMobBiomeChunkCache125 *e = passive_biome_cache_find_125(cx, cz);
+    if (!e) {
+        if (!allow_build) return 0;
+        e = passive_biome_cache_build_125(cx, cz);
+        if (!e) return 0;
+    }
+    int lx = x - cx * 16;
+    int lz = z - cz * 16;
+    if (lx < 0) lx += 16;
+    if (lz < 0) lz += 16;
+    if (out_biome) *out_biome = (int)e->ids[(lz << 4) | lx];
+    return 1;
+}
+
+static int passive_current_biome_id_at(int x, int z) {
+    int biome = BIOME_PLAINS;
+    if (passive_biome_cache_get_125(x, z, 1, &biome)) return biome;
+    return BIOME_PLAINS;
+}
+
+/* Natural spawning may touch hundreds of chunks in one tick.  Java reads the
+   biome byte array already stored in each loaded chunk; PexCraft previously
+   rebuilt GenLayers for every lookup.  Build at most one missing chunk array
+   per tick and defer spawn attempts in the remaining uncached chunks. */
+static int passive_spawn_biome_id_at_125(int x, int z, int *out_biome) {
+    if (passive_biome_cache_get_125(x, z, 0, out_biome)) return 1;
+    if (g_passive_biome_cache_build_budget_125 <= 0) return 0;
+    --g_passive_biome_cache_build_budget_125;
+    return passive_biome_cache_get_125(x, z, 1, out_biome);
 }
 
 static int passive_biome_allows_creatures(int biome) {
@@ -1017,6 +1114,8 @@ static void passive_mobs_reset(void) {
     g_passive_spawn_probe_budget = -1;
     g_player_riding_passive_mob = -1;
     passive_spawner_discovery_reset_125();
+    passive_village_runtime_reset_125();
+    passive_biome_cache_reset_125();
 }
 
 static PassiveMob *passive_mob_alloc(void) {
@@ -1622,7 +1721,8 @@ static void passive_mobs_try_natural_spawn(void) {
                         float fx=(float)x+0.5f, fy=(float)y, fz=(float)z+0.5f;
                         if (!passive_mob_far_enough_from_player(fx,fy,fz) || !passive_mob_far_enough_from_world_spawn(fx,fy,fz)) continue;
                         if (!passive_spawn_initial_material_ok_125(cat,x,y,z)) continue;
-                        int biome = passive_current_biome_id_at(x, z);
+                        int biome = BIOME_PLAINS;
+                        if (!passive_spawn_biome_id_at_125(x, z, &biome)) { stop_chunk = 1; break; }
                         if (!passive_biome_weighted_spawn_entry(cat, biome, &entry)) break;
                         have_entry = 1;
                     }
@@ -3026,7 +3126,27 @@ static void passive_village_prune_aggressors_125(PexVillageRuntime *v);
 
 static PexVillageRuntime g_passive_villages[PEX_MAX_RUNTIME_VILLAGES];
 static int g_passive_villages_tick = -9999;
+static int g_passive_villages_center_chunk_x = INT_MIN;
+static int g_passive_villages_center_chunk_z = INT_MIN;
 static int g_passive_next_village_id = 1;
+
+/* Runtime village discovery used to recreate a BiomeManager and recurse the
+   GenLayer graph every time the nearby registry refreshed.  A village start is
+   immutable for a world seed, so cache the rare candidate-biome result and
+   retain one main-thread biome manager.  World-generation workers continue to
+   use their own providers; this cache is never shared with them. */
+#define PEX_VILLAGE_LOCATION_CACHE 128
+typedef struct PexVillageLocationCache125 {
+    int valid;
+    long long seed;
+    int chunk_x, chunk_z;
+    int can_spawn;
+} PexVillageLocationCache125;
+static PexVillageLocationCache125 g_passive_village_location_cache_125[PEX_VILLAGE_LOCATION_CACHE];
+static int g_passive_village_location_cache_next_125 = 0;
+static BiomeManager g_passive_village_biomes_125;
+static int g_passive_village_biomes_ready_125 = 0;
+static long long g_passive_village_biomes_seed_125 = 0;
 
 /* VillageSiege.java is world-runtime state rather than saved structure data.
    It resets after a reload just like the 1.2.5 server-side helper. */
@@ -3936,57 +4056,151 @@ static void passive_village_scan_around_villager_125(PexVillageRuntime *v, int p
     passive_village_update_radius_and_center_125(v);
 }
 
-static void passive_villages_refresh(void) {
-    if (g_passive_villages_tick == g_ingame_ticks) return;
-    if (g_passive_villages_tick > 0 && g_ingame_ticks - g_passive_villages_tick < 20) return;
-    g_passive_villages_tick = g_ingame_ticks;
-    PexVillageRuntime old[PEX_MAX_RUNTIME_VILLAGES];
-    memcpy(old, g_passive_villages, sizeof(old));
-    memset(g_passive_villages, 0, sizeof(g_passive_villages));
-    int pcx = floor_div16((int)floorf(g_player_x));
-    int pcz = floor_div16((int)floorf(g_player_z));
-    int n = 0;
-    for (int vx = pcx - 8; vx <= pcx + 8 && n < PEX_MAX_RUNTIME_VILLAGES; ++vx) {
-        for (int vz = pcz - 8; vz <= pcz + 8 && n < PEX_MAX_RUNTIME_VILLAGES; ++vz) {
-            if (!worldgen_village_can_spawn((long long)g_world_seed, vx, vz)) continue;
-            PexVillageRuntime *v = &g_passive_villages[n++];
-            int reused = 0;
-            for (int oi=0; oi<PEX_MAX_RUNTIME_VILLAGES; ++oi) {
-                if (old[oi].active && old[oi].chunk_x == vx && old[oi].chunk_z == vz) { *v = old[oi]; reused = 1; break; }
-            }
-            if (!reused) {
-                memset(v, 0, sizeof(*v));
-                v->active = 1;
-                v->id = g_passive_next_village_id++;
-                if (g_passive_next_village_id < 1) g_passive_next_village_id = 1;
-                v->chunk_x = vx; v->chunk_z = vz;
-                v->cx = vx * 16 + 8; v->cz = vz * 16 + 8; v->cy = 64;
-                v->player_reputation = 0;
-                v->aggressor_entity_id = -1;
-                /* Doors are discovered by generated Villagers, matching
-                   VillageCollection's queued villager-position scans. */
-            } else {
-                v->active = 1;
-                v->villager_count = 0;
-                v->golem_count = 0;
-                v->tick_counter = g_ingame_ticks;
-                passive_village_prune_aggressors_125(v);
-            }
-        }
+static void passive_village_location_cache_reset_125(void) {
+    memset(g_passive_village_location_cache_125, 0, sizeof(g_passive_village_location_cache_125));
+    g_passive_village_location_cache_next_125 = 0;
+    if (g_passive_village_biomes_ready_125) free(g_passive_village_biomes_125.temp);
+    memset(&g_passive_village_biomes_125, 0, sizeof(g_passive_village_biomes_125));
+    g_passive_village_biomes_ready_125 = 0;
+    g_passive_village_biomes_seed_125 = 0;
+}
+
+static void passive_village_runtime_reset_125(void) {
+    g_passive_villages_tick = -9999;
+    g_passive_villages_center_chunk_x = INT_MIN;
+    g_passive_villages_center_chunk_z = INT_MIN;
+    passive_village_location_cache_reset_125();
+}
+
+static int passive_village_is_location_candidate_125(long long seed, int chunk_x, int chunk_z) {
+    const int spacing = 32;
+    const int separation = 8;
+    int adjusted_x = chunk_x;
+    int adjusted_z = chunk_z;
+    if (adjusted_x < 0) adjusted_x -= spacing - 1;
+    if (adjusted_z < 0) adjusted_z -= spacing - 1;
+    int grid_x = adjusted_x / spacing;
+    int grid_z = adjusted_z / spacing;
+    JavaRandom r = worldgen_set_random_seed(seed, grid_x, grid_z, 10387312);
+    int candidate_x = grid_x * spacing + jr_next_int_bound(&r, spacing - separation);
+    int candidate_z = grid_z * spacing + jr_next_int_bound(&r, spacing - separation);
+    return chunk_x == candidate_x && chunk_z == candidate_z;
+}
+
+static int passive_village_can_spawn_cached_125(long long seed, int chunk_x, int chunk_z) {
+    if (!passive_village_is_location_candidate_125(seed, chunk_x, chunk_z)) return 0;
+    ++g_prof_village_refresh_candidates_last;
+    for (int i = 0; i < PEX_VILLAGE_LOCATION_CACHE; ++i) {
+        PexVillageLocationCache125 *e = &g_passive_village_location_cache_125[i];
+        if (e->valid && e->seed == seed && e->chunk_x == chunk_x && e->chunk_z == chunk_z) return e->can_spawn;
     }
+    if (!g_passive_village_biomes_ready_125 || g_passive_village_biomes_seed_125 != seed) {
+        passive_village_location_cache_reset_125();
+        biome_manager_init(&g_passive_village_biomes_125, (int64_t)seed);
+        g_passive_village_biomes_ready_125 = 1;
+        g_passive_village_biomes_seed_125 = seed;
+    }
+    ++g_prof_village_refresh_biome_queries_last;
+    int qx = (chunk_x * 16 + 8) >> 2;
+    int qz = (chunk_z * 16 + 8) >> 2;
+    int *ids = genlayer_get_ints(g_passive_village_biomes_125.gen_biomes, qx, qz, 1, 1);
+    int can_spawn = ids && worldgen_is_village_biome(ids[0]);
+    free(ids);
+    PexVillageLocationCache125 *dst = &g_passive_village_location_cache_125[g_passive_village_location_cache_next_125++ % PEX_VILLAGE_LOCATION_CACHE];
+    dst->valid = 1;
+    dst->seed = seed;
+    dst->chunk_x = chunk_x;
+    dst->chunk_z = chunk_z;
+    dst->can_spawn = can_spawn;
+    return can_spawn;
+}
+
+static void passive_villages_assign_mob_membership_125(void) {
     for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
         PassiveMob *m = &g_passive_mobs[i];
         if (!m->active) continue;
         m->village_id = -1;
-        float best=3.402823466e+38F;
+        float best = 3.402823466e+38F;
         for (int vi = 0; vi < PEX_MAX_RUNTIME_VILLAGES; ++vi) {
             PexVillageRuntime *v = &g_passive_villages[vi];
             if (!v->active || v->radius <= 0) continue;
-            float dx=m->x-(float)v->cx,dy=m->y-(float)v->cy,dz=m->z-(float)v->cz;
-            float d2=dx*dx+dy*dy+dz*dz;
-            if(d2<(float)(v->radius*v->radius)&&d2<best){best=d2;m->village_id=v->id;}
+            float dx = m->x - (float)v->cx;
+            float dy = m->y - (float)v->cy;
+            float dz = m->z - (float)v->cz;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < (float)(v->radius * v->radius) && d2 < best) {
+                best = d2;
+                m->village_id = v->id;
+            }
         }
     }
+}
+
+static void passive_villages_refresh(void) {
+    if (g_passive_villages_tick == g_ingame_ticks) return;
+    g_passive_villages_tick = g_ingame_ticks;
+
+    int pcx = floor_div16((int)floorf(g_player_x));
+    int pcz = floor_div16((int)floorf(g_player_z));
+    int moved_chunk = pcx != g_passive_villages_center_chunk_x || pcz != g_passive_villages_center_chunk_z;
+
+    /* The nearby StructureStart set changes only when the player enters a new
+       chunk.  Door activity, villagers, golems, and sieges are ticked below on
+       their original schedules; rebuilding the immutable start registry every
+       20 ticks only repeated expensive biome-layer work. */
+    if (!moved_chunk) {
+        if ((g_ingame_ticks % 20) == 0) passive_villages_assign_mob_membership_125();
+        return;
+    }
+
+    double refresh_start = now_seconds();
+    g_passive_villages_center_chunk_x = pcx;
+    g_passive_villages_center_chunk_z = pcz;
+    g_prof_village_refresh_candidates_last = 0;
+    g_prof_village_refresh_biome_queries_last = 0;
+
+    int keep[PEX_MAX_RUNTIME_VILLAGES];
+    memset(keep, 0, sizeof(keep));
+    int discovered = 0;
+    for (int vx = pcx - 8; vx <= pcx + 8 && discovered < PEX_MAX_RUNTIME_VILLAGES; ++vx) {
+        for (int vz = pcz - 8; vz <= pcz + 8 && discovered < PEX_MAX_RUNTIME_VILLAGES; ++vz) {
+            if (!passive_village_can_spawn_cached_125((long long)g_world_seed, vx, vz)) continue;
+            int slot = -1;
+            for (int i = 0; i < PEX_MAX_RUNTIME_VILLAGES; ++i) {
+                PexVillageRuntime *v = &g_passive_villages[i];
+                if (v->active && v->chunk_x == vx && v->chunk_z == vz) { slot = i; break; }
+            }
+            if (slot < 0) {
+                for (int i = 0; i < PEX_MAX_RUNTIME_VILLAGES; ++i) {
+                    if (!g_passive_villages[i].active && !keep[i]) { slot = i; break; }
+                }
+            }
+            if (slot < 0) break;
+            PexVillageRuntime *v = &g_passive_villages[slot];
+            if (!v->active || v->chunk_x != vx || v->chunk_z != vz) {
+                memset(v, 0, sizeof(*v));
+                v->active = 1;
+                v->id = g_passive_next_village_id++;
+                if (g_passive_next_village_id < 1) g_passive_next_village_id = 1;
+                v->chunk_x = vx;
+                v->chunk_z = vz;
+                v->cx = vx * 16 + 8;
+                v->cz = vz * 16 + 8;
+                v->cy = 64;
+                v->aggressor_entity_id = -1;
+            } else {
+                v->active = 1;
+                passive_village_prune_aggressors_125(v);
+            }
+            keep[slot] = 1;
+            ++discovered;
+        }
+    }
+    for (int i = 0; i < PEX_MAX_RUNTIME_VILLAGES; ++i) {
+        if (!keep[i]) g_passive_villages[i].active = 0;
+    }
+    passive_villages_assign_mob_membership_125();
+    g_prof_village_refresh_ms_last = (now_seconds() - refresh_start) * 1000.0;
 }
 
 static PexVillageRuntime *passive_village_by_id(int id) {
@@ -4039,9 +4253,13 @@ static int passive_villager_pick_door(PassiveMob *m, PexVillageRuntime *v) {
 
 static int passive_village_piece_chunks_ready_125(const VillagePiece125 *p) {
     if (!p) return 0;
-    for (int z = p->box.minZ; z <= p->box.maxZ; ++z)
-        for (int x = p->box.minX; x <= p->box.maxX; ++x)
-            if (!flat_chunk_generated_at_block(x, z)) return 0;
+    int min_cx = floor_div16(p->box.minX);
+    int max_cx = floor_div16(p->box.maxX);
+    int min_cz = floor_div16(p->box.minZ);
+    int max_cz = floor_div16(p->box.maxZ);
+    for (int cz = min_cz; cz <= max_cz; ++cz)
+        for (int cx = min_cx; cx <= max_cx; ++cx)
+            if (!flat_chunk_generated_at_block(cx * 16, cz * 16)) return 0;
     return 1;
 }
 
@@ -7485,12 +7703,19 @@ static void update_passive_mobs(void) {
 
     g_passive_pathfind_budget = -1;
     g_passive_spawn_probe_budget = PEX_SPAWN_PROBE_BUDGET_PER_TICK;
+    g_passive_biome_cache_build_budget_125 = 1;
     g_passive_perf_last_spawns_skipped_streaming = 0;
     g_prof_mob_spawn_probe_hits_last = 0;
     g_prof_mob_spawn_probe_misses_last = 0;
     g_prof_mob_spawn_calls_last = 0;
     g_prof_mob_spawn_columns_last = 0;
     g_prof_mob_spawn_ms_last = 0.0;
+    g_prof_mob_ender_ms_last = 0.0;
+    g_prof_mob_village_ms_last = 0.0;
+    g_prof_mob_natural_spawn_ms_last = 0.0;
+    g_prof_village_refresh_ms_last = 0.0;
+    g_prof_village_refresh_candidates_last = 0;
+    g_prof_village_refresh_biome_queries_last = 0;
     g_prof_mob_spawner_ms_last = 0.0;
     g_prof_mob_spawner_scan_blocks_last = 0;
     g_prof_mob_spawner_active_last = 0;
@@ -7511,10 +7736,16 @@ static void update_passive_mobs(void) {
        half-streamed terrain and fighting the streaming thread. */
     double spawn_start = now_seconds();
     if (!world_stream_service_active()) {
+        double phase_start = now_seconds();
         passive_mobs_ensure_ender_dragon_125();
+        g_prof_mob_ender_ms_last = (now_seconds() - phase_start) * 1000.0;
+        phase_start = now_seconds();
         passive_villages_tick_125();
+        g_prof_mob_village_ms_last = (now_seconds() - phase_start) * 1000.0;
         passive_mobs_tick_spawners_125();
+        phase_start = now_seconds();
         passive_mobs_try_natural_spawn();
+        g_prof_mob_natural_spawn_ms_last = (now_seconds() - phase_start) * 1000.0;
     } else {
         g_passive_perf_last_spawns_skipped_streaming = 1;
     }
@@ -9313,7 +9544,7 @@ static void passive_villages_write_binary_125(FILE *f) {
 
 static void passive_villages_read_binary_125(FILE *f, int save_version) {
     memset(g_passive_villages, 0, sizeof(g_passive_villages));
-    g_passive_villages_tick = -9999;
+    passive_village_runtime_reset_125();
     if (save_version < 27) return;
     char magic[4];
     if (fread(magic, 1, 4, f) != 4) return;
