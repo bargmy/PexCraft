@@ -1890,6 +1890,7 @@ static void world_quit_shutdown_for_app_exit(void) {
 
 static void leave_world_to_title(void) {
     if (world_quit_is_active()) return;
+    pex_stats_world_left();
 
     g_world_quit_was_multiplayer = (g_mp_connected || pex_net_is_connecting()) ? 1 : 0;
     g_world_quit_had_local_world = (!g_world_quit_was_multiplayer && g_loaded_world_dir[0]) ? 1 : 0;
@@ -1962,12 +1963,14 @@ static void start_world_generation_in_dir(const char *world_dir, const char *wor
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     /* PSP test port: no Memory Stick persistence.  Generate into RAM only. */
     g_worldgen.existing_world = 0;
+    g_worldgen.newly_created = 1;
     snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating RAM world");
     snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
 #else
 #if defined(PEX_PLATFORM_WII)
     if (!g_wii_fat_ready) {
         g_worldgen.existing_world = 0;
+        g_worldgen.newly_created = 1;
         snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Generating RAM world");
         snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Building terrain");
         wii_debug_logf("worldgen: FAT unavailable, using memory world slot=%d type=%d", slot, g_pending_world_type);
@@ -1978,9 +1981,11 @@ static void start_world_generation_in_dir(const char *world_dir, const char *wor
         snprintf(level_path, sizeof(level_path), "%s\\level.dat", g_worldgen.world_dir);
         if (file_exists(level_path)) {
             g_worldgen.existing_world = 1;
+            g_worldgen.newly_created = 0;
             snprintf(g_worldgen.title, sizeof(g_worldgen.title), "Loading level");
             snprintf(g_worldgen.status, sizeof(g_worldgen.status), "Loading chunks");
         } else {
+            g_worldgen.newly_created = 1;
             /* Create the world slot.  Terrain is generated from level.dat metadata
                at load/stream time; only chunks edited by gameplay are saved. */
             if (dir_exists(g_worldgen.world_dir)) delete_recursive(g_worldgen.world_dir);

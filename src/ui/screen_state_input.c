@@ -26,6 +26,8 @@ static int pex_screen_keeps_world_music(ScreenId s) {
     switch (s) {
         case SCREEN_INGAME:
         case SCREEN_PAUSE:
+        case SCREEN_ACHIEVEMENTS:
+        case SCREEN_STATISTICS:
         case SCREEN_INVENTORY:
         case SCREEN_CREATIVE:
         case SCREEN_WORKBENCH:
@@ -49,6 +51,9 @@ static void set_screen(ScreenId s) {
     if (old_screen == SCREEN_FURNACE && s != SCREEN_FURNACE) furnace_close_open_inventory();
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
+    if ((s == SCREEN_INGAME || s == SCREEN_DEATH) && pex_screen_is_world_loading(old_screen))
+        pex_stats_world_entered(old_screen == SCREEN_CONNECTING || g_mp_connected,
+                                old_screen == SCREEN_GENERATING && g_worldgen.newly_created);
     if (s == SCREEN_TITLE) {
         if (pex_screen_keeps_world_music(old_screen) || pex_screen_is_world_loading(old_screen)) {
             pex_sound_stop_world_audio();
@@ -1116,9 +1121,20 @@ static void rebuild_screen(void) {
         add_button_full(5, g_gui_w / 2 - 154, g_gui_h - 48, 150, 20, tr_key_default("texturePack.openFolder", "Open texture pack folder"), BUTTON_NORMAL);
         add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 48, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_PAUSE) {
-        add_button(4, g_gui_w / 2 - 100, g_gui_h / 4 + 24, tr_key_default("menu.returnToGame", "Back to game"));
-        add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 48, g_mp_connected ? tr_key_default("menu.disconnect", "Disconnect") : tr_key_default("menu.returnToMenu", "Save and quit to title"));
-        add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 96, tr_key_default("menu.options", "Options..."));
+        /* Exact GuiIngameMenu 1.2.5 placement (the original var1 offset is -16). */
+        add_button(4, g_gui_w / 2 - 100, g_gui_h / 4 + 8, tr_key_default("menu.returnToGame", "Back to game"));
+        add_button_full(5, g_gui_w / 2 - 100, g_gui_h / 4 + 32, 98, 20, tr_key_default("gui.achievements", "Achievements"), BUTTON_NORMAL);
+        add_button_full(6, g_gui_w / 2 + 2, g_gui_h / 4 + 32, 98, 20, tr_key_default("gui.stats", "Statistics"), BUTTON_NORMAL);
+        add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 80, tr_key_default("menu.options", "Options..."));
+        add_button(1, g_gui_w / 2 - 100, g_gui_h / 4 + 104, g_mp_connected ? tr_key_default("menu.disconnect", "Disconnect") : tr_key_default("menu.returnToMenu", "Save and quit to title"));
+    } else if (g_screen == SCREEN_ACHIEVEMENTS) {
+        add_button_full(1, g_gui_w / 2 + 24, g_gui_h / 2 + 74, 80, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
+    } else if (g_screen == SCREEN_STATISTICS) {
+        int tab_y = g_gui_h - 52;
+        add_button_full(1, g_gui_w / 2 - 154, tab_y, 100, 20, tr_key_default("stat.generalButton", "General"), BUTTON_NORMAL);
+        add_button_full(2, g_gui_w / 2 - 46, tab_y, 100, 20, tr_key_default("stat.blocksButton", "Blocks"), BUTTON_NORMAL);
+        add_button_full(3, g_gui_w / 2 + 62, tab_y, 100, 20, tr_key_default("stat.itemsButton", "Items"), BUTTON_NORMAL);
+        add_button_full(0, g_gui_w / 2 + 4, g_gui_h - 28, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_CREATIVE) {
         /* Java 1.2.5 GuiContainerCreative has no Prev/Next/Done buttons. */
     } else if (g_screen == SCREEN_DEATH) {
@@ -1473,6 +1489,13 @@ static void on_button(Button *b) {
         if (b->id == 4) set_screen(SCREEN_INGAME);
         else if (b->id == 0) { g_parent_screen = SCREEN_PAUSE; set_screen(SCREEN_OPTIONS); }
         else if (b->id == 1) leave_world_to_title();
+        else if (b->id == 5) set_screen(SCREEN_ACHIEVEMENTS);
+        else if (b->id == 6) set_screen(SCREEN_STATISTICS);
+    } else if (g_screen == SCREEN_ACHIEVEMENTS) {
+        if (b->id == 1) set_screen(SCREEN_INGAME);
+    } else if (g_screen == SCREEN_STATISTICS) {
+        if (b->id == 0) set_screen(SCREEN_PAUSE);
+        else if (b->id >= 1 && b->id <= 3) pex_statistics_set_tab(b->id - 1);
     } else if (g_screen == SCREEN_CREATIVE) {
         (void)b;
     } else if (g_screen == SCREEN_DEATH) {
@@ -1630,6 +1653,8 @@ static void mouse_down(int mx, int my) {
         return;
     }
     if (g_screen == SCREEN_LANGUAGE) language_mouse_down(mx, my);
+    if (g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_down(mx, my);
+    if (g_screen == SCREEN_STATISTICS) pex_statistics_mouse_down(mx, my);
     if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) world_save_mouse_down(mx, my);
 
     if (g_screen == SCREEN_CREATE_WORLD) {
@@ -1697,6 +1722,8 @@ static void mouse_up(int mx, int my) {
     g_drag_slider = NULL;
     if (g_screen == SCREEN_TEXPACK) { g_texpack_drag_anchor = -1; g_texpack_drag_mode = 0; }
     if (g_screen == SCREEN_LANGUAGE) language_mouse_up();
+    if (g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_up();
+    if (g_screen == SCREEN_STATISTICS) pex_statistics_mouse_up();
     if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) world_save_mouse_up();
     if (g_screen == SCREEN_CREATIVE) g_creative_dragging_scroll = 0;
 }
@@ -2127,7 +2154,7 @@ static void handle_keydown(WPARAM vk) {
         if (g_debug_menu_shown && vk == 'X') { player_add_experience(key_down_vk(VK_SHIFT) ? 10 : 1); g_save_dirty = 1; return; }
         if (vk == VK_F5) { third_person_view_cycle(); return; }
         if ((int)vk == g_opts.keys[6]) { inventory_drop_selected_one(); return; }
-        if ((int)vk == g_opts.keys[7]) { set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY); return; }
+        if ((int)vk == g_opts.keys[7]) { pex_achievement_on_inventory_open(); set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY); return; }
         if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 1; set_screen(SCREEN_CHAT); return; }
         if (vk >= '1' && vk <= '9') { g_selected_hotbar_slot = (int)(vk - '1'); return; }
         return;
@@ -2151,10 +2178,20 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_ESCAPE || (int)vk == g_opts.keys[7]) { set_screen(SCREEN_INGAME); return; }
         return;
     }
+    if (g_screen == SCREEN_ACHIEVEMENTS && (int)vk == g_opts.keys[7]) {
+        set_screen(SCREEN_INGAME);
+        return;
+    }
+    if (g_screen == SCREEN_STATISTICS) {
+        if (vk == VK_PRIOR) { pex_statistics_scroll_by(-5); return; }
+        if (vk == VK_NEXT) { pex_statistics_scroll_by(5); return; }
+    }
 
     if (vk == VK_ESCAPE) {
         if (g_screen == SCREEN_TITLE || g_screen == SCREEN_GENERATING || g_screen == SCREEN_SAVING_QUIT || g_screen == SCREEN_TEXPACK_INSTALL) { if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_request_cancel(); return; }
         if (g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
+        else if (g_screen == SCREEN_ACHIEVEMENTS) set_screen(SCREEN_INGAME);
+        else if (g_screen == SCREEN_STATISTICS) set_screen(SCREEN_PAUSE);
         else if (g_screen == SCREEN_OPTIONS) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_OPTIONS_MORE) set_screen(SCREEN_OPTIONS);
         else if (g_screen == SCREEN_STIVUFINE) set_screen(SCREEN_OPTIONS_MORE);

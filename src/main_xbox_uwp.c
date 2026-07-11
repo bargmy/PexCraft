@@ -84,6 +84,7 @@ static int pex_renderer_d3d11_xbox_init_corewindow(void *core_window_unknown, in
 #include "render/cfont.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
+#include "game/achievements.c"
 #include "audio/sound.c"
 #include "platform/xbox_uwp/xbox_uwp_input.c"
 
@@ -119,6 +120,7 @@ static void steve_set_tint(float r, float g, float b);
 #include "game/ingame_logic.c"
 #include "render/world_view.c"
 #include "render/item_render.c"
+#include "ui/achievements_ui.c"
 #include "ui/gui.c"
 #include "platform/gamepad.c"
 #include "render/render_dispatch.c"

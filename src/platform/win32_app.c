@@ -183,6 +183,8 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             g_mouse_y = py * g_gui_h / (g_win_h ? g_win_h : 1);
             if (g_mouse_down && g_drag_slider) update_slider(g_drag_slider, g_mouse_x);
             if (g_mouse_down && g_screen == SCREEN_TEXPACK) texpack_mouse_drag(g_mouse_y);
+            if (g_mouse_down && g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_drag(g_mouse_x, g_mouse_y);
+            if (g_mouse_down && g_screen == SCREEN_STATISTICS) pex_statistics_mouse_drag(g_mouse_x, g_mouse_y);
             if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
             if (g_mouse_down && g_screen == SCREEN_LANGUAGE) language_drag_scroll(g_mouse_y - old_mouse_y);
             if (g_mouse_down && (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE)) world_save_drag_scroll(g_mouse_y - old_mouse_y);
@@ -235,6 +237,9 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
                     if (delta > 0) pex_mp_server_scroll_by(-1);
                     else if (delta < 0) pex_mp_server_scroll_by(1);
                     rebuild_screen();
+                } else if (g_screen == SCREEN_STATISTICS) {
+                    if (delta > 0) pex_statistics_scroll_by(-1);
+                    else if (delta < 0) pex_statistics_scroll_by(1);
                 } else if (g_screen == SCREEN_INGAME) {
                     if (delta > 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
                     else if (delta < 0) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
@@ -287,6 +292,7 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+    pex_stats_flush();
     if (world_quit_is_active()) return;
     pex_join_save_thread_for_exit();
     if (g_mp_connected) {

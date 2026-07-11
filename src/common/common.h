@@ -318,6 +318,7 @@ typedef struct WorldGenJob {
     int active;
     int slot;
     int existing_world;
+    int newly_created;
     int radius;
     int total_chunks;
     int chunks_done;
@@ -377,6 +378,8 @@ typedef enum ScreenId {
     SCREEN_SAVING_QUIT,
     SCREEN_INGAME,
     SCREEN_PAUSE,
+    SCREEN_ACHIEVEMENTS,
+    SCREEN_STATISTICS,
     SCREEN_INVENTORY,
     SCREEN_CREATIVE,
     SCREEN_WORKBENCH,
@@ -2821,7 +2824,7 @@ static Texture tex_bg, tex_gui, tex_font, tex_terrain, tex_black, tex_pack, tex_
 static Texture tex_font_glyph[256];
 static unsigned char font_glyph_widths[65536];
 static int font_glyph_widths_loaded = 0;
-static Texture tex_icons, tex_inventory, tex_allitems, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_steve;
+static Texture tex_icons, tex_inventory, tex_allitems, tex_workbench, tex_furnace_gui, tex_chest_gui, tex_items, tex_achievement, tex_stat_slot, tex_steve;
 static Texture tex_armor[5][2];
 static Texture tex_mob_pig, tex_mob_sheep, tex_mob_sheep_fur, tex_mob_cow, tex_mob_chicken, tex_mob_saddle;
 static Texture tex_mob_creeper, tex_mob_creeper_power, tex_mob_skeleton, tex_mob_spider, tex_mob_spider_eyes, tex_mob_zombie, tex_mob_slime;
@@ -2902,6 +2905,19 @@ static void language_drag_scroll(int delta_y);
 static void language_ensure_selected_visible(void);
 static int pex_language_download_from_jar_blocking(void);
 static void open_notice(const char *title, const char *line1, const char *line2);
+
+/* Statistics/achievement screens are defined after item rendering in the unity build. */
+static void draw_achievements_screen(void);
+static void draw_statistics_screen(void);
+static void pex_achievements_mouse_down(int mx, int my);
+static void pex_achievements_mouse_drag(int mx, int my);
+static void pex_achievements_mouse_up(void);
+static void pex_statistics_scroll_by(int rows);
+static void pex_statistics_mouse_down(int mx, int my);
+static void pex_statistics_mouse_drag(int mx, int my);
+static void pex_statistics_mouse_up(void);
+static void pex_statistics_set_tab(int tab);
+static void pex_draw_achievement_toast(void);
 static int renderer_backend_supported(int backend);
 static const char *renderer_backend_label(int backend);
 static void restart_application_now(void);
@@ -2996,6 +3012,8 @@ static void classic_resource_missing_summary(char *out, size_t cap);
 static void pack_install_start(void);
 static void pack_install_tick(void);
 static void enter_world_from_job(void);
+static void pex_stats_world_left(void);
+static void pex_stats_flush(void);
 static void ingame_tick(void);
 static void ingame_tick_async_queue(void);
 static void ingame_pump_async_tick(void);

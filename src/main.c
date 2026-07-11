@@ -66,6 +66,7 @@ static void apply_texture_pack_index(int index);
 #include "i18n/language.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
+#include "game/achievements.c"
 #include "audio/sound.c"
 #include "platform/input.c"
 
@@ -106,6 +107,7 @@ static void steve_set_tint(float r, float g, float b);
 #include "game/ingame_logic.c"
 #include "render/world_view.c"
 #include "render/item_render.c"
+#include "ui/achievements_ui.c"
 #include "ui/gui.c"
 #include "platform/gamepad.c"
 #include "render/render_dispatch.c"

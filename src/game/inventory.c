@@ -5728,6 +5728,7 @@ static void inventory_drop_selected_one(void) {
         pex_sound_play("random.pop", 0.20f, 0.6f);
         g_save_dirty = 1;
     }
+    pex_stats_add_general(PEX_STAT_DROPS, 1);
     restart_hand_swing();
     hud_add_chat("Dropped item.");
 }
@@ -5995,6 +5996,7 @@ static int inventory_take_crafting_output(void) {
             }
         }
     }
+    pex_achievement_on_crafted(out.id, out.count);
     g_save_dirty = 1;
     return 1;
 }
@@ -6131,6 +6133,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
 
     ItemStack *s = inventory_slot_ptr(slot);
     if (!s) return;
+    ItemStack pex_slot_before = *s;
 
     if (button == 0) {
         if (stack_empty(&g_carried_stack)) {
@@ -6182,6 +6185,11 @@ static void inventory_mouse_click(int mx, int my, int button) {
                 if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack);
             }
         }
+    }
+    if (slot == 402 && !stack_empty(&pex_slot_before)) {
+        int remaining = stack_empty(s) ? 0 : s->count;
+        int taken = pex_slot_before.count - remaining;
+        if (taken > 0) pex_achievement_on_furnace_taken(pex_slot_before.id, taken);
     }
     if (armor_slot_touched) armor_sync_player_armor();
     if (sync_chest_after) pex_net_send_chest_update();
@@ -6929,6 +6937,7 @@ static void break_target_block(void) {
         flat_set_block(g_break_x, g_break_y, g_break_z, 0);
     }
     passive_mobs_on_block_broken_125(id, break_meta, g_break_x, g_break_y, g_break_z);
+    if (!player_is_creative()) pex_stats_add_mined(id, 1);
     unsupported_block_neighbor_cleanup(g_break_x, g_break_y, g_break_z);
     flat_end_persistent_edit();
     redstone_update_near(g_break_x, g_break_y, g_break_z);
@@ -7172,12 +7181,13 @@ static int item_max_damage_for_gameplay(int id) {
 }
 
 static void damage_held_item(ItemStack *held, int amount) {
-    int maxd;
+    int maxd, old_id;
     if (!held || stack_empty(held) || amount <= 0 || player_is_creative()) return;
+    old_id = held->id;
     maxd = item_max_damage_for_gameplay(held->id);
     if (maxd <= 0) return;
     held->damage += amount;
-    if (held->damage > maxd) stack_clear(held);
+    if (held->damage > maxd) { stack_clear(held); pex_stats_add_broken(old_id, 1); }
 }
 
 static int dye_to_wool_meta(int dye_damage) {
@@ -9020,7 +9030,7 @@ static void ingame_right_click_impl(void) {
     }
 
     if (stack_empty(held)) return;
-    if (try_use_nonblock_item(held, &hit, target_id)) return;
+    { int used_id = held->id; if (try_use_nonblock_item(held, &hit, target_id)) { pex_stats_add_used(used_id, 1); return; } }
     if (!item_is_placeable_block_id(held->id)) return;
 
     int px = hit.bx;
@@ -9047,7 +9057,8 @@ static void ingame_right_click_impl(void) {
         pz < g_flat_world_origin_z || pz >= g_flat_world_origin_z + FLAT_WORLD_SIZE) return;
 
     if (held->id == ITEM_DOOR_WOOD || held->id == ITEM_DOOR_IRON) {
-        if (!place_door_from_item(held->id, px, py, pz)) return;
+        int door_item_id = held->id;
+        if (!place_door_from_item(door_item_id, px, py, pz)) return;
         redstone_update_near(px, py, pz);
         if (g_mp_connected) {
             pex_net_send_player_action(PEX_ACTION_PLACE, px, py, pz, hit.face, held->id);
@@ -9055,11 +9066,13 @@ static void ingame_right_click_impl(void) {
         }
         if (!player_is_creative() && --held->count <= 0) stack_clear(held);
         if (!g_mp_connected) g_save_dirty = 1;
-        pex_sound_play_at(pex_block_step_sound_key(held->id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
+        pex_sound_play_at(pex_block_step_sound_key(door_item_id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
+        pex_stats_add_used(door_item_id, 1);
         restart_hand_swing();
         return;
     }
 
+    int placed_item_id = held->id;
     int place_id = held->id;
     if (place_id == ITEM_REED) place_id = BLOCK_REEDS;
     if (place_id == ITEM_REDSTONE) place_id = BLOCK_REDSTONE_WIRE;
@@ -9113,6 +9126,7 @@ static void ingame_right_click_impl(void) {
     }
     if (!player_is_creative() && --held->count <= 0) stack_clear(held);
     if (!g_mp_connected) g_save_dirty = 1;
+    pex_stats_add_used(placed_item_id, 1);
     pex_sound_play_at(pex_block_step_sound_key(place_id), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
     restart_hand_swing();
 }
@@ -9285,6 +9299,7 @@ static void update_dropped_items(void) {
                 FlatDroppedItem before = *e;
                 int moved = inventory_add_stack_partial(&e->stack);
                 if (moved > 0) {
+                    pex_achievement_on_item_picked(before.stack.id, moved);
                     /* EntityItem captures the original stack size before the
                        inventory mutates the entity stack. */
                     spawn_pickup_fx_from_drop(&before);

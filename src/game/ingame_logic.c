@@ -115,6 +115,7 @@ static const char *pex_damage_source_death_reason(const PexDamageSource *source)
 static void player_die(const char *reason) {
     if (g_player_dead) return;
     g_player_dead = 1;
+    pex_stats_add_general(PEX_STAT_DEATHS, 1);
     g_player_death_time = 0;
     if (g_player_health > 0) player_health_set_hearts(0);
     else g_player_health = 0;
@@ -188,6 +189,7 @@ static int player_attack_entity_from(PexDamageSource source, int amount) {
     }
     if (play_hurt) g_player_hurt_time = g_player_max_hurt_time;
     g_player_attacked_at_yaw = 0.0f;
+    pex_stats_add_general(PEX_STAT_DAMAGE_TAKEN, incoming);
     player_health_set_hearts(g_player_health - incoming);
     if (play_hurt) pex_sound_play("random.hurt", 1.0f, 1.0f);
     player_add_exhaustion(source.hunger_damage);
@@ -479,6 +481,7 @@ static void ingame_tick(void) {
 
     g_ingame_ticks++;
     g_world_time++;
+    pex_stats_tick();
     prof_part = profile_begin();
     pex_update_time_light_bucket();
     profile_add_time(PROF_DAYLIGHT_MESH, prof_part);
@@ -805,6 +808,7 @@ static void ingame_tick(void) {
         /* Lava remains heavy/slow. */
         g_player_motion_y += 0.04f;
     } else if (normal_jump && g_player_on_ground) {
+        pex_stats_add_general(PEX_STAT_JUMPS, 1);
         g_player_motion_y = 0.50f;
         if (player_has_potion(PEX_POTION_JUMP)) g_player_motion_y += 0.10f * (float)(player_potion_amplifier(PEX_POTION_JUMP) + 1);
         if (g_player_sprinting) {
@@ -963,6 +967,10 @@ static void ingame_tick(void) {
 
     /* Deobf EntityLiving.fall: damage is ceil(fallDistance - 3). */
     if (g_player_on_ground) {
+        /* EntityPlayer.fall records the completed fall, not each airborne tick. */
+        if (!was_on_ground && !g_creative_flying && g_player_fall_distance >= 2.0f) {
+            pex_stats_add_general(PEX_STAT_FALL_CM, (long long)floorf(g_player_fall_distance * 100.0f + 0.5f));
+        }
         /* b1.0 should not play the heavy landing sound on a normal jump.
            Only play landing audio once the fall distance is near the damage
            threshold; actual damage remains ceil(fallDistance - 3). */
@@ -1061,6 +1069,14 @@ static void ingame_tick(void) {
     g_render_arm_pitch += (g_player_pitch - g_render_arm_pitch) * 0.5f;
     g_render_arm_yaw += (g_player_yaw - g_render_arm_yaw) * 0.5f;
     passive_mobs_apply_riding();
+    {
+        int riding_pig = 0;
+        if (g_player_riding_passive_mob >= 0 && g_player_riding_passive_mob < MAX_PASSIVE_MOBS) {
+            PassiveMob *mount = &g_passive_mobs[g_player_riding_passive_mob];
+            riding_pig = mount->active && mount->type == PASSIVE_MOB_PIG;
+        }
+        pex_stats_track_player_position(in_water, in_ladder, g_creative_flying, riding_pig, 0, 0);
+    }
 
     g_prev_sprint_forward = (input_active && !sneaking && forward_for_sprint) ? 1 : 0;
 

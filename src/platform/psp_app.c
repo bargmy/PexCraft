@@ -202,6 +202,7 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+    pex_stats_flush();
     if (world_quit_is_active()) return;
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     pex_join_save_thread_for_exit();

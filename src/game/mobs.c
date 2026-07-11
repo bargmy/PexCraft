@@ -2401,7 +2401,22 @@ static int pex_mob_attack_entity_from(PassiveMob *m, PexDamageSource source, int
                                      (pex_rand_float01() - pex_rand_float01()) * 0.2f + 1.0f);
         }
     }
-    if (passive_mob_damage_has_player_attacker(&source)) player_add_exhaustion(source.hunger_damage);
+    if (passive_mob_damage_has_player_attacker(&source)) {
+        player_add_exhaustion(source.hunger_damage);
+        pex_achievement_on_damage_dealt(applied);
+        if (m->health <= 0) {
+            int cat = passive_mob_category(m->type);
+            int hostile = cat == PEX_CAT_MONSTER || m->type == PASSIVE_MOB_GHAST ||
+                          m->type == PASSIVE_MOB_GIANT || m->type == PASSIVE_MOB_ENDER_DRAGON;
+            if (m->type == PASSIVE_MOB_GHAST && source.type == PEX_DAMAGE_FIREBALL && source.true_kind == PEX_DAMAGE_ENTITY_PLAYER)
+                pex_achievement_on_ghast_reflect();
+            if (m->type == PASSIVE_MOB_SKELETON && source.type == PEX_DAMAGE_ARROW) {
+                float sx = m->x - g_player_x, sz = m->z - g_player_z;
+                if (sx * sx + sz * sz >= 2500.0f) pex_achievement_on_skeleton_snipe();
+            }
+            pex_achievement_on_mob_killed(m->type, hostile, &source);
+        }
+    }
     if (m->health <= 0) passive_mob_start_death(m, &source);
     g_save_dirty = 1;
     return 1;
@@ -7512,6 +7527,12 @@ static void passive_mob_apply_physics(PassiveMob *m, float forward, int in_liqui
         if (m->on_ground && m->my < 0.0f) m->my = 0.0f;
 
         if (m->on_ground) {
+            /* EntityPig.fall: a saddled pig carrying the local player grants
+               When Pigs Fly after a fall greater than five blocks. */
+            if (!was_on_ground && m->type == PASSIVE_MOB_PIG && m->fall_distance > 5.0f &&
+                g_player_riding_passive_mob == passive_mob_index_of(m)) {
+                pex_achievement_on_pig_fall();
+            }
             if (!was_on_ground && m->fall_distance > 3.0f && !passive_mob_ignores_fall_damage_125(m->type)) {
                 int dmg = (int)ceilf(m->fall_distance - 3.0f);
                 if (dmg > 0) {

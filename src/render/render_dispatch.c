@@ -104,6 +104,8 @@ static void draw_current_screen(float partial) {
         case SCREEN_SAVING_QUIT: draw_saving_quit_screen(); break;
         case SCREEN_INGAME: draw_ingame_screen(); break;
         case SCREEN_PAUSE: draw_pause_screen(); break;
+        case SCREEN_ACHIEVEMENTS: draw_achievements_screen(); break;
+        case SCREEN_STATISTICS: draw_statistics_screen(); break;
         case SCREEN_INVENTORY: draw_inventory_screen(); break;
         case SCREEN_CREATIVE: draw_creative_screen(); break;
         case SCREEN_WORKBENCH: draw_workbench_screen(); break;
@@ -156,6 +158,7 @@ static void render(float partial) {
     double render_start_time = now_seconds();
     part_start = profile_begin();
     draw_current_screen(partial);
+    pex_draw_achievement_toast();
     profile_add_time(PROF_DRAW_CURRENT_SCREEN, part_start);
     profile_add_time(PROF_SCREEN_DRAW, part_start);
 #ifdef PEX_PLATFORM_ANDROID

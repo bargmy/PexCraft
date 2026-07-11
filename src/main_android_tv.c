@@ -116,6 +116,7 @@ static void rebuild_screen(void);
 #include "render/cfont.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
+#include "game/achievements.c"
 #include "audio/sound.c"
 #include "platform/sdl2_input.c"
 
@@ -157,6 +158,7 @@ static void steve_set_tint(float r, float g, float b);
 #include "game/ingame_logic.c"
 #include "render/world_view.c"
 #include "render/item_render.c"
+#include "ui/achievements_ui.c"
 #include "ui/gui.c"
 #include "platform/android_tv/android_tv_input.c"
 #include "platform/gamepad.c"

@@ -50,6 +50,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "render/cfont.c"
 #include "render/gui_primitives.c"
 #include "settings/options.c"
+#include "game/achievements.c"
 #include "audio/sound.c"
 #include "../platforms/wii/wii_input.c"
 
@@ -68,6 +69,7 @@ static const char *item_display_name(int id);
 #include "game/ingame_logic.c"
 #include "render/world_view.c"
 #include "render/item_render.c"
+#include "ui/achievements_ui.c"
 #include "platform/gamepad.c"
 #include "render/render_dispatch.c"
 #include "../platforms/wii/wii_app.c"

@@ -358,6 +358,8 @@ static void pex_android_touch_ui_motion(SDL_FingerID id, int x, int y) {
     g_mouse_y = y;
     if (g_drag_slider) update_slider(g_drag_slider, x);
     if (g_screen == SCREEN_TEXPACK) texpack_mouse_drag(y);
+    if (g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_drag(x, y);
+    if (g_screen == SCREEN_STATISTICS) pex_statistics_mouse_drag(x, y);
     if (g_screen == SCREEN_CREATIVE) creative_mouse_drag(y);
     if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
         world_save_drag_scroll(y - old_y);

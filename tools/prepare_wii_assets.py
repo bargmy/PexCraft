@@ -19,7 +19,7 @@ CLASSIC_PACK_URL = "https://piston-data.mojang.com/v1/objects/93faf3398ebf8008d5
 
 REQUIRED_MCRW = {
     "gui_background.mcrw", "gui_gui.mcrw", "font_default.mcrw", "terrain.mcrw",
-    "title_black.mcrw", "gui_icons.mcrw", "gui_inventory.mcrw", "mob_char.mcrw",
+    "title_black.mcrw", "gui_icons.mcrw", "achievement_bg.mcrw", "gui_slot.mcrw", "gui_inventory.mcrw", "mob_char.mcrw",
 }
 
 MAPPING = {
@@ -27,6 +27,8 @@ MAPPING = {
     "gui/gui.png": "gui_gui.mcrw",
     "gui/background.png": "gui_background.mcrw",
     "gui/icons.png": "gui_icons.mcrw",
+    "achievement/bg.png": "achievement_bg.mcrw",
+    "gui/slot.png": "gui_slot.mcrw",
     "gui/inventory.png": "gui_inventory.mcrw",
     "gui/items.png": "gui_items.mcrw",
     "font/default.png": "font_default.mcrw",

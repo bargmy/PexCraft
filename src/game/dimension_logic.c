@@ -421,6 +421,8 @@ static void dimension_teleport_player(int target_dim) {
 
     /* Switch dimension */
     g_current_dimension = target_dim;
+    if (target_dim == PEX_DIM_NETHER) pex_achievement_on_portal();
+    else if (target_dim == PEX_DIM_END) pex_achievement_on_end_enter();
     g_portal_timer = 0;
     g_time_in_portal = 0.0f;
     g_prev_time_in_portal = 0.0f;
