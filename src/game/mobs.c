@@ -39,6 +39,7 @@ static void passive_ai_init_runtime(PassiveMob *m);
 static void passive_mob_sync_named_state_from_legacy(PassiveMob *m);
 static void passive_mob_sync_legacy_from_named_state(PassiveMob *m);
 static PassiveMob *passive_mob_by_entity_id(int entity_id);
+static int passive_mob_target_position_125(PassiveMob *m, float *tx, float *ty, float *tz, float *target_height);
 static int item_icon_tile(int id);
 static int block_texture_resolve(int block_id, int meta, int face);
 static void draw_dropped_item_sprite(int tile);
@@ -2255,10 +2256,22 @@ static void passive_mob_on_attacked_by_source(PassiveMob *m, const PexDamageSour
             else passive_pig_zombie_become_angry_125(m, 0);
         }
         if (source->true_kind == PEX_DAMAGE_ENTITY_PLAYER) {
-            m->target_entity_id = 0;
-            m->target_mob_index = -1;
+            /* EntityLiving still remembers the owner as its revenge source,
+               but EntityAITarget rejects an owned tameable's owner.  Keep the
+               hurt memory while immediately cancelling any stale owner chase. */
+            int owner_hit = (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m));
             m->revenge_entity_id = 0;
             m->revenge_timer = 100;
+            if (owner_hit) {
+                m->target_entity_id = -1;
+                m->target_mob_index = -1;
+                m->species.wolf_angry = 0;
+                m->rideable = 0;
+                passive_path_clear(m);
+            } else {
+                m->target_entity_id = 0;
+                m->target_mob_index = -1;
+            }
         } else if (source->true_kind == PEX_DAMAGE_ENTITY_MOB &&
                    source->true_mob_index >= 0 && source->true_mob_index < MAX_PASSIVE_MOBS) {
             PassiveMob *attacker = &g_passive_mobs[source->true_mob_index];
@@ -2971,6 +2984,12 @@ static int passive_mob_scaled_attack_damage(const PassiveMob *m, int base) {
     if (d == 3) return (base * 3 + 1) / 2;
     (void)m;
     return base;
+}
+
+static float passive_mob_melee_reach_sq_125(const PassiveMob *m) {
+    /* EntityAIAttackOnCollide uses (attacker.width * 2)^2. */
+    float reach = m ? m->width * 2.0f : 1.0f;
+    return reach * reach;
 }
 
 static void passive_mob_attack_player(PassiveMob *m, int ranged) {
@@ -6150,7 +6169,8 @@ static void passive_ai_init_runtime(PassiveMob *m) {
             passive_ai_add(m->target_tasks, &m->target_task_count, PEX_MOB_TASK_TARGET_OWNER_HURT_BY, 1, 0, 1, 0.0f, 32.0f, 0, 0);
             passive_ai_add(m->target_tasks, &m->target_task_count, PEX_MOB_TASK_TARGET_OWNER_HURT_TARGET, 2, 0, 1, 0.0f, 32.0f, 0, 0);
             passive_ai_add(m->target_tasks, &m->target_task_count, PEX_MOB_TASK_TARGET_REVENGE, 3, 0, 1, 0.0f, 16.0f, 1, 0);
-            passive_ai_add(m->target_tasks, &m->target_task_count, PEX_MOB_TASK_TARGET_PLAYER, 3, 0, 1, 0.0f, 16.0f, 1, 0);
+            /* EntityWolf has no generic nearest-player target task.  Player
+               aggression is entered only through HurtByTarget/revenge. */
             passive_ai_add(m->target_tasks, &m->target_task_count, PEX_MOB_TASK_TARGET_MOB, 4, 0, 1, 0.0f, 16.0f, PASSIVE_MOB_SHEEP, 200);
             break;
         case PASSIVE_MOB_OCELOT:
@@ -6228,6 +6248,9 @@ static int passive_ai_player_target_allowed_125(const PassiveMob *m) {
 static int passive_ai_target_valid(PassiveMob *m, int entity_id, float range, int require_sight) {
     if (!m) return 0;
     if (entity_id == 0) {
+        /* EntityAITarget.func_48376_a: a tamed tameable can never select its
+           owner, including through the hurt-by/revenge target task. */
+        if (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m)) return 0;
         if (g_player_dead || !passive_ai_player_target_allowed_125(m)) return 0;
         if (passive_mob_player_distance2(m) > range * range) return 0;
         return !require_sight || passive_senses_can_see_player(m);
@@ -6681,6 +6704,11 @@ static void passive_ai_task_start(PassiveMob *m, PexMobAITaskEntry *e, int targe
             e->arg0 = m->navigation.avoids_water;
             m->navigation.avoids_water = 0;
             break;
+        case PEX_MOB_TASK_ATTACK:
+            /* EntityAIAttackOnCollide starts with an immediate path refresh,
+               then updates the path only every 4..10 ticks. */
+            e->timer = 0;
+            break;
         case PEX_MOB_TASK_BEG:
             e->timer = 40 + (rand() % 40);
             m->species.wolf_begging = 1;
@@ -6782,33 +6810,34 @@ static void passive_ai_task_update(PassiveMob *m, PexMobAITaskEntry *e, int targ
             break;
         case PEX_MOB_TASK_ATTACK: {
             if (m->type == PASSIVE_MOB_GHAST) break;
-            if (m->target_entity_id == 0) {
-                float speed=e->speed;
-                if (m->type == PASSIVE_MOB_OCELOT) {
-                    float d2=passive_mob_player_distance2(m);
-                    float reach=(m->width*2.0f)*(m->width*2.0f);
-                    if (d2>reach && d2<16.0f) speed=0.40f; else if (d2<225.0f) speed=0.18f;
-                    m->species.ocelot_sneaking=(speed==0.18f);
-                    m->species.ocelot_sprinting=(speed==0.40f);
-                }
-                if (m->type != PASSIVE_MOB_SKELETON && m->type != PASSIVE_MOB_BLAZE)
-                    passive_navigation_set_goal(m, g_player_x, g_player_y - 1.62f, g_player_z, speed);
-                passive_look_helper_set_look(m, g_player_x, g_player_y, g_player_z, 30.0f, 30.0f);
-            } else {
-                PassiveMob *t = passive_mob_by_entity_id(m->target_entity_id);
-                if (t) {
-                    float speed = e->speed;
-                    if (m->type == PASSIVE_MOB_OCELOT) {
-                        float dx = t->x - m->x, dz = t->z - m->z;
-                        float d2 = dx * dx + dz * dz;
-                        float reach = (m->width * 2.0f) * (m->width * 2.0f);
-                        if (d2 > reach && d2 < 16.0f) speed = 0.40f;
-                        else if (d2 < 225.0f) speed = 0.18f;
-                        m->species.ocelot_sneaking = (speed == 0.18f);
-                        m->species.ocelot_sprinting = (speed == 0.40f);
-                    }
-                    passive_navigation_set_goal(m, t->x, t->y, t->z, speed);
-                    passive_look_helper_set_look(m, t->x, t->y + t->height * 0.8f, t->z, 30.0f, 30.0f);
+            float tx, ty, tz, th;
+            if (!passive_mob_target_position_125(m, &tx, &ty, &tz, &th)) break;
+            float dx = tx - m->x;
+            float dy = ty - m->y;
+            float dz = tz - m->z;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            float speed = e->speed;
+            if (m->type == PASSIVE_MOB_OCELOT) {
+                float horizontal2 = dx * dx + dz * dz;
+                float reach = passive_mob_melee_reach_sq_125(m);
+                if (horizontal2 > reach && horizontal2 < 16.0f) speed = 0.40f;
+                else if (horizontal2 < 225.0f) speed = 0.18f;
+                m->species.ocelot_sneaking = (speed == 0.18f);
+                m->species.ocelot_sprinting = (speed == 0.40f);
+            }
+            passive_look_helper_set_look(m, tx, ty + th * 0.8f, tz, 30.0f, 30.0f);
+
+            if (m->type != PASSIVE_MOB_SKELETON && m->type != PASSIVE_MOB_BLAZE) {
+                if (d2 <= passive_mob_melee_reach_sq_125(m)) {
+                    /* Do not keep steering around/through a target already in
+                       contact range.  The Java navigator naturally reaches
+                       the end of its path here; explicitly clearing the C path
+                       prevents the visible 360-degree orbit/jitter. */
+                    passive_navigation_clear(m);
+                    e->timer = 0;
+                } else if (--e->timer <= 0) {
+                    e->timer = 4 + (rand() % 7);
+                    passive_navigation_set_goal(m, tx, ty, tz, speed);
                 }
             }
             break;
@@ -7112,9 +7141,9 @@ static void passive_ai_combat_update(PassiveMob *m) {
     if (m->type == PASSIVE_MOB_BLAZE) { passive_blaze_attack_update_125(m); return; }
     if (m->target_entity_id == 0) {
         float d2 = passive_mob_player_distance2(m);
-        float reach = 1.35f + m->width * 0.5f;
-        if (m->type == PASSIVE_MOB_GIANT) reach = 6.0f;
-        if (m->type == PASSIVE_MOB_ENDER_DRAGON) reach = 8.0f;
+        float reach_sq = passive_mob_melee_reach_sq_125(m);
+        if (m->type == PASSIVE_MOB_GIANT) reach_sq = 36.0f;
+        if (m->type == PASSIVE_MOB_ENDER_DRAGON) reach_sq = 64.0f;
         if (m->type == PASSIVE_MOB_SPIDER || m->type == PASSIVE_MOB_CAVE_SPIDER) {
             if (d2 > 4.0f && d2 < 36.0f && (rand() % 10) == 0 && m->on_ground) {
                 float dx = g_player_x - m->x, dz = g_player_z - m->z;
@@ -7122,8 +7151,8 @@ static void passive_ai_combat_update(PassiveMob *m) {
                 m->mx = dx / len * 0.4f + m->mx * 0.2f;
                 m->mz = dz / len * 0.4f + m->mz * 0.2f;
                 m->my = 0.4f;
-            } else if (d2 < reach * reach) passive_mob_attack_player(m, 0);
-        } else if (d2 < reach * reach) {
+            } else if (d2 < reach_sq) passive_mob_attack_player(m, 0);
+        } else if (d2 < reach_sq) {
             passive_mob_attack_player(m, 0);
         }
         if (m->type == PASSIVE_MOB_ENDERMAN) {
@@ -7138,10 +7167,13 @@ static void passive_ai_combat_update(PassiveMob *m) {
     } else {
         PassiveMob *t = passive_mob_by_entity_id(m->target_entity_id);
         if (!t) return;
-        float dx = t->x - m->x, dz = t->z - m->z;
-        float d2 = dx * dx + dz * dz;
+        float dx = t->x - m->x, dy = t->y - m->y, dz = t->z - m->z;
+        float d2 = dx * dx + dy * dy + dz * dz;
         if (m->type == PASSIVE_MOB_SNOWMAN && d2 < 100.0f) passive_mob_attack_other_mob(m, t, 1);
-        else if (d2 < (m->type == PASSIVE_MOB_IRON_GOLEM ? 9.0f : 3.24f)) passive_mob_attack_other_mob(m, t, 0);
+        else {
+            float reach_sq = (m->type == PASSIVE_MOB_IRON_GOLEM) ? 9.0f : passive_mob_melee_reach_sq_125(m);
+            if (d2 < reach_sq) passive_mob_attack_other_mob(m, t, 0);
+        }
     }
 }
 
@@ -9380,14 +9412,21 @@ static void draw_passive_mobs(float partial) {
                 passive_fast_set_tint(1.0f, 1.0f, 1.0f);
             }
             if (e->type == PASSIVE_MOB_SLIME) {
-                /* RenderSlime's pass uses the texture's own alpha with normal
-                   SRC_ALPHA blending; it does not impose a fixed 0.45 alpha
-                   or disable depth writes. */
-                passive_fast_set_tint(1.0f, 1.0f, 1.0f);
+                /* ModelSlime(0) is the translucent 8x8x8 outer gelatin shell;
+                   ModelSlime(16), rendered above as the base model, contains
+                   the opaque 6x6x6 core, both eyes, and the mouth.  Some packs
+                   (and a few PNG import paths) provide an accidentally opaque
+                   shell region, which completely hides the inner face.  The
+                   reference shell is visibly translucent, so multiply its
+                   texture alpha while retaining the pack's own per-pixel alpha. */
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                passive_fast_set_tint_alpha(entity_br, entity_br, entity_br, 0.60f);
                 glBegin(GL_QUADS);
                 passive_render_quad_model(e->type, 1, e->detail, e->limb, e->move, e->head_yaw, e->pitch, e->age, e->sitting, e->rideable, e->held_block, e->sheep_eat_amount, e->sheep_head_pitch, e->wolf_head_roll, e->wolf_mane_roll, e->wolf_body_roll, e->wolf_tail_roll, e->wolf_tail_pitch, e->ocelot_sneaking, e->ocelot_sprinting, e->is_child, e->is_riding,
                                           e->golem_attack_timer, e->golem_rose_timer, partial);
                 glEnd();
+                passive_fast_set_tint(entity_br, entity_br, entity_br);
             }
             if (e->type == PASSIVE_MOB_ENDERMAN && e->held_block > 0) {
                 passive_render_enderman_held_block(e->held_block);
