@@ -56,13 +56,24 @@ static void apply_vsync_setting(void) {
     if (g_hwnd) SDL_GL_SetSwapInterval((g_opts.anaglyph && g_opts.max_fps > 0) ? 1 : 0);
 }
 
-static void refresh_window_size_after_mode(void) {
+static void sdl2_refresh_display_metrics(void) {
     if (!g_hwnd) return;
     SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
     if (g_win_w < 1) g_win_w = 1;
     if (g_win_h < 1) g_win_h = 1;
     g_render_w = g_win_w;
     g_render_h = g_win_h;
+    /* Minecraft's displayWidth/displayHeight are framebuffer pixels.  On a
+       high-DPI SDL window the drawable can be 2x the mouse/window coordinate
+       size, so use it for ScaledResolution and the GL viewport. */
+    if (g_glrc) SDL_GL_GetDrawableSize(g_hwnd, &g_render_w, &g_render_h);
+    if (g_render_w < 1) g_render_w = g_win_w;
+    if (g_render_h < 1) g_render_h = g_win_h;
+}
+
+static void refresh_window_size_after_mode(void) {
+    if (!g_hwnd) return;
+    sdl2_refresh_display_metrics();
     setup_scale();
     rebuild_screen();
     if (g_screen == SCREEN_INGAME) set_mouse_grabbed(1);
@@ -132,12 +143,9 @@ static void sdl2_handle_event(SDL_Event *e) {
             break;
         case SDL_WINDOWEVENT:
             if (e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e->window.event == SDL_WINDOWEVENT_RESIZED) {
-                g_win_w = e->window.data1; g_win_h = e->window.data2;
-                if (g_win_w < 1) g_win_w = 1;
-                if (g_win_h < 1) g_win_h = 1;
-                g_render_w = g_win_w; g_render_h = g_win_h;
+                sdl2_refresh_display_metrics();
                 setup_scale();
-                pex_renderer_resize(g_win_w, g_win_h);
+                pex_renderer_resize(g_render_w, g_render_h);
                 rebuild_screen();
             } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                 set_mouse_grabbed(0);
@@ -628,6 +636,9 @@ int main(int argc, char **argv) {
             return 3;
         }
     }
+    sdl2_refresh_display_metrics();
+    setup_scale();
+    rebuild_screen();
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
     if (g_loggy_enabled) {
         loggy_init();

@@ -17,6 +17,7 @@ static void set_default_options(void) {
     g_opts.sensitivity = 0.5f;
     g_opts.invert_mouse = 0;
     g_opts.render_distance = 8;
+    g_opts.gui_scale = 0; /* Auto, matching GameSettings.guiScale */
     g_opts.view_bobbing = 1;
     g_opts.anaglyph = 0; /* V-Sync */
     g_opts.max_fps = 0;  /* unlimited */
@@ -126,7 +127,7 @@ static const StivuFineOptionDef stivufine_defs[] = {
     { SF_FRAMERATE_LIMIT, "Max FPS", SF_CAT_MAIN, SF_KIND_SLIDER, 1 },
     { SF_ANAGLYPH, "3D Anaglyph", SF_CAT_MAIN, SF_KIND_BUTTON, 0 },
     { SF_VIEW_BOBBING, "View Bobbing", SF_CAT_MAIN, SF_KIND_BUTTON, 1 },
-    { SF_GUI_SCALE, "GUI Scale", SF_CAT_OTHER, SF_KIND_BUTTON, 0 },
+    { SF_GUI_SCALE, "GUI Scale", SF_CAT_MAIN, SF_KIND_BUTTON, 1 },
     { SF_ADVANCED_OPENGL, "Advanced OpenGL", SF_CAT_PERFORMANCE, SF_KIND_BUTTON, 0 },
     { SF_GAMMA, "Brightness", SF_CAT_QUALITY, SF_KIND_SLIDER, 1 },
         { SF_FOG_FANCY, "Fog", SF_CAT_DETAILS, SF_KIND_BUTTON, 0 },
@@ -233,6 +234,7 @@ static const char *stivufine_option_lang_key(StivuFineOptionId id) {
         case SF_FRAMERATE_LIMIT: return "options.framerateLimit";
         case SF_ANAGLYPH: return "options.anaglyph";
         case SF_VIEW_BOBBING: return "options.viewBobbing";
+        case SF_GUI_SCALE: return "options.guiScale";
         case SF_GAMMA: return "options.gamma";
         case SF_FOG_FANCY: return "sf.options.FOG_FANCY";
         case SF_FOG_START: return "sf.options.FOG_START";
@@ -706,6 +708,17 @@ static void get_stivufine_option_label(StivuFineOptionId opt, char *out, size_t 
             if (g_opts.max_fps <= 0) snprintf(out, cap, "%s: %s", name, tr_key_default("options.framerateLimit.max", "Unlimited"));
             else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
             break;
+        case SF_GUI_SCALE: {
+            static const char *keys[4] = {
+                "options.guiScale.auto", "options.guiScale.small",
+                "options.guiScale.normal", "options.guiScale.large"
+            };
+            static const char *fallback[4] = { "Auto", "Small", "Normal", "Large" };
+            int v = g_opts.gui_scale;
+            if (v < 0 || v > 3) v = 0;
+            snprintf(out, cap, "%s: %s", name, tr_key_default(keys[v], fallback[v]));
+            break;
+        }
         case SF_GAMMA:
             if (g_opts.sf_gamma <= 0.0f) snprintf(out, cap, "%s: %s", name, tr_key_default("options.gamma.min", "Moody"));
             else if (g_opts.sf_gamma >= 1.0f) snprintf(out, cap, "%s: %s", name, tr_key_default("options.gamma.max", "Bright"));
@@ -768,6 +781,9 @@ static void bump_stivufine_option(StivuFineOptionId opt, int delta) {
             break;
         case SF_VIEW_BOBBING:
             g_opts.view_bobbing = !g_opts.view_bobbing;
+            break;
+        case SF_GUI_SCALE:
+            g_opts.gui_scale = (g_opts.gui_scale + 1) & 3;
             break;
         case SF_RENDER_CLOUDS:
             g_opts.sf_clouds = (stivufine_cloud_mode() == SF_OFF) ? SF_DEFAULT : SF_OFF;
@@ -909,6 +925,7 @@ static void load_options(void) {
         else if (!strcmp(k, "mouseSensitivity")) g_opts.sensitivity = parse_float_java(v);
         else if (!strcmp(k, "invertYMouse")) g_opts.invert_mouse = !strcmp(v, "true");
         else if (!strcmp(k, "viewDistance")) g_opts.render_distance = atoi(v);
+        else if (!strcmp(k, "guiScale")) g_opts.gui_scale = atoi(v);
         else if (!strcmp(k, "bobView")) g_opts.view_bobbing = !strcmp(v, "true");
         else if (!strcmp(k, "anaglyph3d")) g_opts.anaglyph = !strcmp(v, "true");
         else if (!strcmp(k, "limitFramerate")) { if (!strcmp(v, "true")) g_opts.max_fps = 60; }
@@ -982,6 +999,7 @@ static void load_options(void) {
     if (g_opts.sf_natural_textures < 0 || g_opts.sf_natural_textures > 1) g_opts.sf_natural_textures = 0;
     { int aa = g_opts.sf_aa_level; if (!(aa==0||aa==2||aa==4||aa==6||aa==8||aa==12||aa==16)) g_opts.sf_aa_level = 0; }
     { int af = g_opts.sf_af_level; if (!(af==1||af==2||af==4||af==8||af==16)) g_opts.sf_af_level = 1; }
+    if (g_opts.gui_scale < 0 || g_opts.gui_scale > 3) g_opts.gui_scale = 0;
     if (g_opts.render_distance < 2) g_opts.render_distance = 8;
     if (g_opts.render_distance > 32) g_opts.render_distance = 32;
     if (g_opts.max_fps < 0) g_opts.max_fps = 0;
@@ -1035,6 +1053,7 @@ static void save_options(void) {
     fprintf(f, "invertYMouse:%s\n", g_opts.invert_mouse ? "true" : "false");
     fprintf(f, "mouseSensitivity:%g\n", g_opts.sensitivity);
     fprintf(f, "viewDistance:%d\n", g_opts.render_distance);
+    fprintf(f, "guiScale:%d\n", g_opts.gui_scale);
     fprintf(f, "bobView:%s\n", g_opts.view_bobbing ? "true" : "false");
     fprintf(f, "anaglyph3d:%s\n", g_opts.anaglyph ? "true" : "false");
     fprintf(f, "maxFps:%d\n", g_opts.max_fps);

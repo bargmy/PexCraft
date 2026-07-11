@@ -148,8 +148,9 @@ static void render(float partial) {
         profile_add_time(PROF_RENDER_TOTAL, render_profile_time);
         return;
     }
-    g_render_w = g_win_w;
-    g_render_h = g_win_h;
+    /* Platform resize/context code owns framebuffer dimensions.  Do not
+       overwrite an SDL high-DPI drawable (or a backend render target) with
+       logical window coordinates every frame. */
     part_start = profile_begin();
     glViewport(0, 0, g_render_w, g_render_h);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

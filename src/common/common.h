@@ -625,6 +625,7 @@ typedef struct Options {
     float sensitivity;
     int invert_mouse;
     int render_distance;
+    int gui_scale; /* Minecraft 1.2.5: 0 Auto, 1 Small, 2 Normal, 3 Large */
     int view_bobbing;
     int anaglyph; /* repurposed: V-Sync */
     int max_fps;  /* 1..200, 0 = unlimited */
@@ -1175,6 +1176,7 @@ static HGLRC g_glrc;
 static int g_win_w = 854, g_win_h = 480;
 static int g_render_w = 854, g_render_h = 480; /* current framebuffer target; can be smaller than window */
 static int g_gui_w = 427, g_gui_h = 240, g_gui_scale = 2;
+static double g_gui_w_d = 427.0, g_gui_h_d = 240.0; /* ScaledResolution.scaledWidthD/HeightD */
 static int g_fullscreen_active = 0;
 static DWORD g_windowed_style = 0;
 static DWORD g_windowed_exstyle = 0;

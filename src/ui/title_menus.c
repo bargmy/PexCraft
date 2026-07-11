@@ -458,7 +458,7 @@ static void release_panorama_blur_pass(void) {
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
-    glOrtho(0.0, (double)g_gui_w, (double)g_gui_h, 0.0, 1000.0, 3000.0);
+    glOrtho(0.0, g_gui_w_d, g_gui_h_d, 0.0, 1000.0, 3000.0);
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();

@@ -1,17 +1,37 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+/* Exact Minecraft 1.2.5 ScaledResolution semantics.
+   Layout uses ceil(scaledWidthD), while the projection uses the unsnapped
+   doubles.  That distinction is important: it makes every GUI unit land on an
+   integer number of framebuffer pixels even when the window size is not evenly
+   divisible by the scale factor. */
 static void setup_scale(void) {
+    int display_w = g_render_w > 0 ? g_render_w : g_win_w;
+    int display_h = g_render_h > 0 ? g_render_h : g_win_h;
+    int requested = g_opts.gui_scale;
+    if (display_w < 1) display_w = 1;
+    if (display_h < 1) display_h = 1;
+    if (requested < 0 || requested > 3) requested = 0;
+    if (requested == 0) requested = 1000;
+
     g_gui_scale = 1;
-    while (g_win_w / (g_gui_scale + 1) >= 320 && g_win_h / (g_gui_scale + 1) >= 240) g_gui_scale++;
-    g_gui_w = g_win_w / g_gui_scale;
-    g_gui_h = g_win_h / g_gui_scale;
+    while (g_gui_scale < requested &&
+           display_w / (g_gui_scale + 1) >= 320 &&
+           display_h / (g_gui_scale + 1) >= 240) {
+        ++g_gui_scale;
+    }
+
+    g_gui_w_d = (double)display_w / (double)g_gui_scale;
+    g_gui_h_d = (double)display_h / (double)g_gui_scale;
+    g_gui_w = (int)ceil(g_gui_w_d);
+    g_gui_h = (int)ceil(g_gui_h_d);
 }
 
 static void setup_gui_projection(void) {
     glViewport(0, 0, g_render_w, g_render_h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0.0, (double)g_gui_w, (double)g_gui_h, 0.0, 1000.0, 3000.0);
+    glOrtho(0.0, g_gui_w_d, g_gui_h_d, 0.0, 1000.0, 3000.0);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glTranslatef(0.0f, 0.0f, -2000.0f);
@@ -120,27 +140,15 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
    panels look stretched or completely unrelated to the requested tile. */
 static void pex_gui_atlas_uv_256(Texture *tex, int sx, int sy, int sw, int sh,
                                  float *u0, float *v0, float *u1, float *v1) {
-    float scale_x = (float)tex->w / 256.0f;
-    float scale_y = (float)tex->h / 256.0f;
-    float px0 = (float)sx * scale_x;
-    float py0 = (float)sy * scale_y;
-    float px1 = (float)(sx + sw) * scale_x;
-    float py1 = (float)(sy + sh) * scale_y;
-
-    /* Inset by half of one physical texel, not half of one logical GUI pixel.
-       This keeps nearest-filtered atlas cells from borrowing their neighbour
-       while retaining every detail pixel in an HD resource pack. */
-    float ax0 = px0 + 0.5f;
-    float ay0 = py0 + 0.5f;
-    float ax1 = px1 - 0.5f;
-    float ay1 = py1 - 0.5f;
-    if (ax1 < ax0) ax0 = ax1 = (px0 + px1) * 0.5f;
-    if (ay1 < ay0) ay0 = ay1 = (py0 + py1) * 0.5f;
-
-    *u0 = ax0 / (float)tex->w;
-    *v0 = ay0 / (float)tex->h;
-    *u1 = ax1 / (float)tex->w;
-    *v1 = ay1 / (float)tex->h;
+    (void)tex;
+    /* Gui.drawTexturedModalRect in 1.2.5 uses 1/256 exactly.  Do not add a
+       half-texel inset: it shaves the one-pixel bevel from buttons and slots,
+       especially in HD packs and at large GUI scales. */
+    const float unit = 1.0f / 256.0f;
+    *u0 = (float)sx * unit;
+    *v0 = (float)sy * unit;
+    *u1 = (float)(sx + sw) * unit;
+    *v1 = (float)(sy + sh) * unit;
 }
 
 static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, int dh,
@@ -182,8 +190,6 @@ static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy,
 
 static void draw_texture_scaled_full(Texture *tex, int x, int y, int w, int h, int color) {
     if (!tex || tex->id == 0 || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
-    float inset_u = 0.5f / (float)tex->w;
-    float inset_v = 0.5f / (float)tex->h;
     glBindTexture(GL_TEXTURE_2D, tex->id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -192,10 +198,10 @@ static void draw_texture_scaled_full(Texture *tex, int x, int y, int w, int h, i
     set_color_int(color);
     if (g_loggy_enabled) g_loggy_gui_quads++;
     glBegin(GL_QUADS);
-    glTexCoord2f(inset_u, 1.0f - inset_v); glVertex3f((float)x, (float)(y + h), 0.0f);
-    glTexCoord2f(1.0f - inset_u, 1.0f - inset_v); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
-    glTexCoord2f(1.0f - inset_u, inset_v); glVertex3f((float)(x + w), (float)y, 0.0f);
-    glTexCoord2f(inset_u, inset_v); glVertex3f((float)x, (float)y, 0.0f);
+    glTexCoord2f(0.0f, 1.0f); glVertex3f((float)x, (float)(y + h), 0.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex3f((float)(x + w), (float)y, 0.0f);
+    glTexCoord2f(0.0f, 0.0f); glVertex3f((float)x, (float)y, 0.0f);
     glEnd();
     glColor4f(1,1,1,1);
 }
@@ -1061,46 +1067,18 @@ static int button_hover(Button *b, int mx, int my) {
     return b->visible && mx >= b->x && my >= b->y && mx < b->x + b->w && my < b->y + b->h;
 }
 
-static void draw_button_row_slice(Button *b, int src_y, int dst_y, int src_h, int dst_h) {
-    int left_w = b->w / 2;
-    int right_w = b->w - left_w;
-    draw_textured_rect_part_scaled(&tex_gui, b->x, dst_y,
-                                   left_w, dst_h, 0, src_y, left_w, src_h, 0xFFFFFF);
-    draw_textured_rect_part_scaled(&tex_gui, b->x + left_w, dst_y,
-                                   right_w, dst_h, 200 - right_w, src_y,
-                                   right_w, src_h, 0xFFFFFF);
-}
-
 static void draw_button_bg_minecraft(Button *b, int state) {
     int src_y = 46 + state * 20;
-    if (b->h == 20) {
-        /* Exact GuiButton draw: two unscaled halves from gui.png. */
-        draw_button_row_slice(b, src_y, b->y, 20, 20);
-        return;
-    }
+    int left_w = b->w / 2;
+    int right_w = b->w - left_w;
 
-    if (b->h < 20) {
-        /* Short custom controls crop the centre of the vanilla button instead
-           of squeezing all twenty source rows into a smaller rectangle. */
-        int crop = (20 - b->h) / 2;
-        draw_button_row_slice(b, src_y + crop, b->y, b->h, b->h);
-        return;
-    }
-
-    /* gui.png contains a 200x20 button, not a scalable vector panel.  Preserve
-       its top and bottom pixels exactly and repeat the two centre scanlines for
-       custom tall controls.  No part of the resource-pack texture is blurred
-       or continuously stretched. */
-    draw_button_row_slice(b, src_y, b->y, 10, 10);
-    int dst_y = b->y + 10;
-    int remaining = b->h - 20;
-    while (remaining > 0) {
-        int strip = remaining > 2 ? 2 : remaining;
-        draw_button_row_slice(b, src_y + 9, dst_y, strip, strip);
-        dst_y += strip;
-        remaining -= strip;
-    }
-    draw_button_row_slice(b, src_y + 10, b->y + b->h - 10, 10, 10);
+    /* Exact GuiButton.drawButton from Minecraft 1.2.5: two source halves,
+       no nine-patch, no fixed-width border reconstruction and no filtering. */
+    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y,
+                                   left_w, b->h, 0, src_y, left_w, b->h, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x + left_w, b->y,
+                                   right_w, b->h, 200 - right_w, src_y,
+                                   right_w, b->h, 0xFFFFFF);
 }
 
 static void draw_button(Button *b) {
@@ -1132,8 +1110,12 @@ static void draw_button(Button *b) {
         int cat = cats[b->id - 6100];
         char line1[MAX_LABEL], line2[MAX_LABEL];
         legacy_asset_button_lines(cat, line1, sizeof(line1), line2, sizeof(line2));
-        draw_centered_text(line1, b->x + b->w / 2, b->y + 5, col);
-        if (line2[0]) draw_centered_text(line2, b->x + b->w / 2, b->y + 17, col);
+        if (b->h <= 20) {
+            draw_centered_text(b->label, b->x + b->w / 2, b->y + (b->h - 8) / 2, col);
+        } else {
+            draw_centered_text(line1, b->x + b->w / 2, b->y + 5, col);
+            if (line2[0]) draw_centered_text(line2, b->x + b->w / 2, b->y + 17, col);
+        }
         if (legacy_assets_is_downloading() && (legacy_assets_download_mask() & cat)) {
             int p = legacy_asset_group_progress_percent(cat);
             int px0 = b->x + 3;

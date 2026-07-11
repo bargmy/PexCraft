@@ -882,7 +882,7 @@ static void rebuild_screen(void) {
             OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDERER
         };
         const StivuFineOptionId sf_video_options[] = {
-            SF_AO_LEVEL
+            SF_AO_LEVEL, SF_GUI_SCALE
         };
         int y0 = g_gui_h / 6;
         if (g_gui_h <= 240) y0 -= 6;
@@ -951,7 +951,7 @@ static void rebuild_screen(void) {
         int cats[] = { LEGACY_ASSET_LANG, CLASSIC_AUDIO_MOBS, CLASSIC_AUDIO_WORLD_UI, CLASSIC_AUDIO_RECORDS, CLASSIC_AUDIO_MENU_MUSIC, CLASSIC_AUDIO_GAME_MUSIC, LEGACY_ASSET_OTHER };
         int grid_w = g_gui_w - 40;
         int gap = 6;
-        int button_h = 32;
+        int button_h = 20;
         int start_x, button_w;
         int y0 = 58;
         int shown = 0;
@@ -1264,7 +1264,12 @@ static void on_button(Button *b) {
             StivuFineOptionId opt = (StivuFineOptionId)(b->id - SF_BUTTON_BASE);
             if (b->kind == BUTTON_NORMAL) {
                 bump_stivufine_option(opt, 1);
-                get_stivufine_option_label(opt, b->label, sizeof(b->label));
+                if (opt == SF_GUI_SCALE) {
+                    setup_scale();
+                    rebuild_screen();
+                } else {
+                    get_stivufine_option_label(opt, b->label, sizeof(b->label));
+                }
             }
         } else if (b->id == SF_NAV_DETAILS) set_screen(SCREEN_STIVUFINE_DETAILS);
         else if (b->id == SF_NAV_QUALITY) set_screen(SCREEN_STIVUFINE_QUALITY);
@@ -1298,7 +1303,12 @@ static void on_button(Button *b) {
             StivuFineOptionId opt = (StivuFineOptionId)(b->id - SF_BUTTON_BASE);
             if (b->kind == BUTTON_NORMAL) {
                 bump_stivufine_option(opt, 1);
-                get_stivufine_option_label(opt, b->label, sizeof(b->label));
+                if (opt == SF_GUI_SCALE) {
+                    setup_scale();
+                    rebuild_screen();
+                } else {
+                    get_stivufine_option_label(opt, b->label, sizeof(b->label));
+                }
             }
         } else if (b->id == SF_NAV_DETAILS) set_screen(SCREEN_STIVUFINE_DETAILS);
         else if (b->id == SF_NAV_QUALITY) set_screen(SCREEN_STIVUFINE_QUALITY);
