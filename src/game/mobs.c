@@ -16,6 +16,7 @@ static int passive_player_looking_at_mob_125(const PassiveMob *m);
 static int passive_mob_teleport_random_125(PassiveMob *m, float range);
 static int passive_path_can_stand_at(int type, int x, int y, int z);
 static void passive_mobs_tick_spawners_125(void);
+static void passive_spawner_discovery_reset_125(void);
 static void passive_mob_spawner_remove_tile_125(int x, int y, int z);
 static void passive_mobs_ensure_ender_dragon_125(void);
 static void passive_dragon_tick_living_125(PassiveMob *m);
@@ -1015,6 +1016,7 @@ static void passive_mobs_reset(void) {
     g_prof_spawn_y_cache_hits = g_prof_spawn_y_cache_misses = 0;
     g_passive_spawn_probe_budget = -1;
     g_player_riding_passive_mob = -1;
+    passive_spawner_discovery_reset_125();
 }
 
 static PassiveMob *passive_mob_alloc(void) {
@@ -5009,6 +5011,16 @@ static void passive_mobs_ensure_ender_dragon_125(void) {
 
 
 #define PEX_MOB_SPAWNER_CACHE_MAX 128
+#define PEX_MOB_SPAWNER_DISCOVERY_RADIUS 16
+#define PEX_MOB_SPAWNER_DISCOVERY_SIDE (PEX_MOB_SPAWNER_DISCOVERY_RADIUS * 2 + 1)
+#define PEX_MOB_SPAWNER_DISCOVERY_CELLS (PEX_MOB_SPAWNER_DISCOVERY_SIDE * PEX_MOB_SPAWNER_DISCOVERY_SIDE * PEX_MOB_SPAWNER_DISCOVERY_SIDE)
+/* Discovery is only a migration bridge for chunks whose TileEntityMobSpawner
+   data was not imported into gameplay state.  Java ticks loaded tile entities
+   directly; it never scans a 33^3 volume every world tick.  Keep the fallback
+   bounded so generated spawners are found without stalling the simulation. */
+#define PEX_MOB_SPAWNER_DISCOVERY_PROBES_PER_TICK 512
+#define PEX_MOB_SPAWNER_RESCAN_TICKS 200
+#define PEX_MOB_SPAWNER_RESCAN_MOVE 8
 
 typedef struct PexMobSpawnerRuntime {
     int active;
@@ -5023,6 +5035,22 @@ typedef struct PexMobSpawnerRuntime {
 } PexMobSpawnerRuntime;
 
 static PexMobSpawnerRuntime g_passive_spawners[PEX_MOB_SPAWNER_CACHE_MAX];
+
+typedef struct PexMobSpawnerDiscovery125 {
+    int active;
+    int center_x, center_y, center_z;
+    int index;
+    int last_complete_x, last_complete_y, last_complete_z;
+    int last_complete_tick;
+    int has_completed;
+} PexMobSpawnerDiscovery125;
+
+static PexMobSpawnerDiscovery125 g_passive_spawner_discovery_125;
+
+static void passive_spawner_discovery_reset_125(void) {
+    memset(&g_passive_spawner_discovery_125, 0, sizeof(g_passive_spawner_discovery_125));
+    g_passive_spawner_discovery_125.last_complete_tick = -PEX_MOB_SPAWNER_RESCAN_TICKS;
+}
 
 static void passive_mob_spawner_remove_tile_125(int x, int y, int z) {
     for (int i = 0; i < PEX_MOB_SPAWNER_CACHE_MAX; ++i) {
@@ -5095,6 +5123,10 @@ static PexMobSpawnerRuntime *passive_spawner_runtime_125(int x, int y, int z) {
     sp->last_seen_tick = g_ingame_ticks;
     passive_spawner_apply_java_defaults_125(sp);
     return sp;
+}
+
+static void passive_mob_spawner_note_tile_125(int x, int y, int z) {
+    (void)passive_spawner_runtime_125(x, y, z);
 }
 
 static int passive_mob_spawner_set_entity_type_125(int x, int y, int z, int type) {
@@ -5183,24 +5215,87 @@ static void passive_spawner_tick_one_125(PexMobSpawnerRuntime *sp) {
     }
 }
 
+static void passive_spawner_discovery_begin_125(int px, int py, int pz) {
+    PexMobSpawnerDiscovery125 *d = &g_passive_spawner_discovery_125;
+    d->active = 1;
+    d->center_x = px;
+    d->center_y = py;
+    d->center_z = pz;
+    d->index = 0;
+}
+
+static int passive_spawner_discovery_should_begin_125(int px, int py, int pz) {
+    PexMobSpawnerDiscovery125 *d = &g_passive_spawner_discovery_125;
+    if (d->active) return 0;
+    if (!d->has_completed) return 1;
+    if (abs(px - d->last_complete_x) >= PEX_MOB_SPAWNER_RESCAN_MOVE ||
+        abs(py - d->last_complete_y) >= PEX_MOB_SPAWNER_RESCAN_MOVE ||
+        abs(pz - d->last_complete_z) >= PEX_MOB_SPAWNER_RESCAN_MOVE) return 1;
+    return g_ingame_ticks - d->last_complete_tick >= PEX_MOB_SPAWNER_RESCAN_TICKS;
+}
+
+static void passive_spawner_discover_incremental_125(int px, int py, int pz) {
+    PexMobSpawnerDiscovery125 *d = &g_passive_spawner_discovery_125;
+    if (passive_spawner_discovery_should_begin_125(px, py, pz)) passive_spawner_discovery_begin_125(px, py, pz);
+    if (!d->active) return;
+
+    int probes = 0;
+    while (d->index < PEX_MOB_SPAWNER_DISCOVERY_CELLS && probes < PEX_MOB_SPAWNER_DISCOVERY_PROBES_PER_TICK) {
+        int index = d->index++;
+        int ox = (index % PEX_MOB_SPAWNER_DISCOVERY_SIDE) - PEX_MOB_SPAWNER_DISCOVERY_RADIUS;
+        index /= PEX_MOB_SPAWNER_DISCOVERY_SIDE;
+        int oz = (index % PEX_MOB_SPAWNER_DISCOVERY_SIDE) - PEX_MOB_SPAWNER_DISCOVERY_RADIUS;
+        int oy = (index / PEX_MOB_SPAWNER_DISCOVERY_SIDE) - PEX_MOB_SPAWNER_DISCOVERY_RADIUS;
+        int x = d->center_x + ox;
+        int y = d->center_y + oy;
+        int z = d->center_z + oz;
+        if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) continue;
+        if (ox * ox + oy * oy + oz * oz > PEX_MOB_SPAWNER_DISCOVERY_RADIUS * PEX_MOB_SPAWNER_DISCOVERY_RADIUS) continue;
+        ++probes;
+        if (flat_get_block(x, y, z) == BLOCK_MOB_SPAWNER) (void)passive_spawner_runtime_125(x, y, z);
+    }
+    g_prof_mob_spawner_scan_blocks_last += probes;
+
+    if (d->index >= PEX_MOB_SPAWNER_DISCOVERY_CELLS) {
+        d->active = 0;
+        d->has_completed = 1;
+        d->last_complete_x = d->center_x;
+        d->last_complete_y = d->center_y;
+        d->last_complete_z = d->center_z;
+        d->last_complete_tick = g_ingame_ticks;
+    }
+}
+
 static void passive_mobs_tick_spawners_125(void) {
     if (g_mp_connected || g_player_dead) return;
+    double start = now_seconds();
     int px = (int)floorf(g_player_x);
     int py = (int)floorf(g_player_y - 1.62f);
     int pz = (int)floorf(g_player_z);
-    for (int y = py - 16; y <= py + 16; ++y) {
-        if (y < FLAT_WORLD_Y_MIN || y > FLAT_WORLD_Y_MAX) continue;
-        for (int z = pz - 16; z <= pz + 16; ++z) {
-            for (int x = px - 16; x <= px + 16; ++x) {
-                float dx = ((float)x + 0.5f) - g_player_x;
-                float dy = ((float)y + 0.5f) - (g_player_y - 1.62f);
-                float dz = ((float)z + 0.5f) - g_player_z;
-                if (dx*dx + dy*dy + dz*dz > 16.0f * 16.0f) continue;
-                if (flat_get_block(x, y, z) != BLOCK_MOB_SPAWNER) continue;
-                passive_spawner_tick_one_125(passive_spawner_runtime_125(x, y, z));
-            }
-        }
+
+    /* Loaded TileEntityMobSpawner instances tick directly from the runtime
+       cache.  This is O(number of spawners), not O(blocks around player). */
+    int active = 0;
+    for (int i = 0; i < PEX_MOB_SPAWNER_CACHE_MAX; ++i) {
+        PexMobSpawnerRuntime *sp = &g_passive_spawners[i];
+        if (!sp->active) continue;
+        ++active;
+        passive_spawner_apply_java_defaults_125(sp);
+        float dx = ((float)sp->x + 0.5f) - g_player_x;
+        float dy = ((float)sp->y + 0.5f) - (g_player_y - 1.62f);
+        float dz = ((float)sp->z + 0.5f) - g_player_z;
+        float req = (float)sp->required_range;
+        if (dx * dx + dy * dy + dz * dz > req * req) continue;
+        passive_spawner_tick_one_125(sp);
     }
+    g_prof_mob_spawner_active_last = active;
+
+    /* Old/generated chunks that did not import their tile-entity tag are
+       discovered incrementally.  At most 512 actual block probes occur in a
+       tick, and a completed nearby volume is not rescanned for ten seconds
+       unless the player moves at least eight blocks. */
+    passive_spawner_discover_incremental_125(px, py, pz);
+    g_prof_mob_spawner_ms_last = (now_seconds() - start) * 1000.0;
 }
 
 
@@ -7396,6 +7491,9 @@ static void update_passive_mobs(void) {
     g_prof_mob_spawn_calls_last = 0;
     g_prof_mob_spawn_columns_last = 0;
     g_prof_mob_spawn_ms_last = 0.0;
+    g_prof_mob_spawner_ms_last = 0.0;
+    g_prof_mob_spawner_scan_blocks_last = 0;
+    g_prof_mob_spawner_active_last = 0;
     g_prof_mob_living_ms_last = 0.0;
     g_prof_mob_living_ticked_last = 0;
     g_prof_mob_living_deferred_last = 0;

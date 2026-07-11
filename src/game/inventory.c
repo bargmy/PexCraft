@@ -78,6 +78,7 @@ static int passive_dragon_segment_part_hit_125(const PassiveMob *dragon,
                                                 float *out_t, int *out_part);
 static int g_passive_projectile_dragon_part_125 = -1;
 static void passive_mobs_on_block_broken_125(int block_id, int meta, int x, int y, int z);
+static void passive_mob_spawner_note_tile_125(int x, int y, int z);
 static int spawn_flat_vehicle(int type, float x, float y, float z, float yaw);
 
 typedef struct CreativeItemDef { int id; int damage; } CreativeItemDef;
@@ -9088,6 +9089,7 @@ static void ingame_right_click_impl(void) {
 
     if (!g_mp_connected) flat_begin_persistent_edit();
     flat_set_block(px, py, pz, place_id);
+    if (place_id == BLOCK_MOB_SPAWNER) passive_mob_spawner_note_tile_125(px, py, pz);
     if (place_id == BLOCK_CHEST) chest_on_block_placed(px, py, pz);
     if (place_id == BLOCK_FURNACE || place_id == BLOCK_FURNACE_LIT) {
         furnace_on_block_placed(px, py, pz);
