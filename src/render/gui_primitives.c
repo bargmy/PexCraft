@@ -112,83 +112,43 @@ static void draw_gradient(int x1, int y1, int x2, int y2, int c1, int c2) {
     glColor4f(1,1,1,1);
 }
 
-static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
-    if (!tex || !tex->id || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
-    float u0 = ((float)sx + 0.5f) / (float)tex->w;
-    float v0 = ((float)sy + 0.5f) / (float)tex->h;
-    float u1 = ((float)(sx + w) - 0.5f) / (float)tex->w;
-    float v1 = ((float)(sy + h) - 0.5f) / (float)tex->h;
-    if (u1 < u0) { float mid = ((float)sx + (float)(sx + w)) * 0.5f / (float)tex->w; u0 = u1 = mid; }
-    if (v1 < v0) { float mid = ((float)sy + (float)(sy + h)) * 0.5f / (float)tex->h; v0 = v1 = mid; }
-    glBindTexture(GL_TEXTURE_2D, tex->id);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.1f);
-    set_color_int(color);
-    if (g_loggy_enabled) g_loggy_gui_quads++;
-    glBegin(GL_QUADS);
-    glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + h), 0.0f);
-    glTexCoord2f(u1, v1); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
-    glTexCoord2f(u1, v0); glVertex3f((float)(x + w), (float)y, 0.0f);
-    glTexCoord2f(u0, v0); glVertex3f((float)x, (float)y, 0.0f);
-    glEnd();
-    glColor4f(1,1,1,1);
+/* Minecraft 1.2.5 GUI sheets use a fixed 256x256 logical coordinate
+   space.  Resource packs may replace them with 2x/4x/8x PNGs, but source
+   rectangles are still expressed in the original 256-unit atlas.  Treating
+   those source coordinates as physical pixels sampled only the upper-left
+   portion of HD packs and made buttons, containers, item icons and achievement
+   panels look stretched or completely unrelated to the requested tile. */
+static void pex_gui_atlas_uv_256(Texture *tex, int sx, int sy, int sw, int sh,
+                                 float *u0, float *v0, float *u1, float *v1) {
+    float scale_x = (float)tex->w / 256.0f;
+    float scale_y = (float)tex->h / 256.0f;
+    float px0 = (float)sx * scale_x;
+    float py0 = (float)sy * scale_y;
+    float px1 = (float)(sx + sw) * scale_x;
+    float py1 = (float)(sy + sh) * scale_y;
+
+    /* Inset by half of one physical texel, not half of one logical GUI pixel.
+       This keeps nearest-filtered atlas cells from borrowing their neighbour
+       while retaining every detail pixel in an HD resource pack. */
+    float ax0 = px0 + 0.5f;
+    float ay0 = py0 + 0.5f;
+    float ax1 = px1 - 0.5f;
+    float ay1 = py1 - 0.5f;
+    if (ax1 < ax0) ax0 = ax1 = (px0 + px1) * 0.5f;
+    if (ay1 < ay0) ay0 = ay1 = (py0 + py1) * 0.5f;
+
+    *u0 = ax0 / (float)tex->w;
+    *v0 = ay0 / (float)tex->h;
+    *u1 = ax1 / (float)tex->w;
+    *v1 = ay1 / (float)tex->h;
 }
 
-
-static void draw_textured_rect_256(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
-    if (!tex || !tex->id || w <= 0 || h <= 0) return;
-    /* Java Gui.drawTexturedModalRect uses a fixed 1/256 atlas coordinate scale.
-       Do not divide by the uploaded texture's pixel size here: HD/converted GUI
-       sheets keep the same 256x256 logical coordinate space, and using the
-       physical size samples the wrong heart/hunger/XP pixels. */
-    const float us = 1.0f / 256.0f;
-    const float vs = 1.0f / 256.0f;
-    glBindTexture(GL_TEXTURE_2D, tex->id);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.1f);
-    set_color_int(color);
-    if (g_loggy_enabled) g_loggy_gui_quads++;
-    glBegin(GL_QUADS);
-    glTexCoord2f((float)sx * us, (float)(sy + h) * vs); glVertex3f((float)x, (float)(y + h), 0.0f);
-    glTexCoord2f((float)(sx + w) * us, (float)(sy + h) * vs); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
-    glTexCoord2f((float)(sx + w) * us, (float)sy * vs); glVertex3f((float)(x + w), (float)y, 0.0f);
-    glTexCoord2f((float)sx * us, (float)sy * vs); glVertex3f((float)x, (float)y, 0.0f);
-    glEnd();
-    glColor4f(1,1,1,1);
-}
-
-static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy, int w, int h, int color) {
-    if (!tex || !tex->id || tex->w <= 0 || tex->h <= 0 || w <= 0 || h <= 0) return;
-    float us = 1.0f / (float)tex->w;
-    float vs = 1.0f / (float)tex->h;
-    glBindTexture(GL_TEXTURE_2D, tex->id);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.1f);
-    set_color_int(color);
-    if (g_loggy_enabled) g_loggy_gui_quads++;
-    glBegin(GL_QUADS);
-    glTexCoord2f((float)(sx + 0) * us, (float)(sy + h) * vs); glVertex3f((float)(x + 0), (float)(y + h), 0.0f);
-    glTexCoord2f((float)(sx + w) * us, (float)(sy + h) * vs); glVertex3f((float)(x + w), (float)(y + h), 0.0f);
-    glTexCoord2f((float)(sx + w) * us, (float)(sy + 0) * vs); glVertex3f((float)(x + w), (float)(y + 0), 0.0f);
-    glTexCoord2f((float)(sx + 0) * us, (float)(sy + 0) * vs); glVertex3f((float)(x + 0), (float)(y + 0), 0.0f);
-    glEnd();
-    glColor4f(1,1,1,1);
-}
-
-static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, int dh, int sx, int sy, int sw, int sh, int color) {
-    if (!tex || tex->id == 0 || tex->w <= 0 || tex->h <= 0 || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
-    float u0 = ((float)sx + 0.5f) / (float)tex->w;
-    float v0 = ((float)sy + 0.5f) / (float)tex->h;
-    float u1 = ((float)(sx + sw) - 0.5f) / (float)tex->w;
-    float v1 = ((float)(sy + sh) - 0.5f) / (float)tex->h;
-    if (u1 < u0) { float mid = ((float)sx + (float)(sx + sw)) * 0.5f / (float)tex->w; u0 = u1 = mid; }
-    if (v1 < v0) { float mid = ((float)sy + (float)(sy + sh)) * 0.5f / (float)tex->h; v0 = v1 = mid; }
+static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, int dh,
+                                           int sx, int sy, int sw, int sh, int color) {
+    float u0, v0, u1, v1;
+    if (!tex || tex->id == 0 || tex->w <= 0 || tex->h <= 0 ||
+        dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+    pex_gui_atlas_uv_256(tex, sx, sy, sw, sh, &u0, &v0, &u1, &v1);
     glBindTexture(GL_TEXTURE_2D, tex->id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -203,6 +163,21 @@ static void draw_textured_rect_part_scaled(Texture *tex, int x, int y, int dw, i
     glTexCoord2f(u0, v0); glVertex3f((float)x, (float)y, 0.0f);
     glEnd();
     glColor4f(1,1,1,1);
+}
+
+static void draw_textured_rect_tex(Texture *tex, int x, int y, int sx, int sy,
+                                   int w, int h, int color) {
+    draw_textured_rect_part_scaled(tex, x, y, w, h, sx, sy, w, h, color);
+}
+
+static void draw_textured_rect_256(Texture *tex, int x, int y, int sx, int sy,
+                                   int w, int h, int color) {
+    draw_textured_rect_part_scaled(tex, x, y, w, h, sx, sy, w, h, color);
+}
+
+static void draw_textured_modal_rect(Texture *tex, int x, int y, int sx, int sy,
+                                     int w, int h, int color) {
+    draw_textured_rect_part_scaled(tex, x, y, w, h, sx, sy, w, h, color);
 }
 
 static void draw_texture_scaled_full(Texture *tex, int x, int y, int w, int h, int color) {
@@ -1086,23 +1061,46 @@ static int button_hover(Button *b, int mx, int my) {
     return b->visible && mx >= b->x && my >= b->y && mx < b->x + b->w && my < b->y + b->h;
 }
 
-static void draw_button_bg_9patch(Button *b, int state) {
+static void draw_button_row_slice(Button *b, int src_y, int dst_y, int src_h, int dst_h) {
+    int left_w = b->w / 2;
+    int right_w = b->w - left_w;
+    draw_textured_rect_part_scaled(&tex_gui, b->x, dst_y,
+                                   left_w, dst_h, 0, src_y, left_w, src_h, 0xFFFFFF);
+    draw_textured_rect_part_scaled(&tex_gui, b->x + left_w, dst_y,
+                                   right_w, dst_h, 200 - right_w, src_y,
+                                   right_w, src_h, 0xFFFFFF);
+}
+
+static void draw_button_bg_minecraft(Button *b, int state) {
     int src_y = 46 + state * 20;
-    int half = b->w / 2;
     if (b->h == 20) {
-        draw_textured_modal_rect(&tex_gui, b->x, b->y, 0, src_y, half, 20, 0xFFFFFF);
-        draw_textured_modal_rect(&tex_gui, b->x + half, b->y, 200 - half, src_y, b->w - half, 20, 0xFFFFFF);
+        /* Exact GuiButton draw: two unscaled halves from gui.png. */
+        draw_button_row_slice(b, src_y, b->y, 20, 20);
         return;
     }
-    /* Minecraft's gui.png button is only 20 px high.  Taller asset buttons
-       must stretch the middle strip, otherwise sampling beyond those 20 px
-       exposes unrelated gui.png tiles. */
-    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y, half, 5, 0, src_y, half, 5, 0xFFFFFF);
-    draw_textured_rect_part_scaled(&tex_gui, b->x + half, b->y, b->w - half, 5, 200 - (b->w - half), src_y, b->w - half, 5, 0xFFFFFF);
-    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y + 5, half, b->h - 10, 0, src_y + 9, half, 1, 0xFFFFFF);
-    draw_textured_rect_part_scaled(&tex_gui, b->x + half, b->y + 5, b->w - half, b->h - 10, 200 - (b->w - half), src_y + 9, b->w - half, 1, 0xFFFFFF);
-    draw_textured_rect_part_scaled(&tex_gui, b->x, b->y + b->h - 5, half, 5, 0, src_y + 15, half, 5, 0xFFFFFF);
-    draw_textured_rect_part_scaled(&tex_gui, b->x + half, b->y + b->h - 5, b->w - half, 5, 200 - (b->w - half), src_y + 15, b->w - half, 5, 0xFFFFFF);
+
+    if (b->h < 20) {
+        /* Short custom controls crop the centre of the vanilla button instead
+           of squeezing all twenty source rows into a smaller rectangle. */
+        int crop = (20 - b->h) / 2;
+        draw_button_row_slice(b, src_y + crop, b->y, b->h, b->h);
+        return;
+    }
+
+    /* gui.png contains a 200x20 button, not a scalable vector panel.  Preserve
+       its top and bottom pixels exactly and repeat the two centre scanlines for
+       custom tall controls.  No part of the resource-pack texture is blurred
+       or continuously stretched. */
+    draw_button_row_slice(b, src_y, b->y, 10, 10);
+    int dst_y = b->y + 10;
+    int remaining = b->h - 20;
+    while (remaining > 0) {
+        int strip = remaining > 2 ? 2 : remaining;
+        draw_button_row_slice(b, src_y + 9, dst_y, strip, strip);
+        dst_y += strip;
+        remaining -= strip;
+    }
+    draw_button_row_slice(b, src_y + 10, b->y + b->h - 10, 10, 10);
 }
 
 static void draw_button(Button *b) {
@@ -1114,7 +1112,7 @@ static void draw_button(Button *b) {
     if (!b->enabled) state = 0;
     else if (hover) state = 2;
     if (b->kind == BUTTON_SLIDER) state = 0;
-    draw_button_bg_9patch(b, state);
+    draw_button_bg_minecraft(b, state);
     if (b->kind == BUTTON_SLIDER) {
         int knob = b->x + (int)(b->slider_value * (float)(b->w - 8));
         draw_textured_modal_rect(&tex_gui, knob, b->y, 0, 66, 4, 20, 0xFFFFFF);

@@ -37,6 +37,31 @@ static int pex_achievement_java_random_next_int(PexAchievementJavaRandom *r, int
     return (int)val;
 }
 
+
+static void pex_draw_achievement_terrain_tile(int tile, int x, int y, int tint) {
+    float u0, v0, u1, v1;
+    if (!tex_terrain.id) return;
+    /* terrain.png can be HD and can also be expanded into StivuFine's CTM
+       mega-atlas.  Use the terrain atlas resolver rather than the generic
+       256x256 GUI-sheet mapper so the achievement background always samples
+       the real base-pack block tile. */
+    terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
+    set_color_int(tint);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + 16), 0.0f);
+    glTexCoord2f(u1, v1); glVertex3f((float)(x + 16), (float)(y + 16), 0.0f);
+    glTexCoord2f(u1, v0); glVertex3f((float)(x + 16), (float)y, 0.0f);
+    glTexCoord2f(u0, v0); glVertex3f((float)x, (float)y, 0.0f);
+    glEnd();
+    glColor4f(1,1,1,1);
+}
+
 static void pex_draw_achievement_terrain(int view_x, int view_y) {
     int map_x = g_pex_achievement_map_x;
     int map_y = g_pex_achievement_map_y;
@@ -68,10 +93,10 @@ static void pex_draw_achievement_terrain(int view_x, int view_y) {
                 else if (depth > 0) block_id = BLOCK_DIRT;
             } else block_id = BLOCK_BEDROCK;
             int tile = block_item_tile_for_id(block_id);
-            draw_textured_rect_tex(&tex_terrain,
-                                   view_x + col * 16 - off_x,
-                                   view_y + row * 16 - off_y,
-                                   (tile & 15) * 16, (tile >> 4) * 16, 16, 16, tint);
+            pex_draw_achievement_terrain_tile(tile,
+                                              view_x + col * 16 - off_x,
+                                              view_y + row * 16 - off_y,
+                                              tint);
         }
     }
 }

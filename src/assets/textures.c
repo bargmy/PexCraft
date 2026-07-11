@@ -56,6 +56,23 @@ static int stivufine_texture_is_font(const Texture *t) {
     return 0;
 }
 
+
+/* UI atlases must remain point-filtered and mipmap-free.  A high-resolution
+   resource-pack GUI is already downsampled deliberately by the fixed logical
+   256x256 atlas mapping in gui_primitives.c.  Letting the general texture
+   mipmap path process it blends neighbouring button states, slots and icons,
+   producing the distinctly non-Minecraft-looking soft/stretchy UI. */
+static int stivufine_texture_is_gui(const Texture *t) {
+    if (!t) return 0;
+    return t == &tex_bg || t == &tex_gui || t == &tex_icons ||
+           t == &tex_inventory || t == &tex_allitems ||
+           t == &tex_workbench || t == &tex_furnace_gui ||
+           t == &tex_chest_gui || t == &tex_items ||
+           t == &tex_achievement || t == &tex_stat_slot ||
+           t == &tex_title_logo || t == &tex_pack ||
+           t == &tex_default_pack_icon || t == &tex_unknown_pack;
+}
+
 static void set_texture_filter_wrap(Texture *t, int linear, int repeat) {
     if (!t || !t->id) return;
     glBindTexture(GL_TEXTURE_2D, t->id);
@@ -71,7 +88,7 @@ static int stivufine_texture_mipmap_level_for(const Texture *t) {
     (void)t;
     return 0;
 #else
-    if (!t || t == &tex_items || stivufine_mipmaps_suppressed || stivufine_texture_is_font(t)) return 0;
+    if (!t || stivufine_mipmaps_suppressed || stivufine_texture_is_font(t) || stivufine_texture_is_gui(t)) return 0;
 #if !defined(PEX_PLATFORM_SDL2)
     if (pex_using_gpu_backend()) return 0;
 #endif
