@@ -935,7 +935,11 @@ static void draw_multiplayer(void) {
             int w = text_width(e->player_count);
             draw_text(e->player_count, left + 215 - w, y + 12, 8421504);
         }
-        draw_text(e->host, left + 2, y + 23, 3158064);
+        char server_line[160];
+        if (e->server_kind == 1) snprintf(server_line, sizeof(server_line), "%s  [Java %s]", e->host, e->version[0] ? e->version : "1.8.8");
+        else if (e->server_kind == 2) snprintf(server_line, sizeof(server_line), "%s  [Bedrock %s]", e->host, e->version[0] ? e->version : "0.15.x");
+        else snprintf(server_line, sizeof(server_line), "%s", e->host);
+        draw_text(server_line, left + 2, y + 23, 3158064);
         int bars = 5;
         const char *tip = "Polling..";
         if (e->polled && !e->polling) {

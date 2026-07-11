@@ -48,6 +48,8 @@ static int pex_screen_is_world_loading(ScreenId s) {
 static void set_screen(ScreenId s) {
     ScreenId old_screen = g_screen;
     if (old_screen != s) pex_logf("screen change %d -> %d", (int)old_screen, (int)s);
+    if (g_mp_connected && (old_screen == SCREEN_WORKBENCH || old_screen == SCREEN_FURNACE || old_screen == SCREEN_CHEST) && old_screen != s)
+        pex_net_send_container_close();
     if (old_screen == SCREEN_FURNACE && s != SCREEN_FURNACE) furnace_close_open_inventory();
     if (old_screen == SCREEN_CHEST && s != SCREEN_CHEST) chest_close_open_inventory();
     g_screen = s;
@@ -2404,7 +2406,7 @@ static void handle_char(WPARAM ch) {
         char *field = pex_mp_server_edit_field_get() == 1 ? g_mp_server_edit_name : g_mp_server_edit_address;
         size_t cap = pex_mp_server_edit_field_get() == 1 ? sizeof(g_mp_server_edit_name) : sizeof(g_mp_server_edit_address);
         const char *allowed_name = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-        const char *allowed_server = ".-_:0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        const char *allowed_server = ".-_:[]0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
         const char *allowed = pex_mp_server_edit_field_get() == 1 ? allowed_name : allowed_server;
         if (strchr(allowed, (char)ch) && strlen(field) + 1 < cap) {
             size_t len = strlen(field);

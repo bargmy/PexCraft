@@ -23,7 +23,8 @@ static int g_mp_connect_thread_port = PEX_NET_DEFAULT_PORT;
 
 typedef enum PexMpJoinBackend {
     PEX_MP_JOIN_BACKEND_PXNET = 0,
-    PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 = 1
+    PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 = 1,
+    PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE = 2
 } PexMpJoinBackend;
 
 static PexMpJoinBackend g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
@@ -70,6 +71,7 @@ typedef struct PexMpServerEntry {
     int polled;
     int polling;
     int valid_mcpe;
+    int server_kind; /* 0 unknown, 1 Java, 2 Bedrock */
     HANDLE thread;
 } PexMpServerEntry;
 static PexMpServerEntry g_mp_server_entries[PEX_MP_SERVER_LIST_MAX];
@@ -459,7 +461,7 @@ static int pex_net_parse_host_port_ex(const char *input, char *host, size_t host
     if (!host || host_cap == 0 || !port) return 0;
     const char *src = input && input[0] ? input : "127.0.0.1";
     while (*src == ' ' || *src == '\t') src++;
-    char tmp[128];
+    char tmp[256];
     snprintf(tmp, sizeof(tmp), "%s", src);
     char *end = tmp + strlen(tmp);
     while (end > tmp && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) *--end = 0;
@@ -467,13 +469,28 @@ static int pex_net_parse_host_port_ex(const char *input, char *host, size_t host
 
     *port = PEX_NET_DEFAULT_PORT;
     if (out_port_was_given) *out_port_was_given = 0;
-    char *colon = strrchr(tmp, ':');
-    if (colon && colon[1]) {
-        int p = atoi(colon + 1);
-        if (p > 0 && p < 65536) {
-            *port = p;
-            *colon = 0;
-            if (out_port_was_given) *out_port_was_given = 1;
+    if (tmp[0] == '[') {
+        char *close = strchr(tmp, ']');
+        if (close) {
+            *close = 0;
+            snprintf(host, host_cap, "%s", tmp + 1);
+            if (close[1] == ':' && close[2]) {
+                int p = atoi(close + 2);
+                if (p > 0 && p < 65536) { *port = p; if (out_port_was_given) *out_port_was_given = 1; }
+            }
+            return 1;
+        }
+    }
+    int colon_count = 0;
+    for (char *q = tmp; *q; q++) if (*q == ':') colon_count++;
+    if (colon_count == 1) {
+        char *colon = strrchr(tmp, ':');
+        if (colon && colon[1]) {
+            int p = atoi(colon + 1);
+            if (p > 0 && p < 65536) {
+                *port = p; *colon = 0;
+                if (out_port_was_given) *out_port_was_given = 1;
+            }
         }
     }
     snprintf(host, host_cap, "%s", tmp[0] ? tmp : "127.0.0.1");
@@ -522,7 +539,7 @@ static int pex_mcpe_motd_is_genisys_0154(const char *motd, int *out_protocol, ch
     if (!pex_mcpe_parse_motd_protocol_81(motd, &protocol, version, sizeof(version))) return 0;
     if (out_protocol) *out_protocol = protocol;
     if (out_version && out_version_cap) snprintf(out_version, out_version_cap, "%s", version);
-    return protocol == 82 || strcmp(version, "0.15.4") == 0;
+    return protocol == 81 || protocol == 82 || strncmp(version, "0.15", 4) == 0;
 }
 
 static int pex_mcpe_probe_unconnected_motd(const char *host, int port, char *out_motd, size_t out_motd_cap) {
@@ -539,7 +556,7 @@ static int pex_mcpe_probe_unconnected_motd(const char *host, int port, char *out
     struct addrinfo hints;
     struct addrinfo *result = NULL;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
 
@@ -790,36 +807,53 @@ static DWORD WINAPI pex_mp_server_ping_worker(LPVOID param) {
     if (index < 0 || index >= PEX_MP_SERVER_LIST_MAX) return 0;
     PexMpServerEntry *e = &g_mp_server_entries[index];
     char host[96];
-    int port = 19132;
+    int parsed_port = PEX_NET_DEFAULT_PORT;
     int port_was_given = 0;
-    pex_net_parse_host_port_ex(e->host, host, sizeof(host), &port, &port_was_given);
-    if (!port_was_given) port = 19132;
-    char motd[256];
-    motd[0] = 0;
-    double start = now_seconds();
+    pex_net_parse_host_port_ex(e->host, host, sizeof(host), &parsed_port, &port_was_given);
     if (!g_mp_winsock_started) {
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) g_mp_winsock_started = 1;
     }
-    if (pex_mcpe_probe_unconnected_motd(host, port, motd, sizeof(motd))) {
-        double end = now_seconds();
-        PexMcpeMotdInfo info;
-        memset(&info, 0, sizeof(info));
-        pex_mcpe_protocol_81_parse_motd(motd, &info);
-        e->ping_ms = (int)((end - start) * 1000.0);
-        if (e->ping_ms < 0) e->ping_ms = 0;
-        e->valid_mcpe = info.is_mcpe;
-        e->protocol = info.protocol_version;
-        snprintf(e->version, sizeof(e->version), "%s", info.game_version[0] ? info.game_version : "?");
-        snprintf(e->motd, sizeof(e->motd), "%s", info.server_name[0] ? info.server_name : motd);
-        pex_mp_server_parse_player_count(motd, e->player_count, sizeof(e->player_count));
+
+    e->server_kind = 0;
+    e->valid_mcpe = 0;
+    PexJava47Status java_status;
+    memset(&java_status, 0, sizeof(java_status));
+    int java_port = port_was_given ? parsed_port : PEX_JAVA47_DEFAULT_PORT;
+    if (pex_java47_probe_status(host, java_port, 1200, &java_status)) {
+        e->server_kind = 1;
+        e->ping_ms = java_status.ping_ms;
+        e->protocol = java_status.protocol;
+        snprintf(e->version, sizeof(e->version), "%s", java_status.version[0] ? java_status.version : "Java");
+        snprintf(e->motd, sizeof(e->motd), "%s", java_status.motd[0] ? java_status.motd : "Java server");
+        snprintf(e->player_count, sizeof(e->player_count), "%d/%d", java_status.online_players, java_status.max_players);
     } else {
-        e->ping_ms = -1;
-        e->valid_mcpe = 0;
-        e->protocol = 0;
-        e->version[0] = 0;
-        e->player_count[0] = 0;
-        snprintf(e->motd, sizeof(e->motd), "Can't reach server");
+        int bedrock_port = port_was_given ? parsed_port : 19132;
+        char motd[256]; motd[0] = 0;
+        double start_time = now_seconds();
+        if (pex_mcpe_probe_unconnected_motd(host, bedrock_port, motd, sizeof(motd))) {
+            PexMcpeMotdInfo info; memset(&info, 0, sizeof(info));
+            pex_mcpe_protocol_81_parse_motd(motd, &info);
+            e->ping_ms = (int)((now_seconds() - start_time) * 1000.0);
+            if (e->ping_ms < 0) e->ping_ms = 0;
+            e->protocol = info.protocol_version;
+            snprintf(e->version, sizeof(e->version), "%s", info.game_version[0] ? info.game_version : "Bedrock");
+            snprintf(e->motd, sizeof(e->motd), "%s", info.server_name[0] ? info.server_name : motd);
+            pex_mp_server_parse_player_count(motd, e->player_count, sizeof(e->player_count));
+            if (pex_mcpe_motd_is_genisys_0154(motd, NULL, NULL, 0)) {
+                e->server_kind = 2;
+                e->valid_mcpe = 1;
+            } else {
+                e->server_kind = 0;
+                e->valid_mcpe = 0;
+                char unsupported[128];
+                snprintf(unsupported, sizeof(unsupported), "Unsupported Bedrock %s", e->version[0] ? e->version : "server");
+                snprintf(e->motd, sizeof(e->motd), "%s", unsupported);
+            }
+        } else {
+            e->ping_ms = -1; e->protocol = 0; e->version[0] = 0; e->player_count[0] = 0;
+            snprintf(e->motd, sizeof(e->motd), "Can't reach server");
+        }
     }
     e->polled = 1;
     e->polling = 0;
@@ -1509,7 +1543,14 @@ static void pex_net_finish_world_download(void) {
     g_mp_connect_progress = 100;
     if (g_screen != SCREEN_INGAME) {
         g_chat_count = 0;
-        if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) hud_add_chat("Connected to PEXCraft server.");
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) hud_add_chat("Connected to Java 1.8.8 server.");
+        else if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) hud_add_chat("Connected to PEXCraft server.");
+        set_screen(SCREEN_INGAME);
+    }
+}
+
+static void pex_net_java_server_closed_window(void) {
+    if (g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) {
         set_screen(SCREEN_INGAME);
     }
 }
@@ -2716,12 +2757,17 @@ static void pex_net_update_smoothing(void) {
         if (p->health > 0) r->death_time = 0.0f;
         r->health = p->health;
         r->flags = p->flags;
-        PexMpBedrockEntityMap *bm = pex_mp_bedrock_entity_by_player_id(p->player_id);
-        if (bm) {
-            r->held_item_id = bm->held_item_id;
-            r->held_item_count = bm->held_item_count;
-            r->held_item_damage = bm->held_item_damage;
-            r->held_slot = bm->held_slot;
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+            pex_java47_get_equipment(p->player_id, &r->held_item_id, &r->held_item_count,
+                                     &r->held_item_damage, &r->held_slot);
+        } else {
+            PexMpBedrockEntityMap *bm = pex_mp_bedrock_entity_by_player_id(p->player_id);
+            if (bm) {
+                r->held_item_id = bm->held_item_id;
+                r->held_item_count = bm->held_item_count;
+                r->held_item_damage = bm->held_item_damage;
+                r->held_slot = bm->held_slot;
+            }
         }
 
         float dx = p->x - r->x;
@@ -2980,6 +3026,7 @@ static int pex_net_is_connecting(void) {
 }
 
 static void pex_net_connect_fail(const char *msg) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE || pex_java47_is_active()) pex_java47_disconnect();
     if (g_mp_bedrock_session_active) {
         pex_mcpe_join_session_disconnect(&g_mp_bedrock_session);
         g_mp_bedrock_session_active = 0;
@@ -3006,6 +3053,28 @@ static void pex_net_connect_fail(const char *msg) {
 
 static void pex_net_connect_tick(void) {
     if (!g_mp_connecting) return;
+
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (!pex_java47_tick()) {
+            char reason[256];
+            snprintf(reason, sizeof(reason), "%s", pex_java47_disconnect_reason());
+            pex_net_connect_fail(reason[0] ? reason : "Java connection failed.");
+            return;
+        }
+        g_mp_connect_progress = pex_java47_progress();
+        snprintf(g_multiplayer_status, sizeof(g_multiplayer_status), "%s", pex_java47_status_text());
+        if (pex_java47_has_join_game()) {
+            g_mp_connected = 1;
+            g_mp_player_id = pex_java47_local_entity_id();
+        }
+        if (pex_java47_world_ready()) {
+            g_mp_connecting = 0;
+            g_mp_connected = 1;
+            g_mp_world_ready = 1;
+            if (g_screen != SCREEN_INGAME) pex_net_finish_world_download();
+        }
+        return;
+    }
 
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_bedrock_session_active) {
@@ -3078,6 +3147,16 @@ static void pex_net_connect_tick(void) {
 static void pex_net_poll(void) {
     if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return;
     if (g_mp_connecting) pex_net_connect_tick();
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (g_mp_connecting) return;
+        if (g_mp_connected && !pex_java47_tick()) {
+            char reason[256];
+            snprintf(reason, sizeof(reason), "%s", pex_java47_disconnect_reason());
+            pex_net_disconnect();
+            open_notice("Disconnected", reason[0] ? reason : "Java connection lost.", "");
+        }
+        return;
+    }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (g_mp_bedrock_session_active) {
             if (!pex_mcpe_join_session_tick(&g_mp_bedrock_session)) {
@@ -3148,9 +3227,9 @@ static void pex_net_poll(void) {
 
 static int pex_net_connect_to_server(const char *server) {
     char host[96];
-    int port = PEX_NET_DEFAULT_PORT;
+    int parsed_port = PEX_NET_DEFAULT_PORT;
     int port_was_given = 0;
-    pex_net_parse_host_port_ex(server, host, sizeof(host), &port, &port_was_given);
+    pex_net_parse_host_port_ex(server, host, sizeof(host), &parsed_port, &port_was_given);
     pex_net_disconnect();
     pex_net_clear_remote_state();
     g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
@@ -3158,7 +3237,7 @@ static int pex_net_connect_to_server(const char *server) {
     g_mp_bedrock_detected_version[0] = 0;
     g_mp_bedrock_detected_motd[0] = 0;
     g_mp_connect_progress = 1;
-    pex_net_set_status("Locating server");
+    pex_net_set_status("Locating Java server");
 
     if (!g_mp_winsock_started) {
         WSADATA wsa;
@@ -3169,20 +3248,58 @@ static int pex_net_connect_to_server(const char *server) {
         g_mp_winsock_started = 1;
     }
 
+    /* Detection order is deliberate: Java status first, then RakNet 0.15.x.
+       An explicit port is tested with both transports; without a port the
+       respective defaults 25565 and 19132 are used. */
     {
-        int mcpe_port = port_was_given ? port : 19132;
-        char motd[256];
-        int protocol = 0;
-        char version[24];
-        motd[0] = 0;
-        version[0] = 0;
-        pex_net_set_status("Locating server");
+        int java_port = port_was_given ? parsed_port : PEX_JAVA47_DEFAULT_PORT;
+        PexJava47Status st;
+        memset(&st, 0, sizeof(st));
+        if (pex_java47_probe_status(host, java_port, 1600, &st)) {
+            if (st.protocol != PEX_JAVA47_PROTOCOL_VERSION) {
+                char msg[160];
+                snprintf(msg, sizeof(msg), "Java server uses protocol %d (%s); this build supports 1.8.8 protocol 47.", st.protocol, st.version[0] ? st.version : "unknown version");
+                pex_net_set_status(msg);
+                return 0;
+            }
+            g_mp_join_backend = PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE;
+            g_mp_socket = INVALID_SOCKET;
+            g_mp_connected = 0;
+            g_mp_connecting = 1;
+            g_mp_world_ready = 0;
+            g_mp_connect_start_time = now_seconds();
+            g_mp_connect_progress = 8;
+            snprintf(g_mp_server_name, sizeof(g_mp_server_name), "%s:%d", host, java_port);
+            memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
+            memset(g_flat_meta, 0, sizeof(g_flat_meta));
+            memset(g_flat_levels, 0, sizeof(g_flat_levels));
+            memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+            memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
+            memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+            flat_center_origin_near(0.0f, 0.0f);
+            if (!pex_java47_begin_join(host, java_port, g_multiplayer_username[0] ? g_multiplayer_username : "Player")) {
+                g_mp_connecting = 0;
+                pex_net_set_status(pex_java47_disconnect_reason());
+                return 0;
+            }
+            return 1;
+        }
+    }
+
+    pex_net_set_status("Locating Bedrock server");
+    {
+        int mcpe_port = port_was_given ? parsed_port : 19132;
+        char motd[256]; int protocol = 0; char version[24];
+        motd[0] = 0; version[0] = 0;
         if (pex_mcpe_probe_unconnected_motd(host, mcpe_port, motd, sizeof(motd)) &&
             pex_mcpe_motd_is_genisys_0154(motd, &protocol, version, sizeof(version))) {
             return pex_mcpe_begin_bedrock_protocol_81_join(host, mcpe_port, protocol, version, motd);
         }
     }
 
+    /* Preserve the project's private PXNET fallback after both Minecraft
+       protocols fail. */
+    int port = port_was_given ? parsed_port : PEX_NET_DEFAULT_PORT;
     if (g_mp_connect_thread) {
         if (InterlockedCompareExchange(&g_mp_connect_thread_done, 0, 0)) {
             CloseHandle(g_mp_connect_thread);
@@ -3251,6 +3368,14 @@ static void pex_mp_bedrock_sync_inventory_slots(void) {
 }
 
 static void pex_net_send_player_state(void) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (!g_mp_connected || !g_mp_world_ready || !pex_java47_is_playing()) return;
+        int sneaking_now = (g_screen == SCREEN_INGAME && key_down_vk(g_opts.keys[5])) ? 1 : 0;
+        pex_java47_send_player_state(g_player_x, g_player_y - 1.62, g_player_z,
+                                     g_player_yaw, g_player_pitch, g_player_on_ground,
+                                     sneaking_now, g_player_sprinting ? 1 : 0, g_selected_hotbar_slot);
+        return;
+    }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
         pex_mp_bedrock_sync_held_item();
@@ -3307,7 +3432,84 @@ static void pex_net_send_player_state(void) {
     }
 }
 
+static int pex_net_send_block_interact(int x, int y, int z, int face) {
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE ||
+        !g_mp_connected || !g_mp_world_ready || !pex_java47_is_playing()) return 0;
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    int item_id = held && !stack_empty(held) ? held->id : 0;
+    int count = held && !stack_empty(held) ? held->count : 0;
+    int damage = held && !stack_empty(held) ? held->damage : 0;
+    pex_java47_send_place(x, y, z, face, item_id, count, damage, 0.5f, 0.5f, 0.5f);
+    return 1;
+}
+
+static int pex_net_send_use_item_air(void) {
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE ||
+        !g_mp_connected || !g_mp_world_ready || !pex_java47_is_playing()) return 0;
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    int item_id = held && !stack_empty(held) ? held->id : 0;
+    int count = held && !stack_empty(held) ? held->count : 0;
+    int damage = held && !stack_empty(held) ? held->damage : 0;
+    pex_java47_send_use_item(item_id, count, damage);
+    return 1;
+}
+
+static void pex_net_send_release_use_item(void) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
+        g_mp_connected && g_mp_world_ready && pex_java47_is_playing())
+        pex_java47_send_release_use_item();
+}
+
+static int pex_net_send_inventory_click(int pex_slot, int button, int mode, const ItemStack *clicked_result) {
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE ||
+        !g_mp_connected || !g_mp_world_ready || !pex_java47_is_playing()) return 0;
+    return pex_java47_send_window_click(pex_slot, button, mode, clicked_result);
+}
+
+static int pex_net_send_creative_slot(int pex_slot, const ItemStack *stack) {
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE ||
+        !g_mp_connected || !g_mp_world_ready || !pex_java47_is_playing()) return 0;
+    return pex_java47_send_creative_slot(pex_slot, stack);
+}
+
+static void pex_net_send_container_close(void) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
+        g_mp_connected && pex_java47_is_playing()) pex_java47_send_close_window();
+}
+
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (!g_mp_connected || !g_mp_world_ready) return;
+        ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+        if (block_id == BLOCK_STONE_BUTTON || block_id == BLOCK_LEVER || block_is_door_id(block_id) ||
+            block_id == BLOCK_STONE_PRESSURE_PLATE || block_id == BLOCK_WOOD_PRESSURE_PLATE) return;
+        if (action == PEX_BLOCK_BREAK) {
+            /* The matching PEX_ACTION_BREAK path sends Java's destroy packet.
+               Avoid emitting the same C07 twice for one local break. */
+            return;
+        } else if (action == PEX_BLOCK_BUCKET_PICKUP) {
+            int held_id = held && !stack_empty(held) ? held->id : 0;
+            int held_count = held && !stack_empty(held) ? held->count : 0;
+            int held_damage = held && !stack_empty(held) ? held->damage : 0;
+            pex_java47_send_place(x, y, z, face, held_id, held_count, held_damage, 0.5f, 0.5f, 0.5f);
+        } else {
+            int tx=x, ty=y, tz=z;
+            /* Most local placement callbacks report the newly occupied cell, so
+               recover the server's clicked block. Hoe use is different: its
+               callback reports the clicked dirt/grass block itself. */
+            if (block_id != BLOCK_FARMLAND) {
+                if (face == 0) ty += 1; else if (face == 1) ty -= 1;
+                else if (face == 2) tz += 1; else if (face == 3) tz -= 1;
+                else if (face == 4) tx += 1; else if (face == 5) tx -= 1;
+            }
+            int held_id = held && !stack_empty(held) ? held->id : 0;
+            int held_count = held && !stack_empty(held) ? held->count : 0;
+            int held_damage = held && !stack_empty(held) ? held->damage : 0;
+            pex_java47_send_place(tx, ty, tz, face, held_id, held_count, held_damage, 0.5f, 0.5f, 0.5f);
+        }
+        (void)block_id;
+        return;
+    }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !g_mp_bedrock_session_active) return;
         ItemStack *held = &g_inventory[g_selected_hotbar_slot];
@@ -3353,6 +3555,22 @@ static void pex_net_send_block_action(int action, int x, int y, int z, int face,
 }
 
 static void net_send_action_progress(int action, int x, int y, int z, int face, int block_id, int progress) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (!g_mp_connected || !g_mp_world_ready) return;
+        if (action == PEX_ACTION_SWING) pex_java47_send_swing();
+        else if (action == PEX_ACTION_ATTACK) { pex_java47_send_swing(); pex_java47_send_attack(x); }
+        else if (action == PEX_ACTION_MINE_HIT) {
+            pex_java47_send_swing();
+            if (progress < 0) pex_java47_send_dig(1, x, y, z, face);
+            else if (progress == 0) pex_java47_send_dig(0, x, y, z, face);
+        } else if (action == PEX_ACTION_BREAK) {
+            pex_java47_send_dig(player_is_creative() ? 0 : 2, x, y, z, face);
+        }
+        /* The server already owns death state. Respawn is sent only when the
+           player activates the death-screen respawn control. */
+        (void)block_id;
+        return;
+    }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         (void)block_id;
         if (g_mp_connected && g_mp_world_ready && g_mp_bedrock_session_active) {
@@ -3504,10 +3722,18 @@ static int pex_net_try_attack_player(void) {
         }
     }
 
-    if (best_id <= 0) return 0;
+    if (best_id <= 0) {
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) return pex_java47_try_attack_mob(block_dist);
+        return 0;
+    }
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     int held_id = stack_empty(held) ? 0 : held->id;
     restart_hand_swing();
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        pex_java47_send_swing();
+        pex_java47_send_attack(best_id);
+        return 1;
+    }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         PexMpBedrockEntityMap *m = pex_mp_bedrock_entity_by_player_id(best_id);
         if (!m || m->eid == 0 || !g_mp_bedrock_session_active) return 1;
@@ -3523,6 +3749,7 @@ static int pex_net_try_attack_player(void) {
 
 static void pex_net_send_drop_item(ItemStack st) {
     if (!g_mp_connected || !g_mp_world_ready || stack_empty(&st)) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) { pex_java47_send_drop(st.count > 1); return; }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (g_mp_bedrock_session_active) pex_mcpe_join_session_send_drop_item(&g_mp_bedrock_session, st.id, st.count, st.damage);
         return;
@@ -3550,7 +3777,8 @@ static int pex_net_pickup_pending(int drop_id) {
 
 static void pex_net_send_pickup_drop(int drop_id) {
     if (!g_mp_connected || !g_mp_world_ready || drop_id <= 0 || pex_net_pickup_pending(drop_id)) return;
-    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 ||
+        g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) return;
     for (int i = 0; i < PEX_NET_MAX_DROPS; i++) {
         if (g_mp_pending_pickups[i] == 0) {
             g_mp_pending_pickups[i] = drop_id;
@@ -3580,6 +3808,7 @@ static void pex_net_fill_open_chest_header(PexNetChestOpen *open) {
 
 static void pex_net_send_craft_request(void) {
     if (!g_mp_connected || !g_mp_world_ready) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) { pex_java47_sync_inventory_from_game(); return; }
     PexNetCraftRequest req;
     memset(&req, 0, sizeof(req));
     if (g_screen == SCREEN_WORKBENCH) {
@@ -3606,6 +3835,7 @@ static void pex_net_send_craft_request(void) {
 
 static void pex_net_send_chest_open(void) {
     if (!g_mp_connected || !g_mp_world_ready || g_screen != SCREEN_CHEST) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) return;
     PexNetChestOpen open;
     pex_net_fill_open_chest_header(&open);
     if (open.chest_count <= 0) return;
@@ -3614,6 +3844,7 @@ static void pex_net_send_chest_open(void) {
 
 static void pex_net_send_chest_update(void) {
     if (!g_mp_connected || !g_mp_world_ready || g_screen != SCREEN_CHEST) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) return;
     PexNetChestOpen open;
     pex_net_fill_open_chest_header(&open);
     if (open.chest_count <= 0) return;
@@ -3634,6 +3865,10 @@ static void pex_net_send_chest_update(void) {
 }
 
 static void pex_net_send_chat(const char *text) {
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (g_mp_connected && g_mp_world_ready && text && text[0]) pex_java47_send_chat(text);
+        return;
+    }
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
         if (!g_mp_connected || !g_mp_world_ready || !text || !text[0] || !g_mp_bedrock_session_active) return;
         if (!pex_mcpe_join_session_send_chat(&g_mp_bedrock_session, text)) {
@@ -3650,8 +3885,12 @@ static void pex_net_send_chat(const char *text) {
 }
 
 static void pex_net_send_respawn(void) {
-    if (!g_mp_connected || !g_mp_bedrock_session_active) return;
-    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81) {
+    if (!g_mp_connected) return;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        pex_java47_send_respawn();
+        return;
+    }
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_BEDROCK_PROTOCOL_81 && g_mp_bedrock_session_active) {
         g_mp_pending_respawn_sync = 1;
         pex_mcpe_join_session_send_respawn(&g_mp_bedrock_session, g_player_x, g_player_y, g_player_z);
     }
@@ -3659,13 +3898,14 @@ static void pex_net_send_respawn(void) {
 
 static void pex_net_disconnect_request_stop(void) {
     InterlockedExchange(&g_mp_rx_stop, 1);
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE || pex_java47_is_active()) pex_java47_disconnect();
     if (g_mp_rx_thread) SetThreadPriority(g_mp_rx_thread, THREAD_PRIORITY_BELOW_NORMAL);
     pex_mp_cache_save_request_stop();
 
     /* Closing nonblocking sockets wakes receive/connect workers without waiting
        on the UI thread.  The full disconnect stage joins them afterward. */
     if (g_mp_socket != INVALID_SOCKET) {
-        if (g_mp_connected) {
+        if (g_mp_connected && g_mp_join_backend == PEX_MP_JOIN_BACKEND_PXNET) {
             PexNetPacketHeader h;
             h.type = PEX_C2S_DISCONNECT;
             h.reserved = 0;
@@ -3686,7 +3926,9 @@ static void pex_net_disconnect_request_stop(void) {
 }
 
 static void pex_net_disconnect(void) {
+    PexMpJoinBackend old_backend = g_mp_join_backend;
     if (world_quit_is_active()) pex_net_disconnect_request_stop();
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE || pex_java47_is_active()) pex_java47_disconnect();
     pex_net_stop_rx_thread();
     pex_mp_cache_save_shutdown();
     if (g_mp_bedrock_session_active) {
@@ -3707,9 +3949,8 @@ static void pex_net_disconnect(void) {
         g_mp_connect_thread = NULL;
     }
     g_mp_connecting = 0;
-    g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
     if (g_mp_socket != INVALID_SOCKET) {
-        if (g_mp_connected) {
+        if (g_mp_connected && old_backend == PEX_MP_JOIN_BACKEND_PXNET) {
             PexNetPacketHeader h;
             h.type = PEX_C2S_DISCONNECT;
             h.reserved = 0;
@@ -3719,6 +3960,7 @@ static void pex_net_disconnect(void) {
         closesocket(g_mp_socket);
         g_mp_socket = INVALID_SOCKET;
     }
+    g_mp_join_backend = PEX_MP_JOIN_BACKEND_PXNET;
     g_mp_connected = 0;
     g_mp_world_ready = 0;
     g_mp_player_id = 0;

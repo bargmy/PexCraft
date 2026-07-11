@@ -12,6 +12,12 @@ static void pex_mp_cache_save_request_stop(void) { }
 static void pex_mp_cache_save_shutdown(void) { }
 static void pex_net_send_player_state(void) { }
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id) { (void)action; (void)x; (void)y; (void)z; (void)face; (void)block_id; }
+static int pex_net_send_block_interact(int x, int y, int z, int face) { (void)x; (void)y; (void)z; (void)face; return 0; }
+static int pex_net_send_use_item_air(void) { return 0; }
+static void pex_net_send_release_use_item(void) { }
+static int pex_net_send_inventory_click(int pex_slot, int button, int mode, const ItemStack *clicked_result) { (void)pex_slot; (void)button; (void)mode; (void)clicked_result; return 0; }
+static int pex_net_send_creative_slot(int pex_slot, const ItemStack *stack) { (void)pex_slot; (void)stack; return 0; }
+static void pex_net_send_container_close(void) { }
 static void net_send_action_progress(int action, int x, int y, int z, int face, int block_id, int progress) { (void)action; (void)x; (void)y; (void)z; (void)face; (void)block_id; (void)progress; }
 static void pex_net_send_player_action(int action, int x, int y, int z, int face, int block_id) { net_send_action_progress(action, x, y, z, face, block_id, 0); }
 static int pex_net_player_ray_distance(float max_dist, float *out_t) { (void)max_dist; if (out_t) *out_t = 0.0f; return 0; }

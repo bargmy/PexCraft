@@ -1,0 +1,1644 @@
+#include "protocol_47je.h"
+#include <zlib.h>
+
+#define J47_RX_MAX (8u * 1024u * 1024u)
+#define J47_TX_MAX (2u * 1024u * 1024u)
+#define J47_PACKET_MAX (2u * 1024u * 1024u)
+#define J47_PROFILE_MAX 128
+#define J47_ENTITY_MAX 512
+#define J47_WINDOW_MAX_SLOTS 128
+
+/* The Java adapter is unity-included after game/mobs.c and before
+   platform/multiplayer_client.c. These declarations bind the protocol layer to
+   the existing PexCraft multiplayer presentation helpers without duplicating
+   gameplay systems. */
+static void pex_net_mark_chunk_ready(int chunk_x, int chunk_z);
+static PexNetRenderPlayerState *pex_net_find_render_player(int player_id);
+static void pex_net_java_server_closed_window(void);
+
+typedef struct J47Writer {
+    unsigned char *data;
+    size_t len;
+    size_t cap;
+    int failed;
+} J47Writer;
+
+typedef struct J47Reader {
+    const unsigned char *data;
+    size_t len;
+    size_t pos;
+    int failed;
+} J47Reader;
+
+typedef struct J47Profile {
+    int used;
+    unsigned char uuid[16];
+    char name[32];
+} J47Profile;
+
+typedef enum J47EntityKind {
+    J47_ENTITY_NONE = 0,
+    J47_ENTITY_PLAYER,
+    J47_ENTITY_MOB,
+    J47_ENTITY_DROP,
+    J47_ENTITY_OTHER
+} J47EntityKind;
+
+typedef struct J47Entity {
+    int used;
+    int entity_id;
+    J47EntityKind kind;
+    int java_type;
+    int player_slot;
+    int mob_slot;
+    int drop_slot;
+    int held_item_id;
+    int held_item_count;
+    int held_item_damage;
+    int held_slot;
+    double x, y, z;
+    float yaw, pitch, head_yaw;
+} J47Entity;
+
+typedef struct J47Window {
+    int open;
+    int window_id;
+    int container_slots;
+    int total_slots;
+    short action_number;
+    char type[40];
+    char title[96];
+    ItemStack slots[J47_WINDOW_MAX_SLOTS];
+} J47Window;
+
+typedef struct PexJava47Session {
+    SOCKET socket;
+    PexJava47State state;
+    int connect_pending;
+    int active;
+    int peer_closed;
+    int has_join_game;
+    int world_ready;
+    int server_protocol;
+    int compression_threshold;
+    int dimension;
+    int game_mode;
+    int difficulty;
+    int local_entity_id;
+    int chunks_received;
+    int position_received;
+    int progress;
+    int held_slot;
+    int last_held_slot;
+    int last_sneaking;
+    int last_sprinting;
+    int last_abilities_flags;
+    int movement_ticks;
+    int last_on_ground;
+    double last_x, last_y, last_z;
+    float last_yaw, last_pitch;
+    double connect_started;
+    double last_move_sent;
+    char host[256];
+    int port;
+    char username[17];
+    char status[128];
+    char disconnect_reason[256];
+    unsigned char *rx;
+    size_t rx_len;
+    size_t rx_cap;
+    unsigned char *tx;
+    size_t tx_len;
+    size_t tx_pos;
+    size_t tx_cap;
+    J47Profile profiles[J47_PROFILE_MAX];
+    J47Entity entities[J47_ENTITY_MAX];
+    J47Window window;
+} PexJava47Session;
+
+static PexJava47Session g_j47;
+
+static int j47_socket_would_block(void) {
+    int e = WSAGetLastError();
+    return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS || e == WSAEALREADY;
+}
+
+static int j47_wait_socket(SOCKET s, int write_ready, int timeout_ms) {
+    fd_set set;
+    FD_ZERO(&set);
+    FD_SET(s, &set);
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    return write_ready ? select((int)s + 1, NULL, &set, NULL, &tv) : select((int)s + 1, &set, NULL, NULL, &tv);
+}
+
+static SOCKET j47_connect_timeout(const char *host, int port, int timeout_ms) {
+    char port_text[16];
+    snprintf(port_text, sizeof(port_text), "%d", port);
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    if (getaddrinfo(host, port_text, &hints, &result) != 0 || !result) return INVALID_SOCKET;
+
+    SOCKET out = INVALID_SOCKET;
+    for (struct addrinfo *rp = result; rp; rp = rp->ai_next) {
+        SOCKET s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (s == INVALID_SOCKET) continue;
+        BOOL yes = TRUE;
+        int sock_buf = 1024 * 1024;
+        setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&yes, sizeof(yes));
+        setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char *)&sock_buf, sizeof(sock_buf));
+        setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&sock_buf, sizeof(sock_buf));
+        u_long nonblock = 1;
+        ioctlsocket(s, FIONBIO, &nonblock);
+        int cr = connect(s, rp->ai_addr, (int)rp->ai_addrlen);
+        if (cr == 0) { out = s; break; }
+        if (cr == SOCKET_ERROR && j47_socket_would_block()) {
+            int sr = j47_wait_socket(s, 1, timeout_ms);
+            if (sr > 0) {
+                int err = 0;
+#if defined(_WIN32) && !defined(PEX_PLATFORM_SDL2) && !defined(PEX_PLATFORM_ANDROID) && !defined(PEX_PLATFORM_ANDROID_TV)
+                int err_len = (int)sizeof(err);
+#else
+                socklen_t err_len = (socklen_t)sizeof(err);
+#endif
+                getsockopt(s, SOL_SOCKET, SO_ERROR, (char *)&err, &err_len);
+                if (err == 0) { out = s; break; }
+            }
+        }
+        closesocket(s);
+    }
+    freeaddrinfo(result);
+    return out;
+}
+
+static int j47_send_all_timeout(SOCKET s, const unsigned char *data, size_t len, int timeout_ms) {
+    size_t off = 0;
+    double started = now_seconds();
+    while (off < len) {
+        int n = send(s, (const char *)data + off, (int)(len - off), 0);
+        if (n > 0) { off += (size_t)n; continue; }
+        if (n == 0) return 0;
+        if (!j47_socket_would_block()) return 0;
+        int remaining = timeout_ms - (int)((now_seconds() - started) * 1000.0);
+        if (remaining <= 0 || j47_wait_socket(s, 1, remaining) <= 0) return 0;
+    }
+    return 1;
+}
+
+static int j47_recv_some_timeout(SOCKET s, unsigned char *data, size_t cap, int timeout_ms) {
+    if (j47_wait_socket(s, 0, timeout_ms) <= 0) return -1;
+    int n = recv(s, (char *)data, (int)cap, 0);
+    return n;
+}
+
+static void j47_writer_init(J47Writer *w, size_t initial) {
+    memset(w, 0, sizeof(*w));
+    if (initial < 64) initial = 64;
+    w->data = (unsigned char *)malloc(initial);
+    if (!w->data) w->failed = 1;
+    else w->cap = initial;
+}
+
+static void j47_writer_free(J47Writer *w) {
+    if (!w) return;
+    free(w->data);
+    memset(w, 0, sizeof(*w));
+}
+
+static int j47_writer_reserve(J47Writer *w, size_t add) {
+    if (!w || w->failed || add > SIZE_MAX - w->len) return 0;
+    size_t need = w->len + add;
+    if (need <= w->cap) return 1;
+    size_t cap = w->cap ? w->cap : 64;
+    while (cap < need) {
+        if (cap > SIZE_MAX / 2) { w->failed = 1; return 0; }
+        cap *= 2;
+    }
+    unsigned char *p = (unsigned char *)realloc(w->data, cap);
+    if (!p) { w->failed = 1; return 0; }
+    w->data = p;
+    w->cap = cap;
+    return 1;
+}
+
+static void j47_w_bytes(J47Writer *w, const void *data, size_t len) {
+    if (!j47_writer_reserve(w, len)) return;
+    if (len) memcpy(w->data + w->len, data, len);
+    w->len += len;
+}
+
+static void j47_w_u8(J47Writer *w, unsigned int v) {
+    unsigned char b = (unsigned char)v;
+    j47_w_bytes(w, &b, 1);
+}
+
+static void j47_w_be16(J47Writer *w, int v) {
+    uint16_t x = (uint16_t)v;
+    unsigned char b[2] = {(unsigned char)(x >> 8), (unsigned char)x};
+    j47_w_bytes(w, b, sizeof(b));
+}
+
+static void j47_w_be32(J47Writer *w, int32_t v) {
+    uint32_t x = (uint32_t)v;
+    unsigned char b[4] = {
+        (unsigned char)(x >> 24), (unsigned char)(x >> 16),
+        (unsigned char)(x >> 8), (unsigned char)x
+    };
+    j47_w_bytes(w, b, sizeof(b));
+}
+
+static void j47_w_be64(J47Writer *w, int64_t v) {
+    uint64_t x = (uint64_t)v;
+    unsigned char b[8];
+    for (int i = 0; i < 8; i++) b[i] = (unsigned char)(x >> (56 - i * 8));
+    j47_w_bytes(w, b, sizeof(b));
+}
+
+static void j47_w_float(J47Writer *w, float v) {
+    uint32_t bits = 0;
+    memcpy(&bits, &v, sizeof(bits));
+    j47_w_be32(w, (int32_t)bits);
+}
+
+static void j47_w_double(J47Writer *w, double v) {
+    uint64_t bits = 0;
+    memcpy(&bits, &v, sizeof(bits));
+    j47_w_be64(w, (int64_t)bits);
+}
+
+static void j47_w_varint(J47Writer *w, int32_t value) {
+    uint32_t v = (uint32_t)value;
+    do {
+        unsigned char b = (unsigned char)(v & 0x7fu);
+        v >>= 7;
+        if (v) b |= 0x80u;
+        j47_w_u8(w, b);
+    } while (v && !w->failed);
+}
+
+static void j47_w_string_n(J47Writer *w, const char *s, size_t max_bytes) {
+    if (!s) s = "";
+    size_t n = strlen(s);
+    if (n > max_bytes) n = max_bytes;
+    j47_w_varint(w, (int32_t)n);
+    j47_w_bytes(w, s, n);
+}
+
+static void j47_w_string(J47Writer *w, const char *s) {
+    j47_w_string_n(w, s, 32767);
+}
+
+static void j47_reader_init(J47Reader *r, const unsigned char *data, size_t len) {
+    r->data = data;
+    r->len = len;
+    r->pos = 0;
+    r->failed = 0;
+}
+
+static int j47_r_need(J47Reader *r, size_t n) {
+    if (!r || r->failed || n > r->len - r->pos) {
+        if (r) r->failed = 1;
+        return 0;
+    }
+    return 1;
+}
+
+static unsigned int j47_r_u8(J47Reader *r) {
+    if (!j47_r_need(r, 1)) return 0;
+    return r->data[r->pos++];
+}
+
+
+static int16_t j47_r_be16(J47Reader *r) {
+    if (!j47_r_need(r, 2)) return 0;
+    uint16_t x = ((uint16_t)r->data[r->pos] << 8) | (uint16_t)r->data[r->pos + 1];
+    r->pos += 2;
+    return (int16_t)x;
+}
+
+static int32_t j47_r_be32(J47Reader *r) {
+    if (!j47_r_need(r, 4)) return 0;
+    uint32_t x = ((uint32_t)r->data[r->pos] << 24) |
+                 ((uint32_t)r->data[r->pos + 1] << 16) |
+                 ((uint32_t)r->data[r->pos + 2] << 8) |
+                 (uint32_t)r->data[r->pos + 3];
+    r->pos += 4;
+    return (int32_t)x;
+}
+
+static int64_t j47_r_be64(J47Reader *r) {
+    if (!j47_r_need(r, 8)) return 0;
+    uint64_t x = 0;
+    for (int i = 0; i < 8; i++) x = (x << 8) | (uint64_t)r->data[r->pos + i];
+    r->pos += 8;
+    return (int64_t)x;
+}
+
+static float j47_r_float(J47Reader *r) {
+    uint32_t x = (uint32_t)j47_r_be32(r);
+    float v = 0.0f;
+    memcpy(&v, &x, 4);
+    return v;
+}
+
+static double j47_r_double(J47Reader *r) {
+    uint64_t x = (uint64_t)j47_r_be64(r);
+    double v = 0.0;
+    memcpy(&v, &x, 8);
+    return v;
+}
+
+static int j47_r_varint(J47Reader *r, int32_t *out) {
+    uint32_t result = 0;
+    int shift = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (!j47_r_need(r, 1)) return 0;
+        unsigned char b = r->data[r->pos++];
+        result |= (uint32_t)(b & 0x7fu) << shift;
+        if (!(b & 0x80u)) {
+            if (out) *out = (int32_t)result;
+            return 1;
+        }
+        shift += 7;
+    }
+    r->failed = 1;
+    return 0;
+}
+
+static int j47_decode_varint_at(const unsigned char *data, size_t len, size_t *used, int32_t *out) {
+    uint32_t result = 0;
+    int shift = 0;
+    for (size_t i = 0; i < len && i < 5; ++i) {
+        unsigned char b = data[i];
+        result |= (uint32_t)(b & 0x7fu) << shift;
+        if (!(b & 0x80u)) {
+            if (used) *used = i + 1;
+            if (out) *out = (int32_t)result;
+            return 1;
+        }
+        shift += 7;
+    }
+    return 0;
+}
+
+static int j47_r_string(J47Reader *r, char *out, size_t cap) {
+    int32_t n = 0;
+    if (!j47_r_varint(r, &n) || n < 0 || (size_t)n > J47_PACKET_MAX || !j47_r_need(r, (size_t)n)) return 0;
+    if (out && cap) {
+        size_t copy = (size_t)n;
+        if (copy >= cap) copy = cap - 1;
+        memcpy(out, r->data + r->pos, copy);
+        out[copy] = 0;
+    }
+    r->pos += (size_t)n;
+    return 1;
+}
+
+static void j47_strip_formatting(char *s) {
+    if (!s) return;
+    char *d = s;
+    for (char *p = s; *p; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c == 0xc2 && (unsigned char)p[1] == 0xa7 && p[2]) { p += 2; continue; }
+        if (c == 0xa7 && p[1]) { ++p; continue; }
+        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+        *d++ = (char)c;
+    }
+    *d = 0;
+}
+
+static int j47_json_unescape(const char *p, const char *end, char *out, size_t cap, const char **after) {
+    if (!p || p >= end || *p != '"') return 0;
+    ++p;
+    size_t n = 0;
+    while (p < end) {
+        unsigned char c = (unsigned char)*p++;
+        if (c == '"') {
+            if (out && cap) out[n < cap ? n : cap - 1] = 0;
+            if (after) *after = p;
+            return 1;
+        }
+        if (c == '\\' && p < end) {
+            unsigned char e = (unsigned char)*p++;
+            if (e == 'n') c = '\n';
+            else if (e == 'r') c = '\r';
+            else if (e == 't') c = '\t';
+            else if (e == 'b') c = '\b';
+            else if (e == 'f') c = '\f';
+            else if (e == 'u' && end - p >= 4) {
+                unsigned int cp = 0;
+                for (int i = 0; i < 4; ++i) {
+                    unsigned char h = (unsigned char)p[i];
+                    cp <<= 4;
+                    if (h >= '0' && h <= '9') cp |= h - '0';
+                    else if (h >= 'a' && h <= 'f') cp |= h - 'a' + 10;
+                    else if (h >= 'A' && h <= 'F') cp |= h - 'A' + 10;
+                }
+                p += 4;
+                if (cp < 0x80) c = (unsigned char)cp;
+                else c = '?';
+            } else c = e;
+        }
+        if (out && cap && n + 1 < cap) out[n] = (char)c;
+        ++n;
+    }
+    return 0;
+}
+
+static const char *j47_json_find_key(const char *json, const char *key) {
+    if (!json || !key) return NULL;
+    size_t key_len = strlen(key);
+    const char *p = json;
+    while (*p) {
+        if (*p != '"') { ++p; continue; }
+        const char *start = ++p;
+        int escaped = 0;
+        while (*p) {
+            if (!escaped && *p == '"') break;
+            if (!escaped && *p == '\\') escaped = 1;
+            else escaped = 0;
+            ++p;
+        }
+        if (!*p) return NULL;
+        size_t n = (size_t)(p - start);
+        const char *after = p + 1;
+        while (*after == ' ' || *after == '\t' || *after == '\r' || *after == '\n') ++after;
+        if (n == key_len && memcmp(start, key, key_len) == 0 && *after == ':') {
+            ++after;
+            while (*after == ' ' || *after == '\t' || *after == '\r' || *after == '\n') ++after;
+            return after;
+        }
+        p = after;
+    }
+    return NULL;
+}
+
+static int j47_json_get_string(const char *json, const char *key, char *out, size_t cap) {
+    const char *v = j47_json_find_key(json, key);
+    if (!v || *v != '"') return 0;
+    return j47_json_unescape(v, json + strlen(json), out, cap, NULL);
+}
+
+static int j47_json_get_int(const char *json, const char *key, int *out) {
+    const char *v = j47_json_find_key(json, key);
+    if (!v) return 0;
+    char *end = NULL;
+    long n = strtol(v, &end, 10);
+    if (end == v) return 0;
+    if (out) *out = (int)n;
+    return 1;
+}
+
+static void j47_json_collect_text(const char *json, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    if (!json) return;
+    const char *end = json + strlen(json);
+    if (*json == '"') {
+        j47_json_unescape(json, end, out, cap, NULL);
+        j47_strip_formatting(out);
+        return;
+    }
+    const char *p = json;
+    size_t used = 0;
+    while ((p = strstr(p, "\"text\"")) != NULL) {
+        p += 6;
+        while (*p && *p != ':') ++p;
+        if (!*p) break;
+        ++p;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '"') {
+            char part[192];
+            const char *after = NULL;
+            if (j47_json_unescape(p, end, part, sizeof(part), &after)) {
+                size_t pn = strlen(part);
+                if (pn && used && used + 1 < cap) out[used++] = ' ';
+                if (pn > cap - 1 - used) pn = cap - 1 - used;
+                memcpy(out + used, part, pn);
+                used += pn;
+                out[used] = 0;
+                p = after;
+                continue;
+            }
+        }
+        ++p;
+    }
+    if (!out[0]) snprintf(out, cap, "Minecraft Server");
+    j47_strip_formatting(out);
+}
+
+static int j47_build_raw_frame(int packet_id, const unsigned char *payload, size_t payload_len, J47Writer *out) {
+    J47Writer body;
+    j47_writer_init(&body, payload_len + 16);
+    j47_w_varint(&body, packet_id);
+    j47_w_bytes(&body, payload, payload_len);
+    if (body.failed || body.len > J47_PACKET_MAX) { j47_writer_free(&body); return 0; }
+    j47_w_varint(out, (int32_t)body.len);
+    j47_w_bytes(out, body.data, body.len);
+    j47_writer_free(&body);
+    return !out->failed;
+}
+
+static int j47_probe_read_frame(SOCKET s, int timeout_ms, unsigned char **out_data, size_t *out_len) {
+    unsigned char header[5];
+    size_t hn = 0;
+    double started = now_seconds();
+    int32_t packet_len = -1;
+    while (hn < sizeof(header)) {
+        int remaining = timeout_ms - (int)((now_seconds() - started) * 1000.0);
+        if (remaining <= 0) return 0;
+        int n = j47_recv_some_timeout(s, header + hn, 1, remaining);
+        if (n != 1) return 0;
+        ++hn;
+        size_t used = 0;
+        if (j47_decode_varint_at(header, hn, &used, &packet_len)) break;
+    }
+    if (packet_len < 0 || packet_len > (int32_t)J47_PACKET_MAX) return 0;
+    unsigned char *buf = (unsigned char *)malloc((size_t)packet_len);
+    if (!buf) return 0;
+    size_t got = 0;
+    while (got < (size_t)packet_len) {
+        int remaining = timeout_ms - (int)((now_seconds() - started) * 1000.0);
+        if (remaining <= 0) { free(buf); return 0; }
+        int n = j47_recv_some_timeout(s, buf + got, (size_t)packet_len - got, remaining);
+        if (n <= 0) { free(buf); return 0; }
+        got += (size_t)n;
+    }
+    *out_data = buf;
+    *out_len = got;
+    return 1;
+}
+
+int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava47Status *out_status) {
+    PexJava47Status st;
+    memset(&st, 0, sizeof(st));
+    st.ping_ms = -1;
+    if (!host || !host[0] || port <= 0 || port > 65535) {
+        if (out_status) *out_status = st;
+        return 0;
+    }
+    if (timeout_ms < 100) timeout_ms = 100;
+    SOCKET s = j47_connect_timeout(host, port, timeout_ms);
+    if (s == INVALID_SOCKET) { if (out_status) *out_status = st; return 0; }
+
+    J47Writer handshake_payload, stream;
+    j47_writer_init(&handshake_payload, 256);
+    j47_writer_init(&stream, 512);
+    j47_w_varint(&handshake_payload, PEX_JAVA47_PROTOCOL_VERSION);
+    j47_w_string_n(&handshake_payload, host, 255);
+    j47_w_be16(&handshake_payload, port);
+    j47_w_varint(&handshake_payload, 1);
+    j47_build_raw_frame(0, handshake_payload.data, handshake_payload.len, &stream);
+    j47_build_raw_frame(0, NULL, 0, &stream);
+    int ok = !stream.failed && j47_send_all_timeout(s, stream.data, stream.len, timeout_ms);
+    j47_writer_free(&handshake_payload);
+    j47_writer_free(&stream);
+    if (!ok) { closesocket(s); if (out_status) *out_status = st; return 0; }
+
+    unsigned char *frame = NULL;
+    size_t frame_len = 0;
+    if (!j47_probe_read_frame(s, timeout_ms, &frame, &frame_len)) {
+        closesocket(s); if (out_status) *out_status = st; return 0;
+    }
+    J47Reader r;
+    j47_reader_init(&r, frame, frame_len);
+    int32_t packet_id = -1;
+    char json[16384];
+    json[0] = 0;
+    if (!j47_r_varint(&r, &packet_id) || packet_id != 0 || !j47_r_string(&r, json, sizeof(json))) {
+        free(frame); closesocket(s); if (out_status) *out_status = st; return 0;
+    }
+    free(frame);
+
+    st.protocol = 0;
+    st.online_players = 0;
+    st.max_players = 0;
+    /* Scope repeated field names to their containing objects. Player samples
+       also contain a "name" key and must not replace the version label. */
+    const char *version_object = j47_json_find_key(json, "version");
+    const char *players_object = j47_json_find_key(json, "players");
+    if (!version_object || *version_object != '{' ||
+        !j47_json_get_int(version_object, "protocol", &st.protocol)) {
+        closesocket(s);
+        if (out_status) *out_status = st;
+        return 0;
+    }
+    if (players_object && *players_object == '{') {
+        j47_json_get_int(players_object, "online", &st.online_players);
+        j47_json_get_int(players_object, "max", &st.max_players);
+    }
+    if (!j47_json_get_string(version_object, "name", st.version, sizeof(st.version)))
+        snprintf(st.version, sizeof(st.version), "Java");
+    const char *description = j47_json_find_key(json, "description");
+    j47_json_collect_text(description ? description : "", st.motd, sizeof(st.motd));
+
+    int64_t stamp = (int64_t)(now_seconds() * 1000.0);
+    J47Writer ping_payload, ping_frame;
+    j47_writer_init(&ping_payload, 16);
+    j47_writer_init(&ping_frame, 32);
+    j47_w_be64(&ping_payload, stamp);
+    j47_build_raw_frame(1, ping_payload.data, ping_payload.len, &ping_frame);
+    double ping_started = now_seconds();
+    if (j47_send_all_timeout(s, ping_frame.data, ping_frame.len, timeout_ms)) {
+        frame = NULL; frame_len = 0;
+        if (j47_probe_read_frame(s, timeout_ms, &frame, &frame_len)) {
+            J47Reader pr;
+            int32_t pid = -1;
+            j47_reader_init(&pr, frame, frame_len);
+            if (j47_r_varint(&pr, &pid) && pid == 1) {
+                (void)j47_r_be64(&pr);
+                st.ping_ms = (int)((now_seconds() - ping_started) * 1000.0);
+                if (st.ping_ms < 0) st.ping_ms = 0;
+            }
+            free(frame);
+        }
+    }
+    j47_writer_free(&ping_payload);
+    j47_writer_free(&ping_frame);
+    closesocket(s);
+    st.ok = 1;
+    if (out_status) *out_status = st;
+    return 1;
+}
+
+/* --------------------------- play/session codec --------------------------- */
+
+static void j47_set_status(const char *text) {
+    snprintf(g_j47.status, sizeof(g_j47.status), "%.*s", (int)sizeof(g_j47.status) - 1, text ? text : "");
+}
+
+static void j47_fail(const char *reason) {
+    if (g_j47.socket != INVALID_SOCKET) closesocket(g_j47.socket);
+    g_j47.socket = INVALID_SOCKET;
+    g_j47.active = 0;
+    g_j47.state = PEX_JAVA47_FAILED;
+    snprintf(g_j47.disconnect_reason, sizeof(g_j47.disconnect_reason), "%s", reason && reason[0] ? reason : "Connection lost");
+    j47_set_status(g_j47.disconnect_reason);
+}
+
+static int j47_queue_bytes(const void *data, size_t len) {
+    if (!data || len == 0) return 1;
+    if (len > J47_TX_MAX || g_j47.tx_len > J47_TX_MAX - len) return 0;
+    size_t need = g_j47.tx_len + len;
+    if (need > g_j47.tx_cap) {
+        size_t cap = g_j47.tx_cap ? g_j47.tx_cap : 4096;
+        while (cap < need) cap *= 2;
+        unsigned char *p = (unsigned char *)realloc(g_j47.tx, cap);
+        if (!p) return 0;
+        g_j47.tx = p;
+        g_j47.tx_cap = cap;
+    }
+    memcpy(g_j47.tx + g_j47.tx_len, data, len);
+    g_j47.tx_len += len;
+    return 1;
+}
+
+static int j47_flush_tx(void) {
+    while (g_j47.tx_pos < g_j47.tx_len) {
+        int n = send(g_j47.socket, (const char *)g_j47.tx + g_j47.tx_pos,
+                     (int)(g_j47.tx_len - g_j47.tx_pos), 0);
+        if (n > 0) { g_j47.tx_pos += (size_t)n; continue; }
+        if (n == 0) { g_j47.peer_closed = 1; return 1; }
+        if (j47_socket_would_block()) return 1;
+        j47_fail("Could not send Java protocol data");
+        return 0;
+    }
+    g_j47.tx_len = 0;
+    g_j47.tx_pos = 0;
+    return 1;
+}
+
+static int j47_send_packet(int packet_id, const unsigned char *payload, size_t payload_len) {
+    J47Writer packet, inner, frame;
+    j47_writer_init(&packet, payload_len + 16);
+    j47_w_varint(&packet, packet_id);
+    if (payload_len) j47_w_bytes(&packet, payload, payload_len);
+    if (packet.failed || packet.len > J47_PACKET_MAX) { j47_writer_free(&packet); return 0; }
+
+    j47_writer_init(&inner, packet.len + 32);
+    if (g_j47.compression_threshold >= 0) {
+        if ((int)packet.len >= g_j47.compression_threshold) {
+            uLongf bound = compressBound((uLong)packet.len);
+            unsigned char *compressed = (unsigned char *)malloc((size_t)bound);
+            if (!compressed) { j47_writer_free(&packet); j47_writer_free(&inner); return 0; }
+            uLongf compressed_len = bound;
+            int zr = compress2(compressed, &compressed_len, packet.data, (uLong)packet.len, Z_DEFAULT_COMPRESSION);
+            if (zr != Z_OK) { free(compressed); j47_writer_free(&packet); j47_writer_free(&inner); return 0; }
+            j47_w_varint(&inner, (int32_t)packet.len);
+            j47_w_bytes(&inner, compressed, (size_t)compressed_len);
+            free(compressed);
+        } else {
+            j47_w_varint(&inner, 0);
+            j47_w_bytes(&inner, packet.data, packet.len);
+        }
+    } else {
+        j47_w_bytes(&inner, packet.data, packet.len);
+    }
+
+    j47_writer_init(&frame, inner.len + 8);
+    j47_w_varint(&frame, (int32_t)inner.len);
+    j47_w_bytes(&frame, inner.data, inner.len);
+    int ok = !frame.failed && j47_queue_bytes(frame.data, frame.len);
+    j47_writer_free(&packet);
+    j47_writer_free(&inner);
+    j47_writer_free(&frame);
+    return ok;
+}
+
+static int j47_rx_reserve(size_t add) {
+    if (add > J47_RX_MAX || g_j47.rx_len > J47_RX_MAX - add) return 0;
+    size_t need = g_j47.rx_len + add;
+    if (need <= g_j47.rx_cap) return 1;
+    size_t cap = g_j47.rx_cap ? g_j47.rx_cap : 16384;
+    while (cap < need) cap *= 2;
+    unsigned char *p = (unsigned char *)realloc(g_j47.rx, cap);
+    if (!p) return 0;
+    g_j47.rx = p;
+    g_j47.rx_cap = cap;
+    return 1;
+}
+
+static int j47_receive_available(void) {
+    unsigned char temp[32768];
+    for (;;) {
+        int n = recv(g_j47.socket, (char *)temp, sizeof(temp), 0);
+        if (n > 0) {
+            if (!j47_rx_reserve((size_t)n)) { j47_fail("Java receive buffer overflow"); return 0; }
+            memcpy(g_j47.rx + g_j47.rx_len, temp, (size_t)n);
+            g_j47.rx_len += (size_t)n;
+            continue;
+        }
+        if (n == 0) { j47_fail("Java server closed the connection"); return 0; }
+        if (j47_socket_would_block()) return 1;
+        j47_fail("Java network receive failed");
+        return 0;
+    }
+}
+
+static int j47_peek_varint(const unsigned char *data, size_t len, int32_t *out, size_t *used) {
+    uint32_t result = 0;
+    for (size_t i = 0; i < len && i < 5; i++) {
+        unsigned char b = data[i];
+        result |= (uint32_t)(b & 0x7f) << (7 * i);
+        if (!(b & 0x80)) {
+            if (out) *out = (int32_t)result;
+            if (used) *used = i + 1;
+            return 1;
+        }
+    }
+    if (len >= 5) return -1;
+    return 0;
+}
+
+static int j47_nbt_skip_payload(J47Reader *r, int tag_type, int depth);
+
+static int j47_nbt_skip_string(J47Reader *r) {
+    uint16_t n = j47_r_be16(r);
+    if (r->failed || n > r->len - r->pos) { r->failed = 1; return 0; }
+    r->pos += n;
+    return 1;
+}
+
+static int j47_nbt_skip_payload(J47Reader *r, int tag_type, int depth) {
+    if (depth > 64) { r->failed = 1; return 0; }
+    switch (tag_type) {
+        case 0: return 1;
+        case 1: (void)j47_r_u8(r); return !r->failed;
+        case 2: (void)j47_r_be16(r); return !r->failed;
+        case 3: (void)j47_r_be32(r); return !r->failed;
+        case 4: (void)j47_r_be64(r); return !r->failed;
+        case 5: (void)j47_r_float(r); return !r->failed;
+        case 6: (void)j47_r_double(r); return !r->failed;
+        case 7: {
+            int32_t n = j47_r_be32(r);
+            if (r->failed || n < 0 || (size_t)n > r->len - r->pos) { r->failed = 1; return 0; }
+            r->pos += (size_t)n; return 1;
+        }
+        case 8: return j47_nbt_skip_string(r);
+        case 9: {
+            int child = (int)j47_r_u8(r);
+            int32_t n = j47_r_be32(r);
+            if (r->failed || n < 0 || n > 1000000) { r->failed = 1; return 0; }
+            for (int32_t i = 0; i < n; i++) if (!j47_nbt_skip_payload(r, child, depth + 1)) return 0;
+            return 1;
+        }
+        case 10: {
+            for (;;) {
+                int child = (int)j47_r_u8(r);
+                if (r->failed) return 0;
+                if (child == 0) return 1;
+                if (!j47_nbt_skip_string(r) || !j47_nbt_skip_payload(r, child, depth + 1)) return 0;
+            }
+        }
+        case 11: {
+            int32_t n = j47_r_be32(r);
+            if (r->failed || n < 0 || (size_t)n > (r->len - r->pos) / 4) { r->failed = 1; return 0; }
+            r->pos += (size_t)n * 4; return 1;
+        }
+        case 12: {
+            int32_t n = j47_r_be32(r);
+            if (r->failed || n < 0 || (size_t)n > (r->len - r->pos) / 8) { r->failed = 1; return 0; }
+            r->pos += (size_t)n * 8; return 1;
+        }
+        default: r->failed = 1; return 0;
+    }
+}
+
+static int j47_skip_nbt(J47Reader *r) {
+    int root = (int)j47_r_u8(r);
+    if (r->failed) return 0;
+    if (root == 0) return 1;
+    if (!j47_nbt_skip_string(r)) return 0;
+    return j47_nbt_skip_payload(r, root, 0);
+}
+
+int pex_java47_translate_block_id(int id) {
+    return (id >= 0 && id <= 124) ? id : BLOCK_STONE;
+}
+
+int pex_java47_translate_item_id(int id) {
+    if (id <= 0) return 0;
+    if (id <= 124) return id;
+    if (id <= 255) return BLOCK_STONE;
+    if (id <= 385) return id;
+    if (id >= 2256 && id <= 2267) return id;
+    return BLOCK_STONE;
+}
+
+int pex_java47_translate_mob_type(int type) {
+    switch (type) {
+        case 50: return PASSIVE_MOB_CREEPER;
+        case 51: return PASSIVE_MOB_SKELETON;
+        case 52: return PASSIVE_MOB_SPIDER;
+        case 54: return PASSIVE_MOB_ZOMBIE;
+        case 55: return PASSIVE_MOB_SLIME;
+        case 56: return PASSIVE_MOB_GHAST;
+        case 57: return PASSIVE_MOB_PIG_ZOMBIE;
+        case 58: return PASSIVE_MOB_ENDERMAN;
+        case 59: return PASSIVE_MOB_CAVE_SPIDER;
+        case 60: return PASSIVE_MOB_SILVERFISH;
+        case 61: return PASSIVE_MOB_BLAZE;
+        case 62: return PASSIVE_MOB_MAGMA_CUBE;
+        case 53: return PASSIVE_MOB_GIANT;
+        case 63: return PASSIVE_MOB_ENDER_DRAGON;
+        case 90: return PASSIVE_MOB_PIG;
+        case 91: return PASSIVE_MOB_SHEEP;
+        case 92: return PASSIVE_MOB_COW;
+        case 93: return PASSIVE_MOB_CHICKEN;
+        case 94: return PASSIVE_MOB_SQUID;
+        case 95: return PASSIVE_MOB_WOLF;
+        case 96: return PASSIVE_MOB_MOOSHROOM;
+        case 97: return PASSIVE_MOB_SNOWMAN;
+        case 98: return PASSIVE_MOB_OCELOT;
+        case 99: return PASSIVE_MOB_IRON_GOLEM;
+        case 120: return PASSIVE_MOB_VILLAGER;
+        default: return PASSIVE_MOB_PIG;
+    }
+}
+
+static int j47_read_item(J47Reader *r, ItemStack *out) {
+    ItemStack st;
+    memset(&st, 0, sizeof(st));
+    int16_t raw_id = (int16_t)j47_r_be16(r);
+    if (r->failed) return 0;
+    if (raw_id < 0) { if (out) *out = st; return 1; }
+    st.id = pex_java47_translate_item_id(raw_id);
+    st.count = (int)(int8_t)j47_r_u8(r);
+    st.damage = (int)(int16_t)j47_r_be16(r);
+    if (!j47_skip_nbt(r)) return 0;
+    if (st.count < 1) st.count = 1;
+    if (out) *out = st;
+    return !r->failed;
+}
+
+static void j47_write_item(J47Writer *w, int item_id, int count, int damage) {
+    if (item_id <= 0 || count <= 0) { j47_w_be16(w, -1); return; }
+    j47_w_be16(w, pex_java47_translate_item_id(item_id));
+    j47_w_u8(w, count);
+    j47_w_be16(w, damage);
+    j47_w_u8(w, 0); /* TAG_End: no NBT */
+}
+
+static int j47_read_block_pos(J47Reader *r, int *x, int *y, int *z) {
+    uint64_t v = (uint64_t)j47_r_be64(r);
+    if (r->failed) return 0;
+    int xx = (int)(v >> 38);
+    int yy = (int)((v >> 26) & 0xfff);
+    int zz = (int)(v & 0x3ffffff);
+    if (xx & 0x2000000) xx -= 0x4000000;
+    if (zz & 0x2000000) zz -= 0x4000000;
+    if (x) *x = xx;
+    if (y) *y = yy;
+    if (z) *z = zz;
+    return 1;
+}
+
+static void j47_write_block_pos(J47Writer *w, int x, int y, int z) {
+    uint64_t v = (((uint64_t)x & 0x3ffffffu) << 38) |
+                 (((uint64_t)y & 0xfffu) << 26) |
+                 ((uint64_t)z & 0x3ffffffu);
+    j47_w_be64(w, (int64_t)v);
+}
+
+static int j47_skip_metadata(J47Reader *r) {
+    for (;;) {
+        int h = (int)j47_r_u8(r);
+        if (r->failed) return 0;
+        if (h == 0x7f) return 1;
+        switch ((h >> 5) & 7) {
+            case 0: (void)j47_r_u8(r); break;
+            case 1: (void)j47_r_be16(r); break;
+            case 2: (void)j47_r_be32(r); break;
+            case 3: (void)j47_r_float(r); break;
+            case 4: { char tmp[512]; if (!j47_r_string(r, tmp, sizeof(tmp))) return 0; break; }
+            case 5: { ItemStack st; if (!j47_read_item(r, &st)) return 0; break; }
+            case 6: (void)j47_r_be32(r); (void)j47_r_be32(r); (void)j47_r_be32(r); break;
+            case 7: (void)j47_r_float(r); (void)j47_r_float(r); (void)j47_r_float(r); break;
+        }
+        if (r->failed) return 0;
+    }
+}
+
+static J47Entity *j47_entity_find(int entity_id) {
+    for (int i = 0; i < J47_ENTITY_MAX; i++) if (g_j47.entities[i].used && g_j47.entities[i].entity_id == entity_id) return &g_j47.entities[i];
+    return NULL;
+}
+
+static J47Entity *j47_entity_alloc(int entity_id) {
+    J47Entity *e = j47_entity_find(entity_id);
+    if (e) return e;
+    for (int i = 0; i < J47_ENTITY_MAX; i++) if (!g_j47.entities[i].used) {
+        memset(&g_j47.entities[i], 0, sizeof(g_j47.entities[i]));
+        g_j47.entities[i].used = 1;
+        g_j47.entities[i].entity_id = entity_id;
+        g_j47.entities[i].player_slot = -1;
+        g_j47.entities[i].mob_slot = -1;
+        g_j47.entities[i].drop_slot = -1;
+        return &g_j47.entities[i];
+    }
+    return NULL;
+}
+
+static void j47_entity_remove(int entity_id) {
+    J47Entity *e = j47_entity_find(entity_id);
+    if (!e) return;
+    if (e->kind == J47_ENTITY_PLAYER && e->player_slot >= 0 && e->player_slot < PEX_NET_MAX_PLAYERS) {
+        int slot = e->player_slot;
+        for (int i = slot; i + 1 < g_mp_player_count; i++) {
+            g_mp_players[i] = g_mp_players[i + 1];
+            g_mp_prev_players[i] = g_mp_prev_players[i + 1];
+            for (int k = 0; k < J47_ENTITY_MAX; k++) if (g_j47.entities[k].used && g_j47.entities[k].player_slot == i + 1) g_j47.entities[k].player_slot = i;
+        }
+        if (g_mp_player_count > 0) g_mp_player_count--;
+    } else if (e->kind == J47_ENTITY_MOB && e->mob_slot >= 0 && e->mob_slot < MAX_PASSIVE_MOBS) {
+        g_passive_mobs[e->mob_slot].active = 0;
+    } else if (e->kind == J47_ENTITY_DROP && e->drop_slot >= 0 && e->drop_slot < MAX_DROP_ENTITIES) {
+        g_drops[e->drop_slot].active = 0;
+    }
+    memset(e, 0, sizeof(*e));
+}
+
+static void j47_clear_remote_entities(void) {
+    for (int i = 0; i < J47_ENTITY_MAX; i++) {
+        if (g_j47.entities[i].used) j47_entity_remove(g_j47.entities[i].entity_id);
+    }
+    g_mp_player_count = 0;
+}
+
+static void j47_reset_world_for_respawn(void) {
+    memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
+    memset(g_flat_meta, 0, sizeof(g_flat_meta));
+    memset(g_flat_levels, 0, sizeof(g_flat_levels));
+    memset(g_flat_block_light, 0, sizeof(g_flat_block_light));
+    memset(g_flat_sky_light, 0, sizeof(g_flat_sky_light));
+    memset(g_flat_world_chunk_generated, 0, sizeof(g_flat_world_chunk_generated));
+    memset(g_flat_world_chunk_valid, 0, sizeof(g_flat_world_chunk_valid));
+    memset(g_flat_chunk_light_ready, 0, sizeof(g_flat_chunk_light_ready));
+    memset(g_flat_chunk_light_valid, 0, sizeof(g_flat_chunk_light_valid));
+    for (int cz = 0; cz < FLAT_RENDER_CHUNKS; cz++) {
+        for (int cx = 0; cx < FLAT_RENDER_CHUNKS; cx++) {
+            g_flat_world_chunk_dirty[cz][cx] = 1;
+            g_flat_world_chunk_has_liquid[cz][cx] = 0;
+        }
+    }
+    g_flat_renderer_sort_dirty = 1;
+    j47_clear_remote_entities();
+    g_j47.chunks_received = 0;
+    g_j47.world_ready = 0;
+    g_j47.position_received = 0;
+}
+
+static J47Profile *j47_profile_find_uuid(const unsigned char uuid[16]) {
+    for (int i = 0; i < J47_PROFILE_MAX; i++) if (g_j47.profiles[i].used && memcmp(g_j47.profiles[i].uuid, uuid, 16) == 0) return &g_j47.profiles[i];
+    return NULL;
+}
+
+static J47Profile *j47_profile_put(const unsigned char uuid[16], const char *name) {
+    J47Profile *p = j47_profile_find_uuid(uuid);
+    if (!p) for (int i = 0; i < J47_PROFILE_MAX; i++) if (!g_j47.profiles[i].used) { p = &g_j47.profiles[i]; memset(p, 0, sizeof(*p)); p->used = 1; memcpy(p->uuid, uuid, 16); break; }
+    if (p && name) snprintf(p->name, sizeof(p->name), "%.*s", (int)sizeof(p->name) - 1, name);
+    return p;
+}
+
+static int j47_drop_alloc(void) {
+    for (int i = 0; i < MAX_DROP_ENTITIES; i++) if (!g_drops[i].active) return i;
+    return -1;
+}
+
+static int j47_player_alloc(void) {
+    if (g_mp_player_count >= PEX_NET_MAX_PLAYERS) return -1;
+    return g_mp_player_count++;
+}
+
+static int j47_mob_alloc_slot(void) {
+    PassiveMob *m = passive_mob_alloc();
+    if (!m) return -1;
+    return (int)(m - g_passive_mobs);
+}
+
+static void j47_set_block_state(int x, int y, int z, int state) {
+    if (!flat_in_bounds(x, y, z)) return;
+    int id = pex_java47_translate_block_id((state >> 4) & 0xfff);
+    int meta = state & 15;
+    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
+    int old = g_flat_blocks[yi][zi][xi];
+    g_flat_blocks[yi][zi][xi] = (unsigned char)id;
+    g_flat_meta[yi][zi][xi] = (unsigned char)meta;
+    g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)meta : 0;
+    flat_update_section_after_block_change(x, y, z, id);
+    flat_mark_sections_dirty_near_block(x, y, z);
+    flat_mark_chunks_dirty_near(x, z);
+    if (old != id) flat_mark_light_dirty_for_change(x, y, z, old, id);
+}
+
+static void j47_unload_chunk(int cx, int cz) {
+    int lcx = (cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (cz * 16 - g_flat_world_origin_z) / 16;
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                int wx = cx * 16 + x, wz = cz * 16 + z;
+                int yi = flat_y_index(y), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
+                g_flat_blocks[yi][zi][xi] = 0;
+                g_flat_meta[yi][zi][xi] = 0;
+                g_flat_levels[yi][zi][xi] = 0;
+                g_flat_block_light[yi][zi][xi] = 0;
+                g_flat_sky_light[yi][zi][xi] = 0;
+            }
+        }
+    }
+    g_flat_world_chunk_generated[lcz][lcx] = 0;
+    g_flat_world_chunk_valid[lcz][lcx] = 0;
+    g_flat_chunk_light_ready[lcz][lcx] = 0;
+    g_flat_chunk_light_valid[lcz][lcx] = 0;
+    g_flat_chunk_section_non_empty_mask[lcz][lcx] = 0;
+    g_flat_world_chunk_has_liquid[lcz][lcx] = 0;
+    g_flat_world_chunk_dirty[lcz][lcx] = 1;
+    for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
+        g_flat_section_dirty[sy][lcz][lcx] = 0;
+        g_flat_section_valid[sy][lcz][lcx] = 0;
+    }
+    g_flat_renderer_sort_dirty = 1;
+}
+
+static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const unsigned char *data, size_t len, int has_sky) {
+    if (full && mask == 0) {
+        j47_unload_chunk(cx, cz);
+        return;
+    }
+    size_t pos = 0;
+    int lcx = (cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (cz * 16 - g_flat_world_origin_z) / 16;
+    int visible = flat_local_chunk_valid(lcx, lcz);
+    if (full && visible) {
+        for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+            int wx = cx * 16 + x, wz = cz * 16 + z;
+            int yi = flat_y_index(y), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
+            g_flat_blocks[yi][zi][xi] = 0; g_flat_meta[yi][zi][xi] = 0; g_flat_levels[yi][zi][xi] = 0;
+            g_flat_block_light[yi][zi][xi] = 0; g_flat_sky_light[yi][zi][xi] = has_sky ? 15 : 0;
+        }
+    }
+    for (int sy = 0; sy < 16; sy++) if (mask & (1u << sy)) {
+        if (pos + 8192 > len) return;
+        const unsigned char *states = data + pos; pos += 8192;
+        if (visible) for (int ly = 0; ly < 16; ly++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+            int idx = (ly << 8) | (z << 4) | x;
+            int state = states[idx * 2] | (states[idx * 2 + 1] << 8);
+            int id = pex_java47_translate_block_id((state >> 4) & 0xfff), meta = state & 15;
+            int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
+            int yi = flat_y_index(wy), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
+            g_flat_blocks[yi][zi][xi] = (unsigned char)id;
+            g_flat_meta[yi][zi][xi] = (unsigned char)meta;
+            g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)meta : 0;
+        }
+    }
+    for (int sy = 0; sy < 16; sy++) if (mask & (1u << sy)) {
+        if (pos + 2048 > len) return;
+        if (visible) for (int i = 0; i < 4096; i++) {
+            int nib = (data[pos + (i >> 1)] >> ((i & 1) * 4)) & 15;
+            int x = i & 15, z = (i >> 4) & 15, ly = (i >> 8) & 15;
+            int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
+            g_flat_block_light[flat_y_index(wy)][flat_storage_z_index(wz)][flat_storage_index(wx)] = (unsigned char)nib;
+        }
+        pos += 2048;
+    }
+    if (has_sky) for (int sy = 0; sy < 16; sy++) if (mask & (1u << sy)) {
+        if (pos + 2048 > len) return;
+        if (visible) for (int i = 0; i < 4096; i++) {
+            int nib = (data[pos + (i >> 1)] >> ((i & 1) * 4)) & 15;
+            int x = i & 15, z = (i >> 4) & 15, ly = (i >> 8) & 15;
+            int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
+            g_flat_sky_light[flat_y_index(wy)][flat_storage_z_index(wz)][flat_storage_index(wx)] = (unsigned char)nib;
+        }
+        pos += 2048;
+    }
+    if (full && pos + 256 <= len) pos += 256;
+    if (visible) {
+        g_flat_chunk_section_non_empty_mask[lcz][lcx] = (unsigned short)mask;
+        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
+            g_flat_section_dirty[sy][lcz][lcx] = 1;
+            g_flat_section_valid[sy][lcz][lcx] = 0;
+            flat_note_section_mesh_changed(sy, lcz, lcx);
+        }
+        g_flat_renderer_sort_dirty = 1;
+        pex_net_mark_chunk_ready(cx, cz);
+    }
+    g_j47.chunks_received++;
+    if (!g_j47.world_ready && g_j47.position_received && g_j47.chunks_received >= 1) {
+        g_j47.world_ready = 1;
+        g_j47.progress = 100;
+    }
+}
+
+static void j47_apply_player_slot(int java_slot, const ItemStack *st);
+
+
+static int j47_window_is_container_type(const char *type) {
+    return type && (!strcmp(type, "minecraft:container") || !strcmp(type, "minecraft:chest"));
+}
+
+static int j47_map_pex_slot_to_java(int pex_slot) {
+    if (pex_slot == -999) return -999;
+
+    if (g_j47.window.open) {
+        int container = g_j47.window.container_slots;
+        if (j47_window_is_container_type(g_j47.window.type)) {
+            if (pex_slot >= 200 && pex_slot < 200 + container) return pex_slot - 200;
+            if (pex_slot >= 9 && pex_slot <= 35) return container + (pex_slot - 9);
+            if (pex_slot >= 0 && pex_slot <= 8) return container + 27 + pex_slot;
+        } else if (!strcmp(g_j47.window.type, "minecraft:crafting_table")) {
+            if (pex_slot == 309) return 0;
+            if (pex_slot >= 300 && pex_slot <= 308) return 1 + (pex_slot - 300);
+            if (pex_slot >= 9 && pex_slot <= 35) return 10 + (pex_slot - 9);
+            if (pex_slot >= 0 && pex_slot <= 8) return 37 + pex_slot;
+        } else if (!strcmp(g_j47.window.type, "minecraft:furnace")) {
+            if (pex_slot >= 400 && pex_slot <= 402) return pex_slot - 400;
+            if (pex_slot >= 9 && pex_slot <= 35) return 3 + (pex_slot - 9);
+            if (pex_slot >= 0 && pex_slot <= 8) return 30 + pex_slot;
+        } else {
+            if (pex_slot >= 9 && pex_slot <= 35) return container + (pex_slot - 9);
+            if (pex_slot >= 0 && pex_slot <= 8) return container + 27 + pex_slot;
+        }
+        return -32768;
+    }
+
+    if (pex_slot == 104) return 0;
+    if (pex_slot >= 100 && pex_slot <= 103) return 1 + (pex_slot - 100);
+    if (pex_slot >= 110 && pex_slot <= 113) return 5 + (pex_slot - 110);
+    if (pex_slot >= 9 && pex_slot <= 35) return pex_slot;
+    if (pex_slot >= 0 && pex_slot <= 8) return 36 + pex_slot;
+    return -32768;
+}
+
+static void j47_apply_open_window_slot(int slot, const ItemStack *st) {
+    if (!st || slot < 0) return;
+    if (slot < J47_WINDOW_MAX_SLOTS) g_j47.window.slots[slot] = *st;
+
+    if (j47_window_is_container_type(g_j47.window.type)) {
+        int container = g_j47.window.container_slots;
+        if (slot < container) {
+            ItemStack *dst = chest_get_open_slot_ptr(slot);
+            if (dst) *dst = *st;
+        } else {
+            int relative = slot - container;
+            if (relative < 27) j47_apply_player_slot(9 + relative, st);
+            else if (relative < 36) j47_apply_player_slot(36 + relative - 27, st);
+        }
+    } else if (!strcmp(g_j47.window.type, "minecraft:crafting_table")) {
+        if (slot >= 1 && slot <= 9) g_workbench_grid[slot - 1] = *st;
+        else if (slot >= 10 && slot <= 36) j47_apply_player_slot(9 + slot - 10, st);
+        else if (slot >= 37 && slot <= 45) j47_apply_player_slot(36 + slot - 37, st);
+    } else if (!strcmp(g_j47.window.type, "minecraft:furnace")) {
+        if (slot >= 0 && slot <= 2) {
+            ItemStack *dst = furnace_get_slot_ptr(slot);
+            if (dst) *dst = *st;
+        } else if (slot >= 3 && slot <= 29) j47_apply_player_slot(9 + slot - 3, st);
+        else if (slot >= 30 && slot <= 38) j47_apply_player_slot(36 + slot - 30, st);
+    }
+}
+
+static void j47_apply_player_slot(int java_slot, const ItemStack *st) {
+    if (!st) return;
+    if (java_slot >= 36 && java_slot <= 44) g_inventory[java_slot - 36] = *st;
+    else if (java_slot >= 9 && java_slot <= 35) g_inventory[java_slot] = *st;
+    else if (java_slot >= 5 && java_slot <= 8) g_armor_inventory[8 - java_slot] = *st;
+    armor_sync_player_armor();
+}
+
+static void j47_apply_window_items(int window_id, ItemStack *items, int count) {
+    if (window_id == 0) {
+        for (int i = 0; i < count; i++) j47_apply_player_slot(i, &items[i]);
+        return;
+    }
+    if (!g_j47.window.open || window_id != g_j47.window.window_id) return;
+    int n = count < J47_WINDOW_MAX_SLOTS ? count : J47_WINDOW_MAX_SLOTS;
+    g_j47.window.total_slots = n;
+    for (int i = 0; i < n; i++) j47_apply_open_window_slot(i, &items[i]);
+}
+
+static void j47_spawn_player(J47Reader *r) {
+    int32_t entity_id = 0;
+    if (!j47_r_varint(r, &entity_id) || r->pos + 16 > r->len) return;
+    unsigned char uuid[16]; memcpy(uuid, r->data + r->pos, 16); r->pos += 16;
+    double x = (double)j47_r_be32(r) / 32.0;
+    double y = (double)j47_r_be32(r) / 32.0;
+    double z = (double)j47_r_be32(r) / 32.0;
+    float yaw = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
+    float pitch = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
+    int held = (int16_t)j47_r_be16(r);
+    if (!j47_skip_metadata(r) || r->failed) return;
+    J47Entity *e = j47_entity_alloc(entity_id);
+    if (!e) return;
+    int slot = e->player_slot;
+    if (slot < 0) slot = j47_player_alloc();
+    if (slot < 0) return;
+    e->kind = J47_ENTITY_PLAYER; e->player_slot = slot; e->x = x; e->y = y; e->z = z; e->yaw = yaw; e->pitch = pitch;
+    e->held_item_id = pex_java47_translate_item_id(held);
+    e->held_item_count = e->held_item_id > 0 ? 1 : 0;
+    PexNetPlayerState *p = &g_mp_players[slot];
+    memset(p, 0, sizeof(*p));
+    p->player_id = entity_id; p->x = (float)x; p->y = (float)y + 1.62f; p->z = (float)z;
+    p->yaw = yaw; p->pitch = pitch; p->health = 20;
+    J47Profile *profile = j47_profile_find_uuid(uuid);
+    snprintf(p->name, sizeof(p->name), "%s", profile && profile->name[0] ? profile->name : "Player");
+    g_mp_prev_players[slot] = *p;
+}
+
+static void j47_spawn_mob(J47Reader *r) {
+    int32_t entity_id = 0;
+    if (!j47_r_varint(r, &entity_id)) return;
+    int java_type = (int)j47_r_u8(r);
+    double x = (double)j47_r_be32(r) / 32.0;
+    double y = (double)j47_r_be32(r) / 32.0;
+    double z = (double)j47_r_be32(r) / 32.0;
+    float yaw = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
+    float pitch = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
+    float head = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
+    (void)j47_r_be16(r); (void)j47_r_be16(r); (void)j47_r_be16(r);
+    if (!j47_skip_metadata(r) || r->failed) return;
+    J47Entity *e = j47_entity_alloc(entity_id);
+    if (!e) return;
+    int slot = e->mob_slot;
+    if (slot < 0) slot = j47_mob_alloc_slot();
+    if (slot < 0) return;
+    int type = pex_java47_translate_mob_type(java_type);
+    passive_mob_init(&g_passive_mobs[slot], type, (float)x, (float)y, (float)z);
+    PassiveMob *m = &g_passive_mobs[slot];
+    m->entity_id = entity_id; m->yaw = m->prev_yaw = yaw; m->pitch = m->prev_pitch = pitch;
+    m->head_yaw = m->prev_head_yaw = head; m->render_yaw = m->prev_render_yaw = yaw;
+    e->kind = J47_ENTITY_MOB; e->java_type = java_type; e->mob_slot = slot; e->x=x; e->y=y; e->z=z; e->yaw=yaw; e->pitch=pitch; e->head_yaw=head;
+}
+
+static void j47_spawn_object(J47Reader *r) {
+    int32_t entity_id = 0;
+    if (!j47_r_varint(r, &entity_id)) return;
+    int type = (int)j47_r_u8(r);
+    double x = (double)j47_r_be32(r) / 32.0;
+    double y = (double)j47_r_be32(r) / 32.0;
+    double z = (double)j47_r_be32(r) / 32.0;
+    (void)j47_r_u8(r); (void)j47_r_u8(r);
+    int data = j47_r_be32(r);
+    int vx=0,vy=0,vz=0;
+    if (data > 0) { vx=(int16_t)j47_r_be16(r); vy=(int16_t)j47_r_be16(r); vz=(int16_t)j47_r_be16(r); }
+    if (r->failed) return;
+    J47Entity *e = j47_entity_alloc(entity_id); if (!e) return;
+    e->kind = J47_ENTITY_OTHER; e->java_type = type; e->x=x; e->y=y; e->z=z;
+    if (type == 2) { /* dropped item: item metadata arrives in S1C */
+        int slot = j47_drop_alloc();
+        if (slot >= 0) {
+            FlatDroppedItem *d=&g_drops[slot]; memset(d,0,sizeof(*d)); d->active=1; d->net_id=entity_id;
+            d->x=d->prev_x=(float)x; d->y=d->prev_y=(float)y; d->z=d->prev_z=(float)z;
+            d->mx=(float)vx/8000.0f; d->my=(float)vy/8000.0f; d->mz=(float)vz/8000.0f; d->stack.id=BLOCK_STONE; d->stack.count=1;
+            e->kind=J47_ENTITY_DROP; e->drop_slot=slot;
+        }
+    }
+}
+
+static void j47_apply_entity_position(J47Entity *e, double x, double y, double z, float yaw, float pitch, int set_rot) {
+    if (!e) return;
+    e->x=x; e->y=y; e->z=z; if(set_rot){e->yaw=yaw;e->pitch=pitch;}
+    if (e->kind==J47_ENTITY_PLAYER && e->player_slot>=0 && e->player_slot<g_mp_player_count) {
+        PexNetPlayerState *p=&g_mp_players[e->player_slot]; g_mp_prev_players[e->player_slot]=*p;
+        p->x=(float)x;p->y=(float)y+1.62f;p->z=(float)z;if(set_rot){p->yaw=yaw;p->pitch=pitch;}
+    } else if (e->kind==J47_ENTITY_MOB && e->mob_slot>=0 && e->mob_slot<MAX_PASSIVE_MOBS) {
+        PassiveMob *m=&g_passive_mobs[e->mob_slot]; m->prev_x=m->x;m->prev_y=m->y;m->prev_z=m->z;m->x=(float)x;m->y=(float)y;m->z=(float)z;
+        if(set_rot){m->prev_yaw=m->yaw;m->yaw=yaw;m->prev_pitch=m->pitch;m->pitch=pitch;m->prev_head_yaw=m->head_yaw;m->head_yaw=yaw;}
+    } else if (e->kind==J47_ENTITY_DROP && e->drop_slot>=0 && e->drop_slot<MAX_DROP_ENTITIES) {
+        FlatDroppedItem *d=&g_drops[e->drop_slot]; d->prev_x=d->x;d->prev_y=d->y;d->prev_z=d->z;d->x=(float)x;d->y=(float)y;d->z=(float)z;
+    }
+}
+
+static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
+    J47Entity *e=j47_entity_find(entity_id);
+    for (;;) {
+        int h=(int)j47_r_u8(r); if(r->failed||h==0x7f) return;
+        int type=(h>>5)&7, index=h&31;
+        if(type==5){ItemStack st;if(!j47_read_item(r,&st))return;if(e&&e->kind==J47_ENTITY_DROP&&index==10&&e->drop_slot>=0){g_drops[e->drop_slot].stack=st;}}
+        else if(type==0){int v=(int8_t)j47_r_u8(r);if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=v;}
+        else if(type==1)(void)j47_r_be16(r);
+        else if(type==2)(void)j47_r_be32(r);
+        else if(type==3){float v=j47_r_float(r);if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=(int)ceilf(v);}
+        else if(type==4){char tmp[512];if(!j47_r_string(r,tmp,sizeof(tmp)))return;}
+        else if(type==6){(void)j47_r_be32(r);(void)j47_r_be32(r);(void)j47_r_be32(r);}
+        else if(type==7){(void)j47_r_float(r);(void)j47_r_float(r);(void)j47_r_float(r);}
+    }
+}
+
+static int j47_send_position_look_immediate(double x, double feet_y, double z,
+                                              float yaw, float pitch, int on_ground) {
+    J47Writer w;
+    j47_writer_init(&w, 48);
+    j47_w_double(&w, x);
+    j47_w_double(&w, feet_y);
+    j47_w_double(&w, z);
+    j47_w_float(&w, yaw);
+    j47_w_float(&w, pitch);
+    j47_w_u8(&w, on_ground);
+    int ok = j47_send_packet(0x06, w.data, w.len);
+    j47_writer_free(&w);
+    if (ok) {
+        g_j47.last_x = x;
+        g_j47.last_y = feet_y;
+        g_j47.last_z = z;
+        g_j47.last_yaw = yaw;
+        g_j47.last_pitch = pitch;
+        g_j47.last_on_ground = on_ground;
+        g_j47.last_move_sent = now_seconds();
+        g_j47.movement_ticks = 0;
+    }
+    return ok;
+}
+
+static void j47_handle_player_list(J47Reader *r) {
+    int32_t action=0,count=0;if(!j47_r_varint(r,&action)||!j47_r_varint(r,&count)||count<0||count>10000)return;
+    for(int i=0;i<count;i++){
+        if(r->pos+16>r->len){r->failed=1;return;}unsigned char uuid[16];memcpy(uuid,r->data+r->pos,16);r->pos+=16;
+        if(action==0){char name[64];int32_t props=0,gm=0,ping=0;j47_r_string(r,name,sizeof(name));j47_r_varint(r,&props);
+            for(int p=0;p<props;p++){char a[128],b[4096];j47_r_string(r,a,sizeof(a));j47_r_string(r,b,sizeof(b));int sig=j47_r_u8(r);if(sig){char c[4096];j47_r_string(r,c,sizeof(c));}}
+            j47_r_varint(r,&gm);j47_r_varint(r,&ping);int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}j47_profile_put(uuid,name);
+        } else if(action==1||action==2){int32_t v;j47_r_varint(r,&v);} else if(action==3){int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}}
+        else if(action==4){J47Profile*p=j47_profile_find_uuid(uuid);if(p)p->used=0;}
+        if(r->failed)return;
+    }
+}
+
+static int j47_send_client_identity(void) {
+    J47Writer settings;
+    j47_writer_init(&settings, 64);
+    j47_w_string(&settings, "en_US");
+    int view_distance = FLAT_RENDER_CHUNKS / 2 - 1;
+    if (view_distance < 1) view_distance = 1;
+    if (view_distance > 8) view_distance = 8;
+    j47_w_u8(&settings, view_distance);
+    j47_w_u8(&settings, 0);       /* full chat */
+    j47_w_u8(&settings, 1);       /* chat colours */
+    j47_w_u8(&settings, 0x7f);    /* all model parts */
+    int ok = j47_send_packet(0x15, settings.data, settings.len);
+    j47_writer_free(&settings);
+    if (!ok) return 0;
+
+    J47Writer brand;
+    J47Writer brand_data;
+    j47_writer_init(&brand, 64);
+    j47_writer_init(&brand_data, 32);
+    j47_w_string_n(&brand, "MC|Brand", 20);
+    j47_w_string_n(&brand_data, "vanilla", 32767);
+    j47_w_bytes(&brand, brand_data.data, brand_data.len);
+    ok = j47_send_packet(0x17, brand.data, brand.len);
+    j47_writer_free(&brand_data);
+    j47_writer_free(&brand);
+    return ok;
+}
+
+static void j47_handle_play_packet(int packet_id, J47Reader *r) {
+    switch(packet_id){
+        case 0x00:{int32_t id;if(j47_r_varint(r,&id)){J47Writer w;j47_writer_init(&w,8);j47_w_varint(&w,id);j47_send_packet(0x00,w.data,w.len);j47_writer_free(&w);}break;}
+        case 0x01:{g_j47.local_entity_id=j47_r_be32(r);g_mp_player_id=g_j47.local_entity_id;int gm=(int)j47_r_u8(r);g_j47.game_mode=gm&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_j47.dimension=(int8_t)j47_r_u8(r);g_j47.difficulty=(int)j47_r_u8(r);(void)j47_r_u8(r);char wt[64];j47_r_string(r,wt,sizeof(wt));g_j47.has_join_game=1;g_j47.progress=35;j47_set_status("Downloading terrain");if(!r->failed&&!j47_send_client_identity())j47_fail("Could not send Java client settings");break;}
+        case 0x02:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){(void)j47_r_u8(r);j47_json_collect_text(json,text,sizeof(text));if(text[0])hud_add_chat(text);}break;}
+        case 0x03:{(void)j47_r_be64(r);g_world_time=j47_r_be64(r);break;}
+        case 0x04:{int32_t id;if(j47_r_varint(r,&id)){int slot=(int16_t)j47_r_be16(r);ItemStack st;if(j47_read_item(r,&st)&&slot==0){J47Entity*e=j47_entity_find(id);if(e){e->held_item_id=st.id;e->held_item_count=st.count;e->held_item_damage=st.damage;e->held_slot=0;PexNetRenderPlayerState*rp=pex_net_find_render_player(id);if(rp){rp->held_item_id=st.id;rp->held_item_count=st.count;rp->held_item_damage=st.damage;rp->held_slot=0;}}}}break;}
+        case 0x05:{int x,y,z;j47_read_block_pos(r,&x,&y,&z);break;}
+        case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
+        case 0x07:{g_j47.dimension=j47_r_be32(r);g_j47.difficulty=(int)j47_r_u8(r);g_j47.game_mode=(int)j47_r_u8(r)&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_player_dead=0;g_player_death_time=0;g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;char wt[64];j47_r_string(r,wt,sizeof(wt));j47_reset_world_for_respawn();break;}
+        case 0x08:{double x=j47_r_double(r),y=j47_r_double(r),z=j47_r_double(r);float yaw=j47_r_float(r),pitch=j47_r_float(r);int flags=j47_r_u8(r);if(flags&1)x+=g_player_x;if(flags&2)y+=(g_player_y-1.62);if(flags&4)z+=g_player_z;if(flags&8)yaw+=g_player_yaw;if(flags&16)pitch+=g_player_pitch;g_player_x=g_player_prev_x=(float)x;g_player_y=g_player_prev_y=(float)y+1.62f;g_player_z=g_player_prev_z=(float)z;g_player_yaw=yaw;g_player_pitch=pitch;flat_multiplayer_recenter_world(g_player_x,g_player_z,1);g_j47.position_received=1;g_j47.progress=55;j47_send_position_look_immediate(x,y,z,yaw,pitch,g_player_on_ground);break;}
+        case 0x09:g_selected_hotbar_slot=(int)j47_r_u8(r);if(g_selected_hotbar_slot<0||g_selected_hotbar_slot>8)g_selected_hotbar_slot=0;break;
+        case 0x0B:{int32_t id;if(j47_r_varint(r,&id)){int anim=j47_r_u8(r);PexNetRenderPlayerState*rp=pex_net_find_render_player(id);if(rp&&anim==0){rp->swing_active=1;rp->swing_ticks=0;}}break;}
+        case 0x0C:j47_spawn_player(r);break;
+        case 0x0D:{int32_t collected,collector;j47_r_varint(r,&collected);j47_r_varint(r,&collector);j47_entity_remove(collected);break;}
+        case 0x0E:j47_spawn_object(r);break;
+        case 0x0F:j47_spawn_mob(r);break;
+        case 0x12:{int32_t id;if(j47_r_varint(r,&id)){J47Entity*e=j47_entity_find(id);int vx=(int16_t)j47_r_be16(r),vy=(int16_t)j47_r_be16(r),vz=(int16_t)j47_r_be16(r);if(e&&e->kind==J47_ENTITY_DROP&&e->drop_slot>=0){g_drops[e->drop_slot].mx=vx/8000.0f;g_drops[e->drop_slot].my=vy/8000.0f;g_drops[e->drop_slot].mz=vz/8000.0f;}}break;}
+        case 0x13:{int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int32_t id;if(!j47_r_varint(r,&id))break;j47_entity_remove(id);}break;}
+        case 0x14:case 0x15:case 0x16:case 0x17:{int32_t id;if(!j47_r_varint(r,&id))break;J47Entity*e=j47_entity_find(id);double x=e?e->x:0,y=e?e->y:0,z=e?e->z:0;float yaw=e?e->yaw:0,pitch=e?e->pitch:0;int rot=packet_id==0x16||packet_id==0x17;if(packet_id==0x15||packet_id==0x17){x+=(int8_t)j47_r_u8(r)/32.0;y+=(int8_t)j47_r_u8(r)/32.0;z+=(int8_t)j47_r_u8(r)/32.0;}if(rot){yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f;pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;}(void)j47_r_u8(r);j47_apply_entity_position(e,x,y,z,yaw,pitch,rot);break;}
+        case 0x18:{int32_t id;if(j47_r_varint(r,&id)){double x=j47_r_be32(r)/32.0,y=j47_r_be32(r)/32.0,z=j47_r_be32(r)/32.0;float yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f,pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;(void)j47_r_u8(r);j47_apply_entity_position(j47_entity_find(id),x,y,z,yaw,pitch,1);}break;}
+        case 0x19:{int32_t id;if(j47_r_varint(r,&id)){float head=(int8_t)j47_r_u8(r)*360.0f/256.0f;J47Entity*e=j47_entity_find(id);if(e){e->head_yaw=head;if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){g_passive_mobs[e->mob_slot].prev_head_yaw=g_passive_mobs[e->mob_slot].head_yaw;g_passive_mobs[e->mob_slot].head_yaw=head;}}}break;}
+        case 0x1A:{int32_t id;if(j47_r_varint(r,&id)){int status=(int8_t)j47_r_u8(r);J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){PassiveMob*m=&g_passive_mobs[e->mob_slot];if(status==2)m->hurt_time=10;if(status==3)m->death_time=1;}}break;}
+        case 0x1C:{int32_t id;if(j47_r_varint(r,&id))j47_parse_entity_metadata(r,id);break;}
+        case 0x1F:{g_player_xp_progress=j47_r_float(r);int32_t level,total;j47_r_varint(r,&level);j47_r_varint(r,&total);g_player_xp_level=level;g_player_xp_total=total;break;}
+        case 0x21:{int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0);break;}
+        case 0x22:{int cx=j47_r_be32(r),cz=j47_r_be32(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int packed=j47_r_be16(r);int32_t state;j47_r_varint(r,&state);int x=cx*16+((packed>>12)&15),z=cz*16+((packed>>8)&15),y=packed&255;j47_set_block_state(x,y,z,state);}break;}
+        case 0x23:{int x=0,y=0,z=0;int32_t s;if(j47_read_block_pos(r,&x,&y,&z)&&j47_r_varint(r,&s))j47_set_block_state(x,y,z,s);break;}
+        case 0x26:{int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=0;for(int sy=0;sy<16;sy++)if(mask[i]&(1u<<sy))bytes+=8192+2048+(has_sky?2048:0);bytes+=256;if(bytes>r->len-r->pos){r->failed=1;break;}j47_install_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky);r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
+        case 0x2B:{int reason=j47_r_u8(r);float v=j47_r_float(r);if(reason==3){g_game_mode=(int)v==1?1:0;g_pending_game_mode=g_game_mode;g_j47.game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;}break;}
+        case 0x2D:{
+            memset(&g_j47.window,0,sizeof(g_j47.window));
+            g_j47.window.open=1;
+            g_j47.window.window_id=j47_r_u8(r);
+            j47_r_string(r,g_j47.window.type,sizeof(g_j47.window.type));
+            char title_json[1024];
+            j47_r_string(r,title_json,sizeof(title_json));
+            j47_json_collect_text(title_json,g_j47.window.title,sizeof(g_j47.window.title));
+            g_j47.window.container_slots=j47_r_u8(r);
+            if(!strcmp(g_j47.window.type,"EntityHorse"))j47_r_be32(r);
+            if(j47_window_is_container_type(g_j47.window.type)) {
+                g_open_chest_rows = g_j47.window.container_slots >= 54 ? 6 : 3;
+                if(g_j47.window.title[0]) snprintf(g_open_chest_title,sizeof(g_open_chest_title),"%.*s",(int)sizeof(g_open_chest_title)-1,g_j47.window.title);
+            }
+            break;
+        }
+        case 0x2E:{int id=j47_r_u8(r);if(id==g_j47.window.window_id){memset(&g_j47.window,0,sizeof(g_j47.window));pex_net_java_server_closed_window();}break;}
+        case 0x2F:{
+            int wid=(int)(int8_t)j47_r_u8(r);
+            int slot=(int16_t)j47_r_be16(r);
+            ItemStack st;
+            if(j47_read_item(r,&st)){
+                if(wid==-1 && slot==-1) g_carried_stack=st;
+                else if(wid==0 || wid==-2) j47_apply_player_slot(slot,&st);
+                else if(g_j47.window.open && wid==g_j47.window.window_id) j47_apply_open_window_slot(slot,&st);
+            }
+            break;
+        }
+        case 0x30:{int wid=j47_r_u8(r);int count=(int16_t)j47_r_be16(r);if(count<0||count>4096)break;ItemStack*items=calloc((size_t)count,sizeof(ItemStack));if(!items)break;for(int i=0;i<count&&!r->failed;i++)j47_read_item(r,&items[i]);if(!r->failed)j47_apply_window_items(wid,items,count);free(items);break;}
+        case 0x31:{int wid=j47_r_u8(r);int property=(int16_t)j47_r_be16(r);int value=(int16_t)j47_r_be16(r);if(g_j47.window.open&&wid==g_j47.window.window_id&&!strcmp(g_j47.window.type,"minecraft:furnace")){FurnaceTile*ft=furnace_open_tile();if(ft){if(property==0)ft->burn_time=value;else if(property==1)ft->current_item_burn_time=value;else if(property==2)ft->cook_time=value;}}break;}
+        case 0x32:{int wid=j47_r_u8(r);int action=(int16_t)j47_r_be16(r);int accepted=j47_r_u8(r);if(!accepted){J47Writer w;j47_writer_init(&w,8);j47_w_u8(&w,wid);j47_w_be16(&w,action);j47_w_u8(&w,1);j47_send_packet(0x0F,w.data,w.len);j47_writer_free(&w);}break;}
+        case 0x38:j47_handle_player_list(r);break;
+        case 0x39:{(void)j47_r_u8(r);(void)j47_r_float(r);(void)j47_r_float(r);break;}
+        case 0x40:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Disconnected by Java server");}break;}
+        case 0x41:g_j47.difficulty=j47_r_u8(r);break;
+        case 0x46:{int32_t threshold;if(j47_r_varint(r,&threshold))g_j47.compression_threshold=threshold;break;}
+        case 0x48:{char url[2048],hash[128];j47_r_string(r,url,sizeof(url));j47_r_string(r,hash,sizeof(hash));J47Writer w;j47_writer_init(&w,128);j47_w_string(&w,hash);j47_w_varint(&w,1);j47_send_packet(0x19,w.data,w.len);j47_writer_free(&w);break;}
+        default: break;
+    }
+}
+
+static void j47_handle_packet(const unsigned char *data,size_t len){
+    J47Reader r;int32_t id=-1;j47_reader_init(&r,data,len);if(!j47_r_varint(&r,&id))return;
+    if(g_j47.state==PEX_JAVA47_LOGIN){
+        if(id==0){char json[8192],text[512];if(j47_r_string(&r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Login rejected");}}
+        else if(id==1){j47_fail("This Java server requires online-mode authentication");}
+        else if(id==2){char uuid[64],name[64];if(j47_r_string(&r,uuid,sizeof(uuid))&&j47_r_string(&r,name,sizeof(name))){g_j47.state=PEX_JAVA47_PLAY;g_j47.progress=25;j47_set_status("Logging in");}}
+        else if(id==3){int32_t threshold;if(j47_r_varint(&r,&threshold))g_j47.compression_threshold=threshold;}
+    }else if(g_j47.state==PEX_JAVA47_PLAY)j47_handle_play_packet(id,&r);
+    if(r.failed&&g_j47.state!=PEX_JAVA47_FAILED)j47_fail("Malformed Java protocol packet");
+}
+
+static int j47_process_rx(void){
+    size_t consumed=0;
+    while(consumed<g_j47.rx_len){int32_t frame_len=0;size_t prefix=0;int vr=j47_peek_varint(g_j47.rx+consumed,g_j47.rx_len-consumed,&frame_len,&prefix);if(vr==0)break;if(vr<0||frame_len<0||frame_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java packet length");return 0;}if(g_j47.rx_len-consumed-prefix<(size_t)frame_len)break;
+        const unsigned char*frame=g_j47.rx+consumed+prefix;size_t flen=(size_t)frame_len;
+        if(g_j47.compression_threshold>=0){J47Reader rr;int32_t raw_len=0;j47_reader_init(&rr,frame,flen);if(!j47_r_varint(&rr,&raw_len)){j47_fail("Invalid compressed Java packet");return 0;}if(raw_len==0)j47_handle_packet(frame+rr.pos,flen-rr.pos);else{if(raw_len<g_j47.compression_threshold||raw_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java decompressed length");return 0;}unsigned char*out=malloc((size_t)raw_len);if(!out){j47_fail("Out of memory decoding Java packet");return 0;}uLongf outlen=(uLongf)raw_len;int zr=uncompress(out,&outlen,frame+rr.pos,(uLong)(flen-rr.pos));if(zr!=Z_OK||outlen!=(uLongf)raw_len){free(out);j47_fail("Invalid Java compressed packet");return 0;}j47_handle_packet(out,(size_t)outlen);free(out);}}
+        else j47_handle_packet(frame,flen);
+        if(g_j47.state==PEX_JAVA47_FAILED) return 0;
+        consumed += prefix + flen;
+    }
+    if(consumed){memmove(g_j47.rx,g_j47.rx+consumed,g_j47.rx_len-consumed);g_j47.rx_len-=consumed;}return 1;
+}
+
+int pex_java47_begin_join(const char *host,int port,const char *username){
+    pex_java47_disconnect();
+    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;
+    snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
+    g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
+    J47Writer hs; j47_writer_init(&hs,300);j47_w_varint(&hs,PEX_JAVA47_PROTOCOL_VERSION);j47_w_string_n(&hs,g_j47.host,255);j47_w_be16(&hs,g_j47.port);j47_w_varint(&hs,2);
+    if(!j47_send_packet(0x00,hs.data,hs.len)){j47_writer_free(&hs);j47_fail("Could not send Java handshake");return 0;}j47_writer_free(&hs);
+    J47Writer login;j47_writer_init(&login,32);j47_w_string_n(&login,g_j47.username,16);if(!j47_send_packet(0x00,login.data,login.len)){j47_writer_free(&login);j47_fail("Could not send Java login");return 0;}j47_writer_free(&login);
+    g_j47.state=PEX_JAVA47_LOGIN;g_j47.progress=15;j47_set_status("Logging in");return 1;
+}
+
+int pex_java47_tick(void){
+    if(!g_j47.active&&g_j47.state!=PEX_JAVA47_PLAY)return g_j47.state!=PEX_JAVA47_FAILED;
+    if(g_j47.socket==INVALID_SOCKET)return 0;
+    if(!j47_flush_tx())return 0;
+    if(!j47_receive_available())return 0;
+    if(!j47_process_rx())return 0;
+    if(g_j47.peer_closed){
+        if(g_j47.rx_len) j47_fail("Java server closed with a truncated packet");
+        else j47_fail("Java server closed the connection");
+        return 0;
+    }
+    return j47_flush_tx();
+}
+
+void pex_java47_disconnect(void){
+    if(g_j47.socket!=INVALID_SOCKET)closesocket(g_j47.socket);
+    j47_clear_remote_entities();
+    free(g_j47.rx);free(g_j47.tx);memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.state=PEX_JAVA47_IDLE;
+}
+
+int pex_java47_is_active(void){return g_j47.active||g_j47.state==PEX_JAVA47_PLAY;}
+int pex_java47_is_playing(void){return g_j47.state==PEX_JAVA47_PLAY;}
+int pex_java47_has_join_game(void){return g_j47.has_join_game;}
+int pex_java47_world_ready(void){return g_j47.world_ready;}
+int pex_java47_progress(void){return g_j47.progress;}
+const char*pex_java47_status_text(void){return g_j47.status;}
+const char*pex_java47_disconnect_reason(void){return g_j47.disconnect_reason;}
+int pex_java47_server_protocol(void){return g_j47.server_protocol;}
+int pex_java47_local_entity_id(void){return g_j47.local_entity_id;}
+int pex_java47_get_equipment(int entity_id,int *item_id,int *count,int *damage,int *slot){J47Entity*e=j47_entity_find(entity_id);if(!e)return 0;if(item_id)*item_id=e->held_item_id;if(count)*count=e->held_item_count;if(damage)*damage=e->held_item_damage;if(slot)*slot=e->held_slot;return 1;}
+int pex_java47_entity_is_player(int entity_id){J47Entity*e=j47_entity_find(entity_id);return e&&e->kind==J47_ENTITY_PLAYER;}
+
+static int j47_send_entity_action(int action){J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,g_j47.local_entity_id);j47_w_varint(&w,action);j47_w_varint(&w,0);int ok=j47_send_packet(0x0B,w.data,w.len);j47_writer_free(&w);return ok;}
+
+int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float pitch,int on_ground,int sneaking,int sprinting,int held_slot){
+    if(g_j47.state!=PEX_JAVA47_PLAY)return 0;
+    flat_multiplayer_recenter_world((float)x,(float)z,0);
+    if(held_slot<0||held_slot>8) held_slot=0;
+    if(g_j47.last_held_slot!=held_slot){J47Writer h;j47_writer_init(&h,4);j47_w_be16(&h,held_slot);j47_send_packet(0x09,h.data,h.len);j47_writer_free(&h);g_j47.last_held_slot=held_slot;}
+    if(g_j47.last_sneaking!=sneaking){j47_send_entity_action(sneaking?0:1);g_j47.last_sneaking=sneaking;}
+    if(g_j47.last_sprinting!=sprinting){j47_send_entity_action(sprinting?3:4);g_j47.last_sprinting=sprinting;}
+    int ability_flags=0;if(g_j47.game_mode==1){ability_flags=1|4|8;if(g_creative_flying)ability_flags|=2;}
+    if(g_j47.last_abilities_flags!=ability_flags){J47Writer a;j47_writer_init(&a,16);j47_w_u8(&a,ability_flags);j47_w_float(&a,0.05f);j47_w_float(&a,0.1f);j47_send_packet(0x13,a.data,a.len);j47_writer_free(&a);g_j47.last_abilities_flags=ability_flags;}
+    double now=now_seconds();if(now-g_j47.last_move_sent<0.045)return 1;g_j47.last_move_sent=now;
+    int moved=fabs(x-g_j47.last_x)>0.0001||fabs(feet_y-g_j47.last_y)>0.0001||fabs(z-g_j47.last_z)>0.0001||g_j47.movement_ticks++>=20;
+    int looked=fabsf(yaw-g_j47.last_yaw)>0.001f||fabsf(pitch-g_j47.last_pitch)>0.001f;J47Writer w;j47_writer_init(&w,48);int pid=0x03;
+    if(moved&&looked){pid=0x06;j47_w_double(&w,x);j47_w_double(&w,feet_y);j47_w_double(&w,z);j47_w_float(&w,yaw);j47_w_float(&w,pitch);j47_w_u8(&w,on_ground);}
+    else if(moved){pid=0x04;j47_w_double(&w,x);j47_w_double(&w,feet_y);j47_w_double(&w,z);j47_w_u8(&w,on_ground);}
+    else if(looked){pid=0x05;j47_w_float(&w,yaw);j47_w_float(&w,pitch);j47_w_u8(&w,on_ground);}
+    else {pid=0x03;j47_w_u8(&w,on_ground);}
+    int ok=j47_send_packet(pid,w.data,w.len);j47_writer_free(&w);if(moved){g_j47.last_x=x;g_j47.last_y=feet_y;g_j47.last_z=z;g_j47.movement_ticks=0;}if(looked){g_j47.last_yaw=yaw;g_j47.last_pitch=pitch;}g_j47.last_on_ground=on_ground;return ok;
+}
+
+int pex_java47_send_chat(const char*text){if(g_j47.state!=PEX_JAVA47_PLAY||!text)return 0;J47Writer w;j47_writer_init(&w,300);j47_w_string_n(&w,text,100);int ok=j47_send_packet(0x01,w.data,w.len);j47_writer_free(&w);return ok;}
+int pex_java47_send_swing(void){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;return j47_send_packet(0x0A,NULL,0);}
+int pex_java47_send_attack(int entity_id){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,entity_id);j47_w_varint(&w,1);int ok=j47_send_packet(0x02,w.data,w.len);j47_writer_free(&w);return ok;}
+int pex_java47_send_dig(int status,int x,int y,int z,int face){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,24);j47_w_varint(&w,status);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);int ok=j47_send_packet(0x07,w.data,w.len);j47_writer_free(&w);return ok;}
+int pex_java47_send_place(int x,int y,int z,int face,int item_id,int count,int damage,float cursor_x,float cursor_y,float cursor_z){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,48);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);j47_write_item(&w,item_id,count,damage);int cx=(int)(cursor_x*16.0f);int cy=(int)(cursor_y*16.0f);int cz=(int)(cursor_z*16.0f);if(cx<0)cx=0;if(cx>15)cx=15;if(cy<0)cy=0;if(cy>15)cy=15;if(cz<0)cz=0;if(cz>15)cz=15;j47_w_u8(&w,cx);j47_w_u8(&w,cy);j47_w_u8(&w,cz);int ok=j47_send_packet(0x08,w.data,w.len);j47_writer_free(&w);return ok;}
+int pex_java47_send_drop(int whole_stack){return pex_java47_send_dig(whole_stack?3:4,0,0,0,0);}
+int pex_java47_send_use_item(int item_id,int count,int damage){return pex_java47_send_place(-1,-1,-1,255,item_id,count,damage,0.0f,0.0f,0.0f);}
+int pex_java47_send_release_use_item(void){return pex_java47_send_dig(5,0,0,0,0);}
+int pex_java47_send_respawn(void){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,4);j47_w_varint(&w,0);int ok=j47_send_packet(0x16,w.data,w.len);j47_writer_free(&w);return ok;}
+int pex_java47_send_close_window(void){if(g_j47.state!=PEX_JAVA47_PLAY||!g_j47.window.open)return 0;J47Writer w;j47_writer_init(&w,4);j47_w_u8(&w,g_j47.window.window_id);int ok=j47_send_packet(0x0D,w.data,w.len);j47_writer_free(&w);memset(&g_j47.window,0,sizeof(g_j47.window));return ok;}
+
+int pex_java47_send_window_click(int pex_slot,int button,int mode,const ItemStack *clicked_result){
+    if(g_j47.state!=PEX_JAVA47_PLAY)return 0;
+    int java_slot=j47_map_pex_slot_to_java(pex_slot);
+    if(java_slot==-32768)return 0;
+    int window_id=g_j47.window.open?g_j47.window.window_id:0;
+    short action=++g_j47.window.action_number;
+    J47Writer w;j47_writer_init(&w,48);
+    j47_w_u8(&w,window_id);
+    j47_w_be16(&w,java_slot);
+    j47_w_u8(&w,button);
+    j47_w_be16(&w,action);
+    j47_w_u8(&w,mode);
+    if(clicked_result&&!stack_empty(clicked_result))j47_write_item(&w,clicked_result->id,clicked_result->count,clicked_result->damage);
+    else j47_write_item(&w,0,0,0);
+    int ok=j47_send_packet(0x0E,w.data,w.len);j47_writer_free(&w);return ok;
+}
+
+int pex_java47_send_creative_slot(int pex_slot,const ItemStack *stack){
+    if(g_j47.state!=PEX_JAVA47_PLAY||g_j47.game_mode!=1)return 0;
+    int java_slot=j47_map_pex_slot_to_java(pex_slot);
+    if(java_slot==-32768)return 0;
+    J47Writer w;j47_writer_init(&w,40);j47_w_be16(&w,java_slot);
+    if(stack&&!stack_empty(stack))j47_write_item(&w,stack->id,stack->count,stack->damage);else j47_write_item(&w,0,0,0);
+    int ok=j47_send_packet(0x10,w.data,w.len);j47_writer_free(&w);return ok;
+}
+
+int pex_java47_sync_inventory_from_game(void){return g_j47.state==PEX_JAVA47_PLAY;}
+
+int pex_java47_try_attack_mob(float max_dist){
+    if(g_j47.state!=PEX_JAVA47_PLAY) return 0;
+    float lx,ly,lz;
+    pex_touch_aware_look_vector(&lx,&ly,&lz);
+    float best=max_dist;
+    int best_id=0;
+    for(int i=0;i<J47_ENTITY_MAX;i++){J47Entity*e=&g_j47.entities[i];if(!e->used||e->kind!=J47_ENTITY_MOB||e->mob_slot<0)continue;PassiveMob*m=&g_passive_mobs[e->mob_slot];if(!m->active)continue;float mn[3]={m->x-m->width*.5f,m->y,m->z-m->width*.5f},mx[3]={m->x+m->width*.5f,m->y+m->height,m->z+m->width*.5f},o[3]={g_player_x,g_player_y,g_player_z},d[3]={lx,ly,lz};float tmin=0,tmax=best;int hit=1;for(int a=0;a<3;a++){if(fabsf(d[a])<1e-5f){if(o[a]<mn[a]||o[a]>mx[a]){hit=0;break;}}else{float inv=1/d[a],t1=(mn[a]-o[a])*inv,t2=(mx[a]-o[a])*inv;if(t1>t2){float q=t1;t1=t2;t2=q;}if(t1>tmin)tmin=t1;if(t2<tmax)tmax=t2;if(tmin>tmax){hit=0;break;}}}if(hit&&tmin>=0&&tmin<best){best=tmin;best_id=e->entity_id;}}
+    if(best_id){pex_java47_send_swing();pex_java47_send_attack(best_id);restart_hand_swing();return 1;}return 0;
+}

@@ -160,6 +160,7 @@ static void steve_set_tint(float r, float g, float b);
 #include "../multiplayer/mcpe/protocol_81/session/bedrock_join.c"
 #include "../multiplayer/mcpe/protocol_81/world/chunk_convert.c"
 
+#include "../multiplayer/java/protocol_47je/protocol_47je.c"
 #include "platform/multiplayer_client.c"
 #include "ui/screen_state_input.c"
 #include "ui/title_menus.c"

@@ -274,6 +274,7 @@ static void creative_click_hotbar_slot(int hotbar, int button) {
             ItemStack tmp = *s; *s = g_carried_stack; g_carried_stack = tmp; s->pop_time = 5;
         }
     }
+    if (g_mp_connected) pex_net_send_creative_slot(hotbar, s);
     g_save_dirty = 1;
 }
 
@@ -5962,6 +5963,8 @@ static int inventory_take_crafting_output(void) {
     if (stack_empty(&out)) return 0;
 
     if (g_mp_connected) {
+        int output_slot = (g_screen == SCREEN_WORKBENCH) ? 309 : 104;
+        if (pex_net_send_inventory_click(output_slot, 0, 0, &out)) return 1;
         if (!stack_empty(&g_carried_stack)) {
             hud_add_chat("Server crafting needs an empty cursor.");
             return 0;
@@ -6120,6 +6123,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
     int slot = inventory_slot_at(mx, my);
     int armor_slot_touched = armor_slot_is_armor(slot);
     if (outside && !stack_empty(&g_carried_stack)) {
+        if (g_mp_connected && pex_net_send_inventory_click(-999, button, 0, NULL)) return;
         if (button == 0) { spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, g_carried_stack, 0); stack_clear(&g_carried_stack); }
         else { ItemStack one = make_stack(g_carried_stack.id, 1, g_carried_stack.damage); spawn_item_stack(g_player_x, g_player_y - 0.30f, g_player_z, one, 0); if (--g_carried_stack.count <= 0) stack_clear(&g_carried_stack); }
         return;
@@ -6192,6 +6196,7 @@ static void inventory_mouse_click(int mx, int my, int button) {
         if (taken > 0) pex_achievement_on_furnace_taken(pex_slot_before.id, taken);
     }
     if (armor_slot_touched) armor_sync_player_armor();
+    if (g_mp_connected && pex_net_send_inventory_click(slot, button, 0, &pex_slot_before)) sync_chest_after = 0;
     if (sync_chest_after) pex_net_send_chest_update();
     g_save_dirty = 1;
 }
@@ -6389,7 +6394,8 @@ static void door_toggle_at_ex(int x, int y, int z, int player_action) {
     /* Only a local player click reaches PlayerController and swings the hand.
        Villager AI and other world-side door changes must not impersonate an
        input action or emit a client block-action packet. */
-    if (player_action && g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, ly, z, 0, id);
+    if (player_action && g_mp_connected && !pex_net_send_block_interact(x, ly, z, 1))
+        pex_net_send_block_action(PEX_BLOCK_PLACE, x, ly, z, 0, id);
     if (player_action) restart_hand_swing();
 }
 
@@ -6692,7 +6698,8 @@ static void press_button_at(int x, int y, int z) {
     pex_sound_play_at("random.click", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.30f, 0.6f);
     add_button_timer(x, y, z);
     redstone_update_near(x, y, z);
-    if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
+    if (g_mp_connected && !pex_net_send_block_interact(x, y, z, 1))
+        pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
     restart_hand_swing();
 }
 
@@ -6703,7 +6710,8 @@ static void toggle_lever_at(int x, int y, int z) {
     flat_set_meta_raw(x, y, z, new_meta);
     pex_sound_play_at("random.click", (float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f, 0.30f, (new_meta & 8) ? 0.6f : 0.5f);
     redstone_update_near(x, y, z);
-    if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
+    if (g_mp_connected && !pex_net_send_block_interact(x, y, z, 1))
+        pex_net_send_block_action(PEX_BLOCK_PLACE, x, y, z, 0, id);
     restart_hand_swing();
 }
 
@@ -8997,6 +9005,7 @@ static void ingame_right_click_impl(void) {
     FlatRayHit hit = flat_raycast();
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (!hit.hit) {
+        if (g_mp_connected) pex_net_send_use_item_air();
         if (dear_memories_use_book(held)) return;
         if (try_start_bow_item_use(held)) return;
         if (try_use_potion_item(held)) return;
@@ -9012,14 +9021,17 @@ static void ingame_right_click_impl(void) {
 
     if (!sneaking) {
         if (target_id == BLOCK_CRAFTING_TABLE) {
+            if (g_mp_connected) pex_net_send_block_interact(hit.bx, hit.by, hit.bz, hit.face);
             set_screen(SCREEN_WORKBENCH);
             return;
         }
         if (target_id == BLOCK_FURNACE || target_id == BLOCK_FURNACE_LIT) {
+            if (g_mp_connected) pex_net_send_block_interact(hit.bx, hit.by, hit.bz, hit.face);
             furnace_open_at(hit.bx, hit.by, hit.bz);
             return;
         }
         if (target_id == BLOCK_CHEST) {
+            if (g_mp_connected) pex_net_send_block_interact(hit.bx, hit.by, hit.bz, hit.face);
             chest_open_at(hit.bx, hit.by, hit.bz);
             return;
         }
@@ -9173,7 +9185,9 @@ static void ingame_right_click(void) {
 }
 
 static void ingame_right_release(void) {
+    int was_using_bow = g_bow_item_in_use;
     (void)release_bow_item_use();
+    if (was_using_bow && g_mp_connected) pex_net_send_release_use_item();
 }
 
 
@@ -11040,6 +11054,44 @@ static void stream_remap_block_storage(int old_origin_x, int old_origin_z,
     (void)old_origin_z;
     (void)new_origin_x;
     (void)new_origin_z;
+}
+
+/* Multiplayer servers own chunk generation. Slide or recenter the active
+   ring-buffer window without queuing local terrain generation, preserving all
+   overlapping server chunks and exposing empty slots for newly received ones. */
+static void flat_multiplayer_recenter_world(float px, float pz, int force_center) {
+    int old_origin_x = g_flat_world_origin_x;
+    int old_origin_z = g_flat_world_origin_z;
+    int new_origin_x = old_origin_x;
+    int new_origin_z = old_origin_z;
+
+    if (force_center) {
+        int pcx = floor_div16((int)floorf(px));
+        int pcz = floor_div16((int)floorf(pz));
+        new_origin_x = (pcx - FLAT_RENDER_CHUNKS / 2) * FLAT_RENDER_CHUNK;
+        new_origin_z = (pcz - FLAT_RENDER_CHUNKS / 2) * FLAT_RENDER_CHUNK;
+    } else {
+        int margin = FLAT_RENDER_CHUNK * 2;
+        if (margin * 2 >= FLAT_WORLD_SIZE) margin = FLAT_RENDER_CHUNK;
+        if (px > old_origin_x + FLAT_WORLD_SIZE - margin) new_origin_x += FLAT_RENDER_CHUNK;
+        else if (px < old_origin_x + margin) new_origin_x -= FLAT_RENDER_CHUNK;
+        if (pz > old_origin_z + FLAT_WORLD_SIZE - margin) new_origin_z += FLAT_RENDER_CHUNK;
+        else if (pz < old_origin_z + margin) new_origin_z -= FLAT_RENDER_CHUNK;
+    }
+
+    if (new_origin_x == old_origin_x && new_origin_z == old_origin_z) return;
+
+    g_stream_remap_in_progress = 1;
+    g_stream_suffocation_grace_until_tick = g_ingame_ticks + 20;
+    flat_world_map_enter();
+    g_flat_world_origin_x = new_origin_x;
+    g_flat_world_origin_z = new_origin_z;
+    stream_remap_render_chunks(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    stream_remap_block_storage(old_origin_x, old_origin_z, new_origin_x, new_origin_z);
+    flat_world_map_leave();
+    g_stream_remap_in_progress = 0;
+    g_flat_renderer_sort_dirty = 1;
+    flat_lighting_worker_wake();
 }
 
 static int stream_local_chunk_x(int wcx) {
