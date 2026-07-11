@@ -123,12 +123,13 @@ typedef struct PexJava47Session {
     int last_sneaking;
     int last_sprinting;
     int last_abilities_flags;
+    int server_abilities_flags;
+    float server_fly_speed;
+    float server_walk_speed;
+    float server_movement_speed_scale;
     int movement_ticks;
     int last_movement_game_tick;
     int last_on_ground;
-    int pending_move_packet;
-    size_t pending_move_len;
-    unsigned char pending_move_payload[48];
     int pending_respawn_dimension;
     int pending_respawn_from;
     int pending_respawn_to;
@@ -1087,6 +1088,25 @@ static void j47_tx_lock_ensure(void) {
 
 static int j47_queue_bytes_unlocked(const void *data, size_t len) {
     if (!data || len == 0) return 1;
+
+    /* Keep the transmit buffer as an ordered byte stream, like Netty's
+       outbound queue.  When a nonblocking send consumed only a prefix, move
+       the remaining bytes to the front before appending more packets.  This
+       prevents harmless partial writes from making the buffer look full and,
+       importantly, lets us retain every 20 Hz movement packet instead of
+       replacing intermediate positions. */
+    if (g_j47.tx_pos > 0) {
+        if (g_j47.tx_pos >= g_j47.tx_len) {
+            g_j47.tx_pos = 0;
+            g_j47.tx_len = 0;
+        } else if (g_j47.tx_pos >= 4096 || g_j47.tx_len > J47_TX_MAX - len) {
+            size_t remaining = g_j47.tx_len - g_j47.tx_pos;
+            memmove(g_j47.tx, g_j47.tx + g_j47.tx_pos, remaining);
+            g_j47.tx_len = remaining;
+            g_j47.tx_pos = 0;
+        }
+    }
+
     if (len > J47_TX_MAX || g_j47.tx_len > J47_TX_MAX - len) return 0;
     size_t need = g_j47.tx_len + len;
     if (need > g_j47.tx_cap) {
@@ -1162,36 +1182,6 @@ static int j47_send_packet(int packet_id, const unsigned char *payload, size_t p
     j47_writer_free(&inner);
     j47_writer_free(&frame);
     return ok;
-}
-
-static void j47_set_pending_movement(int packet_id, const unsigned char *payload, size_t payload_len) {
-    if (payload_len > sizeof(g_j47.pending_move_payload)) return;
-    j47_tx_lock_ensure();
-    EnterCriticalSection(&g_j47_tx_cs);
-    g_j47.pending_move_packet = packet_id;
-    g_j47.pending_move_len = payload_len;
-    if (payload_len) memcpy(g_j47.pending_move_payload, payload, payload_len);
-    LeaveCriticalSection(&g_j47_tx_cs);
-}
-
-static int j47_queue_pending_movement(void) {
-    int packet_id = 0;
-    size_t payload_len = 0;
-    unsigned char payload[48];
-    j47_tx_lock_ensure();
-    EnterCriticalSection(&g_j47_tx_cs);
-    /* Do not append stale movement behind a blocked socket backlog. Keep only
-       the newest snapshot until previously queued protocol data is sent. */
-    if (g_j47.pending_move_packet && g_j47.tx_pos == g_j47.tx_len) {
-        packet_id = g_j47.pending_move_packet;
-        payload_len = g_j47.pending_move_len;
-        if (payload_len) memcpy(payload, g_j47.pending_move_payload, payload_len);
-        g_j47.pending_move_packet = 0;
-        g_j47.pending_move_len = 0;
-    }
-    LeaveCriticalSection(&g_j47_tx_cs);
-    if (!packet_id) return 1;
-    return j47_send_packet(packet_id, payload, payload_len);
 }
 
 static int j47_rx_reserve(size_t add) {
@@ -2512,10 +2502,77 @@ static int j47_send_client_identity(void) {
     return ok;
 }
 
+static int j47_uuid_equals(const unsigned char uuid[16], const unsigned char expected[16]) {
+    return memcmp(uuid, expected, 16) == 0;
+}
+
+static int j47_movement_modifier_is_locally_recreated(const unsigned char uuid[16]) {
+    /* Vanilla client-side modifiers that PexCraft already recreates from its
+       sprint and potion state. Excluding them from S20 avoids applying the same
+       speed change twice while still honoring custom server modifiers. */
+    static const unsigned char sprint_uuid[16] = {
+        0x66,0x2a,0x6b,0x8d,0xda,0x3e,0x4c,0x1c,0x88,0x13,0x96,0xea,0x60,0x97,0x27,0x8d
+    };
+    static const unsigned char speed_uuid[16] = {
+        0x91,0xae,0xaa,0x56,0x37,0x6b,0x44,0x98,0x93,0x5b,0x2f,0x7f,0x68,0x07,0x06,0x35
+    };
+    static const unsigned char slowness_uuid[16] = {
+        0x71,0x07,0xde,0x5e,0x7c,0xe8,0x40,0x30,0x94,0x0e,0x51,0x4c,0x1f,0x16,0x08,0x90
+    };
+    return j47_uuid_equals(uuid, sprint_uuid) ||
+           j47_uuid_equals(uuid, speed_uuid) ||
+           j47_uuid_equals(uuid, slowness_uuid);
+}
+
+static void j47_handle_entity_properties(J47Reader *r) {
+    int32_t entity_id=0;
+    int attribute_count=0;
+    if(!j47_r_varint(r,&entity_id))return;
+    attribute_count=(int)j47_r_be32(r);
+    if(r->failed||attribute_count<0||attribute_count>1024){r->failed=1;return;}
+
+    for(int i=0;i<attribute_count&&!r->failed;i++){
+        char name[96];
+        double base=0.0;
+        int32_t modifier_count=0;
+        if(!j47_r_string(r,name,sizeof(name)))return;
+        base=j47_r_double(r);
+        if(!j47_r_varint(r,&modifier_count)||modifier_count<0||modifier_count>4096){r->failed=1;return;}
+
+        double op0=0.0;
+        double op1=0.0;
+        double op2_product=1.0;
+        int movement_attribute=(entity_id==g_j47.local_entity_id&&!strcmp(name,"generic.movementSpeed"));
+        for(int m=0;m<modifier_count&&!r->failed;m++){
+            unsigned char uuid[16];
+            double amount;
+            int operation;
+            if(r->pos+16>r->len){r->failed=1;return;}
+            memcpy(uuid,r->data+r->pos,16);r->pos+=16;
+            amount=j47_r_double(r);
+            operation=(int)(int8_t)j47_r_u8(r);
+            if(!movement_attribute||j47_movement_modifier_is_locally_recreated(uuid))continue;
+            if(operation==0)op0+=amount;
+            else if(operation==1)op1+=amount;
+            else if(operation==2)op2_product*=1.0+amount;
+        }
+
+        if(movement_attribute&&!r->failed){
+            double after_add=base+op0;
+            double value=(after_add+after_add*op1)*op2_product;
+            double scale=value/0.1;
+            if(!isfinite(scale)||scale<=0.0)scale=1.0;
+            if(scale<0.05)scale=0.05;
+            if(scale>10.0)scale=10.0;
+            g_j47.server_movement_speed_scale=(float)scale;
+        }
+    }
+}
+
 static void j47_handle_play_packet(int packet_id, J47Reader *r) {
     switch(packet_id){
         case 0x00:{int32_t id;if(j47_r_varint(r,&id)){J47Writer w;j47_writer_init(&w,8);j47_w_varint(&w,id);j47_send_packet(0x00,w.data,w.len);j47_writer_free(&w);}break;}
-        case 0x01:{g_j47.local_entity_id=j47_r_be32(r);g_mp_player_id=g_j47.local_entity_id;int gm=(int)j47_r_u8(r);g_j47.game_mode=gm&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_j47.dimension=(int8_t)j47_r_u8(r);g_j47.difficulty=(int)j47_r_u8(r);(void)j47_r_u8(r);char wt[64];j47_r_string(r,wt,sizeof(wt));g_j47.has_join_game=1;g_j47.progress=35;j47_set_status("Downloading terrain");if(!r->failed&&!j47_send_client_identity())j47_fail("Could not send Java client settings");break;}
+        case 0x01:{g_j47.local_entity_id=j47_r_be32(r);g_mp_player_id=g_j47.local_entity_id;int gm=(int)j47_r_u8(r);g_j47.game_mode=gm&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;memset(g_player_potion_effects,0,sizeof(g_player_potion_effects));g_j47.server_movement_speed_scale=1.0f;g_j47.last_abilities_flags=-1;g_j47.dimension=(int8_t)j47_r_u8(r);g_j47.difficulty=(int)j47_r_u8(r);(void)j47_r_u8(r);char wt[64];j47_r_string(r,wt,sizeof(wt));g_j47.has_join_game=1;g_j47.progress=35;j47_set_status("Downloading terrain");if(!r->failed&&!j47_send_client_identity())j47_fail("Could not send Java client settings");break;}
         case 0x02:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){(void)j47_r_u8(r);j47_json_collect_text(json,text,sizeof(text));if(text[0])hud_add_chat(text);}break;}
         case 0x03:{(void)j47_r_be64(r);g_world_time=j47_r_be64(r);break;}
         case 0x04:{
@@ -2610,14 +2667,17 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x0D:{int32_t collected,collector;j47_r_varint(r,&collected);j47_r_varint(r,&collector);j47_entity_remove(collected);break;}
         case 0x0E:j47_spawn_object(r);break;
         case 0x0F:j47_spawn_mob(r);break;
-        case 0x12:{int32_t id;if(j47_r_varint(r,&id)){J47Entity*e=j47_entity_find(id);int vx=(int16_t)j47_r_be16(r),vy=(int16_t)j47_r_be16(r),vz=(int16_t)j47_r_be16(r);if(e&&e->kind==J47_ENTITY_DROP&&e->drop_slot>=0){g_drops[e->drop_slot].mx=vx/8000.0f;g_drops[e->drop_slot].my=vy/8000.0f;g_drops[e->drop_slot].mz=vz/8000.0f;}}break;}
+        case 0x12:{int32_t id;if(j47_r_varint(r,&id)){int vx=(int16_t)j47_r_be16(r),vy=(int16_t)j47_r_be16(r),vz=(int16_t)j47_r_be16(r);if(id==g_j47.local_entity_id){g_player_motion_x=vx/8000.0f;g_player_motion_y=vy/8000.0f;g_player_motion_z=vz/8000.0f;if(vy>0)g_player_on_ground=0;}else{J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_DROP&&e->drop_slot>=0){g_drops[e->drop_slot].mx=vx/8000.0f;g_drops[e->drop_slot].my=vy/8000.0f;g_drops[e->drop_slot].mz=vz/8000.0f;}}}break;}
         case 0x13:{int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int32_t id;if(!j47_r_varint(r,&id))break;j47_entity_remove(id);}break;}
         case 0x14:case 0x15:case 0x16:case 0x17:{int32_t id;if(!j47_r_varint(r,&id))break;J47Entity*e=j47_entity_find(id);double x=e?e->x:0,y=e?e->y:0,z=e?e->z:0;float yaw=e?e->yaw:0,pitch=e?e->pitch:0;int rot=packet_id==0x16||packet_id==0x17;if(packet_id==0x15||packet_id==0x17){x+=(int8_t)j47_r_u8(r)/32.0;y+=(int8_t)j47_r_u8(r)/32.0;z+=(int8_t)j47_r_u8(r)/32.0;}if(rot){yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f;pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;}(void)j47_r_u8(r);j47_apply_entity_position(e,x,y,z,yaw,pitch,rot);break;}
         case 0x18:{int32_t id;if(j47_r_varint(r,&id)){double x=j47_r_be32(r)/32.0,y=j47_r_be32(r)/32.0,z=j47_r_be32(r)/32.0;float yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f,pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;(void)j47_r_u8(r);j47_apply_entity_position(j47_entity_find(id),x,y,z,yaw,pitch,1);}break;}
         case 0x19:{int32_t id;if(j47_r_varint(r,&id)){float head=(int8_t)j47_r_u8(r)*360.0f/256.0f;J47Entity*e=j47_entity_find(id);if(e){e->head_yaw=head;if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){g_passive_mobs[e->mob_slot].prev_head_yaw=g_passive_mobs[e->mob_slot].head_yaw;g_passive_mobs[e->mob_slot].head_yaw=head;}}}break;}
         case 0x1A:{int32_t id;if(j47_r_varint(r,&id)){int status=(int8_t)j47_r_u8(r);J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){PassiveMob*m=&g_passive_mobs[e->mob_slot];if(status==2)m->hurt_time=10;if(status==3)m->death_time=1;}}break;}
         case 0x1C:{int32_t id;if(j47_r_varint(r,&id))j47_parse_entity_metadata(r,id);break;}
+        case 0x1D:{int32_t id=0,duration=0;if(j47_r_varint(r,&id)){int effect=(int)(int8_t)j47_r_u8(r);int amplifier=(int)(int8_t)j47_r_u8(r);j47_r_varint(r,&duration);(void)j47_r_u8(r);if(!r->failed&&id==g_j47.local_entity_id&&effect>0&&effect<PEX_POTION_MAX){if(amplifier<0)amplifier=0;g_player_potion_effects[effect].duration=duration>0?duration:1;g_player_potion_effects[effect].amplifier=amplifier;}}break;}
+        case 0x1E:{int32_t id=0;if(j47_r_varint(r,&id)){int effect=j47_r_u8(r);if(!r->failed&&id==g_j47.local_entity_id&&effect>0&&effect<PEX_POTION_MAX){g_player_potion_effects[effect].duration=0;g_player_potion_effects[effect].amplifier=0;}}break;}
         case 0x1F:{g_player_xp_progress=j47_r_float(r);int32_t level,total;j47_r_varint(r,&level);j47_r_varint(r,&total);g_player_xp_level=level;g_player_xp_total=total;break;}
+        case 0x20:j47_handle_entity_properties(r);break;
         case 0x21:{j47_commit_pending_respawn_dimension();int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0);break;}
         case 0x22:{int cx=j47_r_be32(r),cz=j47_r_be32(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int packed=j47_r_be16(r);int32_t state;j47_r_varint(r,&state);int x=cx*16+((packed>>12)&15),z=cz*16+((packed>>8)&15),y=packed&255;j47_set_block_state(x,y,z,state);}break;}
         case 0x23:{int x=0,y=0,z=0;int32_t s;if(j47_read_block_pos(r,&x,&y,&z)&&j47_r_varint(r,&s))j47_set_block_state(x,y,z,s);break;}
@@ -2676,7 +2736,24 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x31:{int wid=j47_r_u8(r);int property=(int16_t)j47_r_be16(r);int value=(int16_t)j47_r_be16(r);if(g_j47.window.open&&wid==g_j47.window.window_id&&!strcmp(g_j47.window.type,"minecraft:furnace")){FurnaceTile*ft=furnace_open_tile();if(ft){if(property==0)ft->burn_time=value;else if(property==1)ft->current_item_burn_time=value;else if(property==2)ft->cook_time=value;}}break;}
         case 0x32:{int wid=j47_r_u8(r);int action=(int16_t)j47_r_be16(r);int accepted=j47_r_u8(r);if(!accepted){J47Writer w;j47_writer_init(&w,8);j47_w_u8(&w,wid);j47_w_be16(&w,action);j47_w_u8(&w,1);j47_send_packet(0x0F,w.data,w.len);j47_writer_free(&w);}break;}
         case 0x38:j47_handle_player_list(r);break;
-        case 0x39:{(void)j47_r_u8(r);(void)j47_r_float(r);(void)j47_r_float(r);break;}
+        case 0x39:{
+            int flags=j47_r_u8(r);
+            float fly_speed=j47_r_float(r);
+            float walk_speed=j47_r_float(r);
+            if(!r->failed){
+                g_j47.server_abilities_flags=flags;
+                g_j47.server_fly_speed=fly_speed;
+                g_j47.server_walk_speed=walk_speed;
+                /* This is the state the server has just assigned.  Do not
+                   echo a synthetic abilities packet during ordinary survival
+                   movement; vanilla only sends C13 when the player actually
+                   toggles flight. */
+                g_j47.last_abilities_flags=flags;
+                if(!(flags&4))g_creative_flying=0;
+                else g_creative_flying=(flags&2)?1:0;
+            }
+            break;
+        }
         case 0x40:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Disconnected by Java server");}break;}
         case 0x41:g_j47.difficulty=j47_r_u8(r);break;
         case 0x46:{int32_t threshold;if(j47_r_varint(r,&threshold))g_j47.compression_threshold=threshold;break;}
@@ -2719,7 +2796,7 @@ static int j47_process_rx(void){
 
 int pex_java47_begin_join(const char *host,int port,const char *username){
     pex_java47_disconnect();
-    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.last_movement_game_tick=-1;
+    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.last_movement_game_tick=-1;
     snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
     g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
     J47Writer hs; j47_writer_init(&hs,300);j47_w_varint(&hs,PEX_JAVA47_PROTOCOL_VERSION);j47_w_string_n(&hs,g_j47.host,255);j47_w_be16(&hs,g_j47.port);j47_w_varint(&hs,2);
@@ -2733,8 +2810,6 @@ int pex_java47_tick(void){
     if(g_j47.socket==INVALID_SOCKET)return 0;
     j47_skin_pump();
     if(!j47_flush_tx())return 0;
-    if(!j47_queue_pending_movement())return 0;
-    if(!j47_flush_tx())return 0;
     if(!j47_receive_available())return 0;
     if(!j47_process_rx())return 0;
     if(g_j47.peer_closed){
@@ -2742,8 +2817,6 @@ int pex_java47_tick(void){
         else j47_fail("Java server closed the connection");
         return 0;
     }
-    if(!j47_flush_tx())return 0;
-    if(!j47_queue_pending_movement())return 0;
     return j47_flush_tx();
 }
 
@@ -2763,6 +2836,7 @@ const char*pex_java47_status_text(void){return g_j47.status;}
 const char*pex_java47_disconnect_reason(void){return g_j47.disconnect_reason;}
 int pex_java47_server_protocol(void){return g_j47.server_protocol;}
 int pex_java47_local_entity_id(void){return g_j47.local_entity_id;}
+float pex_java47_movement_speed_scale(void){return g_j47.server_movement_speed_scale>0.0f?g_j47.server_movement_speed_scale:1.0f;}
 int pex_java47_get_equipment(int entity_id,int *item_id,int *count,int *damage,int *slot){J47Entity*e=j47_entity_find(entity_id);if(!e)return 0;if(item_id)*item_id=e->held_item_id;if(count)*count=e->held_item_count;if(damage)*damage=e->held_item_damage;if(slot)*slot=e->held_slot;return 1;}
 int pex_java47_entity_is_player(int entity_id){J47Entity*e=j47_entity_find(entity_id);return e&&e->kind==J47_ENTITY_PLAYER;}
 Texture *pex_java47_local_skin_texture(void){return g_j47_local_skin.id?&g_j47_local_skin:&tex_steve;}
@@ -2791,8 +2865,24 @@ int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float
     if(g_j47.last_held_slot!=held_slot){J47Writer h;j47_writer_init(&h,4);j47_w_be16(&h,held_slot);j47_send_packet(0x09,h.data,h.len);j47_writer_free(&h);g_j47.last_held_slot=held_slot;}
     if(g_j47.last_sneaking!=sneaking){j47_send_entity_action(sneaking?0:1);g_j47.last_sneaking=sneaking;}
     if(g_j47.last_sprinting!=sprinting){j47_send_entity_action(sprinting?3:4);g_j47.last_sprinting=sprinting;}
-    int ability_flags=0;if(g_j47.game_mode==1){ability_flags=1|4|8;if(g_creative_flying)ability_flags|=2;}
-    if(g_j47.last_abilities_flags!=ability_flags){J47Writer a;j47_writer_init(&a,16);j47_w_u8(&a,ability_flags);j47_w_float(&a,0.05f);j47_w_float(&a,0.1f);j47_send_packet(0x13,a.data,a.len);j47_writer_free(&a);g_j47.last_abilities_flags=ability_flags;}
+    /* C13 is not a heartbeat.  Vanilla sends it only when an allowed-flight
+       client changes its flying bit.  Repeated or unsolicited ability packets
+       are unusual enough that stricter servers can treat them as movement
+       manipulation. Preserve every server-assigned capability bit and change
+       only the flying flag. */
+    if(g_j47.server_abilities_flags&4){
+        int ability_flags=g_j47.server_abilities_flags;
+        if(g_creative_flying)ability_flags|=2;else ability_flags&=~2;
+        if(g_j47.last_abilities_flags!=ability_flags){
+            J47Writer a;j47_writer_init(&a,16);
+            j47_w_u8(&a,ability_flags);
+            j47_w_float(&a,g_j47.server_fly_speed>0.0f?g_j47.server_fly_speed:0.05f);
+            j47_w_float(&a,g_j47.server_walk_speed>0.0f?g_j47.server_walk_speed:0.1f);
+            j47_send_packet(0x13,a.data,a.len);
+            j47_writer_free(&a);
+            g_j47.last_abilities_flags=ability_flags;
+        }
+    }
 
     /* EntityPlayerSP sends one movement packet per client tick. The previous
        wall-clock limiter could emit irregular bursts when the simulation and
@@ -2811,18 +2901,20 @@ int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float
     else if(moved){pid=0x04;j47_w_double(&w,x);j47_w_double(&w,feet_y);j47_w_double(&w,z);j47_w_u8(&w,on_ground);}
     else if(looked){pid=0x05;j47_w_float(&w,yaw);j47_w_float(&w,pitch);j47_w_u8(&w,on_ground);}
     else {pid=0x03;j47_w_u8(&w,on_ground);}
-    j47_set_pending_movement(pid,w.data,w.len);
+    /* Preserve the exact vanilla packet stream.  The previous newest-only
+       pending slot dropped intermediate 20 Hz positions whenever send() was
+       briefly back-pressured.  A normal server tolerates the resulting larger
+       deltas, but movement checks see them as packet skipping/speed spikes.
+       Queue every C03/C04/C05/C06 in order and let TCP coalesce bytes, never
+       semantic movement states. */
+    int ok=j47_flush_tx()&&j47_send_packet(pid,w.data,w.len)&&j47_flush_tx();
     j47_writer_free(&w);
-    /* The simulation tick can run separately from the render/network poll.
-       Push the newest movement snapshot immediately rather than waiting for a
-       busy lobby's next poll. If the socket is back-pressured, the pending
-       slot retains only the newest movement packet. */
-    int ok=j47_flush_tx()&&j47_queue_pending_movement()&&j47_flush_tx();
+    if(!ok)return 0;
     g_j47.movement_ticks++;
     if(moved){g_j47.last_x=x;g_j47.last_y=feet_y;g_j47.last_z=z;g_j47.movement_ticks=0;}
     if(looked){g_j47.last_yaw=yaw;g_j47.last_pitch=pitch;}
     g_j47.last_on_ground=on_ground;
-    return ok;
+    return 1;
 }
 
 int pex_java47_send_chat(const char*text){if(g_j47.state!=PEX_JAVA47_PLAY||!text)return 0;J47Writer w;j47_writer_init(&w,300);j47_w_string_n(&w,text,100);int ok=j47_send_packet(0x01,w.data,w.len);j47_writer_free(&w);return ok;}

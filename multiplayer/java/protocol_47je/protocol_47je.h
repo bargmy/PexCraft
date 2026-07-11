@@ -38,6 +38,7 @@ const char *pex_java47_status_text(void);
 const char *pex_java47_disconnect_reason(void);
 int pex_java47_server_protocol(void);
 int pex_java47_local_entity_id(void);
+float pex_java47_movement_speed_scale(void);
 
 int pex_java47_send_player_state(double x, double feet_y, double z, float yaw, float pitch, int on_ground,
                                  int sneaking, int sprinting, int held_slot);

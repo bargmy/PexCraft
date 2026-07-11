@@ -1021,8 +1021,20 @@ static void ingame_tick(void) {
         float accel = g_creative_flying ? 0.05f : (in_water ? 0.02f : (in_lava ? 0.02f : (g_player_on_ground ? 0.1f : 0.02f)));
         if (g_player_sprinting && !g_creative_flying && !in_water && !in_lava && !in_ladder) accel *= 1.3f;
         if (!g_creative_flying && !in_water && !in_lava && !in_ladder) {
-            if (player_has_potion(PEX_POTION_SPEED)) accel *= 1.0f + 0.20f * (float)(player_potion_amplifier(PEX_POTION_SPEED) + 1);
-            if (player_has_potion(PEX_POTION_SLOWNESS)) accel *= 1.0f - 0.15f * (float)(player_potion_amplifier(PEX_POTION_SLOWNESS) + 1);
+            if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+                /* In 1.8.8 generic.movementSpeed and speed/slowness affect the
+                   ground movement factor. Air control stays at jumpMovementFactor
+                   (0.02, or 0.026 while sprinting). Applying potion multipliers
+                   again in mid-air makes hop/sprint deltas fail strict checks. */
+                if (g_player_on_ground) {
+                    accel *= pex_java47_movement_speed_scale();
+                    if (player_has_potion(PEX_POTION_SPEED)) accel *= 1.0f + 0.20f * (float)(player_potion_amplifier(PEX_POTION_SPEED) + 1);
+                    if (player_has_potion(PEX_POTION_SLOWNESS)) accel *= 1.0f - 0.15f * (float)(player_potion_amplifier(PEX_POTION_SLOWNESS) + 1);
+                }
+            } else {
+                if (player_has_potion(PEX_POTION_SPEED)) accel *= 1.0f + 0.20f * (float)(player_potion_amplifier(PEX_POTION_SPEED) + 1);
+                if (player_has_potion(PEX_POTION_SLOWNESS)) accel *= 1.0f - 0.15f * (float)(player_potion_amplifier(PEX_POTION_SLOWNESS) + 1);
+            }
             if (accel < 0.002f) accel = 0.002f;
         }
         strafe = strafe * accel / input_len;
