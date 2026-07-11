@@ -2475,6 +2475,11 @@ static int g_suffocation_damage_timer = 0;
 static float g_player_yaw = 0.0f, g_player_pitch = 0.0f;
 static float g_player_prev_yaw = 0.0f, g_player_prev_pitch = 0.0f;
 static int g_player_on_ground = 1;
+/* Java servers use the on-ground bit for movement validation.  Keep a
+   network-facing value that is set only by a real downward collision rather
+   than the looser support probe used to make the local 1.2.5 controller feel
+   stable at block edges. */
+static int g_player_server_on_ground = 1;
 static int g_player_was_in_water = 0;
 static float g_distance_walked = 0.0f, g_prev_distance_walked = 0.0f;
 static float g_next_footstep_distance = 0.0f;

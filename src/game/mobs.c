@@ -7827,7 +7827,9 @@ static void passive_mobs_push_collisions_125(void) {
 }
 
 static void update_passive_mobs(void) {
-    /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
+    /* Multiplayer mobs are server-authoritative. protocol_47je updates their
+       transforms directly, so local spawning, AI and collision simulation
+       must stay disabled while the renderer remains active. */
     if (g_mp_connected) return;
 
     if (g_player_last_hurt_by_mob_ticks > 0 && --g_player_last_hurt_by_mob_ticks == 0)
@@ -9355,8 +9357,10 @@ static void passive_render_entity_on_fire_125(const PassiveMobRenderEntry *e) {
 }
 
 static void draw_passive_mobs(float partial) {
-    /* Passive mobs are disabled in multiplayer until entity spawn/move/despawn sync exists. */
-    if (g_mp_connected) return;
+    /* Local mob AI/spawning remains disabled in multiplayer, but protocol_47je
+       now supplies authoritative spawn/move/despawn state in g_passive_mobs.
+       The old render guard made every Java mob—including villagers—exist in
+       the protocol table while remaining completely invisible. */
     passive_mobs_submit_render_job(partial);
     PassiveMobRenderEntry entries[PEX_PASSIVE_RENDER_LIMIT];
     int entry_count = passive_mobs_fetch_render_list(entries, PEX_PASSIVE_RENDER_LIMIT);

@@ -494,11 +494,11 @@ static void player_respawn(void) {
 }
 
 static int flat_player_try_step_move(float nx, float base_y, float nz) {
-    /* Entity stepHeight behavior for stairs/half-height obstacles: keep the
-       walking speed, just resolve the horizontal collision at +0.5 block. */
+    /* Entity stepHeight behavior for stairs/half-height obstacles. Java 1.8.8
+       uses 0.6F; retain the old 0.5 block behavior for the native backends. */
     if (!g_player_on_ground) return 0;
     if (g_player_y > base_y + 0.01f) return 0;
-    const float step = 0.5f;
+    const float step = (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) ? 0.6f : 0.5f;
     if (flat_player_aabb_collides(nx, base_y + step, nz)) return 0;
     g_player_x = nx;
     g_player_y = base_y + step;
@@ -1004,21 +1004,50 @@ static void ingame_tick(void) {
         g_player_motion_y += 0.04f;
     } else if (normal_jump && g_player_on_ground) {
         pex_stats_add_general(PEX_STAT_JUMPS, 1);
-        g_player_motion_y = 0.50f;
+        /* The old controller subtracts gravity before moving, hence its 0.50
+           compensation. Protocol 47 follows EntityLivingBase exactly: move
+           by 0.42 on the jump tick, then apply gravity and drag afterward. */
+        g_player_motion_y = (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) ? 0.42f : 0.50f;
         if (player_has_potion(PEX_POTION_JUMP)) g_player_motion_y += 0.10f * (float)(player_potion_amplifier(PEX_POTION_JUMP) + 1);
         if (g_player_sprinting) {
             float yaw_rad = g_player_yaw * (float)M_PI / 180.0f;
             g_player_motion_x -= sinf(yaw_rad) * 0.20f;
             g_player_motion_z += cosf(yaw_rad) * 0.20f;
         }
-        g_player_on_ground = 0;
+        /* Vanilla jump() sets motionY/isAirBorne but leaves onGround true
+           until moveEntity resolves the jump.  Keeping it true here is
+           important: the jump tick still receives ground acceleration and
+           ground slipperiness before the vertical move makes the player
+           airborne. */
         player_add_exhaustion(g_player_sprinting ? 0.8f : 0.2f);
+    }
+
+    /* Vanilla computes f4 before moveEntity() and reuses that exact value
+       after the move.  Thus a jump tick uses ground friction and a landing
+       tick uses air friction; recomputing from the post-move onGround flag
+       produces recognizably non-vanilla deltas. */
+    float java_ground_friction_before = 0.91f;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE && g_player_on_ground) {
+        int below = flat_get_block((int)floorf(g_player_x),
+                                   (int)floorf((g_player_y - 1.62f) - 0.01f),
+                                   (int)floorf(g_player_z));
+        java_ground_friction_before = block_slipperiness_for_item(below) * 0.91f;
+        if (java_ground_friction_before < 0.05f) java_ground_friction_before = 0.54600006f;
     }
 
     float input_len = sqrtf(strafe * strafe + forward * forward);
     if (input_len >= 0.01f) {
         if (input_len < 1.0f) input_len = 1.0f;
         float accel = g_creative_flying ? 0.05f : (in_water ? 0.02f : (in_lava ? 0.02f : (g_player_on_ground ? 0.1f : 0.02f)));
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
+            g_player_on_ground && !g_creative_flying && !in_water && !in_lava && !in_ladder) {
+            /* EntityLivingBase.moveEntityWithHeading:
+               0.16277136 / (slipperiness * 0.91)^3.  This is especially
+               important on ice; using ordinary-ground acceleration there
+               looks like speed movement to anti-cheat. */
+            float f = java_ground_friction_before;
+            accel *= 0.16277136f / (f * f * f);
+        }
         if (g_player_sprinting && !g_creative_flying && !in_water && !in_lava && !in_ladder) accel *= 1.3f;
         if (!g_creative_flying && !in_water && !in_lava && !in_ladder) {
             if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
@@ -1047,12 +1076,15 @@ static void ingame_tick(void) {
     }
 
     float previous_motion_y = g_player_motion_y;
+    int java_delayed_gravity =
+        g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
+        !g_creative_flying && !in_water && !in_lava && !in_ladder;
     if (g_creative_flying) {
         /* PlayerControllerCreative flying skips gravity; EntityPlayer restores
            motionY from before super.moveEntityWithHeading and damps it later. */
     } else if (in_ladder) {
         if (g_player_motion_y < -0.15f) g_player_motion_y = -0.15f;
-    } else {
+    } else if (!java_delayed_gravity) {
         g_player_motion_y -= (in_water ? 0.010f : (in_lava ? 0.02f : 0.08f));
     }
 
@@ -1109,6 +1141,7 @@ static void ingame_tick(void) {
     float old_y = g_player_y;
     int was_on_ground = g_player_on_ground;
     g_player_on_ground = 0;
+    g_player_server_on_ground = 0;
 #if defined(PEX_PLATFORM_PSP)
     (void)old_y;
     /* PSP real-world mode can briefly run with low FPS while chunks/meshes are
@@ -1126,7 +1159,10 @@ static void ingame_tick(void) {
             g_player_y += step_dy;
             if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
                 g_player_y = before_step_y;
-                if (total_dy < 0.0f) g_player_on_ground = 1;
+                if (total_dy < 0.0f) {
+                    g_player_on_ground = 1;
+                    g_player_server_on_ground = 1;
+                }
                 g_player_motion_y = 0.0f;
                 break;
             }
@@ -1136,13 +1172,23 @@ static void ingame_tick(void) {
     g_player_y += g_player_motion_y;
     if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
         g_player_y = old_y;
-        if (g_player_motion_y < 0.0f) g_player_on_ground = 1;
+        if (g_player_motion_y < 0.0f) {
+            g_player_on_ground = 1;
+            g_player_server_on_ground = 1;
+        }
         g_player_motion_y = 0.0f;
     }
 #endif
 
-    if (!g_player_on_ground && flat_player_aabb_collides(g_player_x, g_player_y - 0.05f, g_player_z)) {
+    /* The native 1.2.5 controller uses a broad support probe to feel stable
+       at block edges. Do not use it for protocol 47: besides falsifying the
+       packet onGround bit, it grants ground acceleration and jumping while
+       the server's AABB already considers the player airborne. */
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
+        !g_player_on_ground &&
+        flat_player_aabb_collides(g_player_x, g_player_y - 0.05f, g_player_z)) {
         g_player_on_ground = 1;
+        g_player_server_on_ground = 1;
     }
 
     if (normal_jump && in_water && trying_water_exit) {
@@ -1202,6 +1248,12 @@ static void ingame_tick(void) {
         g_creative_fly_toggle_timer = 0;
     }
 
+    if (java_delayed_gravity) {
+        /* Vanilla applies gravity after moveEntity(), even on a grounded tick;
+           the next tick's downward collision is what keeps onGround true. */
+        g_player_motion_y -= 0.08f;
+    }
+
     if (g_creative_flying) {
         g_player_motion_y *= 0.60f;
         g_player_motion_x *= 0.91f;
@@ -1225,6 +1277,9 @@ static void ingame_tick(void) {
     } else {
         g_player_motion_y *= 0.98f;
         float friction = g_player_on_ground ? 0.54600006f : 0.91f;
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+            friction = java_ground_friction_before;
+        }
         g_player_motion_x *= friction;
         g_player_motion_z *= friction;
     }

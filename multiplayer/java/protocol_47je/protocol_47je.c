@@ -160,6 +160,8 @@ static PexJava47Session g_j47;
 static CRITICAL_SECTION g_j47_tx_cs;
 static int g_j47_tx_cs_ready = 0;
 
+static void j47_parse_entity_metadata(J47Reader *r, int entity_id);
+
 typedef struct J47SkinDownloadJob {
     unsigned char uuid[16];
     char url[J47_SKIN_URL_MAX];
@@ -2358,18 +2360,19 @@ static void j47_spawn_mob(J47Reader *r) {
     float pitch = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
     float head = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
     (void)j47_r_be16(r); (void)j47_r_be16(r); (void)j47_r_be16(r);
-    if (!j47_skip_metadata(r) || r->failed) return;
     J47Entity *e = j47_entity_alloc(entity_id);
-    if (!e) return;
+    if (!e) { (void)j47_skip_metadata(r); return; }
     int slot = e->mob_slot;
     if (slot < 0) slot = j47_mob_alloc_slot();
-    if (slot < 0) return;
+    if (slot < 0) { (void)j47_skip_metadata(r); return; }
     int type = pex_java47_translate_mob_type(java_type);
     passive_mob_init(&g_passive_mobs[slot], type, (float)x, (float)y, (float)z);
     PassiveMob *m = &g_passive_mobs[slot];
     m->entity_id = entity_id; m->yaw = m->prev_yaw = yaw; m->pitch = m->prev_pitch = pitch;
     m->head_yaw = m->prev_head_yaw = head; m->render_yaw = m->prev_render_yaw = yaw;
     e->kind = J47_ENTITY_MOB; e->java_type = java_type; e->mob_slot = slot; e->x=x; e->y=y; e->z=z; e->yaw=yaw; e->pitch=pitch; e->head_yaw=head;
+    j47_parse_entity_metadata(r, entity_id);
+    if(r->failed){j47_entity_remove(entity_id);return;}
 }
 
 static void j47_spawn_object(J47Reader *r) {
@@ -2444,10 +2447,16 @@ static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
             int v=(int8_t)j47_r_u8(r);
             if(e&&index==0)e->metadata_flags=v;
             if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=v;
+            if(e&&e->kind==J47_ENTITY_MOB&&index==12&&e->mob_slot>=0)
+                g_passive_mobs[e->mob_slot].baby_age=v<0?-24000:0;
         } else if(type==1){
             (void)j47_r_be16(r);
         } else if(type==2){
-            (void)j47_r_be32(r);
+            int v=j47_r_be32(r);
+            if(e&&e->kind==J47_ENTITY_MOB&&e->java_type==120&&index==16&&e->mob_slot>=0){
+                if(v<0)v=0;if(v>4)v%=5;
+                g_passive_mobs[e->mob_slot].fleece_color=v;
+            }
         } else if(type==3){
             float v=j47_r_float(r);
             if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=(int)ceilf(v);
@@ -2678,6 +2687,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
             g_player_x=g_player_prev_x=(float)x;
             g_player_y=g_player_prev_y=(float)y+1.62f;
             g_player_z=g_player_prev_z=(float)z;
+            g_player_server_on_ground=0;
             g_player_yaw=g_player_prev_yaw=yaw;
             g_player_pitch=g_player_prev_pitch=pitch;
             flat_multiplayer_recenter_world(g_player_x,g_player_z,1);

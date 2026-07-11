@@ -3369,7 +3369,7 @@ static void pex_net_send_player_state(void) {
         if (!g_mp_connected || !g_mp_world_ready || !pex_java47_is_playing()) return;
         int sneaking_now = (g_screen == SCREEN_INGAME && key_down_vk(g_opts.keys[5])) ? 1 : 0;
         pex_java47_send_player_state(g_player_x, g_player_y - 1.62, g_player_z,
-                                     g_player_yaw, g_player_pitch, g_player_on_ground,
+                                     g_player_yaw, g_player_pitch, g_player_server_on_ground,
                                      sneaking_now, g_player_sprinting ? 1 : 0, g_selected_hotbar_slot);
         return;
     }
