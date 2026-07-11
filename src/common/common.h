@@ -1928,6 +1928,8 @@ typedef struct ItemStack {
 int pex_java47_try_interact_entity(float max_dist);
 ItemStack *pex_java47_get_open_container_slot(int local_slot);
 int pex_java47_open_container_slot_count(void);
+const char *pex_java47_slot_custom_name(int pex_slot);
+int pex_java47_slot_lore(int pex_slot, const char **out_lines, int max_lines);
 
 static void armor_sync_player_armor(void);
 static int armor_stack_type(int id);

@@ -40,3 +40,10 @@ Chat messages are wrapped to the existing HUD width and continue on additional c
 Online authentication, encryption, skins/profile textures, resource-pack installation, and newer 1.8-only gameplay systems are intentionally not implemented. Optional presentation-only 1.8 packets that have no 1.2.5 equivalent are safely ignored.
 
 DNS `_minecraft._tcp` SRV discovery is not implemented; use a directly resolvable host or an explicit `host:port`. The adapter targets ordinary vanilla-compatible offline-mode protocol-47 servers. A plugin that requires a custom client channel or mod handshake may reject the connection.
+
+## Protocol-fidelity notes
+
+- Player movement follows the vanilla 1.8.8 client cadence: at most one C03/C04/C05/C06 movement packet per game tick, position deltas use the vanilla threshold, and an S08 correction is acknowledged with feet Y and `onGround=false`.
+- Java chat components are flattened without inventing spaces. JSON colours and styles are converted to the existing UTF-8 section-sign formatting used by the PexCraft renderer, and formatting state is carried across wrapped HUD lines.
+- Item `display.Name`, `display.Lore`, and enchantment presence are read from Java NBT for server-created menus. The translated compatibility icon remains local-only; outgoing click packets retain the original Java stack data.
+- A successful Java status reply is treated as Java regardless of the advertised protocol number. Login still deliberately sends protocol 47, allowing an older/newer Java server to return its own normal incompatible-client disconnect message instead of being blocked by the menu.

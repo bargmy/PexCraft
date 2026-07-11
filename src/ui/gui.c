@@ -904,13 +904,21 @@ static void draw_item_tooltip_for_slot(int slot, int mx, int my) {
         st = inventory_slot_ptr(slot);
     }
     if (!st || stack_empty(st)) return;
-    const char *name = item_stack_display_name(st);
+    const char *name = pex_java47_slot_custom_name(slot);
+    if (!name || !name[0]) name = item_stack_display_name(st);
     if (!name || !name[0]) return;
 
-    const char *lines[10];
+    const char *lines[16];
     char potion_lines[8][96];
     int line_count = 0;
     lines[line_count++] = name;
+
+    /* Java server menus commonly encode their actual button label and
+       description in display.Name/display.Lore NBT while using an arbitrary
+       item as the icon. Preserve that sidecar metadata even though the icon is
+       translated to a 1.2.5-compatible substitute. */
+    line_count += pex_java47_slot_lore(slot, lines + line_count,
+                                      (int)(sizeof(lines) / sizeof(lines[0])) - line_count);
 
     append_item_extra_tooltip_lines(st, lines, &line_count, potion_lines, 8);
 

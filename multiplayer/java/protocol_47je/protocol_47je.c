@@ -8,6 +8,9 @@
 #define J47_ENTITY_MAX 512
 #define J47_WINDOW_MAX_SLOTS 128
 #define J47_ITEM_NBT_MAX 2048
+#define J47_ITEM_NAME_MAX 192
+#define J47_ITEM_LORE_MAX 8
+#define J47_ITEM_LORE_LINE_MAX 192
 
 /* The Java adapter is unity-included after game/mobs.c and before
    platform/multiplayer_client.c. These declarations bind the protocol layer to
@@ -41,6 +44,10 @@ typedef struct J47RawItem {
     int id;
     int count;
     int damage;
+    int has_enchantment;
+    char display_name[J47_ITEM_NAME_MAX];
+    int lore_count;
+    char lore[J47_ITEM_LORE_MAX][J47_ITEM_LORE_LINE_MAX];
     size_t nbt_len;
     unsigned char nbt[J47_ITEM_NBT_MAX];
 } J47RawItem;
@@ -109,6 +116,7 @@ typedef struct PexJava47Session {
     int last_sprinting;
     int last_abilities_flags;
     int movement_ticks;
+    int last_movement_game_tick;
     int last_on_ground;
     double last_x, last_y, last_z;
     float last_yaw, last_pitch;
@@ -416,17 +424,44 @@ static int j47_r_string(J47Reader *r, char *out, size_t cap) {
     return 1;
 }
 
-static void j47_strip_formatting(char *s) {
-    if (!s) return;
-    char *d = s;
-    for (char *p = s; *p; ++p) {
-        unsigned char c = (unsigned char)*p;
-        if (c == 0xc2 && (unsigned char)p[1] == 0xa7 && p[2]) { p += 2; continue; }
-        if (c == 0xa7 && p[1]) { ++p; continue; }
-        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
-        *d++ = (char)c;
+static int j47_hex4(const char *p, const char *end, unsigned int *out) {
+    if (!p || end - p < 4) return 0;
+    unsigned int cp = 0;
+    for (int i = 0; i < 4; ++i) {
+        unsigned char h = (unsigned char)p[i];
+        cp <<= 4;
+        if (h >= '0' && h <= '9') cp |= h - '0';
+        else if (h >= 'a' && h <= 'f') cp |= h - 'a' + 10;
+        else if (h >= 'A' && h <= 'F') cp |= h - 'A' + 10;
+        else return 0;
     }
-    *d = 0;
+    if (out) *out = cp;
+    return 1;
+}
+
+static void j47_utf8_put(char *out, size_t cap, size_t *n, unsigned int cp) {
+    unsigned char bytes[4];
+    size_t count = 0;
+    if (cp <= 0x7f) bytes[count++] = (unsigned char)cp;
+    else if (cp <= 0x7ff) {
+        bytes[count++] = (unsigned char)(0xc0 | (cp >> 6));
+        bytes[count++] = (unsigned char)(0x80 | (cp & 0x3f));
+    } else if (cp <= 0xffff) {
+        bytes[count++] = (unsigned char)(0xe0 | (cp >> 12));
+        bytes[count++] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
+        bytes[count++] = (unsigned char)(0x80 | (cp & 0x3f));
+    } else if (cp <= 0x10ffff) {
+        bytes[count++] = (unsigned char)(0xf0 | (cp >> 18));
+        bytes[count++] = (unsigned char)(0x80 | ((cp >> 12) & 0x3f));
+        bytes[count++] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
+        bytes[count++] = (unsigned char)(0x80 | (cp & 0x3f));
+    } else {
+        bytes[count++] = '?';
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (out && cap && *n + 1 < cap) out[*n] = (char)bytes[i];
+        ++*n;
+    }
 }
 
 static int j47_json_unescape(const char *p, const char *end, char *out, size_t cap, const char **after) {
@@ -447,18 +482,19 @@ static int j47_json_unescape(const char *p, const char *end, char *out, size_t c
             else if (e == 't') c = '\t';
             else if (e == 'b') c = '\b';
             else if (e == 'f') c = '\f';
-            else if (e == 'u' && end - p >= 4) {
+            else if (e == 'u') {
                 unsigned int cp = 0;
-                for (int i = 0; i < 4; ++i) {
-                    unsigned char h = (unsigned char)p[i];
-                    cp <<= 4;
-                    if (h >= '0' && h <= '9') cp |= h - '0';
-                    else if (h >= 'a' && h <= 'f') cp |= h - 'a' + 10;
-                    else if (h >= 'A' && h <= 'F') cp |= h - 'A' + 10;
-                }
+                if (!j47_hex4(p, end, &cp)) return 0;
                 p += 4;
-                if (cp < 0x80) c = (unsigned char)cp;
-                else c = '?';
+                if (cp >= 0xd800 && cp <= 0xdbff && end - p >= 6 && p[0] == '\\' && p[1] == 'u') {
+                    unsigned int low = 0;
+                    if (j47_hex4(p + 2, end, &low) && low >= 0xdc00 && low <= 0xdfff) {
+                        cp = 0x10000u + ((cp - 0xd800u) << 10) + (low - 0xdc00u);
+                        p += 6;
+                    }
+                }
+                j47_utf8_put(out, cap, &n, cp);
+                continue;
             } else c = e;
         }
         if (out && cap && n + 1 < cap) out[n] = (char)c;
@@ -511,42 +547,303 @@ static int j47_json_get_int(const char *json, const char *key, int *out) {
     return 1;
 }
 
+typedef struct J47TextStyle {
+    char color;
+    unsigned char bold;
+    unsigned char italic;
+    unsigned char underlined;
+    unsigned char strikethrough;
+    unsigned char obfuscated;
+} J47TextStyle;
+
+typedef struct J47TextSink {
+    char *out;
+    size_t cap;
+    size_t len;
+} J47TextSink;
+
+static const char *j47_json_ws(const char *p, const char *end) {
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
+    return p;
+}
+
+static void j47_text_put_bytes(J47TextSink *sink, const char *text, size_t n) {
+    if (!sink || !text) return;
+    if (sink->out && sink->cap) {
+        size_t room = sink->len < sink->cap - 1 ? sink->cap - 1 - sink->len : 0;
+        size_t copy = n < room ? n : room;
+        if (copy) memcpy(sink->out + sink->len, text, copy);
+    }
+    sink->len += n;
+    if (sink->out && sink->cap) sink->out[sink->len < sink->cap ? sink->len : sink->cap - 1] = 0;
+}
+
+static void j47_text_put_cstr(J47TextSink *sink, const char *text) {
+    if (text) j47_text_put_bytes(sink, text, strlen(text));
+}
+
+static void j47_text_put_code(J47TextSink *sink, char code) {
+    char token[3] = {(char)0xc2, (char)0xa7, code};
+    j47_text_put_bytes(sink, token, sizeof(token));
+}
+
+static void j47_text_apply_style(J47TextSink *sink, const J47TextStyle *style) {
+    /* Start every JSON component from a known renderer state. A component's
+       text may itself contain legacy section-sign codes, which cannot be
+       inferred by comparing only the JSON style object. */
+    if (sink->len > 0) j47_text_put_code(sink, 'r');
+    if (style->color) j47_text_put_code(sink, style->color);
+    if (style->obfuscated) j47_text_put_code(sink, 'k');
+    if (style->bold) j47_text_put_code(sink, 'l');
+    if (style->strikethrough) j47_text_put_code(sink, 'm');
+    if (style->underlined) j47_text_put_code(sink, 'n');
+    if (style->italic) j47_text_put_code(sink, 'o');
+}
+
+static char j47_json_color_code(const char *name) {
+    static const struct { const char *name; char code; } map[] = {
+        {"black",'0'},{"dark_blue",'1'},{"dark_green",'2'},{"dark_aqua",'3'},
+        {"dark_red",'4'},{"dark_purple",'5'},{"gold",'6'},{"gray",'7'},
+        {"dark_gray",'8'},{"blue",'9'},{"green",'a'},{"aqua",'b'},
+        {"red",'c'},{"light_purple",'d'},{"yellow",'e'},{"white",'f'}
+    };
+    if (!name) return 0;
+    if (!strcmp(name, "reset")) return 0;
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); ++i)
+        if (!strcmp(name, map[i].name)) return map[i].code;
+    return 0;
+}
+
+static int j47_json_skip_value_ptr(const char **pp, const char *end, int depth) {
+    if (!pp || depth > 64) return 0;
+    const char *p = j47_json_ws(*pp, end);
+    if (p >= end) return 0;
+    if (*p == '"') {
+        if (!j47_json_unescape(p, end, NULL, 0, &p)) return 0;
+    } else if (*p == '{') {
+        ++p;
+        p = j47_json_ws(p, end);
+        while (p < end && *p != '}') {
+            if (*p != '"' || !j47_json_unescape(p, end, NULL, 0, &p)) return 0;
+            p = j47_json_ws(p, end);
+            if (p >= end || *p++ != ':') return 0;
+            if (!j47_json_skip_value_ptr(&p, end, depth + 1)) return 0;
+            p = j47_json_ws(p, end);
+            if (p < end && *p == ',') { ++p; p = j47_json_ws(p, end); continue; }
+            break;
+        }
+        if (p >= end || *p != '}') return 0;
+        ++p;
+    } else if (*p == '[') {
+        ++p;
+        p = j47_json_ws(p, end);
+        while (p < end && *p != ']') {
+            if (!j47_json_skip_value_ptr(&p, end, depth + 1)) return 0;
+            p = j47_json_ws(p, end);
+            if (p < end && *p == ',') { ++p; p = j47_json_ws(p, end); continue; }
+            break;
+        }
+        if (p >= end || *p != ']') return 0;
+        ++p;
+    } else {
+        while (p < end && *p != ',' && *p != '}' && *p != ']' &&
+               *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') ++p;
+    }
+    *pp = p;
+    return 1;
+}
+
+static int j47_json_bool_value(const char *p, const char *end, int fallback) {
+    p = j47_json_ws(p, end);
+    if (end - p >= 4 && !memcmp(p, "true", 4)) return 1;
+    if (end - p >= 5 && !memcmp(p, "false", 5)) return 0;
+    return fallback;
+}
+
+static void j47_json_emit_value(const char **pp, const char *end, J47TextSink *sink,
+                                J47TextStyle inherited, int depth);
+
+static int j47_json_collect_array(const char *start, const char *end,
+                                  J47TextStyle inherited,
+                                  char out[][512], int max_items) {
+    const char *p = j47_json_ws(start, end);
+    if (p >= end || *p != '[') return 0;
+    ++p;
+    int count = 0;
+    for (;;) {
+        p = j47_json_ws(p, end);
+        if (p >= end || *p == ']') break;
+        if (count < max_items) {
+            J47TextSink tmp;
+            memset(&tmp, 0, sizeof(tmp));
+            tmp.out = out[count];
+            tmp.cap = 512;
+            out[count][0] = 0;
+            j47_json_emit_value(&p, end, &tmp, inherited, 0);
+            count++;
+        } else if (!j47_json_skip_value_ptr(&p, end, 0)) break;
+        p = j47_json_ws(p, end);
+        if (p < end && *p == ',') { ++p; continue; }
+        break;
+    }
+    return count;
+}
+
+static void j47_json_emit_translate(J47TextSink *sink, const char *key,
+                                    const char *with_start, const char *with_end,
+                                    J47TextStyle style) {
+    char args[8][512];
+    int argc = with_start ? j47_json_collect_array(with_start, with_end, style, args, 8) : 0;
+    j47_text_apply_style(sink, &style);
+    if (!strcmp(key, "chat.type.text") && argc >= 2) {
+        j47_text_put_cstr(sink, "<"); j47_text_put_cstr(sink, args[0]);
+        j47_text_put_cstr(sink, "> "); j47_text_put_cstr(sink, args[1]);
+    } else if (!strcmp(key, "chat.type.announcement") && argc >= 2) {
+        j47_text_put_cstr(sink, "["); j47_text_put_cstr(sink, args[0]);
+        j47_text_put_cstr(sink, "] "); j47_text_put_cstr(sink, args[1]);
+    } else if (!strcmp(key, "commands.message.display.incoming") && argc >= 2) {
+        j47_text_put_cstr(sink, args[0]); j47_text_put_cstr(sink, " whispers to you: ");
+        j47_text_put_cstr(sink, args[1]);
+    } else if (!strcmp(key, "commands.message.display.outgoing") && argc >= 2) {
+        j47_text_put_cstr(sink, "You whisper to "); j47_text_put_cstr(sink, args[0]);
+        j47_text_put_cstr(sink, ": "); j47_text_put_cstr(sink, args[1]);
+    } else if (!strcmp(key, "multiplayer.player.joined") && argc >= 1) {
+        j47_text_put_cstr(sink, args[0]); j47_text_put_cstr(sink, " joined the game");
+    } else if (!strcmp(key, "multiplayer.player.left") && argc >= 1) {
+        j47_text_put_cstr(sink, args[0]); j47_text_put_cstr(sink, " left the game");
+    } else {
+        j47_text_put_cstr(sink, key);
+        for (int i = 0; i < argc; ++i) {
+            j47_text_put_cstr(sink, i == 0 ? ": " : " ");
+            j47_text_put_cstr(sink, args[i]);
+        }
+    }
+}
+
+static void j47_json_emit_value(const char **pp, const char *end, J47TextSink *sink,
+                                J47TextStyle inherited, int depth) {
+    if (!pp || !sink || depth > 32) return;
+    const char *p = j47_json_ws(*pp, end);
+    if (p >= end) { *pp = p; return; }
+    if (*p == '"') {
+        char text[2048];
+        const char *after = p;
+        if (j47_json_unescape(p, end, text, sizeof(text), &after)) {
+            j47_text_apply_style(sink, &inherited);
+            j47_text_put_cstr(sink, text);
+            p = after;
+        }
+        *pp = p;
+        return;
+    }
+    if (*p == '[') {
+        ++p;
+        for (;;) {
+            p = j47_json_ws(p, end);
+            if (p >= end || *p == ']') { if (p < end) ++p; break; }
+            j47_json_emit_value(&p, end, sink, inherited, depth + 1);
+            p = j47_json_ws(p, end);
+            if (p < end && *p == ',') { ++p; continue; }
+            if (p < end && *p == ']') { ++p; break; }
+            break;
+        }
+        *pp = p;
+        return;
+    }
+    if (*p != '{') {
+        j47_json_skip_value_ptr(&p, end, depth + 1);
+        *pp = p;
+        return;
+    }
+
+    ++p;
+    J47TextStyle style = inherited;
+    char text[2048] = {0};
+    char translate[256] = {0};
+    char selector[512] = {0};
+    const char *with_start = NULL, *with_end = NULL;
+    const char *extra_start = NULL, *extra_end = NULL;
+
+    for (;;) {
+        p = j47_json_ws(p, end);
+        if (p >= end || *p == '}') { if (p < end) ++p; break; }
+        char key[64];
+        if (*p != '"' || !j47_json_unescape(p, end, key, sizeof(key), &p)) break;
+        p = j47_json_ws(p, end);
+        if (p >= end || *p++ != ':') break;
+        p = j47_json_ws(p, end);
+        const char *value_start = p;
+
+        if (!strcmp(key, "text") && *p == '"') {
+            j47_json_unescape(p, end, text, sizeof(text), &p);
+        } else if (!strcmp(key, "translate") && *p == '"') {
+            j47_json_unescape(p, end, translate, sizeof(translate), &p);
+        } else if (!strcmp(key, "selector") && *p == '"') {
+            j47_json_unescape(p, end, selector, sizeof(selector), &p);
+        } else if (!strcmp(key, "color") && *p == '"') {
+            char color[40];
+            if (j47_json_unescape(p, end, color, sizeof(color), &p)) style.color = j47_json_color_code(color);
+        } else if (!strcmp(key, "bold")) {
+            style.bold = (unsigned char)j47_json_bool_value(p, end, style.bold);
+            j47_json_skip_value_ptr(&p, end, depth + 1);
+        } else if (!strcmp(key, "italic")) {
+            style.italic = (unsigned char)j47_json_bool_value(p, end, style.italic);
+            j47_json_skip_value_ptr(&p, end, depth + 1);
+        } else if (!strcmp(key, "underlined")) {
+            style.underlined = (unsigned char)j47_json_bool_value(p, end, style.underlined);
+            j47_json_skip_value_ptr(&p, end, depth + 1);
+        } else if (!strcmp(key, "strikethrough")) {
+            style.strikethrough = (unsigned char)j47_json_bool_value(p, end, style.strikethrough);
+            j47_json_skip_value_ptr(&p, end, depth + 1);
+        } else if (!strcmp(key, "obfuscated")) {
+            style.obfuscated = (unsigned char)j47_json_bool_value(p, end, style.obfuscated);
+            j47_json_skip_value_ptr(&p, end, depth + 1);
+        } else if (!strcmp(key, "with")) {
+            with_start = value_start;
+            if (j47_json_skip_value_ptr(&p, end, depth + 1)) with_end = p;
+        } else if (!strcmp(key, "extra")) {
+            extra_start = value_start;
+            if (j47_json_skip_value_ptr(&p, end, depth + 1)) extra_end = p;
+        } else {
+            j47_json_skip_value_ptr(&p, end, depth + 1);
+        }
+
+        p = j47_json_ws(p, end);
+        if (p < end && *p == ',') { ++p; continue; }
+        if (p < end && *p == '}') { ++p; break; }
+        break;
+    }
+
+    if (text[0]) {
+        j47_text_apply_style(sink, &style);
+        j47_text_put_cstr(sink, text);
+    } else if (translate[0]) {
+        j47_json_emit_translate(sink, translate, with_start, with_end ? with_end : end, style);
+    } else if (selector[0]) {
+        j47_text_apply_style(sink, &style);
+        j47_text_put_cstr(sink, selector);
+    }
+    if (extra_start && extra_end) {
+        const char *ep = extra_start;
+        j47_json_emit_value(&ep, extra_end, sink, style, depth + 1);
+    }
+    *pp = p;
+}
+
 static void j47_json_collect_text(const char *json, char *out, size_t cap) {
     if (!out || cap == 0) return;
     out[0] = 0;
-    if (!json) return;
-    const char *end = json + strlen(json);
-    if (*json == '"') {
-        j47_json_unescape(json, end, out, cap, NULL);
-        j47_strip_formatting(out);
-        return;
-    }
+    if (!json || !json[0]) return;
+    J47TextSink sink;
+    J47TextStyle style;
+    memset(&sink, 0, sizeof(sink));
+    memset(&style, 0, sizeof(style));
+    sink.out = out;
+    sink.cap = cap;
     const char *p = json;
-    size_t used = 0;
-    while ((p = strstr(p, "\"text\"")) != NULL) {
-        p += 6;
-        while (*p && *p != ':') ++p;
-        if (!*p) break;
-        ++p;
-        while (*p == ' ' || *p == '\t') ++p;
-        if (*p == '"') {
-            char part[192];
-            const char *after = NULL;
-            if (j47_json_unescape(p, end, part, sizeof(part), &after)) {
-                size_t pn = strlen(part);
-                if (pn && used && used + 1 < cap) out[used++] = ' ';
-                if (pn > cap - 1 - used) pn = cap - 1 - used;
-                memcpy(out + used, part, pn);
-                used += pn;
-                out[used] = 0;
-                p = after;
-                continue;
-            }
-        }
-        ++p;
-    }
-    if (!out[0]) snprintf(out, cap, "Minecraft Server");
-    j47_strip_formatting(out);
+    const char *end = json + strlen(json);
+    j47_json_emit_value(&p, end, &sink, style, 0);
+    out[cap - 1] = 0;
 }
 
 static int j47_build_raw_frame(int packet_id, const unsigned char *payload, size_t payload_len, J47Writer *out) {
@@ -866,11 +1163,79 @@ static int j47_nbt_skip_payload(J47Reader *r, int tag_type, int depth) {
     }
 }
 
-static int j47_skip_nbt(J47Reader *r) {
+static int j47_nbt_read_string(J47Reader *r, char *out, size_t cap) {
+    uint16_t n = j47_r_be16(r);
+    if (r->failed || n > r->len - r->pos) { r->failed = 1; return 0; }
+    if (out && cap) {
+        size_t copy = n;
+        if (copy >= cap) copy = cap - 1;
+        memcpy(out, r->data + r->pos, copy);
+        out[copy] = 0;
+    }
+    r->pos += n;
+    return 1;
+}
+
+static void j47_item_text_normalize(const char *src, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    if (!src || !src[0]) return;
+    const char *p = src;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    if (*p == '{' || *p == '[' || *p == '"') {
+        j47_json_collect_text(p, out, cap);
+        if (out[0]) return;
+    }
+    snprintf(out, cap, "%s", src);
+}
+
+static int j47_nbt_parse_item_compound(J47Reader *r, int depth, int in_display, J47RawItem *raw) {
+    if (depth > 32) { r->failed = 1; return 0; }
+    for (;;) {
+        int child = (int)j47_r_u8(r);
+        if (r->failed) return 0;
+        if (child == 0) return 1;
+        char name[96];
+        if (!j47_nbt_read_string(r, name, sizeof(name))) return 0;
+
+        if (child == 10 && !strcmp(name, "display")) {
+            if (!j47_nbt_parse_item_compound(r, depth + 1, 1, raw)) return 0;
+        } else if (in_display && child == 8 && !strcmp(name, "Name")) {
+            char value[512];
+            if (!j47_nbt_read_string(r, value, sizeof(value))) return 0;
+            j47_item_text_normalize(value, raw->display_name, sizeof(raw->display_name));
+        } else if (in_display && child == 9 && !strcmp(name, "Lore")) {
+            int item_type = (int)j47_r_u8(r);
+            int32_t count = j47_r_be32(r);
+            if (r->failed || count < 0 || count > 100000) { r->failed = 1; return 0; }
+            raw->lore_count = 0;
+            for (int32_t i = 0; i < count; ++i) {
+                if (item_type == 8) {
+                    char value[512];
+                    if (!j47_nbt_read_string(r, value, sizeof(value))) return 0;
+                    if (raw->lore_count < J47_ITEM_LORE_MAX) {
+                        j47_item_text_normalize(value, raw->lore[raw->lore_count],
+                                                sizeof(raw->lore[raw->lore_count]));
+                        raw->lore_count++;
+                    }
+                } else if (!j47_nbt_skip_payload(r, item_type, depth + 1)) return 0;
+            }
+        } else if (child == 9 && (!strcmp(name, "ench") || !strcmp(name, "StoredEnchantments"))) {
+            raw->has_enchantment = 1;
+            if (!j47_nbt_skip_payload(r, child, depth + 1)) return 0;
+        } else if (child == 10) {
+            if (!j47_nbt_parse_item_compound(r, depth + 1, in_display, raw)) return 0;
+        } else if (!j47_nbt_skip_payload(r, child, depth + 1)) return 0;
+    }
+}
+
+static int j47_parse_item_nbt(J47Reader *r, J47RawItem *raw) {
     int root = (int)j47_r_u8(r);
     if (r->failed) return 0;
     if (root == 0) return 1;
-    if (!j47_nbt_skip_string(r)) return 0;
+    char root_name[96];
+    if (!j47_nbt_read_string(r, root_name, sizeof(root_name))) return 0;
+    if (root == 10) return j47_nbt_parse_item_compound(r, 0, 0, raw);
     return j47_nbt_skip_payload(r, root, 0);
 }
 
@@ -1134,7 +1499,7 @@ static int j47_read_item_ex(J47Reader *r, ItemStack *out, J47RawItem *raw_out) {
     st.count = raw.count;
     j47_translate_item_stack(raw.id, raw.damage, &st.id, &st.damage);
     size_t nbt_start = r->pos;
-    if (!j47_skip_nbt(r)) return 0;
+    if (!j47_parse_item_nbt(r, &raw)) return 0;
     size_t nbt_len = r->pos - nbt_start;
     if (nbt_len <= sizeof(raw.nbt)) {
         raw.nbt_len = nbt_len;
@@ -1142,6 +1507,10 @@ static int j47_read_item_ex(J47Reader *r, ItemStack *out, J47RawItem *raw_out) {
     }
     if (st.count < 1) st.count = 1;
     if (raw.count < 1) raw.count = 1;
+    if (raw.has_enchantment) {
+        st.enchant_id[0] = 1;
+        st.enchant_level[0] = 1;
+    }
     if (out) *out = st;
     if (raw_out) *raw_out = raw;
     return !r->failed;
@@ -1529,6 +1898,26 @@ static const J47RawItem *j47_raw_for_java_slot(int java_slot) {
     return NULL;
 }
 
+static const J47RawItem *j47_raw_for_pex_slot(int pex_slot) {
+    int java_slot = j47_map_pex_slot_to_java(pex_slot);
+    if (java_slot == -32768 || java_slot == -999) return NULL;
+    return j47_raw_for_java_slot(java_slot);
+}
+
+const char *pex_java47_slot_custom_name(int pex_slot) {
+    const J47RawItem *raw = j47_raw_for_pex_slot(pex_slot);
+    return raw && raw->display_name[0] ? raw->display_name : NULL;
+}
+
+int pex_java47_slot_lore(int pex_slot, const char **out_lines, int max_lines) {
+    const J47RawItem *raw = j47_raw_for_pex_slot(pex_slot);
+    if (!raw || !out_lines || max_lines <= 0) return 0;
+    int count = raw->lore_count;
+    if (count > max_lines) count = max_lines;
+    for (int i = 0; i < count; ++i) out_lines[i] = raw->lore[i];
+    return count;
+}
+
 static const J47RawItem *j47_raw_for_selected_hotbar(int display_id, int display_damage) {
     int java_slot = 36 + g_selected_hotbar_slot;
     if (java_slot < 36 || java_slot > 44) return NULL;
@@ -1845,7 +2234,30 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x05:{int x,y,z;j47_read_block_pos(r,&x,&y,&z);break;}
         case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
         case 0x07:{g_j47.dimension=j47_r_be32(r);g_j47.difficulty=(int)j47_r_u8(r);g_j47.game_mode=(int)j47_r_u8(r)&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_player_dead=0;g_player_death_time=0;g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;char wt[64];j47_r_string(r,wt,sizeof(wt));j47_reset_world_for_respawn();break;}
-        case 0x08:{double x=j47_r_double(r),y=j47_r_double(r),z=j47_r_double(r);float yaw=j47_r_float(r),pitch=j47_r_float(r);int flags=j47_r_u8(r);if(flags&1)x+=g_player_x;if(flags&2)y+=(g_player_y-1.62);if(flags&4)z+=g_player_z;if(flags&8)yaw+=g_player_yaw;if(flags&16)pitch+=g_player_pitch;g_player_x=g_player_prev_x=(float)x;g_player_y=g_player_prev_y=(float)y+1.62f;g_player_z=g_player_prev_z=(float)z;g_player_yaw=yaw;g_player_pitch=pitch;flat_multiplayer_recenter_world(g_player_x,g_player_z,1);g_j47.position_received=1;g_j47.progress=55;j47_send_position_look_immediate(x,y,z,yaw,pitch,g_player_on_ground);break;}
+        case 0x08:{
+            double x=j47_r_double(r),y=j47_r_double(r),z=j47_r_double(r);
+            float yaw=j47_r_float(r),pitch=j47_r_float(r);
+            int flags=j47_r_u8(r);
+            if(flags&1)x+=g_player_x;else g_player_motion_x=0.0f;
+            if(flags&2)y+=(g_player_y-1.62);else g_player_motion_y=0.0f;
+            if(flags&4)z+=g_player_z;else g_player_motion_z=0.0f;
+            if(flags&8)yaw+=g_player_yaw;
+            if(flags&16)pitch+=g_player_pitch;
+            g_player_x=g_player_prev_x=(float)x;
+            g_player_y=g_player_prev_y=(float)y+1.62f;
+            g_player_z=g_player_prev_z=(float)z;
+            g_player_yaw=g_player_prev_yaw=yaw;
+            g_player_pitch=g_player_prev_pitch=pitch;
+            flat_multiplayer_recenter_world(g_player_x,g_player_z,1);
+            g_j47.position_received=1;
+            g_j47.progress=55;
+            g_j47.last_movement_game_tick=g_ingame_ticks;
+            /* Vanilla 1.8.8 acknowledges S08 with onGround=false. Using the
+               local collision flag here can make strict movement checks treat
+               the correction as a fabricated landing. */
+            j47_send_position_look_immediate(x,y,z,yaw,pitch,0);
+            break;
+        }
         case 0x09:g_selected_hotbar_slot=(int)j47_r_u8(r);if(g_selected_hotbar_slot<0||g_selected_hotbar_slot>8)g_selected_hotbar_slot=0;break;
         case 0x0B:{int32_t id;if(j47_r_varint(r,&id)){int anim=j47_r_u8(r);PexNetRenderPlayerState*rp=pex_net_find_render_player(id);if(rp&&anim==0){rp->swing_active=1;rp->swing_ticks=0;}}break;}
         case 0x0C:j47_spawn_player(r);break;
@@ -1952,7 +2364,7 @@ static int j47_process_rx(void){
 
 int pex_java47_begin_join(const char *host,int port,const char *username){
     pex_java47_disconnect();
-    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;
+    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.last_movement_game_tick=-1;
     snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
     g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
     J47Writer hs; j47_writer_init(&hs,300);j47_w_varint(&hs,PEX_JAVA47_PROTOCOL_VERSION);j47_w_string_n(&hs,g_j47.host,255);j47_w_be16(&hs,g_j47.port);j47_w_varint(&hs,2);
@@ -2010,7 +2422,8 @@ int pex_java47_open_container_slot_count(void){
 static int j47_send_entity_action(int action){J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,g_j47.local_entity_id);j47_w_varint(&w,action);j47_w_varint(&w,0);int ok=j47_send_packet(0x0B,w.data,w.len);j47_writer_free(&w);return ok;}
 
 int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float pitch,int on_ground,int sneaking,int sprinting,int held_slot){
-    if(g_j47.state!=PEX_JAVA47_PLAY)return 0;
+    if(g_j47.state!=PEX_JAVA47_PLAY||!g_j47.position_received)return 0;
+    if(!isfinite(x)||!isfinite(feet_y)||!isfinite(z)||!isfinite(yaw)||!isfinite(pitch))return 1;
     flat_multiplayer_recenter_world((float)x,(float)z,0);
     if(held_slot<0||held_slot>8) held_slot=0;
     if(g_j47.last_held_slot!=held_slot){J47Writer h;j47_writer_init(&h,4);j47_w_be16(&h,held_slot);j47_send_packet(0x09,h.data,h.len);j47_writer_free(&h);g_j47.last_held_slot=held_slot;}
@@ -2018,14 +2431,30 @@ int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float
     if(g_j47.last_sprinting!=sprinting){j47_send_entity_action(sprinting?3:4);g_j47.last_sprinting=sprinting;}
     int ability_flags=0;if(g_j47.game_mode==1){ability_flags=1|4|8;if(g_creative_flying)ability_flags|=2;}
     if(g_j47.last_abilities_flags!=ability_flags){J47Writer a;j47_writer_init(&a,16);j47_w_u8(&a,ability_flags);j47_w_float(&a,0.05f);j47_w_float(&a,0.1f);j47_send_packet(0x13,a.data,a.len);j47_writer_free(&a);g_j47.last_abilities_flags=ability_flags;}
-    double now=now_seconds();if(now-g_j47.last_move_sent<0.045)return 1;g_j47.last_move_sent=now;
-    int moved=fabs(x-g_j47.last_x)>0.0001||fabs(feet_y-g_j47.last_y)>0.0001||fabs(z-g_j47.last_z)>0.0001||g_j47.movement_ticks++>=20;
-    int looked=fabsf(yaw-g_j47.last_yaw)>0.001f||fabsf(pitch-g_j47.last_pitch)>0.001f;J47Writer w;j47_writer_init(&w,48);int pid=0x03;
+
+    /* EntityPlayerSP sends one movement packet per client tick. The previous
+       wall-clock limiter could emit irregular bursts when the simulation and
+       render threads called this path in the same frame, which looks like
+       impossible movement to stricter servers. */
+    if(g_j47.last_movement_game_tick==g_ingame_ticks)return 1;
+    g_j47.last_movement_game_tick=g_ingame_ticks;
+
+    double dx=x-g_j47.last_x,dy=feet_y-g_j47.last_y,dz=z-g_j47.last_z;
+    double dist2=dx*dx+dy*dy+dz*dz;
+    int moved=dist2>9.0e-4||g_j47.movement_ticks>=20;
+    int looked=(yaw!=g_j47.last_yaw)||(pitch!=g_j47.last_pitch);
+    J47Writer w;j47_writer_init(&w,48);int pid=0x03;
+    on_ground=on_ground?1:0;
     if(moved&&looked){pid=0x06;j47_w_double(&w,x);j47_w_double(&w,feet_y);j47_w_double(&w,z);j47_w_float(&w,yaw);j47_w_float(&w,pitch);j47_w_u8(&w,on_ground);}
     else if(moved){pid=0x04;j47_w_double(&w,x);j47_w_double(&w,feet_y);j47_w_double(&w,z);j47_w_u8(&w,on_ground);}
     else if(looked){pid=0x05;j47_w_float(&w,yaw);j47_w_float(&w,pitch);j47_w_u8(&w,on_ground);}
     else {pid=0x03;j47_w_u8(&w,on_ground);}
-    int ok=j47_send_packet(pid,w.data,w.len);j47_writer_free(&w);if(moved){g_j47.last_x=x;g_j47.last_y=feet_y;g_j47.last_z=z;g_j47.movement_ticks=0;}if(looked){g_j47.last_yaw=yaw;g_j47.last_pitch=pitch;}g_j47.last_on_ground=on_ground;return ok;
+    int ok=j47_send_packet(pid,w.data,w.len);j47_writer_free(&w);
+    g_j47.movement_ticks++;
+    if(moved){g_j47.last_x=x;g_j47.last_y=feet_y;g_j47.last_z=z;g_j47.movement_ticks=0;}
+    if(looked){g_j47.last_yaw=yaw;g_j47.last_pitch=pitch;}
+    g_j47.last_on_ground=on_ground;
+    return ok;
 }
 
 int pex_java47_send_chat(const char*text){if(g_j47.state!=PEX_JAVA47_PLAY||!text)return 0;J47Writer w;j47_writer_init(&w,300);j47_w_string_n(&w,text,100);int ok=j47_send_packet(0x01,w.data,w.len);j47_writer_free(&w);return ok;}

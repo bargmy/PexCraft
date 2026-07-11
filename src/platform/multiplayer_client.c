@@ -3256,12 +3256,9 @@ static int pex_net_connect_to_server(const char *server) {
         PexJava47Status st;
         memset(&st, 0, sizeof(st));
         if (pex_java47_probe_status(host, java_port, 1600, &st)) {
-            if (st.protocol != PEX_JAVA47_PROTOCOL_VERSION) {
-                char msg[160];
-                snprintf(msg, sizeof(msg), "Java server uses protocol %d (%s); this build supports 1.8.8 protocol 47.", st.protocol, st.version[0] ? st.version : "unknown version");
-                pex_net_set_status(msg);
-                return 0;
-            }
+            /* A valid Java status response establishes the transport/backend,
+               not compatibility. Always attempt a protocol-47 login and let
+               the server send its own precise outdated/newer-client kick. */
             g_mp_join_backend = PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE;
             g_mp_socket = INVALID_SOCKET;
             g_mp_connected = 0;

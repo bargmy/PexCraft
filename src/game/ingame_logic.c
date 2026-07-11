@@ -42,16 +42,48 @@ static int hud_chat_visible_width(const char *text) {
     return text_width_chat_plain(plain);
 }
 
-static void hud_chat_begin_wrapped_line(char *line, size_t cap, size_t *line_len, char active_code) {
+typedef struct HudChatFormatState {
+    char color;
+    unsigned char obfuscated;
+    unsigned char bold;
+    unsigned char strikethrough;
+    unsigned char underlined;
+    unsigned char italic;
+} HudChatFormatState;
+
+static void hud_chat_format_state_apply(HudChatFormatState *state, char code) {
+    if (!state) return;
+    if (code >= 'A' && code <= 'Z') code = (char)(code - 'A' + 'a');
+    if ((code >= '0' && code <= '9') || (code >= 'a' && code <= 'f')) {
+        memset(state, 0, sizeof(*state));
+        state->color = code;
+    } else if (code == 'k') state->obfuscated = 1;
+    else if (code == 'l') state->bold = 1;
+    else if (code == 'm') state->strikethrough = 1;
+    else if (code == 'n') state->underlined = 1;
+    else if (code == 'o') state->italic = 1;
+    else if (code == 'r') memset(state, 0, sizeof(*state));
+}
+
+static void hud_chat_append_format_code(char *line, size_t cap, size_t *line_len, char code) {
+    if (!line || !line_len || *line_len + 3 >= cap) return;
+    line[(*line_len)++] = (char)0xC2;
+    line[(*line_len)++] = (char)0xA7;
+    line[(*line_len)++] = code;
+    line[*line_len] = 0;
+}
+
+static void hud_chat_begin_wrapped_line(char *line, size_t cap, size_t *line_len,
+                                        const HudChatFormatState *state) {
     *line_len = 0;
     line[0] = 0;
-    if (active_code && cap >= 4) {
-        line[0] = (char)0xC2;
-        line[1] = (char)0xA7;
-        line[2] = active_code;
-        line[3] = 0;
-        *line_len = 3;
-    }
+    if (!state) return;
+    if (state->color) hud_chat_append_format_code(line, cap, line_len, state->color);
+    if (state->obfuscated) hud_chat_append_format_code(line, cap, line_len, 'k');
+    if (state->bold) hud_chat_append_format_code(line, cap, line_len, 'l');
+    if (state->strikethrough) hud_chat_append_format_code(line, cap, line_len, 'm');
+    if (state->underlined) hud_chat_append_format_code(line, cap, line_len, 'n');
+    if (state->italic) hud_chat_append_format_code(line, cap, line_len, 'o');
 }
 
 static void hud_chat_emit_wrapped_line(char *line, size_t *line_len) {
@@ -69,17 +101,18 @@ static void hud_add_chat(const char *msg) {
     if (max_width > 318) max_width = 318;
     if (max_width < 80) max_width = 80;
 
-    char line[256];
+    char line[512];
     size_t line_len = 0;
-    char active_code = 0;
-    hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+    HudChatFormatState format_state;
+    memset(&format_state, 0, sizeof(format_state));
+    hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, &format_state);
 
     const unsigned char *p = (const unsigned char *)msg;
     while (*p) {
         if (*p == '\r') { p++; continue; }
         if (*p == '\n') {
             hud_chat_emit_wrapped_line(line, &line_len);
-            hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+            hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, &format_state);
             p++;
             continue;
         }
@@ -92,8 +125,7 @@ static void hud_add_chat(const char *msg) {
                 line_len += (size_t)fmt;
                 line[line_len] = 0;
             }
-            if (code == 'r' || code == 'R') active_code = 0;
-            else active_code = code;
+            hud_chat_format_state_apply(&format_state, code);
             p += fmt;
             continue;
         }
@@ -138,7 +170,7 @@ static void hud_add_chat(const char *msg) {
 
         if (hud_chat_visible_width(line) > 0) {
             hud_chat_emit_wrapped_line(line, &line_len);
-            hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+            hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, &format_state);
         }
 
         /* A single unbroken word can still exceed the HUD. Split it only at
@@ -149,7 +181,7 @@ static void hud_add_chat(const char *msg) {
             if (bytes <= 0 || used + (size_t)bytes > word_len) bytes = 1;
             if (line_len + (size_t)bytes >= sizeof(line)) {
                 hud_chat_emit_wrapped_line(line, &line_len);
-                hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+                hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, &format_state);
             }
             memcpy(line + line_len, word + used, (size_t)bytes);
             line_len += (size_t)bytes;
@@ -158,7 +190,7 @@ static void hud_add_chat(const char *msg) {
                 line_len -= (size_t)bytes;
                 line[line_len] = 0;
                 hud_chat_emit_wrapped_line(line, &line_len);
-                hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, active_code);
+                hud_chat_begin_wrapped_line(line, sizeof(line), &line_len, &format_state);
                 memcpy(line + line_len, word + used, (size_t)bytes);
                 line_len += (size_t)bytes;
                 line[line_len] = 0;
