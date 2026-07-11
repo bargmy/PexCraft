@@ -8571,7 +8571,8 @@ static void draw_local_player_held_item_125(float x, float eye_y, float z,
                                             float arm_pitch, float arm_yaw, float arm_roll);
 
 static void draw_third_person_player(void) {
-    if (!g_third_person_view || !tex_steve.id) return;
+    Texture *local_skin = pex_java47_local_skin_texture();
+    if (!g_third_person_view || !local_skin || !local_skin->id) return;
 
     const PexPlayerRenderState *pr = &g_player_render_frame;
     float x = pr->prev_x + (pr->x - pr->prev_x) * g_frame_partial;
@@ -8638,8 +8639,8 @@ static void draw_third_person_player(void) {
 
     glPushMatrix();
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex_steve.id);
-    steve_set_texture_dims(&tex_steve);
+    glBindTexture(GL_TEXTURE_2D, local_skin->id);
+    steve_set_texture_dims(local_skin);
     {
         float entity_br = entity_light_factor_at(x, eye_y, z);
         if (pr->hurt_time > 0 || pr->dead) steve_set_tint(entity_br, entity_br * 0.35f, entity_br * 0.35f);
@@ -9738,7 +9739,8 @@ static void draw_item3d_from_atlas(int tile) {
 }
 
 static void draw_first_person_hand(void) {
-    if (!tex_steve.id) return;
+    Texture *local_skin = pex_java47_local_skin_texture();
+    if (!local_skin || !local_skin->id) return;
 
     setup_world_projection();
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -9847,7 +9849,8 @@ static void draw_first_person_hand(void) {
         draw_item3d_from_atlas(tile);
         glPopMatrix();
     } else {
-        glBindTexture(GL_TEXTURE_2D, tex_steve.id);
+        glBindTexture(GL_TEXTURE_2D, local_skin->id);
+        steve_set_texture_dims(local_skin);
         glPushMatrix();
         glTranslatef(0.0f, -0.6f * (1.0f - equip), 0.0f);
         float s = 0.8f;

@@ -759,7 +759,8 @@ static void steve_part(int tex_x, int tex_y,
 }
 
 static void draw_inventory_steve(int inv_x, int inv_y) {
-    if (!tex_steve.id) return;
+    Texture *local_skin = pex_java47_local_skin_texture();
+    if (!local_skin || !local_skin->id) return;
 
     float mx = (float)(inv_x + 51 - g_mouse_x);
     float my = (float)(inv_y + 75 - 50 - g_mouse_y);
@@ -776,8 +777,8 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
 
     glPushMatrix();
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex_steve.id);
-    steve_set_texture_dims(&tex_steve);
+    glBindTexture(GL_TEXTURE_2D, local_skin->id);
+    steve_set_texture_dims(local_skin);
     steve_set_tint(1.0f, 1.0f, 1.0f);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);

@@ -11,6 +11,7 @@
 #define J47_ITEM_NAME_MAX 192
 #define J47_ITEM_LORE_MAX 8
 #define J47_ITEM_LORE_LINE_MAX 192
+#define J47_SKIN_URL_MAX 768
 
 /* The Java adapter is unity-included after game/mobs.c and before
    platform/multiplayer_client.c. These declarations bind the protocol layer to
@@ -19,6 +20,7 @@
 static void pex_net_mark_chunk_ready(int chunk_x, int chunk_z);
 static PexNetRenderPlayerState *pex_net_find_render_player(int player_id);
 static void pex_net_java_server_closed_window(void);
+static void pex_net_apply_skin(const PexNetSkin *skin, uint32_t size);
 
 typedef struct J47Writer {
     unsigned char *data;
@@ -38,6 +40,9 @@ typedef struct J47Profile {
     int used;
     unsigned char uuid[16];
     char name[32];
+    char skin_url[J47_SKIN_URL_MAX];
+    char skin_path[MAX_PATHBUF];
+    int skin_state; /* 0 none, 1 queued, 2 downloading, 3 ready, 4 failed */
 } J47Profile;
 
 typedef struct J47RawItem {
@@ -63,6 +68,7 @@ typedef enum J47EntityKind {
 typedef struct J47Entity {
     int used;
     int entity_id;
+    unsigned char uuid[16];
     J47EntityKind kind;
     int java_type;
     int player_slot;
@@ -107,6 +113,8 @@ typedef struct PexJava47Session {
     int game_mode;
     int difficulty;
     int local_entity_id;
+    unsigned char local_profile_uuid[16];
+    int local_profile_uuid_valid;
     int chunks_received;
     int position_received;
     int progress;
@@ -118,6 +126,12 @@ typedef struct PexJava47Session {
     int movement_ticks;
     int last_movement_game_tick;
     int last_on_ground;
+    int pending_move_packet;
+    size_t pending_move_len;
+    unsigned char pending_move_payload[48];
+    int pending_respawn_dimension;
+    int pending_respawn_from;
+    int pending_respawn_to;
     double last_x, last_y, last_z;
     float last_yaw, last_pitch;
     double connect_started;
@@ -142,6 +156,20 @@ typedef struct PexJava47Session {
 } PexJava47Session;
 
 static PexJava47Session g_j47;
+static CRITICAL_SECTION g_j47_tx_cs;
+static int g_j47_tx_cs_ready = 0;
+
+typedef struct J47SkinDownloadJob {
+    unsigned char uuid[16];
+    char url[J47_SKIN_URL_MAX];
+    char path[MAX_PATHBUF];
+    volatile LONG done;
+    volatile LONG ok;
+} J47SkinDownloadJob;
+
+static J47SkinDownloadJob g_j47_skin_job;
+static HANDLE g_j47_skin_thread = NULL;
+static Texture g_j47_local_skin;
 
 static int j47_socket_would_block(void) {
     int e = WSAGetLastError();
@@ -846,6 +874,61 @@ static void j47_json_collect_text(const char *json, char *out, size_t cap) {
     out[cap - 1] = 0;
 }
 
+static int j47_base64_value(int c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static int j47_base64_decode(const char *src, unsigned char *out, size_t cap, size_t *out_len) {
+    size_t n = 0;
+    uint32_t accum = 0;
+    int bits = 0;
+    if (out_len) *out_len = 0;
+    if (!src || !out || cap == 0) return 0;
+    for (; *src; ++src) {
+        unsigned char ch = (unsigned char)*src;
+        if (ch == '=') break;
+        if (ch == ' ' || ch == '\r' || ch == '\n' || ch == '\t') continue;
+        int v = j47_base64_value(ch);
+        if (v < 0) return 0;
+        accum = (accum << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (n >= cap) return 0;
+            out[n++] = (unsigned char)((accum >> bits) & 0xff);
+        }
+    }
+    if (n < cap) out[n] = 0;
+    if (out_len) *out_len = n;
+    return n > 0;
+}
+
+static int j47_extract_skin_url(const char *textures_value, char *out, size_t cap) {
+    unsigned char decoded[8192];
+    size_t decoded_len = 0;
+    if (!out || cap == 0) return 0;
+    out[0] = 0;
+    if (!j47_base64_decode(textures_value, decoded, sizeof(decoded) - 1, &decoded_len)) return 0;
+    decoded[decoded_len] = 0;
+    const char *json = (const char *)decoded;
+    const char *skin = strstr(json, "\"SKIN\"");
+    if (!skin) return 0;
+    const char *url_key = strstr(skin, "\"url\"");
+    if (!url_key) return 0;
+    const char *colon = strchr(url_key + 5, ':');
+    if (!colon) return 0;
+    const char *p = j47_json_ws(colon + 1, json + decoded_len);
+    const char *after = p;
+    if (p >= json + decoded_len || *p != '"') return 0;
+    if (!j47_json_unescape(p, json + decoded_len, out, cap, &after)) return 0;
+    return !strncmp(out, "http://", 7) || !strncmp(out, "https://", 8);
+}
+
 static int j47_build_raw_frame(int packet_id, const unsigned char *payload, size_t payload_len, J47Writer *out) {
     J47Writer body;
     j47_writer_init(&body, payload_len + 16);
@@ -995,7 +1078,14 @@ static void j47_fail(const char *reason) {
     j47_set_status(g_j47.disconnect_reason);
 }
 
-static int j47_queue_bytes(const void *data, size_t len) {
+static void j47_tx_lock_ensure(void) {
+    if (!g_j47_tx_cs_ready) {
+        InitializeCriticalSection(&g_j47_tx_cs);
+        g_j47_tx_cs_ready = 1;
+    }
+}
+
+static int j47_queue_bytes_unlocked(const void *data, size_t len) {
     if (!data || len == 0) return 1;
     if (len > J47_TX_MAX || g_j47.tx_len > J47_TX_MAX - len) return 0;
     size_t need = g_j47.tx_len + len;
@@ -1013,17 +1103,21 @@ static int j47_queue_bytes(const void *data, size_t len) {
 }
 
 static int j47_flush_tx(void) {
+    j47_tx_lock_ensure();
+    EnterCriticalSection(&g_j47_tx_cs);
     while (g_j47.tx_pos < g_j47.tx_len) {
         int n = send(g_j47.socket, (const char *)g_j47.tx + g_j47.tx_pos,
                      (int)(g_j47.tx_len - g_j47.tx_pos), 0);
         if (n > 0) { g_j47.tx_pos += (size_t)n; continue; }
-        if (n == 0) { g_j47.peer_closed = 1; return 1; }
-        if (j47_socket_would_block()) return 1;
+        if (n == 0) { g_j47.peer_closed = 1; LeaveCriticalSection(&g_j47_tx_cs); return 1; }
+        if (j47_socket_would_block()) { LeaveCriticalSection(&g_j47_tx_cs); return 1; }
+        LeaveCriticalSection(&g_j47_tx_cs);
         j47_fail("Could not send Java protocol data");
         return 0;
     }
     g_j47.tx_len = 0;
     g_j47.tx_pos = 0;
+    LeaveCriticalSection(&g_j47_tx_cs);
     return 1;
 }
 
@@ -1057,11 +1151,47 @@ static int j47_send_packet(int packet_id, const unsigned char *payload, size_t p
     j47_writer_init(&frame, inner.len + 8);
     j47_w_varint(&frame, (int32_t)inner.len);
     j47_w_bytes(&frame, inner.data, inner.len);
-    int ok = !frame.failed && j47_queue_bytes(frame.data, frame.len);
+    int ok = 0;
+    if (!frame.failed) {
+        j47_tx_lock_ensure();
+        EnterCriticalSection(&g_j47_tx_cs);
+        ok = j47_queue_bytes_unlocked(frame.data, frame.len);
+        LeaveCriticalSection(&g_j47_tx_cs);
+    }
     j47_writer_free(&packet);
     j47_writer_free(&inner);
     j47_writer_free(&frame);
     return ok;
+}
+
+static void j47_set_pending_movement(int packet_id, const unsigned char *payload, size_t payload_len) {
+    if (payload_len > sizeof(g_j47.pending_move_payload)) return;
+    j47_tx_lock_ensure();
+    EnterCriticalSection(&g_j47_tx_cs);
+    g_j47.pending_move_packet = packet_id;
+    g_j47.pending_move_len = payload_len;
+    if (payload_len) memcpy(g_j47.pending_move_payload, payload, payload_len);
+    LeaveCriticalSection(&g_j47_tx_cs);
+}
+
+static int j47_queue_pending_movement(void) {
+    int packet_id = 0;
+    size_t payload_len = 0;
+    unsigned char payload[48];
+    j47_tx_lock_ensure();
+    EnterCriticalSection(&g_j47_tx_cs);
+    /* Do not append stale movement behind a blocked socket backlog. Keep only
+       the newest snapshot until previously queued protocol data is sent. */
+    if (g_j47.pending_move_packet && g_j47.tx_pos == g_j47.tx_len) {
+        packet_id = g_j47.pending_move_packet;
+        payload_len = g_j47.pending_move_len;
+        if (payload_len) memcpy(payload, g_j47.pending_move_payload, payload_len);
+        g_j47.pending_move_packet = 0;
+        g_j47.pending_move_len = 0;
+    }
+    LeaveCriticalSection(&g_j47_tx_cs);
+    if (!packet_id) return 1;
+    return j47_send_packet(packet_id, payload, payload_len);
 }
 
 static int j47_rx_reserve(size_t add) {
@@ -1631,7 +1761,7 @@ static void j47_clear_remote_entities(void) {
     g_mp_player_count = 0;
 }
 
-static void j47_reset_world_for_respawn(void) {
+static void j47_reset_world_for_respawn_ex(int preserve_position) {
     memset(g_flat_blocks, 0, sizeof(g_flat_blocks));
     memset(g_flat_meta, 0, sizeof(g_flat_meta));
     memset(g_flat_levels, 0, sizeof(g_flat_levels));
@@ -1651,7 +1781,20 @@ static void j47_reset_world_for_respawn(void) {
     j47_clear_remote_entities();
     g_j47.chunks_received = 0;
     g_j47.world_ready = 0;
-    g_j47.position_received = 0;
+    if (!preserve_position) g_j47.position_received = 0;
+}
+
+static void j47_reset_world_for_respawn(void) {
+    j47_reset_world_for_respawn_ex(0);
+}
+
+static void j47_commit_pending_respawn_dimension(void) {
+    if (!g_j47.pending_respawn_dimension) return;
+    g_j47.dimension = g_j47.pending_respawn_to;
+    g_j47.pending_respawn_dimension = 0;
+    /* S08 commonly arrives before the first chunk. Keep that acknowledged
+       position while replacing the old dimension's terrain. */
+    j47_reset_world_for_respawn_ex(g_j47.position_received ? 1 : 0);
 }
 
 static J47Profile *j47_profile_find_uuid(const unsigned char uuid[16]) {
@@ -1664,6 +1807,161 @@ static J47Profile *j47_profile_put(const unsigned char uuid[16], const char *nam
     if (!p) for (int i = 0; i < J47_PROFILE_MAX; i++) if (!g_j47.profiles[i].used) { p = &g_j47.profiles[i]; memset(p, 0, sizeof(*p)); p->used = 1; memcpy(p->uuid, uuid, 16); break; }
     if (p && name) snprintf(p->name, sizeof(p->name), "%.*s", (int)sizeof(p->name) - 1, name);
     return p;
+}
+
+static int j47_hex_value(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int j47_parse_uuid_text(const char *text, unsigned char out[16]) {
+    int high = -1;
+    int n = 0;
+    if (!text || !out) return 0;
+    memset(out, 0, 16);
+    for (; *text; ++text) {
+        if (*text == '-') continue;
+        int v = j47_hex_value((unsigned char)*text);
+        if (v < 0) return 0;
+        if (high < 0) high = v;
+        else {
+            if (n >= 16) return 0;
+            out[n++] = (unsigned char)((high << 4) | v);
+            high = -1;
+        }
+    }
+    return n == 16 && high < 0;
+}
+
+static void j47_uuid_hex(const unsigned char uuid[16], char out[33]) {
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 16; ++i) {
+        out[i * 2] = hex[(uuid[i] >> 4) & 15];
+        out[i * 2 + 1] = hex[uuid[i] & 15];
+    }
+    out[32] = 0;
+}
+
+static int j47_download_skin_file(const char *url, const char *path) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    (void)url; (void)path;
+    return 0;
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+    return pex_platform_http_download_to_file(url, path, 0, 1);
+#else
+    return http_download_to_file(url, path, 0);
+#endif
+}
+
+static DWORD WINAPI j47_skin_download_worker(LPVOID unused) {
+    (void)unused;
+    int ok = j47_download_skin_file(g_j47_skin_job.url, g_j47_skin_job.path);
+    InterlockedExchange(&g_j47_skin_job.ok, ok ? 1 : 0);
+    InterlockedExchange(&g_j47_skin_job.done, 1);
+    return 0;
+}
+
+static int j47_profile_is_local(const J47Profile *p) {
+    if (!p) return 0;
+    if (g_j47.local_profile_uuid_valid &&
+        memcmp(p->uuid, g_j47.local_profile_uuid, 16) == 0) return 1;
+    return p->name[0] && g_j47.username[0] &&
+           strcmp(p->name, g_j47.username) == 0;
+}
+
+static void j47_apply_profile_skin(J47Profile *p) {
+    if (!p || p->skin_state != 3 || !p->skin_path[0]) return;
+    Texture loaded;
+    memset(&loaded, 0, sizeof(loaded));
+    if (!load_png_texture(&loaded, p->skin_path, 0)) {
+        p->skin_state = 4;
+        return;
+    }
+    if (loaded.w != 64 || (loaded.h != 32 && loaded.h != 64) || !loaded.rgba) {
+        free_texture(&loaded);
+        p->skin_state = 4;
+        return;
+    }
+
+    if (j47_profile_is_local(p)) {
+        free_texture(&g_j47_local_skin);
+        g_j47_local_skin = loaded;
+        memset(&loaded, 0, sizeof(loaded));
+    }
+
+    for (int i = 0; i < J47_ENTITY_MAX; ++i) {
+        J47Entity *e = &g_j47.entities[i];
+        if (!e->used || e->kind != J47_ENTITY_PLAYER || memcmp(e->uuid, p->uuid, 16) != 0) continue;
+        if (e->entity_id == g_j47.local_entity_id || !loaded.rgba) continue;
+        PexNetSkin skin;
+        memset(&skin, 0, sizeof(skin));
+        skin.player_id = e->entity_id;
+        skin.width = loaded.w;
+        skin.height = loaded.h;
+        skin.byte_count = (uint32_t)((size_t)loaded.w * (size_t)loaded.h * 4u);
+        if (skin.byte_count <= PEX_NET_SKIN_MAX_BYTES) {
+            memcpy(skin.rgba, loaded.rgba, skin.byte_count);
+            pex_net_apply_skin(&skin, (uint32_t)(offsetof(PexNetSkin, rgba) + skin.byte_count));
+        }
+    }
+    free_texture(&loaded);
+}
+
+static void j47_profile_set_skin_url(J47Profile *p, const char *url) {
+    if (!p) return;
+    if (!url || !url[0]) {
+        p->skin_url[0] = 0;
+        p->skin_path[0] = 0;
+        p->skin_state = 0;
+        if (j47_profile_is_local(p)) free_texture(&g_j47_local_skin);
+        for (int i = 0; i < J47_ENTITY_MAX; ++i) {
+            J47Entity *e = &g_j47.entities[i];
+            if (!e->used || e->kind != J47_ENTITY_PLAYER ||
+                memcmp(e->uuid, p->uuid, 16) != 0) continue;
+            PexNetRenderPlayerState *rp = pex_net_find_render_player(e->entity_id);
+            if (rp) { free_texture(&rp->skin); rp->has_skin = 0; }
+        }
+        return;
+    }
+    if (!strcmp(p->skin_url, url) && p->skin_state != 4) return;
+    snprintf(p->skin_url, sizeof(p->skin_url), "%.*s", (int)sizeof(p->skin_url) - 1, url);
+    char uuid_hex[33];
+    j47_uuid_hex(p->uuid, uuid_hex);
+    uint32_t url_hash=2166136261u;
+    for(const unsigned char*s=(const unsigned char*)url;*s;++s)url_hash=(url_hash^*s)*16777619u;
+    snprintf(p->skin_path, sizeof(p->skin_path), "%s/java_%s_%08x.png",
+             g_skin_dir[0] ? g_skin_dir : ".", uuid_hex, (unsigned)url_hash);
+    p->skin_state = file_exists(p->skin_path) ? 3 : 1;
+    if (p->skin_state == 3) j47_apply_profile_skin(p);
+}
+
+static void j47_skin_pump(void) {
+    if (g_j47_skin_thread && InterlockedCompareExchange(&g_j47_skin_job.done, 0, 0)) {
+        CloseHandle(g_j47_skin_thread);
+        g_j47_skin_thread = NULL;
+        J47Profile *p = j47_profile_find_uuid(g_j47_skin_job.uuid);
+        if (p && !strcmp(p->skin_url, g_j47_skin_job.url)) {
+            p->skin_state = InterlockedCompareExchange(&g_j47_skin_job.ok, 0, 0) ? 3 : 4;
+            if (p->skin_state == 3) j47_apply_profile_skin(p);
+        }
+        memset(&g_j47_skin_job, 0, sizeof(g_j47_skin_job));
+    }
+    if (g_j47_skin_thread) return;
+    for (int i = 0; i < J47_PROFILE_MAX; ++i) {
+        J47Profile *p = &g_j47.profiles[i];
+        if (!p->used || p->skin_state != 1 || !p->skin_url[0]) continue;
+        memset(&g_j47_skin_job, 0, sizeof(g_j47_skin_job));
+        memcpy(g_j47_skin_job.uuid, p->uuid, 16);
+        snprintf(g_j47_skin_job.url, sizeof(g_j47_skin_job.url), "%s", p->skin_url);
+        snprintf(g_j47_skin_job.path, sizeof(g_j47_skin_job.path), "%s", p->skin_path);
+        pxc_mkdirs_for_file(g_j47_skin_job.path);
+        p->skin_state = 2;
+        g_j47_skin_thread = CreateThread(NULL, 0, j47_skin_download_worker, NULL, 0, NULL);
+        if (!g_j47_skin_thread) p->skin_state = 4;
+        break;
+    }
 }
 
 static int j47_drop_alloc(void) {
@@ -2005,21 +2303,29 @@ static void j47_spawn_player(J47Reader *r) {
     float pitch = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
     int held = (int16_t)j47_r_be16(r);
     if (!j47_skip_metadata(r) || r->failed) return;
+    J47Profile *profile = j47_profile_find_uuid(uuid);
+    /* Some skin plugins briefly destroy and respawn the local player entity.
+       The vanilla client never renders that entity as a separate remote
+       player, so ignore it here while still accepting the refreshed profile. */
+    if (entity_id == g_j47.local_entity_id) {
+        if (profile && profile->skin_state == 3) j47_apply_profile_skin(profile);
+        return;
+    }
     J47Entity *e = j47_entity_alloc(entity_id);
     if (!e) return;
     int slot = e->player_slot;
     if (slot < 0) slot = j47_player_alloc();
     if (slot < 0) return;
-    e->kind = J47_ENTITY_PLAYER; e->player_slot = slot; e->x = x; e->y = y; e->z = z; e->yaw = yaw; e->pitch = pitch;
+    e->kind = J47_ENTITY_PLAYER; e->player_slot = slot; memcpy(e->uuid, uuid, 16); e->x = x; e->y = y; e->z = z; e->yaw = yaw; e->pitch = pitch;
     e->held_item_id = pex_java47_translate_item_id(held);
     e->held_item_count = e->held_item_id > 0 ? 1 : 0;
     PexNetPlayerState *p = &g_mp_players[slot];
     memset(p, 0, sizeof(*p));
     p->player_id = entity_id; p->x = (float)x; p->y = (float)y + 1.62f; p->z = (float)z;
     p->yaw = yaw; p->pitch = pitch; p->health = 20;
-    J47Profile *profile = j47_profile_find_uuid(uuid);
     snprintf(p->name, sizeof(p->name), "%s", profile && profile->name[0] ? profile->name : "Player");
     g_mp_prev_players[slot] = *p;
+    if (profile && profile->skin_state == 3) j47_apply_profile_skin(profile);
 }
 
 static void j47_spawn_mob(J47Reader *r) {
@@ -2168,11 +2474,12 @@ static void j47_handle_player_list(J47Reader *r) {
     int32_t action=0,count=0;if(!j47_r_varint(r,&action)||!j47_r_varint(r,&count)||count<0||count>10000)return;
     for(int i=0;i<count;i++){
         if(r->pos+16>r->len){r->failed=1;return;}unsigned char uuid[16];memcpy(uuid,r->data+r->pos,16);r->pos+=16;
-        if(action==0){char name[64];int32_t props=0,gm=0,ping=0;j47_r_string(r,name,sizeof(name));j47_r_varint(r,&props);
-            for(int p=0;p<props;p++){char a[128],b[4096];j47_r_string(r,a,sizeof(a));j47_r_string(r,b,sizeof(b));int sig=j47_r_u8(r);if(sig){char c[4096];j47_r_string(r,c,sizeof(c));}}
-            j47_r_varint(r,&gm);j47_r_varint(r,&ping);int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}j47_profile_put(uuid,name);
+        if(action==0){char name[64];char skin_url[J47_SKIN_URL_MAX]={0};int32_t props=0,gm=0,ping=0;j47_r_string(r,name,sizeof(name));j47_r_varint(r,&props);
+            for(int p=0;p<props;p++){char a[128],b[8192];j47_r_string(r,a,sizeof(a));j47_r_string(r,b,sizeof(b));int sig=j47_r_u8(r);if(sig){char c[8192];j47_r_string(r,c,sizeof(c));}if(!strcmp(a,"textures"))j47_extract_skin_url(b,skin_url,sizeof(skin_url));}
+            j47_r_varint(r,&gm);j47_r_varint(r,&ping);int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}J47Profile*profile=j47_profile_put(uuid,name);if(profile)j47_profile_set_skin_url(profile,skin_url);
         } else if(action==1||action==2){int32_t v;j47_r_varint(r,&v);} else if(action==3){int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}}
-        else if(action==4){J47Profile*p=j47_profile_find_uuid(uuid);if(p)p->used=0;}
+        else if(action==4){/* Keep cached name/skin data. Skin plugins remove
+                              and immediately re-add profiles during refresh. */}
         if(r->failed)return;
     }
 }
@@ -2233,7 +2540,46 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         }
         case 0x05:{int x,y,z;j47_read_block_pos(r,&x,&y,&z);break;}
         case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
-        case 0x07:{g_j47.dimension=j47_r_be32(r);g_j47.difficulty=(int)j47_r_u8(r);g_j47.game_mode=(int)j47_r_u8(r)&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;g_player_dead=0;g_player_death_time=0;g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;char wt[64];j47_r_string(r,wt,sizeof(wt));j47_reset_world_for_respawn();break;}
+        case 0x07:{
+            int old_dimension=g_j47.dimension;
+            int new_dimension=j47_r_be32(r);
+            g_j47.difficulty=(int)j47_r_u8(r);
+            g_j47.game_mode=(int)j47_r_u8(r)&7;
+            g_game_mode=g_j47.game_mode==1?1:0;
+            g_pending_game_mode=g_game_mode;
+            if(!g_game_mode)g_creative_flying=0;
+            g_j47.last_abilities_flags=-1;
+            g_player_dead=0;
+            g_player_death_time=0;
+            g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;
+            char wt[64];j47_r_string(r,wt,sizeof(wt));
+            if(r->failed)break;
+            /* Skin-restoration plugins use either a same-dimension Respawn
+               or a rapid fake-dimension/real-dimension pair to force the
+               vanilla client to rebuild its skin. Do not erase terrain merely
+               because S07 arrived. A real dimension transfer is committed
+               when the server actually starts sending new chunk data. */
+            if(!g_j47.world_ready){
+                g_j47.dimension=new_dimension;
+                g_j47.pending_respawn_dimension=0;
+                j47_reset_world_for_respawn();
+            }else if(g_j47.pending_respawn_dimension){
+                if(new_dimension==g_j47.pending_respawn_from){
+                    /* Fake transition returned to the original dimension. */
+                    g_j47.pending_respawn_dimension=0;
+                    g_j47.dimension=new_dimension;
+                }else{
+                    g_j47.pending_respawn_to=new_dimension;
+                }
+            }else if(new_dimension!=old_dimension){
+                g_j47.pending_respawn_dimension=1;
+                g_j47.pending_respawn_from=old_dimension;
+                g_j47.pending_respawn_to=new_dimension;
+            }else{
+                g_j47.dimension=new_dimension;
+            }
+            break;
+        }
         case 0x08:{
             double x=j47_r_double(r),y=j47_r_double(r),z=j47_r_double(r);
             float yaw=j47_r_float(r),pitch=j47_r_float(r);
@@ -2272,10 +2618,10 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x1A:{int32_t id;if(j47_r_varint(r,&id)){int status=(int8_t)j47_r_u8(r);J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){PassiveMob*m=&g_passive_mobs[e->mob_slot];if(status==2)m->hurt_time=10;if(status==3)m->death_time=1;}}break;}
         case 0x1C:{int32_t id;if(j47_r_varint(r,&id))j47_parse_entity_metadata(r,id);break;}
         case 0x1F:{g_player_xp_progress=j47_r_float(r);int32_t level,total;j47_r_varint(r,&level);j47_r_varint(r,&total);g_player_xp_level=level;g_player_xp_total=total;break;}
-        case 0x21:{int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0);break;}
+        case 0x21:{j47_commit_pending_respawn_dimension();int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0);break;}
         case 0x22:{int cx=j47_r_be32(r),cz=j47_r_be32(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int packed=j47_r_be16(r);int32_t state;j47_r_varint(r,&state);int x=cx*16+((packed>>12)&15),z=cz*16+((packed>>8)&15),y=packed&255;j47_set_block_state(x,y,z,state);}break;}
         case 0x23:{int x=0,y=0,z=0;int32_t s;if(j47_read_block_pos(r,&x,&y,&z)&&j47_r_varint(r,&s))j47_set_block_state(x,y,z,s);break;}
-        case 0x26:{int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=0;for(int sy=0;sy<16;sy++)if(mask[i]&(1u<<sy))bytes+=8192+2048+(has_sky?2048:0);bytes+=256;if(bytes>r->len-r->pos){r->failed=1;break;}j47_install_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky);r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
+        case 0x26:{j47_commit_pending_respawn_dimension();int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=0;for(int sy=0;sy<16;sy++)if(mask[i]&(1u<<sy))bytes+=8192+2048+(has_sky?2048:0);bytes+=256;if(bytes>r->len-r->pos){r->failed=1;break;}j47_install_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky);r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
         case 0x2B:{int reason=j47_r_u8(r);float v=j47_r_float(r);if(reason==3){g_game_mode=(int)v==1?1:0;g_pending_game_mode=g_game_mode;g_j47.game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;}break;}
         case 0x2D:{
             memset(&g_j47.window,0,sizeof(g_j47.window));
@@ -2344,7 +2690,7 @@ static void j47_handle_packet(const unsigned char *data,size_t len){
     if(g_j47.state==PEX_JAVA47_LOGIN){
         if(id==0){char json[8192],text[512];if(j47_r_string(&r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Login rejected");}}
         else if(id==1){j47_fail("This Java server requires online-mode authentication");}
-        else if(id==2){char uuid[64],name[64];if(j47_r_string(&r,uuid,sizeof(uuid))&&j47_r_string(&r,name,sizeof(name))){g_j47.state=PEX_JAVA47_PLAY;g_j47.progress=25;j47_set_status("Logging in");}}
+        else if(id==2){char uuid[64],name[64];if(j47_r_string(&r,uuid,sizeof(uuid))&&j47_r_string(&r,name,sizeof(name))){g_j47.local_profile_uuid_valid=j47_parse_uuid_text(uuid,g_j47.local_profile_uuid);g_j47.state=PEX_JAVA47_PLAY;g_j47.progress=25;j47_set_status("Logging in");}}
         else if(id==3){int32_t threshold;if(j47_r_varint(&r,&threshold))g_j47.compression_threshold=threshold;}
     }else if(g_j47.state==PEX_JAVA47_PLAY)j47_handle_play_packet(id,&r);
     if(r.failed&&g_j47.state!=PEX_JAVA47_FAILED)j47_fail("Malformed Java protocol packet");
@@ -2352,12 +2698,21 @@ static void j47_handle_packet(const unsigned char *data,size_t len){
 
 static int j47_process_rx(void){
     size_t consumed=0;
+    int packet_count=0;
+    double started=now_seconds();
     while(consumed<g_j47.rx_len){int32_t frame_len=0;size_t prefix=0;int vr=j47_peek_varint(g_j47.rx+consumed,g_j47.rx_len-consumed,&frame_len,&prefix);if(vr==0)break;if(vr<0||frame_len<0||frame_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java packet length");return 0;}if(g_j47.rx_len-consumed-prefix<(size_t)frame_len)break;
         const unsigned char*frame=g_j47.rx+consumed+prefix;size_t flen=(size_t)frame_len;
         if(g_j47.compression_threshold>=0){J47Reader rr;int32_t raw_len=0;j47_reader_init(&rr,frame,flen);if(!j47_r_varint(&rr,&raw_len)){j47_fail("Invalid compressed Java packet");return 0;}if(raw_len==0)j47_handle_packet(frame+rr.pos,flen-rr.pos);else{if(raw_len<g_j47.compression_threshold||raw_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java decompressed length");return 0;}unsigned char*out=malloc((size_t)raw_len);if(!out){j47_fail("Out of memory decoding Java packet");return 0;}uLongf outlen=(uLongf)raw_len;int zr=uncompress(out,&outlen,frame+rr.pos,(uLong)(flen-rr.pos));if(zr!=Z_OK||outlen!=(uLongf)raw_len){free(out);j47_fail("Invalid Java compressed packet");return 0;}j47_handle_packet(out,(size_t)outlen);free(out);}}
         else j47_handle_packet(frame,flen);
         if(g_j47.state==PEX_JAVA47_FAILED) return 0;
         consumed += prefix + flen;
+        packet_count++;
+        /* A busy BedWars lobby can produce hundreds of entity/tab packets in
+           one socket read. Processing the entire backlog before the game tick
+           starves local movement, so bound play-state work per rendered frame
+           while leaving the remaining complete frames buffered. */
+        if(g_j47.state==PEX_JAVA47_PLAY &&
+           (packet_count>=256 || now_seconds()-started>=0.004))break;
     }
     if(consumed){memmove(g_j47.rx,g_j47.rx+consumed,g_j47.rx_len-consumed);g_j47.rx_len-=consumed;}return 1;
 }
@@ -2376,6 +2731,9 @@ int pex_java47_begin_join(const char *host,int port,const char *username){
 int pex_java47_tick(void){
     if(!g_j47.active&&g_j47.state!=PEX_JAVA47_PLAY)return g_j47.state!=PEX_JAVA47_FAILED;
     if(g_j47.socket==INVALID_SOCKET)return 0;
+    j47_skin_pump();
+    if(!j47_flush_tx())return 0;
+    if(!j47_queue_pending_movement())return 0;
     if(!j47_flush_tx())return 0;
     if(!j47_receive_available())return 0;
     if(!j47_process_rx())return 0;
@@ -2384,12 +2742,15 @@ int pex_java47_tick(void){
         else j47_fail("Java server closed the connection");
         return 0;
     }
+    if(!j47_flush_tx())return 0;
+    if(!j47_queue_pending_movement())return 0;
     return j47_flush_tx();
 }
 
 void pex_java47_disconnect(void){
     if(g_j47.socket!=INVALID_SOCKET)closesocket(g_j47.socket);
     j47_clear_remote_entities();
+    free_texture(&g_j47_local_skin);
     free(g_j47.rx);free(g_j47.tx);memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.state=PEX_JAVA47_IDLE;
 }
 
@@ -2404,6 +2765,7 @@ int pex_java47_server_protocol(void){return g_j47.server_protocol;}
 int pex_java47_local_entity_id(void){return g_j47.local_entity_id;}
 int pex_java47_get_equipment(int entity_id,int *item_id,int *count,int *damage,int *slot){J47Entity*e=j47_entity_find(entity_id);if(!e)return 0;if(item_id)*item_id=e->held_item_id;if(count)*count=e->held_item_count;if(damage)*damage=e->held_item_damage;if(slot)*slot=e->held_slot;return 1;}
 int pex_java47_entity_is_player(int entity_id){J47Entity*e=j47_entity_find(entity_id);return e&&e->kind==J47_ENTITY_PLAYER;}
+Texture *pex_java47_local_skin_texture(void){return g_j47_local_skin.id?&g_j47_local_skin:&tex_steve;}
 
 ItemStack *pex_java47_get_open_container_slot(int local_slot){
     if(!g_j47.window.open||!j47_window_is_container_type(g_j47.window.type)||local_slot<0||
@@ -2449,7 +2811,13 @@ int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float
     else if(moved){pid=0x04;j47_w_double(&w,x);j47_w_double(&w,feet_y);j47_w_double(&w,z);j47_w_u8(&w,on_ground);}
     else if(looked){pid=0x05;j47_w_float(&w,yaw);j47_w_float(&w,pitch);j47_w_u8(&w,on_ground);}
     else {pid=0x03;j47_w_u8(&w,on_ground);}
-    int ok=j47_send_packet(pid,w.data,w.len);j47_writer_free(&w);
+    j47_set_pending_movement(pid,w.data,w.len);
+    j47_writer_free(&w);
+    /* The simulation tick can run separately from the render/network poll.
+       Push the newest movement snapshot immediately rather than waiting for a
+       busy lobby's next poll. If the socket is back-pressured, the pending
+       slot retains only the newest movement packet. */
+    int ok=j47_flush_tx()&&j47_queue_pending_movement()&&j47_flush_tx();
     g_j47.movement_ticks++;
     if(moved){g_j47.last_x=x;g_j47.last_y=feet_y;g_j47.last_z=z;g_j47.movement_ticks=0;}
     if(looked){g_j47.last_yaw=yaw;g_j47.last_pitch=pitch;}
