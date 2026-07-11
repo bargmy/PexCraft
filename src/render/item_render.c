@@ -345,6 +345,19 @@ static int java125_inventory_model_meta(int id, int damage) {
     return damage & 15;
 }
 
+static float g_item_gui_brightness_125 = 1.0f;
+
+static int pex_item_gui_scale_rgb_125(int rgb) {
+    float brightness = g_item_gui_brightness_125;
+    int r, g, b;
+    if (brightness >= 0.999f) return rgb & 0xFFFFFF;
+    if (brightness < 0.0f) brightness = 0.0f;
+    r = (int)((float)((rgb >> 16) & 255) * brightness + 0.5f);
+    g = (int)((float)((rgb >> 8) & 255) * brightness + 0.5f);
+    b = (int)((float)(rgb & 255) * brightness + 0.5f);
+    return (r << 16) | (g << 8) | b;
+}
+
 static int java125_wool_texture_meta(int meta) {
     /* ItemCloth.getIconFromDamage calls BlockCloth.getBlockFromDye(damage).
        Damage 0 is still White Wool, but the item icon is resolved through
@@ -356,6 +369,7 @@ static void draw_item_icon_tile_gui(int tile, int x, int y, int rgb) {
     if (!tex_items.id) return;
     int sx = (tile & 15) * 16;
     int sy = (tile >> 4) * 16;
+    rgb = pex_item_gui_scale_rgb_125(rgb);
     float r = ((rgb >> 16) & 255) / 255.0f;
     float g = ((rgb >> 8) & 255) / 255.0f;
     float b = (rgb & 255) / 255.0f;
@@ -366,7 +380,7 @@ static void draw_item_icon_tile_gui(int tile, int x, int y, int rgb) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    draw_textured_rect_tex(&tex_items, x, y, sx, sy, 16, 16, 0xFFFFFF);
+    draw_textured_rect_tex(&tex_items, x, y, sx, sy, 16, 16, rgb);
     glColor4f(1,1,1,1);
 }
 
@@ -647,7 +661,7 @@ static void draw_block_item_gui_3d(const ItemStack *st, int x, int y) {
     glScalef(1.0f, 1.0f, -1.0f);
     glRotatef(210.0f, 1.0f, 0.0f, 0.0f);
     glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
-    gl_color_from_rgb_int(java125_item_block_tint(st));
+    gl_color_from_rgb_int(pex_item_gui_scale_rgb_125(java125_item_block_tint(st)));
     glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);
 
     g_force_fullbright_item_model++;
@@ -808,7 +822,7 @@ static int block_item_tile_for_id(int id) {
 static void draw_block_item_icon_gui(const ItemStack *st, int x, int y) {
     if (stack_empty(st) || !tex_terrain.id) return;
     int tile = item_block_tile_for_stack(st);
-    int tint = java125_item_block_tint(st);
+    int tint = pex_item_gui_scale_rgb_125(java125_item_block_tint(st));
     float u0, v0, u1, v1;
     terrain_tile_uv(tile, &u0, &v0, &u1, &v1);
     glEnable(GL_TEXTURE_2D);
@@ -1551,6 +1565,14 @@ static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int anim
 
 static void draw_item_stack_gui(const ItemStack *st, int x, int y) {
     draw_item_stack_gui_base(st, x, y, 0);
+}
+
+static void draw_item_stack_gui_brightness_125(const ItemStack *st, int x, int y, float brightness) {
+    float previous = g_item_gui_brightness_125;
+    g_item_gui_brightness_125 = brightness;
+    draw_item_stack_gui_base(st, x, y, 0);
+    g_item_gui_brightness_125 = previous;
+    glColor4f(1,1,1,1);
 }
 
 static void draw_item_stack_gui_animated(const ItemStack *st, int x, int y) {

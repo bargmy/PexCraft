@@ -2947,8 +2947,6 @@ static void pex_sound_tick_record_stream(void);
 static void pex_sound_stop_record(void);
 static void pex_sound_stop_world_audio(void);
 static void pex_sound_shutdown(void);
-static const char *pex_block_step_sound_key(int id);
-static const char *pex_block_dig_sound_key(int id);
 static int classic_resources_need_update(void);
 
 

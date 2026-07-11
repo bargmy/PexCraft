@@ -1617,7 +1617,7 @@ static void pex_mp_bedrock_on_entity_event(void *userdata, const PexMcpeEntityEv
     if (event->eid == 0 || event->eid == g_mp_bedrock_session.entity_id) {
         if (event->event == 2) {
             g_player_hurt_time = g_player_max_hurt_time;
-            pex_sound_play("random.hurt", 1.0f, 1.0f);
+            pex_sound_play("damage.hurtflesh", 1.0f, pex_living_sound_pitch_125());
         } else if (event->event == 3) {
             if (!g_player_dead) player_die("was slain");
         } else if (event->event == 17) {

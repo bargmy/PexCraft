@@ -2259,14 +2259,17 @@ static void passive_mob_on_attacked_by_source(PassiveMob *m, const PexDamageSour
             /* EntityLiving still remembers the owner as its revenge source,
                but EntityAITarget rejects an owned tameable's owner.  Keep the
                hurt memory while immediately cancelling any stale owner chase. */
-            int owner_hit = (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m));
+            int owner_hit = ((m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) &&
+                             passive_mob_is_owned_by_player(m));
             m->revenge_entity_id = 0;
             m->revenge_timer = 100;
             if (owner_hit) {
                 m->target_entity_id = -1;
                 m->target_mob_index = -1;
-                m->species.wolf_angry = 0;
-                m->rideable = 0;
+                if (m->type == PASSIVE_MOB_WOLF) {
+                    m->species.wolf_angry = 0;
+                    m->rideable = 0;
+                }
                 passive_path_clear(m);
             } else {
                 m->target_entity_id = 0;
@@ -2711,12 +2714,17 @@ static int passive_mobs_player_interact(void) {
 
 static void passive_mob_request_jump(PassiveMob *m, const char *why) {
     if (!m || !m->on_ground || m->jump_cooldown > 0) return;
-    m->my = 0.43f;
+    /* EntityLiving.jump / onLivingUpdate in Minecraft 1.2.5. */
+    m->my = 0.42f;
+    if (pex_passive_has_potion(m, PEX_POTION_JUMP))
+        m->my += 0.10f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_JUMP) + 1);
+    if (m->type == PASSIVE_MOB_OCELOT && m->species.ocelot_sprinting) {
+        float yaw_rad = m->yaw * (float)M_PI / 180.0f;
+        m->mx += -sinf(yaw_rad) * 0.20f;
+        m->mz +=  cosf(yaw_rad) * 0.20f;
+    }
     m->on_ground = 0;
-    m->jump_cooldown = (m->type == PASSIVE_MOB_CHICKEN) ? 50 : 16;
-    float yaw_rad = m->yaw * (float)M_PI / 180.0f;
-    m->mx += -sinf(yaw_rad) * 0.11f;
-    m->mz +=  cosf(yaw_rad) * 0.11f;
+    m->jump_cooldown = 10; /* EntityLiving.jumpTicks */
     pex_logf_trace("passive mob jump type=%s reason=%s pos=%.2f,%.2f,%.2f", passive_mob_name(m->type), why ? why : "", m->x, m->y, m->z);
 }
 
@@ -3922,30 +3930,52 @@ static int passive_path_drive(PassiveMob *m) {
         }
     }
     if (m->path_len <= 0 || m->path_index >= m->path_len) return 0;
-    /* Skip directly to the farthest reachable node on the current Y level,
-       matching PathNavigate.pathFollow rather than walking every A* cell. */
-    int same_y_end = m->path_index;
+
+    /* Minecraft 1.2.5 PathNavigate.pathFollow uses the entity's pathable Y and
+       a full three-dimensional distance check.  The previous port compared X/Z
+       only and accepted a loose 1.25-block Y difference.  That marked the
+       one-block-higher waypoint as reached before the mob had jumped, so the
+       move helper stopped seeing an upward target and animals walked forever
+       into the block. */
     int path_y = passive_navigation_pathable_y_125(m);
-    while (same_y_end + 1 < m->path_len && m->path_y[same_y_end + 1] == path_y) ++same_y_end;
-    float shortcut_half = (float)((int)(m->width + 1.0f)) * 0.5f;
-    for (int i = same_y_end; i > m->path_index; --i) {
-        float sx = (float)m->path_x[i] + shortcut_half;
-        float sz = (float)m->path_z[i] + shortcut_half;
-        if (passive_navigation_direct_path_125(m, sx, sz, path_y)) { m->path_index = i; break; }
+    int same_y_end = m->path_len;
+    for (int i = m->path_index; i < m->path_len; ++i) {
+        if (m->path_y[i] != path_y) {
+            same_y_end = i;
+            break;
+        }
     }
-    int px = m->path_x[m->path_index], py = m->path_y[m->path_index], pz = m->path_z[m->path_index];
+
     float path_half = (float)((int)(m->width + 1.0f)) * 0.5f;
-    float wx = (float)px + path_half, wy = (float)py, wz = (float)pz + path_half;
-    float ddx = wx - m->x, ddz = wz - m->z;
-    float advance = m->width;
-    if (advance < 0.45f) advance = 0.45f;
-    if (ddx*ddx + ddz*ddz < advance * advance && fabsf(wy - m->y) < 1.25f) {
-        m->path_index++;
-        if (m->path_index >= m->path_len) return 0;
-        px = m->path_x[m->path_index]; py = m->path_y[m->path_index]; pz = m->path_z[m->path_index];
-        wx = (float)px + path_half; wy = (float)py; wz = (float)pz + path_half;
+    float reach_sq = m->width * m->width;
+    for (int i = m->path_index; i < same_y_end; ++i) {
+        float wx = (float)m->path_x[i] + path_half;
+        float wy = (float)m->path_y[i];
+        float wz = (float)m->path_z[i] + path_half;
+        float dx = wx - m->x;
+        float dy = wy - (float)path_y;
+        float dz = wz - m->z;
+        if (dx * dx + dy * dy + dz * dz < reach_sq) m->path_index = i + 1;
     }
-    m->target_x = wx; m->target_y = wy; m->target_z = wz;
+    if (m->path_index >= m->path_len) return 0;
+
+    /* Then perform Java's direct-path shortcut, but only among nodes on the
+       current Y level and only after proximity advancement. */
+    for (int i = same_y_end - 1; i >= m->path_index; --i) {
+        float sx = (float)m->path_x[i] + path_half;
+        float sz = (float)m->path_z[i] + path_half;
+        if (passive_navigation_direct_path_125(m, sx, sz, path_y)) {
+            m->path_index = i;
+            break;
+        }
+    }
+
+    int px = m->path_x[m->path_index];
+    int py = m->path_y[m->path_index];
+    int pz = m->path_z[m->path_index];
+    m->target_x = (float)px + path_half;
+    m->target_y = (float)py;
+    m->target_z = (float)pz + path_half;
     return 1;
 }
 
@@ -5901,16 +5931,21 @@ static void passive_navigation_update(PassiveMob *m) {
 static float passive_move_helper_update(PassiveMob *m, int in_liquid) {
     if (!m || !m->move_controller.update) return 0.0f;
     float dx = m->move_controller.x - m->x;
-    float dy = m->move_controller.y - m->y;
     float dz = m->move_controller.z - m->z;
-    float d2 = dx * dx + dz * dz;
+    int pathable_y = (int)floorf(m->y + 0.5f);
+    float dy = m->move_controller.y - (float)pathable_y;
+    float horizontal_sq = dx * dx + dz * dz;
+    float distance_sq = horizontal_sq + dy * dy;
     m->move_controller.update = 0;
-    if (d2 < 1.0e-5f) return 0.0f;
+    if (distance_sq < 2.5000003e-7f) return 0.0f;
     float desired = atan2f(dz, dx) * 57.29578f - 90.0f;
     float turn = pex_wrap_degrees(desired - m->yaw);
     turn = pex_clamp_float(turn, -30.0f, 30.0f);
     m->yaw += turn;
-    if (dy > 0.35f && m->on_ground) passive_jump_helper_set_jumping(m);
+    /* EntityMoveHelper 1.2.5 requests a jump only once the mob is within one
+       horizontal block of an upward waypoint.  The jump controller then feeds
+       EntityLiving's normal on-ground jump path. */
+    if (dy > 0.0f && horizontal_sq < 1.0f) passive_jump_helper_set_jumping(m);
     float forward = in_liquid ? 0.04f : m->move_controller.speed * 0.10f;
     if (pex_passive_has_potion(m, PEX_POTION_SPEED))
         forward *= 1.0f + 0.20f * (float)(pex_passive_potion_amplifier(m, PEX_POTION_SPEED) + 1);
@@ -5989,7 +6024,7 @@ static int passive_ai_nearest_mob_id_125(const PassiveMob *self, int type, float
 
 static void passive_door_set_open_125(int x,int y,int z,int open) {
     int ly=door_lower_y_at(x,y,z); if(flat_get_block(x,ly,z)!=BLOCK_WOOD_DOOR)return;
-    if(door_is_open_at(x,ly,z)!=(open!=0)) door_toggle_at(x,ly,z);
+    if(door_is_open_at(x,ly,z)!=(open!=0)) door_toggle_at_ex(x,ly,z,0);
 }
 
 static int passive_ocelot_sittable_block_125(int x, int y, int z) {
@@ -6260,12 +6295,54 @@ static int passive_ai_player_target_allowed_125(const PassiveMob *m) {
     return m && m->revenge_timer > 0 && m->revenge_entity_id == 0;
 }
 
+static void passive_mobs_on_player_death_125(void) {
+    /* EntityLiving/EntityAITarget immediately rejects a dead player.  Clear
+       every cached player target as well, so an already-running melee task
+       cannot keep pathing, lunging, or replaying its attack animation while
+       the death screen is open. */
+    for (int i = 0; i < MAX_PASSIVE_MOBS; ++i) {
+        PassiveMob *m = &g_passive_mobs[i];
+        if (!m->active || m->death_time > 0) continue;
+        if (m->target_entity_id == 0) {
+            m->target_entity_id = -1;
+            m->target_mob_index = -1;
+            m->attack_time = 0;
+            passive_navigation_clear(m);
+            if (m->type == PASSIVE_MOB_OCELOT) {
+                m->species.ocelot_sneaking = 0;
+                m->species.ocelot_sprinting = 0;
+            }
+        }
+        if (m->revenge_entity_id == 0) {
+            m->revenge_entity_id = -1;
+            m->revenge_timer = 0;
+        }
+        for (int task = 0; task < m->goal_task_count; ++task) {
+            PexMobAITaskEntry *e = &m->goal_tasks[task];
+            if (e->id == PEX_MOB_TASK_ATTACK && e->target_entity_id == 0) {
+                e->running = 0;
+                e->target_entity_id = -1;
+                e->timer = 0;
+            }
+        }
+        for (int task = 0; task < m->target_task_count; ++task) {
+            PexMobAITaskEntry *e = &m->target_tasks[task];
+            if (e->target_entity_id == 0) {
+                e->running = 0;
+                e->target_entity_id = -1;
+                e->timer = 0;
+            }
+        }
+    }
+}
+
 static int passive_ai_target_valid(PassiveMob *m, int entity_id, float range, int require_sight) {
     if (!m) return 0;
     if (entity_id == 0) {
         /* EntityAITarget.func_48376_a: a tamed tameable can never select its
            owner, including through the hurt-by/revenge target task. */
-        if (m->type == PASSIVE_MOB_WOLF && passive_mob_is_owned_by_player(m)) return 0;
+        if ((m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) &&
+            passive_mob_is_owned_by_player(m)) return 0;
         if (g_player_dead || !passive_ai_player_target_allowed_125(m)) return 0;
         if (passive_mob_player_distance2(m) > range * range) return 0;
         return !require_sight || passive_senses_can_see_player(m);

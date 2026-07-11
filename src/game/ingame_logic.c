@@ -126,6 +126,7 @@ static void player_die(const char *reason) {
     g_sprinting_ticks_left = 0;
     g_sprint_toggle_timer = 0;
     g_prev_sprint_forward = 0;
+    passive_mobs_on_player_death_125();
     if (!g_mp_connected) inventory_drop_death_items();
     if (g_mp_connected) {
         pex_net_send_player_state();
@@ -183,7 +184,7 @@ static int player_attack_entity_from(PexDamageSource source, int amount) {
     if (incoming <= 0 && raw_amount > 0) {
         player_health_damage_hearts();
         g_player_hurt_time = g_player_max_hurt_time;
-        if (play_hurt) pex_sound_play("random.hurt", 1.0f, 1.0f);
+        if (play_hurt) pex_sound_play("damage.hurtflesh", 1.0f, pex_living_sound_pitch_125());
         g_save_dirty = 1;
         return 1;
     }
@@ -191,7 +192,7 @@ static int player_attack_entity_from(PexDamageSource source, int amount) {
     g_player_attacked_at_yaw = 0.0f;
     pex_stats_add_general(PEX_STAT_DAMAGE_TAKEN, incoming);
     player_health_set_hearts(g_player_health - incoming);
-    if (play_hurt) pex_sound_play("random.hurt", 1.0f, 1.0f);
+    if (play_hurt) pex_sound_play("damage.hurtflesh", 1.0f, pex_living_sound_pitch_125());
     player_add_exhaustion(source.hunger_damage);
     pex_logf("player damage amount=%d source=%s health=%d", incoming, source.damage_type ? source.damage_type : "", g_player_health);
     if (g_player_health <= 0) {
@@ -1043,7 +1044,9 @@ static void ingame_tick(void) {
         int bz = (int)floorf(g_player_z);
         int step_block = flat_get_block(bx, by, bz);
         if (step_block > 0 && !block_is_liquid(step_block)) {
-            pex_sound_play_at(pex_block_step_sound_key(step_block), g_player_x, g_player_y - 1.0f, g_player_z, 0.15f, 1.0f);
+            PexBlockStepSound125 sound = pex_block_step_sound_125(step_block);
+            pex_sound_play_at(sound.step_key, g_player_x, g_player_y - 1.0f, g_player_z,
+                              sound.volume * 0.15f, sound.pitch);
         }
         g_next_footstep_distance = floorf(g_distance_walked) + 1.0f;
     }

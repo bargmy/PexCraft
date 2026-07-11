@@ -101,11 +101,13 @@ static void pex_draw_achievement_terrain(int view_x, int view_y) {
     }
 }
 
-static void pex_ui_draw_wrapped(const char *text, int x, int y, int max_width, int color, int max_lines) {
+static void pex_ui_draw_wrapped_mode(const char *text, int x, int y, int max_width,
+                                     int color, int max_lines, int shadow) {
     char line[256];
     int line_len = 0;
     int lines = 0;
     const char *p = text ? text : "";
+    line[0] = 0;
     while (*p && lines < max_lines) {
         while (*p == ' ') ++p;
         if (!*p) break;
@@ -116,7 +118,8 @@ static void pex_ui_draw_wrapped(const char *text, int x, int y, int max_width, i
         if (line_len > 0) snprintf(trial, sizeof(trial), "%s %.*s", line, word_len, word);
         else snprintf(trial, sizeof(trial), "%.*s", word_len, word);
         if (line_len > 0 && text_width(trial) > max_width) {
-            draw_text(line, x, y + lines * 9, color);
+            if (shadow) draw_text(line, x, y + lines * 9, color);
+            else draw_text_no_shadow(line, x, y + lines * 9, color);
             ++lines;
             line_len = 0;
             line[0] = 0;
@@ -136,9 +139,20 @@ static void pex_ui_draw_wrapped(const char *text, int x, int y, int max_width, i
         }
         line_len = (int)strlen(line);
     }
-    if (line_len > 0 && lines < max_lines) draw_text(line, x, y + lines * 9, color);
+    if (line_len > 0 && lines < max_lines) {
+        if (shadow) draw_text(line, x, y + lines * 9, color);
+        else draw_text_no_shadow(line, x, y + lines * 9, color);
+    }
 }
 
+static void pex_ui_draw_wrapped(const char *text, int x, int y, int max_width, int color, int max_lines) {
+    pex_ui_draw_wrapped_mode(text, x, y, max_width, color, max_lines, 1);
+}
+
+static void pex_ui_draw_wrapped_no_shadow(const char *text, int x, int y, int max_width,
+                                          int color, int max_lines) {
+    pex_ui_draw_wrapped_mode(text, x, y, max_width, color, max_lines, 0);
+}
 static int pex_ui_wrapped_line_count(const char *text, int max_width, int max_lines) {
     char line[256];
     int line_len = 0;
@@ -218,10 +232,10 @@ static void pex_draw_achievement_panel(int id, int info_mode, int y) {
     }
     if (info_mode) {
         pex_achievement_description(id, desc, sizeof(desc));
-        pex_ui_draw_wrapped(desc, x + 30, y + 7, 120, 0xFFFFFF, 2);
+        pex_ui_draw_wrapped_no_shadow(desc, x + 30, y + 7, 120, 0xFFFFFF, 2);
     } else {
-        draw_text(tr_key_default("achievement.get", "Achievement get!"), x + 30, y + 7, 0xFFFF00);
-        draw_text(pex_achievement_title(id), x + 30, y + 18, 0xFFFFFF);
+        draw_text_no_shadow(tr_key_default("achievement.get", "Achievement get!"), x + 30, y + 7, 0xFFFF00);
+        draw_text_no_shadow(pex_achievement_title(id), x + 30, y + 18, 0xFFFFFF);
     }
     icon = make_stack(g_pex_achievement_defs[id].icon_id, 1, 0);
     draw_item_stack_gui(&icon, x + 8, y + 8);
@@ -459,7 +473,15 @@ static void draw_achievements_screen(void) {
     int view_x = pane_x + 16, view_y = pane_y + 17;
     int hover = -1;
     pex_stats_ensure_loaded();
+    /* The source screen starts with GuiScreen.drawDefaultBackground.  Disable
+       world depth first so the selected resource pack's gui/background.png is
+       actually opaque instead of leaking the 3-D scene through at high scale. */
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
     draw_default_bg();
+    glDepthMask(GL_TRUE);
     pex_draw_achievement_terrain(view_x, view_y);
 
     for (int id = 0; id < PEX_ACHIEVEMENT_COUNT; ++id) {
@@ -489,11 +511,21 @@ static void draw_achievements_screen(void) {
             draw_rect(x, y, x + 22, y + 22, 0xFF303030);
         }
         ItemStack icon = make_stack(g_pex_achievement_defs[id].icon_id, 1, 0);
-        draw_item_stack_gui(&icon, x + 3, y + 3);
-        if (!can) draw_rect(x + 3, y + 3, x + 19, y + 19, 0xC0000000);
+        draw_item_stack_gui_brightness_125(&icon, x + 3, y + 3, can ? 1.0f : 0.1f);
         if (g_mouse_x >= view_x && g_mouse_x < view_x + 224 && g_mouse_y >= view_y && g_mouse_y < view_y + 155 &&
             g_mouse_x >= x && g_mouse_x <= x + 22 && g_mouse_y >= y && g_mouse_y <= y + 22) hover = id;
     }
+
+    /* Java's depth-layered pane clips the map to 224x155.  Repaint the four
+       outside bands with the same resource-pack dirt texture before drawing
+       the frame; this gives identical clipping on GL, D3D, PSP and Wii paths. */
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    draw_tiled_rect_tint(0, 0, g_gui_w, view_y, 0x404040, 0);
+    draw_tiled_rect_tint(0, view_y + 155, g_gui_w, g_gui_h, 0x404040, 0);
+    draw_tiled_rect_tint(0, view_y, view_x, view_y + 155, 0x404040, 0);
+    draw_tiled_rect_tint(view_x + 224, view_y, g_gui_w, view_y + 155, 0x404040, 0);
 
     if (tex_achievement.id && tex_achievement.w >= 256 && tex_achievement.h >= 202)
         draw_textured_rect_tex(&tex_achievement, pane_x, pane_y, 0, 0, 256, 202, 0xFFFFFF);
@@ -503,7 +535,6 @@ static void draw_achievements_screen(void) {
         draw_rect(pane_x, pane_y, pane_x + 16, pane_y + 202, 0xFFC6C6C6);
         draw_rect(pane_x + 240, pane_y, pane_x + 256, pane_y + 202, 0xFFC6C6C6);
     }
-    draw_text(tr_key_default("gui.achievements", "Achievements"), pane_x + 15, pane_y + 5, 0x404040);
     draw_all_buttons();
 
     if (hover >= 0) {
@@ -524,14 +555,24 @@ static void draw_achievements_screen(void) {
         lines = pex_ui_wrapped_line_count(desc, width, 12);
         if (lines < 1) lines = 1;
         text_height = lines * 9;
-        box_bottom = ty + text_height + 12 + 3 + (can && unlocked ? 12 : 0);
+        box_bottom = ty + text_height + 15 + (can && unlocked ? 12 : 0);
         draw_rect(tx - 3, ty - 3, tx + width + 3, box_bottom, 0xC0000000);
+        pex_ui_draw_wrapped_no_shadow(desc, tx, ty + 12, width,
+                                      can ? 0xA0A0A0 : 0x705050, 12);
+        if (can && unlocked)
+            draw_text(tr_key_default("achievement.taken", "Taken!"), tx,
+                      ty + text_height + 16, 0x9090FF);
         draw_text(pex_achievement_title(hover), tx, ty,
                   can ? (special ? 0xFFFF80 : 0xFFFFFF) : (special ? 0x808040 : 0x808080));
-        pex_ui_draw_wrapped(desc, tx, ty + 12, width, can ? 0xA0A0A0 : 0x705050, 12);
-        if (can && unlocked)
-            draw_text(tr_key_default("achievement.taken", "Taken!"), tx, ty + text_height + 4, 0x9090FF);
     }
+    /* GuiAchievements.func_27110_k runs after genAchievementBackground, so the
+       pane title is the final text layer, even when a tooltip reaches the top. */
+    draw_text_no_shadow(tr_key_default("gui.achievements", "Achievements"),
+                        pane_x + 15, pane_y + 5, 0x404040);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glEnable(GL_ALPHA_TEST);
+    glColor4f(1,1,1,1);
 }
 
 static void pex_draw_stat_slot(int x, int y, int id) {

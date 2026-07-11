@@ -63,7 +63,11 @@ static void set_screen(ScreenId s) {
             g_release_title_state_initialized = 1;
         }
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
-        g_menu_music_started = 0;
+        /* Do not clear the title-music state when returning from Options,
+           world selection, texture packs, language, or another title submenu.
+           Those screens share the same GuiMainMenu audio session in Java.  A
+           real world/session transition already calls pex_sound_stop_world_audio(),
+           which clears this flag and lets the title start a fresh track once. */
     } else if (s == SCREEN_GENERATING || s == SCREEN_CONNECTING || (s == SCREEN_INGAME && !pex_screen_keeps_world_music(old_screen))) {
         /* Stop every previous-world stream when entering/loading a world, but do
            not restart the current in-game track when closing pause, chat,

@@ -6374,7 +6374,7 @@ static int furnace_facing_from_yaw(void) {
     return 4;
 }
 
-static void door_toggle_at(int x, int y, int z) {
+static void door_toggle_at_ex(int x, int y, int z, int player_action) {
     int id = flat_get_block(x, y, z);
     if (!block_is_door_id(id)) return;
     if (id == BLOCK_IRON_DOOR) return; /* Java iron doors ignore player click; redstone toggles them. */
@@ -6386,8 +6386,15 @@ static void door_toggle_at(int x, int y, int z) {
     if (flat_get_block(x, ly + 1, z) == id) flat_set_meta_raw(x, ly + 1, z, meta + 8);
     if (!g_mp_connected) flat_end_persistent_edit();
     pex_sound_play_at((meta & 4) ? "random.door_open" : "random.door_close", (float)x + 0.5f, (float)ly + 0.5f, (float)z + 0.5f, 1.0f, 1.0f);
-    if (g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, ly == y ? x : x, ly, z, 0, id);
-    restart_hand_swing();
+    /* Only a local player click reaches PlayerController and swings the hand.
+       Villager AI and other world-side door changes must not impersonate an
+       input action or emit a client block-action packet. */
+    if (player_action && g_mp_connected) pex_net_send_block_action(PEX_BLOCK_PLACE, x, ly, z, 0, id);
+    if (player_action) restart_hand_swing();
+}
+
+static void door_toggle_at(int x, int y, int z) {
+    door_toggle_at_ex(x, y, z, 1);
 }
 
 static void door_break_at(int x, int y, int z, int drop_item) {
@@ -6890,7 +6897,12 @@ static void break_target_block(void) {
     int break_meta = flat_get_meta(g_break_x, g_break_y, g_break_z);
     if (id == 0 || (id == BLOCK_BEDROCK && !player_is_creative())) return;
     player_add_exhaustion(0.025f);
-    pex_sound_play_at(pex_block_dig_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 1.0f, 0.8f);
+    {
+        PexBlockStepSound125 sound = pex_block_step_sound_125(id);
+        pex_sound_play_at(sound.break_key, (float)g_break_x + 0.5f, (float)g_break_y + 0.5f,
+                          (float)g_break_z + 0.5f, (sound.volume + 1.0f) * 0.5f,
+                          sound.pitch * 0.8f);
+    }
 
     if (block_is_door_id(id)) {
         if (g_mp_connected) {
@@ -7050,7 +7062,10 @@ static void update_breaking(void) {
         /* Java PlayerControllerSP plays the step sound before incrementing
            blockDestroySoundCounter, so a newly-mined block gets feedback on the
            first damage tick and then every fourth tick. */
-        pex_sound_play_at(pex_block_step_sound_key(id), (float)g_break_x + 0.5f, (float)g_break_y + 0.5f, (float)g_break_z + 0.5f, 0.25f, 0.5f);
+        PexBlockStepSound125 sound = pex_block_step_sound_125(id);
+        pex_sound_play_at(sound.step_key, (float)g_break_x + 0.5f, (float)g_break_y + 0.5f,
+                          (float)g_break_z + 0.5f, (sound.volume + 1.0f) * 0.125f,
+                          sound.pitch * 0.5f);
     }
     g_break_sound_counter += 1.0f;
 
@@ -9066,7 +9081,11 @@ static void ingame_right_click_impl(void) {
         }
         if (!player_is_creative() && --held->count <= 0) stack_clear(held);
         if (!g_mp_connected) g_save_dirty = 1;
-        pex_sound_play_at(pex_block_step_sound_key(door_item_id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
+        {
+            PexBlockStepSound125 sound = pex_block_step_sound_125(door_item_id == ITEM_DOOR_IRON ? BLOCK_IRON_DOOR : BLOCK_WOOD_DOOR);
+            pex_sound_play_at(sound.step_key, (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f,
+                              (sound.volume + 1.0f) * 0.5f, sound.pitch * 0.8f);
+        }
         pex_stats_add_used(door_item_id, 1);
         restart_hand_swing();
         return;
@@ -9127,7 +9146,11 @@ static void ingame_right_click_impl(void) {
     if (!player_is_creative() && --held->count <= 0) stack_clear(held);
     if (!g_mp_connected) g_save_dirty = 1;
     pex_stats_add_used(placed_item_id, 1);
-    pex_sound_play_at(pex_block_step_sound_key(place_id), (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f, 1.0f, 0.8f);
+    {
+        PexBlockStepSound125 sound = pex_block_step_sound_125(place_id);
+        pex_sound_play_at(sound.step_key, (float)px + 0.5f, (float)py + 0.5f, (float)pz + 0.5f,
+                          (sound.volume + 1.0f) * 0.5f, sound.pitch * 0.8f);
+    }
     restart_hand_swing();
 }
 

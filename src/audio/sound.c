@@ -131,7 +131,7 @@ static const char *pex_sound_alias(const char *key) {
     if (!strcmp(key, "mob.villager.defaulthurt")) return "mob.villager.hit";
     if (!strcmp(key, "mob.villager.defaultdeath")) return "mob.villager.death";
     if (!strcmp(key, "mob.snowman")) return "";
-    if (!strcmp(key, "random.hurt")) return "random.classic_hurt";
+    if (!strcmp(key, "random.hurt")) return "damage.hurtflesh";
     if (!strcmp(key, "random.drr")) return "random.bowhit";
     return key;
 }
@@ -1099,58 +1099,60 @@ static void pex_sound_play_at(const char *key, float x, float y, float z, float 
     pex_sound_play(key, volume * atten, pitch);
 }
 
-static const char *pex_block_step_sound_key(int id) {
+typedef struct PexBlockStepSound125 {
+    const char *step_key;
+    const char *break_key;
+    float volume;
+    float pitch;
+} PexBlockStepSound125;
+
+static PexBlockStepSound125 pex_block_step_sound_125(int id) {
+    /* Block.java 1.2.5 StepSound assignments.  Unlisted blocks inherit
+       soundPowderFootstep (stone, volume 1, pitch 1). */
+    PexBlockStepSound125 out = {"step.stone", "step.stone", 1.0f, 1.0f};
     switch (id) {
-        case BLOCK_WOOL:
-        case BLOCK_SNOW_LAYER:
-        case BLOCK_SNOW_BLOCK:
-        case BLOCK_CACTUS:
-            return "step.cloth";
-        case BLOCK_GRASS:
-        case BLOCK_LEAVES:
-        case BLOCK_SPONGE:
-        case BLOCK_TNT:
-        case BLOCK_CROPS:
-        case BLOCK_REEDS:
-        case BLOCK_YELLOW_FLOWER:
-        case BLOCK_RED_ROSE:
-        case BLOCK_BROWN_MUSHROOM:
-        case BLOCK_RED_MUSHROOM:
-            return "step.grass";
-        case BLOCK_DIRT:
-        case BLOCK_GRAVEL:
-        case BLOCK_FARMLAND:
-        case BLOCK_CLAY:
-            return "step.gravel";
-        case BLOCK_SAND:
-        case BLOCK_SOUL_SAND:
-            return "step.sand";
-        case BLOCK_PLANKS:
-        case BLOCK_LOG:
-        case BLOCK_BOOKSHELF:
-        case BLOCK_WOOD_STAIRS:
-        case BLOCK_CHEST:
-        case BLOCK_CRAFTING_TABLE:
-        case BLOCK_SIGN_POST:
-        case BLOCK_WALL_SIGN:
-        case BLOCK_WOOD_DOOR:
-        case BLOCK_LADDER:
-        case BLOCK_WOOD_PRESSURE_PLATE:
-        case BLOCK_FENCE:
-        case BLOCK_JUKEBOX:
-        case BLOCK_PUMPKIN:
-        case BLOCK_JACK_O_LANTERN:
-            return "step.wood";
+        case BLOCK_GRASS: case BLOCK_SAPLING: case BLOCK_LEAVES: case BLOCK_SPONGE:
+        case BLOCK_TALL_GRASS: case BLOCK_DEAD_BUSH: case BLOCK_YELLOW_FLOWER:
+        case BLOCK_RED_ROSE: case BLOCK_BROWN_MUSHROOM: case BLOCK_RED_MUSHROOM:
+        case BLOCK_TNT: case BLOCK_CROPS: case BLOCK_REEDS: case BLOCK_VINE:
+        case BLOCK_MYCELIUM: case BLOCK_LILY_PAD:
+            out.step_key = out.break_key = "step.grass"; break;
+        case BLOCK_DIRT: case BLOCK_GRAVEL: case BLOCK_FARMLAND: case BLOCK_CLAY:
+            out.step_key = out.break_key = "step.gravel"; break;
+        case BLOCK_SAND: case BLOCK_SOUL_SAND:
+            out.step_key = "step.sand"; out.break_key = "step.gravel"; break;
+        case BLOCK_WOOL: case BLOCK_SNOW_LAYER: case BLOCK_SNOW_BLOCK:
+        case BLOCK_CACTUS: case BLOCK_CAKE:
+            out.step_key = out.break_key = "step.cloth"; break;
+        case BLOCK_PLANKS: case BLOCK_LOG: case BLOCK_BOOKSHELF: case BLOCK_TORCH:
+        case BLOCK_FIRE: case BLOCK_WOOD_STAIRS: case BLOCK_CHEST:
+        case BLOCK_CRAFTING_TABLE: case BLOCK_SIGN_POST: case BLOCK_WOOD_DOOR:
+        case BLOCK_LADDER: case BLOCK_WALL_SIGN: case BLOCK_LEVER:
+        case BLOCK_WOOD_PRESSURE_PLATE: case BLOCK_REDSTONE_TORCH_OFF:
+        case BLOCK_REDSTONE_TORCH_ON: case BLOCK_FENCE: case BLOCK_PUMPKIN:
+        case BLOCK_JACK_O_LANTERN: case BLOCK_REDSTONE_REPEATER_OFF:
+        case BLOCK_REDSTONE_REPEATER_ON: case BLOCK_LOCKED_CHEST:
+        case BLOCK_TRAPDOOR: case BLOCK_BROWN_MUSHROOM_CAP:
+        case BLOCK_RED_MUSHROOM_CAP: case BLOCK_MELON: case BLOCK_PUMPKIN_STEM:
+        case BLOCK_MELON_STEM: case BLOCK_FENCE_GATE:
+            out.step_key = out.break_key = "step.wood"; break;
+        case BLOCK_POWERED_RAIL: case BLOCK_DETECTOR_RAIL: case BLOCK_GOLD_BLOCK:
+        case BLOCK_IRON_BLOCK: case BLOCK_MOB_SPAWNER: case BLOCK_DIAMOND_BLOCK:
+        case BLOCK_RAILS: case BLOCK_IRON_DOOR: case BLOCK_IRON_BARS:
+            out.pitch = 1.5f; break;
+        case BLOCK_GLASS: case BLOCK_ICE: case BLOCK_GLOWSTONE: case BLOCK_PORTAL:
+        case BLOCK_GLASS_PANE: case BLOCK_END_PORTAL_FRAME:
+        case BLOCK_REDSTONE_LAMP_OFF: case BLOCK_REDSTONE_LAMP_ON:
+            out.break_key = "random.glass"; break;
         default:
-            return "step.stone";
+            break;
     }
+    return out;
 }
 
-static const char *pex_block_dig_sound_key(int id) {
-    /* Java 1.2.5 StepSound.getBreakSound() returns step.<name> for normal
-       blocks.  Only the glass StepSoundStone and sand StepSoundSand override
-       this.  Do not use the newer dig.* sounds for 1.2.5 mining feedback. */
-    if (id == BLOCK_GLASS || id == BLOCK_GLASS_PANE || id == BLOCK_GLOWSTONE) return "random.glass";
-    if (id == BLOCK_SAND || id == BLOCK_SOUL_SAND) return "step.gravel";
-    return pex_block_step_sound_key(id);
+static float pex_living_sound_pitch_125(void) {
+    /* EntityLiving.getSoundPitch for an adult entity. */
+    float a = (float)rand() / (float)RAND_MAX;
+    float b = (float)rand() / (float)RAND_MAX;
+    return (a - b) * 0.2f + 1.0f;
 }
