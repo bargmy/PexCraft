@@ -39,7 +39,11 @@ static int pex_renderer_d3d11_xbox_init_corewindow(void *core_window_unknown, in
         if (SUCCEEDED(hr) && g_d3d11.dev && g_d3d11.ctx) break;
         compat_d3d11_release_failed_device(NULL, &g_d3d11.dev, &g_d3d11.ctx);
     }
-    if (FAILED(hr) || !g_d3d11.dev || !g_d3d11.ctx) return 0;
+    if (FAILED(hr) || !g_d3d11.dev || !g_d3d11.ctx) {
+        pex_d3d11_log_hresult("D3D11CreateDevice (hardware/WARP)", hr);
+        return 0;
+    }
+    pex_logf("D3D11 device created; feature level=0x%04X", (unsigned int)got);
 
     IDXGIDevice1 *dxgi_dev = NULL;
     IDXGIAdapter *adapter = NULL;
@@ -47,8 +51,15 @@ static int pex_renderer_d3d11_xbox_init_corewindow(void *core_window_unknown, in
     IDXGISwapChain1 *swap1 = NULL;
 
     hr = ID3D11Device_QueryInterface(g_d3d11.dev, &IID_IDXGIDevice1, (void **)&dxgi_dev);
-    if (SUCCEEDED(hr) && dxgi_dev) hr = IDXGIDevice1_GetAdapter(dxgi_dev, &adapter);
-    if (SUCCEEDED(hr) && adapter) hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory2, (void **)&factory);
+    if (FAILED(hr) || !dxgi_dev) pex_d3d11_log_hresult("QueryInterface(IDXGIDevice1)", hr);
+    if (SUCCEEDED(hr) && dxgi_dev) {
+        hr = IDXGIDevice1_GetAdapter(dxgi_dev, &adapter);
+        if (FAILED(hr) || !adapter) pex_d3d11_log_hresult("IDXGIDevice1::GetAdapter", hr);
+    }
+    if (SUCCEEDED(hr) && adapter) {
+        hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory2, (void **)&factory);
+        if (FAILED(hr) || !factory) pex_d3d11_log_hresult("IDXGIAdapter::GetParent(IDXGIFactory2)", hr);
+    }
     if (SUCCEEDED(hr) && factory) {
         DXGI_SWAP_CHAIN_DESC1 desc;
         memset(&desc, 0, sizeof(desc));
@@ -66,9 +77,11 @@ static int pex_renderer_d3d11_xbox_init_corewindow(void *core_window_unknown, in
         desc.Flags = 0;
         hr = IDXGIFactory2_CreateSwapChainForCoreWindow(factory,
                 (IUnknown *)g_d3d11.dev, core_window, &desc, NULL, &swap1);
+        if (FAILED(hr) || !swap1) pex_d3d11_log_hresult("IDXGIFactory2::CreateSwapChainForCoreWindow", hr);
     }
     if (SUCCEEDED(hr) && swap1) {
         hr = IDXGISwapChain1_QueryInterface(swap1, &IID_IDXGISwapChain, (void **)&g_d3d11.swap);
+        if (FAILED(hr) || !g_d3d11.swap) pex_d3d11_log_hresult("QueryInterface(IDXGISwapChain)", hr);
     }
     if (swap1) IDXGISwapChain1_Release(swap1);
     if (factory) IDXGIFactory2_Release(factory);

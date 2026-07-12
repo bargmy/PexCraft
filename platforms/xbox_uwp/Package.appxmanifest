@@ -5,7 +5,7 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
-  <Identity Name="ir.hienob.pexcraft.xboxuwp" Publisher="CN=PexCraft" Version="1.0.0.0" />
+  <Identity Name="ir.hienob.pexcraft.xboxuwp" Publisher="CN=PexCraft" Version="1.0.0.0" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>PexCraft</DisplayName>
     <PublisherDisplayName>PexCraft contributors</PublisherDisplayName>

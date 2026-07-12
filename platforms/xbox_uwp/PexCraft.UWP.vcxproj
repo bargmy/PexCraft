@@ -60,6 +60,7 @@
     <AppxManifest Include="Package.appxmanifest" />
     <None Include="README.md" />
     <None Include="build_xbox_uwp.ps1" />
+    <None Include="validate_xbox_uwp_package.ps1" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="Assets\StoreLogo.png" />

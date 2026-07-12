@@ -43,11 +43,13 @@ if ($vcpkg) {
     $zlibCandidates += Join-Path $vcpkg "packages\zlib_x64-uwp\lib"
 }
 $zlibLib = $null
-foreach ($dir in $zlibCandidates) {
-    if (Test-Path $dir) {
-        $hit = Get-ChildItem -Path $dir -Filter "*.lib" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^(zlib|zlibstatic|z)\.lib$" } | Select-Object -First 1
-        if ($hit) { $zlibLib = $hit.FullName; break }
+$zlibPreferredNames = @("zlibstatic.lib", "zlib.lib", "z.lib")
+foreach ($name in $zlibPreferredNames) {
+    foreach ($dir in $zlibCandidates) {
+        $candidate = Join-Path $dir $name
+        if (Test-Path $candidate) { $zlibLib = $candidate; break }
     }
+    if ($zlibLib) { break }
 }
 if (!$zlibLib) {
     $found = @()
@@ -56,6 +58,12 @@ if (!$zlibLib) {
 }
 $zlibDir = Split-Path -Parent $zlibLib
 Write-Host "Using zlib library: $zlibLib"
+
+$packageSearchRoot = Join-Path $root "build\xbox_uwp"
+if (Test-Path $packageSearchRoot) {
+    Get-ChildItem -Path $packageSearchRoot -Recurse -Include *.appx,*.msix,*.appxbundle,*.msixbundle -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "Using MSBuild: $msbuild"
 & $msbuild $project `
@@ -69,12 +77,16 @@ Write-Host "Using MSBuild: $msbuild"
     /p:WindowsTargetPlatformMinVersion=10.0.14393.0 `
     /p:VcpkgTriplet=x64-uwp `
     /p:VcpkgEnabled=true `
+    /p:VcpkgApplocalDeps=true `
     /p:ZlibLibrary="$zlibLib" `
     /p:ZlibLibraryDir="$zlibDir"
 
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
 
-$appx = Get-ChildItem -Path (Join-Path $root "build") -Recurse -Include *.appx,*.msix,*.appxbundle,*.msixbundle -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$appx = Get-ChildItem -Path $packageSearchRoot -Recurse -Include *.appx,*.msix,*.appxbundle,*.msixbundle -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^PexCraft(?:\.UWP)?' } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
 $packagingMode = "MSBuild"
 $certOut = $null
 
@@ -97,12 +109,47 @@ if (!$appx) {
     Copy-Item $exe.FullName (Join-Path $layout "PexCraft.UWP.exe") -Force
     Copy-Item (Join-Path $PSScriptRoot "Assets") (Join-Path $layout "Assets") -Recurse -Force
 
+    # App-local vcpkg DLLs are required when the selected .lib is an import library.
+    # The old fallback copied only the EXE and assets, so the process could die in
+    # the loader before wWinMain with STATUS_DLL_NOT_FOUND.
+    $runtimeDirs = @()
+    if ($vcpkg) {
+        $runtimeDirs += Join-Path $vcpkg "installed\x64-uwp\bin"
+        $runtimeDirs += Join-Path $vcpkg "packages\zlib_x64-uwp\bin"
+    }
+    $runtimeDlls = @()
+    foreach ($runtimeDir in $runtimeDirs) {
+        if (Test-Path $runtimeDir) {
+            $runtimeDlls += Get-ChildItem -Path $runtimeDir -Filter "*.dll" -File -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($dll in ($runtimeDlls | Sort-Object FullName -Unique)) {
+        Copy-Item $dll.FullName (Join-Path $layout $dll.Name) -Force
+        Write-Host "Packaged app-local dependency: $($dll.Name)"
+    }
+
     $manifestSrc = Join-Path $PSScriptRoot "Package.appxmanifest"
     $manifestDst = Join-Path $layout "AppxManifest.xml"
     $manifestText = Get-Content -Raw $manifestSrc
     $manifestText = $manifestText.Replace('$targetnametoken$', 'PexCraft.UWP')
     $manifestText = $manifestText.Replace('$targetentrypoint$', 'PexCraftUWP.App')
+    if ($manifestText -notmatch 'ProcessorArchitecture="x64"') {
+        $manifestText = [regex]::Replace($manifestText, '<Identity\s+([^>]*?)/>', '<Identity $1 ProcessorArchitecture="x64" />', 1)
+    }
     $manifestText | Out-File -FilePath $manifestDst -Encoding utf8
+
+    # Generate the resource index expected by a normal Visual Studio UWP package.
+    $makepri = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") -Recurse -Filter "makepri.exe" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\x64\\makepri\.exe$" } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if (!$makepri) { throw "makepri.exe not found. Install the Windows SDK UWP packaging tools." }
+    $priConfig = Join-Path $layout "priconfig.xml"
+    & $makepri.FullName createconfig /cf $priConfig /dq en-US /o
+    if ($LASTEXITCODE -ne 0) { throw "MakePri createconfig failed with $LASTEXITCODE" }
+    & $makepri.FullName new /pr $layout /cf $priConfig /of (Join-Path $layout "resources.pri") /o
+    if ($LASTEXITCODE -ne 0) { throw "MakePri new failed with $LASTEXITCODE" }
+    Remove-Item $priConfig -Force -ErrorAction SilentlyContinue
 
     $manualAppx = Join-Path $root "build\xbox_uwp\PexCraft.UWP.appx"
     if (Test-Path $manualAppx) { Remove-Item $manualAppx -Force }
@@ -143,6 +190,12 @@ if (!$appx) {
 }
 
 if (!$appx) { throw "UWP build succeeded but no appx/msix package was produced. Fake source zips are intentionally disabled." }
+
+$validator = Join-Path $PSScriptRoot "validate_xbox_uwp_package.ps1"
+if (Test-Path $validator) {
+    & $validator -PackagePath $appx.FullName
+    if ($LASTEXITCODE -ne 0) { throw "Xbox UWP package validation failed with $LASTEXITCODE" }
+}
 
 $out = Join-Path $dist "pexcraft-xbox-one-uwp-devmode$($appx.Extension)"
 Copy-Item $appx.FullName $out -Force

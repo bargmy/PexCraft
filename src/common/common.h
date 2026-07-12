@@ -146,13 +146,29 @@ static void pex_log_timestamp(char *out, size_t cap) {
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
 }
 
+#if defined(PEX_PLATFORM_XBOX_UWP)
+extern const char *pex_xbox_uwp_get_local_folder(void);
+#endif
+
 static void pex_log_init(void) {
     if (g_pex_log_ready) return;
     if (!g_pex_log_cs_ready) {
         InitializeCriticalSection(&g_pex_log_cs);
         g_pex_log_cs_ready = 1;
     }
+#if defined(PEX_PLATFORM_XBOX_UWP)
+    {
+        char log_path[MAX_PATHBUF];
+        const char *local = pex_xbox_uwp_get_local_folder();
+        if (local && local[0]) {
+            CreateDirectoryA(local, NULL);
+            snprintf(log_path, sizeof(log_path), "%s\\log.txt", local);
+            g_pex_log_file = fopen(log_path, "a");
+        }
+    }
+#else
     g_pex_log_file = fopen("log.txt", "a");
+#endif
     g_pex_log_ready = 1;
     if (g_pex_log_file) {
         char ts[64];

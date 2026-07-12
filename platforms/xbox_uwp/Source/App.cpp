@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <string>
 #include <cstdlib>
+#include <exception>
 
 namespace winrt_app = winrt::Windows::ApplicationModel;
 namespace activation = winrt::Windows::ApplicationModel::Activation;
@@ -40,11 +41,40 @@ extern "C" {
 static std::wstring g_local_folder;
 
 
+static void pex_uwp_append_boot_log(const wchar_t *msg) noexcept {
+    if (!msg) return;
+    try {
+        std::wstring dir(storage::ApplicationData::Current().LocalFolder().Path().c_str());
+        dir.append(L"\\PexCraft");
+        CreateDirectoryW(dir.c_str(), nullptr);
+        std::wstring path = dir + L"\\uwp_boot.log";
+        HANDLE h = CreateFile2(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               OPEN_ALWAYS, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return;
+        LARGE_INTEGER zero{};
+        SetFilePointerEx(h, zero, nullptr, FILE_END);
+        std::wstring line = L"[PexCraft UWP] ";
+        line.append(msg);
+        line.append(L"\r\n");
+        int need = WideCharToMultiByte(CP_UTF8, 0, line.c_str(), (int)line.size(), nullptr, 0, nullptr, nullptr);
+        if (need > 0) {
+            std::string utf8((size_t)need, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, line.c_str(), (int)line.size(), &utf8[0], need, nullptr, nullptr);
+            DWORD written = 0;
+            WriteFile(h, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
+        }
+        CloseHandle(h);
+    } catch (...) {
+        // OutputDebugString below remains available if app-data access itself failed.
+    }
+}
+
 static void pex_uwp_output(const wchar_t *msg) {
     if (!msg) return;
     OutputDebugStringW(L"[PexCraft UWP] ");
     OutputDebugStringW(msg);
     OutputDebugStringW(L"\n");
+    pex_uwp_append_boot_log(msg);
 }
 
 
@@ -279,7 +309,24 @@ struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFra
 } // namespace PexCraftUWP
 
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    pex_uwp_output(L"wWinMain: CoreApplication::Run");
-    coreapp::CoreApplication::Run(winrt::make<PexCraftUWP::App>());
-    return 0;
+    try {
+        pex_uwp_output(L"wWinMain: CoreApplication::Run");
+        coreapp::CoreApplication::Run(winrt::make<PexCraftUWP::App>());
+        return 0;
+    } catch (winrt::hresult_error const& e) {
+        wchar_t msg[1024];
+        swprintf_s(msg, L"fatal C++/WinRT exception: hr=0x%08X message=%s",
+                   (unsigned int)e.code().value, e.message().c_str());
+        pex_uwp_output(msg);
+        return (int)e.code().value;
+    } catch (std::exception const& e) {
+        wchar_t msg[1024];
+        std::wstring wide = pex_wide_from_utf8(e.what());
+        swprintf_s(msg, L"fatal std::exception: %s", wide.c_str());
+        pex_uwp_output(msg);
+        return -1;
+    } catch (...) {
+        pex_uwp_output(L"fatal unknown exception escaped the app lifecycle");
+        return -1;
+    }
 }

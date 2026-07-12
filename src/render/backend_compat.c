@@ -897,6 +897,18 @@ static void pex_renderer_d3d9_present(void) {
 }
 
 
+
+static void pex_d3d11_log_hresult(const char *stage, HRESULT hr) {
+    char line[512];
+    snprintf(line, sizeof(line), "D3D11 failure: %s hr=0x%08lX", stage ? stage : "unknown", (unsigned long)hr);
+    pex_logf("%s", line);
+#if defined(_WIN32) || defined(PEX_PLATFORM_XBOX_UWP)
+    OutputDebugStringA("[PexCraft UWP] ");
+    OutputDebugStringA(line);
+    OutputDebugStringA("\n");
+#endif
+}
+
 static void pex_d3d11_release_views(void) {
     if (g_d3d11.rtv) { ID3D11RenderTargetView_Release(g_d3d11.rtv); g_d3d11.rtv = NULL; }
     if (g_d3d11.dsv) { ID3D11DepthStencilView_Release(g_d3d11.dsv); g_d3d11.dsv = NULL; }
@@ -904,13 +916,14 @@ static void pex_d3d11_release_views(void) {
 }
 
 static int pex_d3d11_create_views(int w, int h) {
-    if (!g_d3d11.dev || !g_d3d11.swap) return 0;
+    if (!g_d3d11.dev || !g_d3d11.swap) { pex_logf("D3D11 failure: create views called without device/swap chain"); return 0; }
     if (w < 1) w = 1; if (h < 1) h = 1;
     ID3D11Texture2D *back = NULL;
-    if (FAILED(IDXGISwapChain_GetBuffer(g_d3d11.swap, 0, &IID_ID3D11Texture2D, (void**)&back)) || !back) return 0;
-    HRESULT hr = ID3D11Device_CreateRenderTargetView(g_d3d11.dev, (ID3D11Resource*)back, NULL, &g_d3d11.rtv);
+    HRESULT hr = IDXGISwapChain_GetBuffer(g_d3d11.swap, 0, &IID_ID3D11Texture2D, (void**)&back);
+    if (FAILED(hr) || !back) { pex_d3d11_log_hresult("IDXGISwapChain::GetBuffer", hr); return 0; }
+    hr = ID3D11Device_CreateRenderTargetView(g_d3d11.dev, (ID3D11Resource*)back, NULL, &g_d3d11.rtv);
     ID3D11Texture2D_Release(back);
-    if (FAILED(hr)) return 0;
+    if (FAILED(hr)) { pex_d3d11_log_hresult("ID3D11Device::CreateRenderTargetView", hr); return 0; }
     D3D11_TEXTURE2D_DESC dd;
     memset(&dd, 0, sizeof(dd));
     dd.Width = (UINT)w;
@@ -921,8 +934,10 @@ static int pex_d3d11_create_views(int w, int h) {
     dd.SampleDesc.Count = 1;
     dd.Usage = D3D11_USAGE_DEFAULT;
     dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    if (FAILED(ID3D11Device_CreateTexture2D(g_d3d11.dev, &dd, NULL, &g_d3d11.depth_tex))) return 0;
-    if (FAILED(ID3D11Device_CreateDepthStencilView(g_d3d11.dev, (ID3D11Resource*)g_d3d11.depth_tex, NULL, &g_d3d11.dsv))) return 0;
+    hr = ID3D11Device_CreateTexture2D(g_d3d11.dev, &dd, NULL, &g_d3d11.depth_tex);
+    if (FAILED(hr)) { pex_d3d11_log_hresult("ID3D11Device::CreateTexture2D(depth)", hr); return 0; }
+    hr = ID3D11Device_CreateDepthStencilView(g_d3d11.dev, (ID3D11Resource*)g_d3d11.depth_tex, NULL, &g_d3d11.dsv);
+    if (FAILED(hr)) { pex_d3d11_log_hresult("ID3D11Device::CreateDepthStencilView", hr); return 0; }
     ID3D11DeviceContext_OMSetRenderTargets(g_d3d11.ctx, 1, &g_d3d11.rtv, g_d3d11.dsv);
     D3D11_VIEWPORT vp;
     memset(&vp, 0, sizeof(vp));
@@ -958,8 +973,20 @@ static int pex_d3d11_compile_shader(const char *src, const char *entry, const ch
     ID3DBlob *err = NULL;
     UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
     HRESULT hr = D3DCompile(src, strlen(src), NULL, NULL, NULL, entry, target, flags, 0, out_blob, &err);
+    if (FAILED(hr) || !out_blob || !*out_blob) {
+        pex_d3d11_log_hresult(target ? target : "D3DCompile", hr);
+        if (err && ID3DBlob_GetBufferPointer(err)) {
+            size_t n = ID3DBlob_GetBufferSize(err);
+            if (n > 900) n = 900;
+            char compiler_msg[901];
+            memcpy(compiler_msg, ID3DBlob_GetBufferPointer(err), n);
+            compiler_msg[n] = 0;
+            pex_logf("D3D shader compiler: %s", compiler_msg);
+            OutputDebugStringA(compiler_msg);
+        }
+    }
     if (err) ID3DBlob_Release(err);
-    return SUCCEEDED(hr) && *out_blob;
+    return SUCCEEDED(hr) && out_blob && *out_blob;
 }
 
 static int pex_d3d11_create_pipeline(void) {
@@ -976,17 +1003,21 @@ static int pex_d3d11_create_pipeline(void) {
     ID3DBlob *vsb = NULL, *psb = NULL;
     if (!pex_d3d11_compile_shader(vs_src, "main", "vs_4_0", &vsb)) return 0;
     if (!pex_d3d11_compile_shader(ps_src, "main", "ps_4_0", &psb)) { ID3DBlob_Release(vsb); return 0; }
-    if (FAILED(ID3D11Device_CreateVertexShader(g_d3d11.dev, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), NULL, &g_d3d11.vs))) { ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
-    if (FAILED(ID3D11Device_CreatePixelShader(g_d3d11.dev, ID3DBlob_GetBufferPointer(psb), ID3DBlob_GetBufferSize(psb), NULL, &g_d3d11.ps))) { ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
+    HRESULT create_hr = ID3D11Device_CreateVertexShader(g_d3d11.dev, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), NULL, &g_d3d11.vs);
+    if (FAILED(create_hr)) { pex_d3d11_log_hresult("ID3D11Device::CreateVertexShader", create_hr); ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
+    create_hr = ID3D11Device_CreatePixelShader(g_d3d11.dev, ID3DBlob_GetBufferPointer(psb), ID3DBlob_GetBufferSize(psb), NULL, &g_d3d11.ps);
+    if (FAILED(create_hr)) { pex_d3d11_log_hresult("ID3D11Device::CreatePixelShader", create_hr); ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
     D3D11_INPUT_ELEMENT_DESC il[3];
     memset(il, 0, sizeof(il));
     il[0].SemanticName="POSITION"; il[0].Format=DXGI_FORMAT_R32G32B32_FLOAT; il[0].InputSlotClass=D3D11_INPUT_PER_VERTEX_DATA; il[0].AlignedByteOffset=0;
     il[1].SemanticName="COLOR"; il[1].Format=DXGI_FORMAT_B8G8R8A8_UNORM; il[1].InputSlotClass=D3D11_INPUT_PER_VERTEX_DATA; il[1].AlignedByteOffset=12;
     il[2].SemanticName="TEXCOORD"; il[2].Format=DXGI_FORMAT_R32G32_FLOAT; il[2].InputSlotClass=D3D11_INPUT_PER_VERTEX_DATA; il[2].AlignedByteOffset=16;
-    if (FAILED(ID3D11Device_CreateInputLayout(g_d3d11.dev, il, 3, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), &g_d3d11.layout))) { ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
+    create_hr = ID3D11Device_CreateInputLayout(g_d3d11.dev, il, 3, ID3DBlob_GetBufferPointer(vsb), ID3DBlob_GetBufferSize(vsb), &g_d3d11.layout);
+    if (FAILED(create_hr)) { pex_d3d11_log_hresult("ID3D11Device::CreateInputLayout", create_hr); ID3DBlob_Release(vsb); ID3DBlob_Release(psb); return 0; }
     ID3DBlob_Release(vsb); ID3DBlob_Release(psb);
     D3D11_BUFFER_DESC cbd; memset(&cbd, 0, sizeof(cbd)); cbd.ByteWidth=(UINT)((sizeof(PexD3D11CB)+15)&~15); cbd.Usage=D3D11_USAGE_DYNAMIC; cbd.BindFlags=D3D11_BIND_CONSTANT_BUFFER; cbd.CPUAccessFlags=D3D11_CPU_ACCESS_WRITE;
-    if (FAILED(ID3D11Device_CreateBuffer(g_d3d11.dev, &cbd, NULL, &g_d3d11.cbuffer))) return 0;
+    create_hr = ID3D11Device_CreateBuffer(g_d3d11.dev, &cbd, NULL, &g_d3d11.cbuffer);
+    if (FAILED(create_hr)) { pex_d3d11_log_hresult("ID3D11Device::CreateBuffer(constants)", create_hr); return 0; }
     D3D11_SAMPLER_DESC sd; memset(&sd,0,sizeof(sd)); sd.Filter=D3D11_FILTER_MIN_MAG_MIP_POINT; sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_WRAP; sd.MaxLOD=D3D11_FLOAT32_MAX;
     ID3D11Device_CreateSamplerState(g_d3d11.dev, &sd, &g_d3d11.sampler_wrap);
     sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;
