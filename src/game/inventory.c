@@ -4564,96 +4564,168 @@ static int block_drop_id(int block_id) {
     return block_id;
 }
 
-static float block_hardness(int block_id) {
-    /* Values mirror the deobfuscated Beta client Block.java setHardness(...). */
-    switch (block_id) {
-        case BLOCK_STONE: return 1.5f;
-        case BLOCK_GRASS: return 0.6f;
-        case BLOCK_DIRT: return 0.5f;
-        case BLOCK_COBBLESTONE: return 2.0f;
-        case BLOCK_PLANKS: return 2.0f;
-        case BLOCK_SAPLING: return 0.0f;
-        case BLOCK_BEDROCK: return -1.0f;
-        case BLOCK_WATER: case BLOCK_STILL_WATER: return 100.0f;
-        case BLOCK_LAVA: return 0.0f;
-        case BLOCK_STILL_LAVA: return 100.0f;
-        case BLOCK_SAND: return 0.5f;
-        case BLOCK_GRAVEL: return 0.6f;
-        case BLOCK_GOLD_ORE: case BLOCK_IRON_ORE: case BLOCK_COAL_ORE: return 3.0f;
-        case BLOCK_LOG: return 2.0f;
-        case BLOCK_LEAVES: return 0.2f;
-        case BLOCK_SPONGE: return 0.6f;
-        case BLOCK_GLASS: return 0.3f;
-        case BLOCK_LAPIS_ORE: return 3.0f;
-        case BLOCK_LAPIS_BLOCK: return 3.0f;
-        case BLOCK_WOOL: return 0.8f;
-        case BLOCK_YELLOW_FLOWER: case BLOCK_RED_ROSE:
-        case BLOCK_BROWN_MUSHROOM: case BLOCK_RED_MUSHROOM: return 0.0f;
-        case BLOCK_GOLD_BLOCK: return 3.0f;
-        case BLOCK_IRON_BLOCK: return 5.0f;
-        case BLOCK_DOUBLE_SLAB: case BLOCK_SLAB: return 2.0f;
-        case BLOCK_BRICK: return 2.0f;
-        case BLOCK_TNT: return 0.0f;
-        case BLOCK_BOOKSHELF: return 1.5f;
-        case BLOCK_MOSSY_COBBLESTONE: return 2.0f;
-        case BLOCK_OBSIDIAN: return 10.0f;
-        case BLOCK_TORCH: case BLOCK_FIRE: return 0.0f;
-        case BLOCK_MOB_SPAWNER: return 5.0f;
-        case BLOCK_WOOD_STAIRS: return 2.0f;       /* BlockStairs copies planks hardness. */
-        case BLOCK_CHEST: return 2.5f;
-        case BLOCK_REDSTONE_WIRE: return 0.0f;
-        case BLOCK_DIAMOND_ORE: return 3.0f;
-        case BLOCK_DIAMOND_BLOCK: return 5.0f;
-        case BLOCK_CRAFTING_TABLE: return 2.5f;
-        case BLOCK_CROPS: return 0.0f;
-        case BLOCK_FARMLAND: return 0.6f;
-        case BLOCK_FURNACE: case BLOCK_FURNACE_LIT: return 3.5f;
-        case BLOCK_SIGN_POST: case BLOCK_WALL_SIGN: return 1.0f;
-        case BLOCK_WOOD_DOOR: return 3.0f;
-        case BLOCK_LADDER: return 0.4f;
-        case BLOCK_RAILS: return 0.7f;
-        case BLOCK_COBBLE_STAIRS: return 2.0f;     /* BlockStairs copies cobblestone hardness. */
-        case BLOCK_LEVER: return 0.5f;
-        case BLOCK_STONE_PRESSURE_PLATE: return 0.5f;
-        case BLOCK_IRON_DOOR: return 5.0f;
-        case BLOCK_WOOD_PRESSURE_PLATE: return 0.5f;
-        case BLOCK_REDSTONE_ORE: case BLOCK_REDSTONE_ORE_GLOWING: return 3.0f;
-        case BLOCK_REDSTONE_TORCH_OFF: case BLOCK_REDSTONE_TORCH_ON: return 0.0f;
-        case BLOCK_STONE_BUTTON: return 0.5f;
-        case BLOCK_SNOW_LAYER: return 0.1f;
-        case BLOCK_ICE: return 0.5f;
-        case BLOCK_SNOW_BLOCK: return 0.2f;
-        case BLOCK_CACTUS: return 0.4f;
-        case BLOCK_CLAY: return 0.6f;
-        case BLOCK_REEDS: return 0.0f;
-        case BLOCK_JUKEBOX: return 2.0f;
-        case BLOCK_FENCE: return 2.0f;
-        case BLOCK_PUMPKIN: return 1.0f;
-        case BLOCK_NETHERRACK: return 0.4f;
-        case BLOCK_SOUL_SAND: return 0.5f;
-        case BLOCK_GLOWSTONE: return 0.3f;
-        case BLOCK_PORTAL: return -1.0f;
-        case BLOCK_JACK_O_LANTERN: return 1.0f;
-        default: return 1.0f;
-    }
-}
+typedef enum PexHarvestRule188 {
+    PEX_HARVEST_NONE = 0,
+    PEX_HARVEST_PICKAXE_WOOD,
+    PEX_HARVEST_PICKAXE_STONE,
+    PEX_HARVEST_PICKAXE_IRON,
+    PEX_HARVEST_PICKAXE_DIAMOND,
+    PEX_HARVEST_SHOVEL,
+    PEX_HARVEST_SWORD_OR_SHEARS,
+    PEX_HARVEST_UNBREAKABLE
+} PexHarvestRule188;
 
-static int held_tool_quality(int held_id) {
-    /* Java Item.java constructor quality values: wood=0, stone=1, iron=2,
-       diamond=3, and gold also uses quality 0 in this Beta source. */
-    switch (held_id) {
-        case ITEM_WOODEN_PICKAXE: case ITEM_WOODEN_SHOVEL: case ITEM_WOODEN_AXE:
-        case ITEM_PICKAXE_GOLD: case ITEM_SHOVEL_GOLD: case ITEM_AXE_GOLD:
-            return 0;
-        case ITEM_STONE_PICKAXE: case ITEM_STONE_SHOVEL: case ITEM_STONE_AXE:
-            return 1;
-        case ITEM_PICKAXE_IRON: case ITEM_SHOVEL_IRON: case ITEM_AXE_IRON:
-            return 2;
-        case ITEM_PICKAXE_DIAMOND: case ITEM_SHOVEL_DIAMOND: case ITEM_AXE_DIAMOND:
-            return 3;
-        default:
-            return -1;
+enum {
+    PEX_TOOL_EFFECTIVE_PICKAXE = 1 << 0,
+    PEX_TOOL_EFFECTIVE_SHOVEL  = 1 << 1,
+    PEX_TOOL_EFFECTIVE_AXE     = 1 << 2
+};
+
+typedef struct PexBlockBreakProfile188 {
+    float hardness;
+    unsigned char effective_tools;
+    unsigned char harvest_rule;
+    float sword_speed;
+    float shears_speed;
+} PexBlockBreakProfile188;
+
+/* Java Edition 1.8.8 block hardness, tool effectiveness and harvest rules for
+   every block ID represented by PexCraft's 1.2.5-era world model.  Keeping
+   these properties together prevents a new block from silently falling back
+   to hardness 1.0 or the wrong tool class. */
+static const PexBlockBreakProfile188 g_block_break_profiles_188[125] = {
+    [BLOCK_STONE] = {1.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Stone */
+    [BLOCK_GRASS] = {0.600f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Grass Block */
+    [BLOCK_DIRT] = {0.500f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Dirt */
+    [BLOCK_COBBLESTONE] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Cobblestone */
+    [BLOCK_PLANKS] = {2.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Oak/Wood Planks */
+    [BLOCK_SAPLING] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Sapling */
+    [BLOCK_BEDROCK] = {-1.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_UNBREAKABLE, 1.0f, 1.0f}, /* Bedrock */
+    [BLOCK_WATER] = {100.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Flowing Water */
+    [BLOCK_STILL_WATER] = {100.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Water */
+    [BLOCK_LAVA] = {100.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Flowing Lava */
+    [BLOCK_STILL_LAVA] = {100.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Lava */
+    [BLOCK_SAND] = {0.500f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Sand */
+    [BLOCK_GRAVEL] = {0.600f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Gravel */
+    [BLOCK_GOLD_ORE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_IRON, 1.0f, 1.0f}, /* Gold Ore */
+    [BLOCK_IRON_ORE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_STONE, 1.0f, 1.0f}, /* Iron Ore */
+    [BLOCK_COAL_ORE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Coal Ore */
+    [BLOCK_LOG] = {2.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Log */
+    [BLOCK_LEAVES] = {0.200f, 0, PEX_HARVEST_NONE, 1.5f, 15.0f}, /* Leaves */
+    [BLOCK_SPONGE] = {0.600f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Sponge */
+    [BLOCK_GLASS] = {0.300f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Glass */
+    [BLOCK_LAPIS_ORE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_STONE, 1.0f, 1.0f}, /* Lapis Lazuli Ore */
+    [BLOCK_LAPIS_BLOCK] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_STONE, 1.0f, 1.0f}, /* Lapis Lazuli Block */
+    [BLOCK_DISPENSER] = {3.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Dispenser */
+    [BLOCK_SANDSTONE] = {0.800f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Sandstone */
+    [BLOCK_NOTE_BLOCK] = {0.800f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Note Block */
+    [BLOCK_BED] = {0.200f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Bed */
+    [BLOCK_POWERED_RAIL] = {0.700f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Powered Rail */
+    [BLOCK_DETECTOR_RAIL] = {0.700f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Detector Rail */
+    [BLOCK_STICKY_PISTON] = {0.500f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Sticky Piston */
+    [BLOCK_WEB] = {4.000f, 0, PEX_HARVEST_SWORD_OR_SHEARS, 15.0f, 15.0f}, /* Cobweb */
+    [BLOCK_TALL_GRASS] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Tall Grass */
+    [BLOCK_DEAD_BUSH] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Dead Bush */
+    [BLOCK_PISTON] = {0.500f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Piston */
+    [BLOCK_PISTON_EXTENSION] = {0.500f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Piston Head */
+    [BLOCK_WOOL] = {0.800f, 0, PEX_HARVEST_NONE, 1.0f, 5.0f}, /* Wool */
+    [BLOCK_PISTON_MOVING] = {-1.000f, 0, PEX_HARVEST_UNBREAKABLE, 1.0f, 1.0f}, /* Moving Piston */
+    [BLOCK_YELLOW_FLOWER] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Dandelion */
+    [BLOCK_RED_ROSE] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Poppy / Flowers */
+    [BLOCK_BROWN_MUSHROOM] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Brown Mushroom */
+    [BLOCK_RED_MUSHROOM] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Red Mushroom */
+    [BLOCK_GOLD_BLOCK] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_IRON, 1.0f, 1.0f}, /* Gold Block */
+    [BLOCK_IRON_BLOCK] = {5.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_STONE, 1.0f, 1.0f}, /* Iron Block */
+    [BLOCK_DOUBLE_SLAB] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Double Stone Slab */
+    [BLOCK_SLAB] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Stone Slab */
+    [BLOCK_BRICK] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Bricks */
+    [BLOCK_TNT] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* TNT */
+    [BLOCK_BOOKSHELF] = {1.500f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Bookshelf */
+    [BLOCK_MOSSY_COBBLESTONE] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Mossy Cobblestone */
+    [BLOCK_OBSIDIAN] = {50.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_DIAMOND, 1.0f, 1.0f}, /* Obsidian */
+    [BLOCK_TORCH] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Torch */
+    [BLOCK_FIRE] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Fire */
+    [BLOCK_MOB_SPAWNER] = {5.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Monster Spawner */
+    [BLOCK_WOOD_STAIRS] = {2.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Oak Stairs */
+    [BLOCK_CHEST] = {2.500f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Chest */
+    [BLOCK_REDSTONE_WIRE] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Redstone Wire */
+    [BLOCK_DIAMOND_ORE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_IRON, 1.0f, 1.0f}, /* Diamond Ore */
+    [BLOCK_DIAMOND_BLOCK] = {5.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_IRON, 1.0f, 1.0f}, /* Diamond Block */
+    [BLOCK_CRAFTING_TABLE] = {2.500f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Crafting Table */
+    [BLOCK_CROPS] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Wheat Crops */
+    [BLOCK_FARMLAND] = {0.600f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Farmland */
+    [BLOCK_FURNACE] = {3.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Furnace */
+    [BLOCK_FURNACE_LIT] = {3.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Burning Furnace */
+    [BLOCK_SIGN_POST] = {1.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Standing Sign */
+    [BLOCK_WOOD_DOOR] = {3.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Wooden Door */
+    [BLOCK_LADDER] = {0.400f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Ladder */
+    [BLOCK_RAILS] = {0.700f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Rail */
+    [BLOCK_COBBLE_STAIRS] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Cobblestone Stairs */
+    [BLOCK_WALL_SIGN] = {1.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Wall Sign */
+    [BLOCK_LEVER] = {0.500f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Lever */
+    [BLOCK_STONE_PRESSURE_PLATE] = {0.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Stone Pressure Plate */
+    [BLOCK_IRON_DOOR] = {5.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Iron Door */
+    [BLOCK_WOOD_PRESSURE_PLATE] = {0.500f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Wooden Pressure Plate */
+    [BLOCK_REDSTONE_ORE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_IRON, 1.0f, 1.0f}, /* Redstone Ore */
+    [BLOCK_REDSTONE_ORE_GLOWING] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_IRON, 1.0f, 1.0f}, /* Glowing Redstone Ore */
+    [BLOCK_REDSTONE_TORCH_OFF] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Redstone Torch (Off) */
+    [BLOCK_REDSTONE_TORCH_ON] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Redstone Torch (On) */
+    [BLOCK_STONE_BUTTON] = {0.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Stone Button */
+    [BLOCK_SNOW_LAYER] = {0.100f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_SHOVEL, 1.0f, 1.0f}, /* Snow Layer */
+    [BLOCK_ICE] = {0.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Ice */
+    [BLOCK_SNOW_BLOCK] = {0.200f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_SHOVEL, 1.0f, 1.0f}, /* Snow Block */
+    [BLOCK_CACTUS] = {0.400f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Cactus */
+    [BLOCK_CLAY] = {0.600f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Clay */
+    [BLOCK_REEDS] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Sugar Cane */
+    [BLOCK_JUKEBOX] = {2.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Jukebox */
+    [BLOCK_FENCE] = {2.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Fence */
+    [BLOCK_PUMPKIN] = {1.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Pumpkin */
+    [BLOCK_NETHERRACK] = {0.400f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Netherrack */
+    [BLOCK_SOUL_SAND] = {0.500f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Soul Sand */
+    [BLOCK_GLOWSTONE] = {0.300f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Glowstone */
+    [BLOCK_PORTAL] = {-1.000f, 0, PEX_HARVEST_UNBREAKABLE, 1.0f, 1.0f}, /* Nether Portal */
+    [BLOCK_JACK_O_LANTERN] = {1.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Jack o'Lantern */
+    [BLOCK_CAKE] = {0.500f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Cake */
+    [BLOCK_REDSTONE_REPEATER_OFF] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Repeater (Off) */
+    [BLOCK_REDSTONE_REPEATER_ON] = {0.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Repeater (On) */
+    [BLOCK_LOCKED_CHEST] = {2.500f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* local locked chest; Java stained glass is translated to BLOCK_GLASS */
+    [BLOCK_TRAPDOOR] = {3.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Trapdoor */
+    [BLOCK_SILVERFISH] = {0.750f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Monster Egg */
+    [BLOCK_STONE_BRICK] = {1.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Stone Bricks */
+    [BLOCK_BROWN_MUSHROOM_CAP] = {0.200f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Brown Mushroom Block */
+    [BLOCK_RED_MUSHROOM_CAP] = {0.200f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Red Mushroom Block */
+    [BLOCK_IRON_BARS] = {5.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Iron Bars */
+    [BLOCK_GLASS_PANE] = {0.300f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Glass Pane */
+    [BLOCK_MELON] = {1.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Melon */
+    [BLOCK_PUMPKIN_STEM] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Pumpkin Stem */
+    [BLOCK_MELON_STEM] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Melon Stem */
+    [BLOCK_VINE] = {0.200f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Vines */
+    [BLOCK_FENCE_GATE] = {2.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Fence Gate */
+    [BLOCK_BRICK_STAIRS] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Brick Stairs */
+    [BLOCK_STONE_BRICK_STAIRS] = {1.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Stone Brick Stairs */
+    [BLOCK_MYCELIUM] = {0.600f, PEX_TOOL_EFFECTIVE_SHOVEL, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Mycelium */
+    [BLOCK_LILY_PAD] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Lily Pad */
+    [BLOCK_NETHER_BRICK] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Nether Bricks */
+    [BLOCK_NETHER_BRICK_FENCE] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Nether Brick Fence */
+    [BLOCK_NETHER_BRICK_STAIRS] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Nether Brick Stairs */
+    [BLOCK_NETHER_WART] = {0.000f, PEX_TOOL_EFFECTIVE_AXE, PEX_HARVEST_NONE, 1.5f, 1.0f}, /* Nether Wart */
+    [BLOCK_ENCHANTMENT_TABLE] = {5.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Enchanting Table */
+    [BLOCK_BREWING_STAND] = {0.500f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Brewing Stand */
+    [BLOCK_CAULDRON] = {2.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* Cauldron */
+    [BLOCK_END_PORTAL] = {-1.000f, 0, PEX_HARVEST_UNBREAKABLE, 1.0f, 1.0f}, /* End Portal */
+    [BLOCK_END_PORTAL_FRAME] = {-1.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_UNBREAKABLE, 1.0f, 1.0f}, /* End Portal Frame */
+    [BLOCK_END_STONE] = {3.000f, PEX_TOOL_EFFECTIVE_PICKAXE, PEX_HARVEST_PICKAXE_WOOD, 1.0f, 1.0f}, /* End Stone */
+    [BLOCK_DRAGON_EGG] = {3.000f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Dragon Egg */
+    [BLOCK_REDSTONE_LAMP_OFF] = {0.300f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Redstone Lamp */
+    [BLOCK_REDSTONE_LAMP_ON] = {0.300f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f}, /* Lit Redstone Lamp */
+};
+
+static const PexBlockBreakProfile188 *block_break_profile_188(int block_id) {
+    static const PexBlockBreakProfile188 fallback = {1.0f, 0, PEX_HARVEST_NONE, 1.0f, 1.0f};
+    if (block_id > 0 && block_id < (int)(sizeof(g_block_break_profiles_188) / sizeof(g_block_break_profiles_188[0]))) {
+        return &g_block_break_profiles_188[block_id];
     }
+    return &fallback;
 }
 
 static int held_is_pickaxe(int held_id) {
@@ -4680,159 +4752,128 @@ static int held_is_sword(int held_id) {
            held_id == ITEM_SWORD_GOLD;
 }
 
-static int block_is_pickaxe_fast_block(int block_id) {
-    /* Pickaxes are fast on rock/metal/ore blocks and the small rock-derived
-       utility blocks.  This keeps wooden stairs/plates/buttons on the axe path
-       and stone buttons/plates/cobble stairs on the pickaxe path instead of
-       letting swords beat the correct tool. */
-    switch (block_id) {
-        case BLOCK_STONE:
-        case BLOCK_COBBLESTONE:
-        case BLOCK_DOUBLE_SLAB:
-        case BLOCK_SLAB:
-        case BLOCK_BRICK:
-        case BLOCK_MOSSY_COBBLESTONE:
-        case BLOCK_OBSIDIAN:
-        case BLOCK_MOB_SPAWNER:
-        case BLOCK_FURNACE:
-        case BLOCK_FURNACE_LIT:
-        case BLOCK_COBBLE_STAIRS:
-        case BLOCK_STONE_PRESSURE_PLATE:
-        case BLOCK_STONE_BUTTON:
-        case BLOCK_IRON_DOOR:
-        case BLOCK_IRON_ORE:
-        case BLOCK_IRON_BLOCK:
-        case BLOCK_COAL_ORE:
-        case BLOCK_GOLD_BLOCK:
-        case BLOCK_GOLD_ORE:
-        case BLOCK_DIAMOND_ORE:
-        case BLOCK_DIAMOND_BLOCK:
-        case BLOCK_REDSTONE_ORE:
-        case BLOCK_REDSTONE_ORE_GLOWING:
-        case BLOCK_ICE:
-        case BLOCK_NETHERRACK:
-        case BLOCK_LAPIS_ORE:
-        case BLOCK_LAPIS_BLOCK:
-            return 1;
-        default:
+static int held_is_shears(int held_id) {
+    return held_id == ITEM_SHEARS;
+}
+
+static int held_tool_harvest_level_188(int held_id) {
+    switch (held_id) {
+        case ITEM_WOODEN_PICKAXE: case ITEM_WOODEN_SHOVEL: case ITEM_WOODEN_AXE:
+        case ITEM_PICKAXE_GOLD: case ITEM_SHOVEL_GOLD: case ITEM_AXE_GOLD:
             return 0;
+        case ITEM_STONE_PICKAXE: case ITEM_STONE_SHOVEL: case ITEM_STONE_AXE:
+            return 1;
+        case ITEM_PICKAXE_IRON: case ITEM_SHOVEL_IRON: case ITEM_AXE_IRON:
+            return 2;
+        case ITEM_PICKAXE_DIAMOND: case ITEM_SHOVEL_DIAMOND: case ITEM_AXE_DIAMOND:
+            return 3;
+        default:
+            return -1;
     }
 }
 
-static int block_is_shovel_fast_block(int block_id) {
-    return block_id == BLOCK_GRASS || block_id == BLOCK_DIRT || block_id == BLOCK_SAND ||
-           block_id == BLOCK_GRAVEL || block_id == BLOCK_SNOW_LAYER ||
-           block_id == BLOCK_SNOW_BLOCK || block_id == BLOCK_CLAY;
-}
-
-static int block_is_axe_fast_block(int block_id) {
-    /* The old table only included the four Java Beta ItemAxe entries, which
-       made later wooden block-forms like wood stairs/plates/fences slower than
-       a sword.  Treat every wooden block currently implemented by this client
-       as axe-effective. */
-    switch (block_id) {
-        case BLOCK_PLANKS:
-        case BLOCK_BOOKSHELF:
-        case BLOCK_LOG:
-        case BLOCK_CHEST:
-        case BLOCK_CRAFTING_TABLE:
-        case BLOCK_WOOD_STAIRS:
-        case BLOCK_WOOD_DOOR:
-        case BLOCK_LADDER:
-        case BLOCK_SIGN_POST:
-        case BLOCK_WALL_SIGN:
-        case BLOCK_WOOD_PRESSURE_PLATE:
-        case BLOCK_FENCE:
-        case BLOCK_JUKEBOX:
-            return 1;
+static float held_tool_efficiency_188(int held_id) {
+    switch (held_id) {
+        case ITEM_WOODEN_PICKAXE: case ITEM_WOODEN_SHOVEL: case ITEM_WOODEN_AXE:
+            return 2.0f;
+        case ITEM_STONE_PICKAXE: case ITEM_STONE_SHOVEL: case ITEM_STONE_AXE:
+            return 4.0f;
+        case ITEM_PICKAXE_IRON: case ITEM_SHOVEL_IRON: case ITEM_AXE_IRON:
+            return 6.0f;
+        case ITEM_PICKAXE_DIAMOND: case ITEM_SHOVEL_DIAMOND: case ITEM_AXE_DIAMOND:
+            return 8.0f;
+        case ITEM_PICKAXE_GOLD: case ITEM_SHOVEL_GOLD: case ITEM_AXE_GOLD:
+            return 12.0f;
         default:
-            return 0;
+            return 1.0f;
     }
-}
-
-static int block_requires_tool_to_harvest(int block_id) {
-    /* InventoryPlayer.canHarvestBlock only requires a tool for rock, iron,
-       builtSnow, and snow materials.  Everything else can drop by hand. */
-    switch (block_id) {
-        case BLOCK_STONE:
-        case BLOCK_COBBLESTONE:
-        case BLOCK_GOLD_ORE:
-        case BLOCK_IRON_ORE:
-        case BLOCK_COAL_ORE:
-        case BLOCK_GOLD_BLOCK:
-        case BLOCK_IRON_BLOCK:
-        case BLOCK_DOUBLE_SLAB:
-        case BLOCK_SLAB:
-        case BLOCK_BRICK:
-        case BLOCK_MOSSY_COBBLESTONE:
-        case BLOCK_OBSIDIAN:
-        case BLOCK_MOB_SPAWNER:
-        case BLOCK_DIAMOND_ORE:
-        case BLOCK_DIAMOND_BLOCK:
-        case BLOCK_FURNACE:
-        case BLOCK_FURNACE_LIT:
-        case BLOCK_COBBLE_STAIRS:
-        case BLOCK_IRON_DOOR:
-        case BLOCK_REDSTONE_ORE:
-        case BLOCK_REDSTONE_ORE_GLOWING:
-        case BLOCK_SNOW_LAYER:
-        case BLOCK_SNOW_BLOCK:
-        case BLOCK_NETHERRACK:
-        case BLOCK_LAPIS_ORE:
-        case BLOCK_LAPIS_BLOCK:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-static int held_pickaxe_can_harvest(int held_id, int block_id) {
-    int q = held_tool_quality(held_id);
-    if (!held_is_pickaxe(held_id)) return 0;
-    if (block_id == BLOCK_OBSIDIAN) return q == 3;
-    if (block_id == BLOCK_DIAMOND_BLOCK || block_id == BLOCK_DIAMOND_ORE) return q >= 2;
-    if (block_id == BLOCK_GOLD_BLOCK || block_id == BLOCK_GOLD_ORE) return q >= 2;
-    if (block_id == BLOCK_IRON_BLOCK || block_id == BLOCK_IRON_ORE) return q >= 1;
-    if (block_id == BLOCK_REDSTONE_ORE || block_id == BLOCK_REDSTONE_ORE_GLOWING) return q >= 2;
-    if (block_id == BLOCK_LAPIS_ORE || block_id == BLOCK_LAPIS_BLOCK) return q >= 1;
-    return block_requires_tool_to_harvest(block_id) &&
-           block_id != BLOCK_SNOW_LAYER && block_id != BLOCK_SNOW_BLOCK;
-}
-
-static int held_shovel_can_harvest(int held_id, int block_id) {
-    if (!held_is_shovel(held_id)) return 0;
-    return block_id == BLOCK_SNOW_LAYER || block_id == BLOCK_SNOW_BLOCK;
 }
 
 static int held_item_can_harvest_block_id(int held_id, int block_id) {
-    if (!block_requires_tool_to_harvest(block_id)) return 1;
-    if (held_pickaxe_can_harvest(held_id, block_id)) return 1;
-    if (held_shovel_can_harvest(held_id, block_id)) return 1;
-    return 0;
+    const PexBlockBreakProfile188 *profile = block_break_profile_188(block_id);
+    int level = held_tool_harvest_level_188(held_id);
+    switch ((PexHarvestRule188)profile->harvest_rule) {
+        case PEX_HARVEST_NONE:
+            return 1;
+        case PEX_HARVEST_PICKAXE_WOOD:
+            return held_is_pickaxe(held_id) && level >= 0;
+        case PEX_HARVEST_PICKAXE_STONE:
+            return held_is_pickaxe(held_id) && level >= 1;
+        case PEX_HARVEST_PICKAXE_IRON:
+            return held_is_pickaxe(held_id) && level >= 2;
+        case PEX_HARVEST_PICKAXE_DIAMOND:
+            return held_is_pickaxe(held_id) && level >= 3;
+        case PEX_HARVEST_SHOVEL:
+            return held_is_shovel(held_id);
+        case PEX_HARVEST_SWORD_OR_SHEARS:
+            return held_is_sword(held_id) || held_is_shears(held_id);
+        case PEX_HARVEST_UNBREAKABLE:
+        default:
+            return 0;
+    }
 }
 
 static float held_item_strength_vs_block(int held_id, int block_id) {
-    int q = held_tool_quality(held_id);
-    if (held_is_pickaxe(held_id) && block_is_pickaxe_fast_block(block_id)) return (float)((q + 1) * 2);
-    if (held_is_shovel(held_id) && block_is_shovel_fast_block(block_id)) return (float)((q + 1) * 2);
-    if (held_is_axe(held_id) && block_is_axe_fast_block(block_id)) return (float)((q + 1) * 2);
-    if (held_is_sword(held_id)) return 1.5f;
+    const PexBlockBreakProfile188 *profile = block_break_profile_188(block_id);
+    if (held_is_pickaxe(held_id) && (profile->effective_tools & PEX_TOOL_EFFECTIVE_PICKAXE)) {
+        return held_tool_efficiency_188(held_id);
+    }
+    if (held_is_shovel(held_id) && (profile->effective_tools & PEX_TOOL_EFFECTIVE_SHOVEL)) {
+        return held_tool_efficiency_188(held_id);
+    }
+    if (held_is_axe(held_id) && (profile->effective_tools & PEX_TOOL_EFFECTIVE_AXE)) {
+        return held_tool_efficiency_188(held_id);
+    }
+    if (held_is_shears(held_id)) return profile->shears_speed;
+    if (held_is_sword(held_id)) return profile->sword_speed;
     return 1.0f;
 }
 
 static float block_relative_strength(int block_id) {
     if (player_is_creative()) return 1.0f;
-    float h = block_hardness(block_id);
-    if (h < 0.0f) return 0.0f;
-    if (h <= 0.0f) return 1.0f;
+    const PexBlockBreakProfile188 *profile = block_break_profile_188(block_id);
+    float hardness = profile->hardness;
+    if (hardness < 0.0f || profile->harvest_rule == PEX_HARVEST_UNBREAKABLE) return 0.0f;
+    if (hardness == 0.0f) return 1.0f;
 
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     int held_id = stack_empty(held) ? 0 : held->id;
+    float speed = held_item_strength_vs_block(held_id, block_id);
+
+    /* EntityPlayer.getToolDigEfficiency(): Efficiency only contributes when
+       the held item already has a proper-tool speed above 1.0. */
+    if (speed > 1.0f && held && !stack_empty(held)) {
+        int efficiency = item_stack_enchant_level_125(held, PEX_ENCHANT_EFFICIENCY);
+        if (efficiency > 0) speed += (float)(efficiency * efficiency + 1);
+    }
 
     if (!held_item_can_harvest_block_id(held_id, block_id)) {
-        return 1.0f / h / 100.0f;
+        return speed / hardness / 100.0f;
     }
-    return held_item_strength_vs_block(held_id, block_id) / h / 30.0f;
+    return speed / hardness / 30.0f;
+}
+
+static float block_relative_strength_with_player_effects_188(int block_id) {
+    float strength = block_relative_strength(block_id);
+    if (strength <= 0.0f || player_is_creative()) return strength;
+
+    if (player_has_potion(PEX_POTION_HASTE)) {
+        strength *= 1.0f + 0.20f * (float)(player_potion_amplifier(PEX_POTION_HASTE) + 1);
+    }
+    if (player_has_potion(PEX_POTION_MINING_FATIGUE)) {
+        int amplifier = player_potion_amplifier(PEX_POTION_MINING_FATIGUE);
+        float multiplier = 0.30f;
+        if (amplifier == 1) multiplier = 0.09f;
+        else if (amplifier == 2) multiplier = 0.0027f;
+        else if (amplifier >= 3) multiplier = 0.00081f;
+        strength *= multiplier;
+    }
+    if (flat_player_head_in_water() &&
+        item_stack_enchant_level_125(&g_armor_inventory[3], PEX_ENCHANT_AQUA_AFFINITY) <= 0) {
+        strength *= 0.20f;
+    }
+    if (!g_player_on_ground) strength *= 0.20f;
+    return strength;
 }
 
 static void restart_hand_swing(void) {
@@ -7151,22 +7192,7 @@ static void update_breaking(void) {
         g_last_hit_particle_face = g_break_face; g_last_hit_particle_tick = g_ingame_ticks;
     }
 
-    float rel = block_relative_strength(id);
-    if (player_has_potion(PEX_POTION_HASTE)) {
-        rel *= 1.0f + 0.20f * (float)(player_potion_amplifier(PEX_POTION_HASTE) + 1);
-    }
-    if (player_has_potion(PEX_POTION_MINING_FATIGUE)) {
-        int amp = player_potion_amplifier(PEX_POTION_MINING_FATIGUE);
-        float mul = 0.30f;
-        if (amp == 1) mul = 0.09f;
-        else if (amp == 2) mul = 0.0027f;
-        else if (amp >= 3) mul = 0.00081f;
-        rel *= mul;
-    }
-    if (flat_player_head_in_water() && flat_block_is_underwater_target(g_break_x, g_break_y, g_break_z)) {
-        rel *= 0.20f;
-    }
-
+    float rel = block_relative_strength_with_player_effects_188(id);
     g_break_damage += rel;
 
     if (((int)g_break_sound_counter % 4) == 0) {
@@ -12143,17 +12169,6 @@ static int flat_player_head_in_water(void) {
 
 static int flat_player_head_in_lava(void) {
     return block_is_lava(flat_player_head_block());
-}
-
-static int flat_block_is_underwater_target(int bx, int by, int bz) {
-    /* A mined block counts as underwater when water is directly above it or
-       pressed against any side.  The target itself is normally solid, because
-       raycast skips liquid blocks. */
-    return block_is_water(flat_get_block(bx, by + 1, bz)) ||
-           block_is_water(flat_get_block(bx + 1, by, bz)) ||
-           block_is_water(flat_get_block(bx - 1, by, bz)) ||
-           block_is_water(flat_get_block(bx, by, bz + 1)) ||
-           block_is_water(flat_get_block(bx, by, bz - 1));
 }
 
 static int flat_player_in_water(void) {

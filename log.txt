@@ -1,2 +1,0 @@
-[2026-07-12 04:07:04] {log open: PexCraft 1.2.5}
-[2026-07-12 04:07:04] {passive mob spawn type=Pig pos=1.00,2.00,3.00}

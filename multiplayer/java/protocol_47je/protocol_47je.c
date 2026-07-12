@@ -14,9 +14,10 @@
 #define J47_SKIN_URL_MAX 768
 #define J47_TEAM_MAX 64
 #define J47_TEAM_MEMBER_MAX 128
-#define J47_SCORE_OBJECTIVE_MAX 32
-#define J47_SCORE_ENTRY_MAX 512
+#define J47_SCORE_OBJECTIVE_MAX 128
+#define J47_SCORE_ENTRY_MAX 4096
 #define J47_BLOCK_UPDATE_CACHE_MAX 8192
+#define J47_TITLE_TEXT_MAX 1024
 
 
 /* The Java adapter is unity-included after game/mobs.c and before
@@ -60,6 +61,9 @@ typedef struct J47RawItem {
     int count;
     int damage;
     int has_enchantment;
+    int enchant_count;
+    int enchant_id[PEX_ITEMSTACK_ENCHANT_MAX];
+    int enchant_level[PEX_ITEMSTACK_ENCHANT_MAX];
     char display_name[J47_ITEM_NAME_MAX];
     int lore_count;
     char lore[J47_ITEM_LORE_MAX][J47_ITEM_LORE_LINE_MAX];
@@ -137,6 +141,7 @@ typedef struct J47ScoreObjective {
     char name[17];
     char display_name[65];
     int render_hearts;
+    unsigned int serial;
 } J47ScoreObjective;
 
 typedef struct J47ScoreEntry {
@@ -144,7 +149,18 @@ typedef struct J47ScoreEntry {
     char owner[41];
     char objective[17];
     int value;
+    unsigned int serial;
 } J47ScoreEntry;
+
+typedef struct J47SidebarCache {
+    int valid;
+    char objective[17];
+    char display_name[65];
+    int count;
+    int width;
+    char names[15][192];
+    char values[15][32];
+} J47SidebarCache;
 
 typedef struct J47BlockUpdate {
     int used;
@@ -209,7 +225,16 @@ typedef struct PexJava47Session {
     int last_world_origin_z;
     char tab_header[512];
     char tab_footer[512];
+    char title_text[J47_TITLE_TEXT_MAX];
+    char subtitle_text[J47_TITLE_TEXT_MAX];
+    int title_fade_in;
+    int title_stay;
+    int title_fade_out;
+    int title_timer;
+    int title_last_tick;
     char display_objectives[19][17];
+    char resolved_sidebar_objective[17];
+    J47SidebarCache sidebar_cache;
     J47Team teams[J47_TEAM_MAX];
     J47ScoreObjective objectives[J47_SCORE_OBJECTIVE_MAX];
     J47ScoreEntry scores[J47_SCORE_ENTRY_MAX];
@@ -1409,6 +1434,72 @@ static int j47_nbt_read_string(J47Reader *r, char *out, size_t cap) {
     return 1;
 }
 
+static int j47_nbt_read_integer_payload(J47Reader *r, int tag_type, int *out) {
+    int value = 0;
+    switch (tag_type) {
+        case 1: value = (int)(int8_t)j47_r_u8(r); break;
+        case 2: value = (int)(int16_t)j47_r_be16(r); break;
+        case 3: value = (int)(int32_t)j47_r_be32(r); break;
+        default: return 0;
+    }
+    if (out) *out = value;
+    return !r->failed;
+}
+
+static void j47_raw_item_add_enchantment(J47RawItem *raw, int enchant_id, int level) {
+    if (!raw || enchant_id < 0 || level <= 0) return;
+    raw->has_enchantment = 1;
+    for (int i = 0; i < raw->enchant_count; ++i) {
+        if (raw->enchant_id[i] == enchant_id) {
+            if (level > raw->enchant_level[i]) raw->enchant_level[i] = level;
+            return;
+        }
+    }
+    if (raw->enchant_count >= PEX_ITEMSTACK_ENCHANT_MAX) return;
+    raw->enchant_id[raw->enchant_count] = enchant_id;
+    raw->enchant_level[raw->enchant_count] = level;
+    raw->enchant_count++;
+}
+
+static int j47_nbt_parse_enchantment_compound(J47Reader *r, int depth, J47RawItem *raw) {
+    int enchant_id = -1;
+    int level = 0;
+    if (depth > 32) { r->failed = 1; return 0; }
+    for (;;) {
+        int child = (int)j47_r_u8(r);
+        if (r->failed) return 0;
+        if (child == 0) {
+            j47_raw_item_add_enchantment(raw, enchant_id, level);
+            return 1;
+        }
+        char name[96];
+        if (!j47_nbt_read_string(r, name, sizeof(name))) return 0;
+        if ((!strcmp(name, "id") || !strcmp(name, "lvl")) && child >= 1 && child <= 3) {
+            int value = 0;
+            if (!j47_nbt_read_integer_payload(r, child, &value)) return 0;
+            if (!strcmp(name, "id")) enchant_id = value;
+            else level = value;
+        } else if (!j47_nbt_skip_payload(r, child, depth + 1)) {
+            return 0;
+        }
+    }
+}
+
+static int j47_nbt_parse_enchantment_list(J47Reader *r, int depth, J47RawItem *raw) {
+    int item_type = (int)j47_r_u8(r);
+    int32_t count = j47_r_be32(r);
+    if (r->failed || count < 0 || count > 100000) { r->failed = 1; return 0; }
+    if (count > 0) raw->has_enchantment = 1;
+    for (int32_t i = 0; i < count; ++i) {
+        if (item_type == 10) {
+            if (!j47_nbt_parse_enchantment_compound(r, depth + 1, raw)) return 0;
+        } else if (!j47_nbt_skip_payload(r, item_type, depth + 1)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void j47_item_text_normalize(const char *src, char *out, size_t cap) {
     if (!out || cap == 0) return;
     out[0] = 0;
@@ -1454,8 +1545,7 @@ static int j47_nbt_parse_item_compound(J47Reader *r, int depth, int in_display, 
                 } else if (!j47_nbt_skip_payload(r, item_type, depth + 1)) return 0;
             }
         } else if (child == 9 && (!strcmp(name, "ench") || !strcmp(name, "StoredEnchantments"))) {
-            raw->has_enchantment = 1;
-            if (!j47_nbt_skip_payload(r, child, depth + 1)) return 0;
+            if (!j47_nbt_parse_enchantment_list(r, depth + 1, raw)) return 0;
         } else if (child == 10) {
             if (!j47_nbt_parse_item_compound(r, depth + 1, in_display, raw)) return 0;
         } else if (!j47_nbt_skip_payload(r, child, depth + 1)) return 0;
@@ -1746,7 +1836,12 @@ static int j47_read_item_ex(J47Reader *r, ItemStack *out, J47RawItem *raw_out) {
     }
     if (st.count < 1) st.count = 1;
     if (raw.count < 1) raw.count = 1;
-    if (raw.has_enchantment) {
+    for (int i = 0; i < raw.enchant_count && i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) {
+        st.enchant_id[i] = raw.enchant_id[i];
+        st.enchant_level[i] = raw.enchant_level[i];
+    }
+    if (raw.has_enchantment && raw.enchant_count == 0) {
+        /* Preserve the enchanted-item glint for unusual or empty plugin NBT. */
         st.enchant_id[0] = 1;
         st.enchant_level[0] = 1;
     }
@@ -2050,29 +2145,72 @@ static J47ScoreObjective *j47_objective_find(const char *name) {
     return NULL;
 }
 
+static int j47_objective_name_is_displayed(const char *name) {
+    if (!name || !name[0]) return 0;
+    for (int i = 0; i < 19; ++i)
+        if (strcmp(g_j47.display_objectives[i], name) == 0) return 1;
+    return 0;
+}
+
+static void j47_score_clear_objective(const char *name) {
+    if (!name || !name[0]) return;
+    for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i)
+        if (g_j47.scores[i].used && strcmp(g_j47.scores[i].objective, name) == 0)
+            memset(&g_j47.scores[i], 0, sizeof(g_j47.scores[i]));
+}
+
 static J47ScoreObjective *j47_objective_put(const char *name) {
     J47ScoreObjective *o = j47_objective_find(name);
-    if (o) return o;
+    if (o) {
+        o->serial = g_j47.packet_serial;
+        return o;
+    }
     for (int i = 0; i < J47_SCORE_OBJECTIVE_MAX; ++i) {
         if (!g_j47.objectives[i].used) {
             o = &g_j47.objectives[i];
             memset(o, 0, sizeof(*o));
             o->used = 1;
             snprintf(o->name, sizeof(o->name), "%.*s", 16, name ? name : "");
+            o->serial = g_j47.packet_serial;
             return o;
         }
     }
-    return NULL;
+
+    /* Long-running minigame networks can create many short-lived objectives
+       without consistently removing every old one.  The previous 32-entry
+       fixed table eventually filled, causing a newly displayed sidebar to
+       vanish even though no clear packet was sent.  Reclaim the oldest
+       objective that is not assigned to any display slot. */
+    int victim = -1;
+    unsigned int oldest = 0;
+    for (int i = 0; i < J47_SCORE_OBJECTIVE_MAX; ++i) {
+        J47ScoreObjective *candidate = &g_j47.objectives[i];
+        if (!candidate->used || j47_objective_name_is_displayed(candidate->name)) continue;
+        if (victim < 0 || candidate->serial < oldest) {
+            victim = i;
+            oldest = candidate->serial;
+        }
+    }
+    if (victim < 0) return NULL;
+    o = &g_j47.objectives[victim];
+    j47_score_clear_objective(o->name);
+    memset(o, 0, sizeof(*o));
+    o->used = 1;
+    snprintf(o->name, sizeof(o->name), "%.*s", 16, name ? name : "");
+    o->serial = g_j47.packet_serial;
+    return o;
 }
 
 static void j47_objective_remove(const char *name) {
     J47ScoreObjective *o = j47_objective_find(name);
     if (o) memset(o, 0, sizeof(*o));
-    for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i)
-        if (g_j47.scores[i].used && strcmp(g_j47.scores[i].objective, name) == 0)
-            memset(&g_j47.scores[i], 0, sizeof(g_j47.scores[i]));
+    j47_score_clear_objective(name);
     for (int i = 0; i < 19; ++i)
         if (strcmp(g_j47.display_objectives[i], name) == 0) g_j47.display_objectives[i][0] = 0;
+    if (!strcmp(g_j47.resolved_sidebar_objective, name)) {
+        g_j47.resolved_sidebar_objective[0] = 0;
+        memset(&g_j47.sidebar_cache, 0, sizeof(g_j47.sidebar_cache));
+    }
 }
 
 static J47ScoreEntry *j47_score_find(const char *owner, const char *objective) {
@@ -2088,12 +2226,39 @@ static void j47_score_set(const char *owner, const char *objective, int value) {
     if (!e) {
         for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i) if (!g_j47.scores[i].used) { e = &g_j47.scores[i]; break; }
     }
+    if (!e) {
+        /* Prefer discarding stale scores from objectives that are no longer
+           displayed.  This keeps the active sidebar alive on servers that
+           leak old objectives between lobby/game transitions. */
+        int victim = -1;
+        unsigned int oldest = 0;
+        for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i) {
+            J47ScoreEntry *candidate = &g_j47.scores[i];
+            if (!candidate->used || j47_objective_name_is_displayed(candidate->objective)) continue;
+            if (victim < 0 || candidate->serial < oldest) {
+                victim = i;
+                oldest = candidate->serial;
+            }
+        }
+        if (victim < 0) {
+            for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i) {
+                J47ScoreEntry *candidate = &g_j47.scores[i];
+                if (!candidate->used) continue;
+                if (victim < 0 || candidate->serial < oldest) {
+                    victim = i;
+                    oldest = candidate->serial;
+                }
+            }
+        }
+        if (victim >= 0) e = &g_j47.scores[victim];
+    }
     if (!e) return;
     memset(e, 0, sizeof(*e));
     e->used = 1;
     snprintf(e->owner, sizeof(e->owner), "%.*s", 40, owner ? owner : "");
     snprintf(e->objective, sizeof(e->objective), "%.*s", 16, objective ? objective : "");
     e->value = value;
+    e->serial = g_j47.packet_serial;
 }
 
 static void j47_score_remove(const char *owner, const char *objective) {
@@ -3077,8 +3242,15 @@ static void j47_handle_display_scoreboard(J47Reader *r) {
     int slot = (int)(int8_t)j47_r_u8(r);
     char objective[32] = {0};
     if (!j47_r_string(r, objective, sizeof(objective))) return;
-    if (slot >= 0 && slot < 19)
+    if (slot >= 0 && slot < 19) {
+        char previous[17];
+        snprintf(previous, sizeof(previous), "%s", g_j47.display_objectives[slot]);
         snprintf(g_j47.display_objectives[slot], sizeof(g_j47.display_objectives[slot]), "%.*s", 16, objective);
+        if (!objective[0] && previous[0] && !strcmp(g_j47.resolved_sidebar_objective, previous)) {
+            g_j47.resolved_sidebar_objective[0] = 0;
+            memset(&g_j47.sidebar_cache, 0, sizeof(g_j47.sidebar_cache));
+        }
+    }
 }
 
 static void j47_handle_teams(J47Reader *r) {
@@ -3128,6 +3300,82 @@ static void j47_handle_tab_header_footer(J47Reader *r) {
         !j47_r_string(r, footer_json, sizeof(footer_json))) return;
     j47_json_collect_text(header_json, g_j47.tab_header, sizeof(g_j47.tab_header));
     j47_json_collect_text(footer_json, g_j47.tab_footer, sizeof(g_j47.tab_footer));
+}
+
+static void j47_title_reset_timings(void) {
+    g_j47.title_fade_in = 10;
+    g_j47.title_stay = 70;
+    g_j47.title_fade_out = 20;
+}
+
+static void j47_title_sync_timer(void) {
+    int now_tick = g_ingame_ticks;
+    if (g_j47.title_last_tick < 0) {
+        g_j47.title_last_tick = now_tick;
+        return;
+    }
+    int elapsed = now_tick - g_j47.title_last_tick;
+    if (elapsed <= 0) return;
+    g_j47.title_last_tick = now_tick;
+    if (g_j47.title_timer > 0) {
+        g_j47.title_timer -= elapsed;
+        if (g_j47.title_timer <= 0) {
+            g_j47.title_timer = 0;
+            g_j47.title_text[0] = 0;
+            g_j47.subtitle_text[0] = 0;
+        }
+    }
+}
+
+static void j47_handle_title(J47Reader *r) {
+    int32_t type = -1;
+    if (!j47_r_varint(r, &type)) return;
+    j47_title_sync_timer();
+
+    if (type == 0 || type == 1) { /* TITLE / SUBTITLE */
+        char json[8192];
+        char text[J47_TITLE_TEXT_MAX];
+        if (!j47_r_string(r, json, sizeof(json))) return;
+        j47_json_collect_text(json, text, sizeof(text));
+        if (type == 0) {
+            snprintf(g_j47.title_text, sizeof(g_j47.title_text), "%s", text);
+            g_j47.title_timer = g_j47.title_fade_in + g_j47.title_stay + g_j47.title_fade_out;
+            g_j47.title_last_tick = g_ingame_ticks;
+        } else {
+            snprintf(g_j47.subtitle_text, sizeof(g_j47.subtitle_text), "%s", text);
+        }
+        return;
+    }
+
+    if (type == 2) { /* TIMES */
+        int fade_in = (int)j47_r_be32(r);
+        int stay = (int)j47_r_be32(r);
+        int fade_out = (int)j47_r_be32(r);
+        if (r->failed) return;
+        if (fade_in >= 0) g_j47.title_fade_in = fade_in;
+        if (stay >= 0) g_j47.title_stay = stay;
+        if (fade_out >= 0) g_j47.title_fade_out = fade_out;
+        if (g_j47.title_timer > 0)
+            g_j47.title_timer = g_j47.title_fade_in + g_j47.title_stay + g_j47.title_fade_out;
+        g_j47.title_last_tick = g_ingame_ticks;
+        return;
+    }
+
+    if (type == 3) { /* CLEAR */
+        g_j47.title_timer = 0;
+        return;
+    }
+
+    if (type == 4) { /* RESET */
+        g_j47.title_text[0] = 0;
+        g_j47.subtitle_text[0] = 0;
+        g_j47.title_timer = 0;
+        j47_title_reset_timings();
+        g_j47.title_last_tick = g_ingame_ticks;
+        return;
+    }
+
+    r->failed = 1;
 }
 
 static int j47_send_client_identity(void) {
@@ -3442,6 +3690,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         }
         case 0x40:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Disconnected by Java server");}break;}
         case 0x41:g_j47.difficulty=j47_r_u8(r);break;
+        case 0x45:j47_handle_title(r);break;
         case 0x46:{int32_t threshold;if(j47_r_varint(r,&threshold))g_j47.compression_threshold=threshold;break;}
         case 0x47:j47_handle_tab_header_footer(r);break;
         case 0x48:{char url[2048],hash[128];j47_r_string(r,url,sizeof(url));j47_r_string(r,hash,sizeof(hash));J47Writer w;j47_writer_init(&w,128);j47_w_string(&w,hash);j47_w_varint(&w,1);j47_send_packet(0x19,w.data,w.len);j47_writer_free(&w);break;}
@@ -3672,51 +3921,127 @@ static int j47_score_ptr_compare(const void *ap,const void *bp) {
     return -j47_ascii_casecmp(a->owner,b->owner);
 }
 
-void pex_java47_draw_server_scoreboard(void) {
-    if(g_j47.state!=PEX_JAVA47_PLAY||g_screen!=SCREEN_INGAME)return;
-    int slot=1;
-    J47Team *local_team=j47_team_for_member(g_j47.username);
-    if(local_team&&local_team->color>=0&&local_team->color<16&&g_j47.display_objectives[3+local_team->color][0])
-        slot=3+local_team->color;
-    const char *objective_name=g_j47.display_objectives[slot];
-    if(!objective_name[0])return;
-    J47ScoreObjective *objective=j47_objective_find(objective_name);
-    if(!objective)return;
+void pex_java47_draw_title_overlay(void) {
+    if(g_j47.state!=PEX_JAVA47_PLAY||
+       (g_screen!=SCREEN_INGAME&&g_screen!=SCREEN_CHAT))return;
+    j47_title_sync_timer();
+    if(g_j47.title_timer<=0)return;
 
-    J47ScoreEntry *all[J47_SCORE_ENTRY_MAX];int all_count=0;
+    float remaining=(float)g_j47.title_timer-g_frame_partial;
+    int alpha=255;
+    if(g_j47.title_timer>g_j47.title_fade_out+g_j47.title_stay&&g_j47.title_fade_in>0){
+        float elapsed=(float)(g_j47.title_fade_in+g_j47.title_stay+g_j47.title_fade_out)-remaining;
+        alpha=(int)(elapsed*255.0f/(float)g_j47.title_fade_in);
+    }
+    if(g_j47.title_timer<=g_j47.title_fade_out&&g_j47.title_fade_out>0)
+        alpha=(int)(remaining*255.0f/(float)g_j47.title_fade_out);
+    if(alpha<0)alpha=0;
+    if(alpha>255)alpha=255;
+    if(alpha<=8)return;
+
+    int color=(int)(((unsigned int)alpha<<24)|0x00FFFFFFu);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    glPushMatrix();
+    glTranslatef((float)g_gui_w*0.5f,(float)g_gui_h*0.5f,0.0f);
+    glPushMatrix();
+    glScalef(4.0f,4.0f,4.0f);
+    draw_text(g_j47.title_text,-text_width(g_j47.title_text)/2,-10,color);
+    glPopMatrix();
+    glPushMatrix();
+    glScalef(2.0f,2.0f,2.0f);
+    draw_text(g_j47.subtitle_text,-text_width(g_j47.subtitle_text)/2,5,color);
+    glPopMatrix();
+    glPopMatrix();
+    glColor4f(1,1,1,1);
+}
+
+static const char *j47_resolve_sidebar_objective(void) {
+    const char *default_name = g_j47.display_objectives[1];
+    const char *team_name = "";
+    J47Team *local_team = j47_team_for_member(g_j47.username);
+    if (local_team && local_team->color >= 0 && local_team->color < 16)
+        team_name = g_j47.display_objectives[3 + local_team->color];
+
+    /* Vanilla prefers sidebar.team.<colour> only when that slot resolves to a
+       real objective, then falls back to the ordinary sidebar.  Keeping the
+       previous cached name valid across a one-packet objective refresh avoids
+       a visible blink without ignoring an explicit display-slot clear. */
+    if (team_name[0] && (j47_objective_find(team_name) ||
+        (g_j47.sidebar_cache.valid && !strcmp(g_j47.sidebar_cache.objective, team_name))))
+        return team_name;
+    if (default_name[0]) return default_name;
+    return team_name;
+}
+
+void pex_java47_draw_server_scoreboard(void) {
+    if(g_j47.state!=PEX_JAVA47_PLAY||
+       (g_screen!=SCREEN_INGAME&&g_screen!=SCREEN_CHAT))return;
+    const char *objective_name=j47_resolve_sidebar_objective();
+    if(!objective_name||!objective_name[0]){
+        g_j47.resolved_sidebar_objective[0]=0;
+        memset(&g_j47.sidebar_cache,0,sizeof(g_j47.sidebar_cache));
+        return;
+    }
+
+    if(strcmp(g_j47.resolved_sidebar_objective,objective_name)!=0){
+        snprintf(g_j47.resolved_sidebar_objective,sizeof(g_j47.resolved_sidebar_objective),"%.*s",16,objective_name);
+        if(!g_j47.sidebar_cache.valid||strcmp(g_j47.sidebar_cache.objective,objective_name)!=0)
+            memset(&g_j47.sidebar_cache,0,sizeof(g_j47.sidebar_cache));
+    }
+
+    J47ScoreObjective *objective=j47_objective_find(objective_name);
+    static J47ScoreEntry *all[J47_SCORE_ENTRY_MAX];int all_count=0;
     for(int i=0;i<J47_SCORE_ENTRY_MAX;++i){
         J47ScoreEntry *e=&g_j47.scores[i];
         if(e->used&&!strcmp(e->objective,objective_name)&&e->owner[0]!='#')all[all_count++]=e;
     }
-    if(all_count<=0)return;
-    qsort(all,(size_t)all_count,sizeof(all[0]),j47_score_ptr_compare);
-    int first=all_count>15?all_count-15:0;
-    int total=all_count-first;
-    int width=text_width(objective->display_name);
-    char names[15][192],values[15][32],measure[256];
-    for(int i=0;i<total;++i){
-        J47ScoreEntry *e=all[first+i];
-        j47_format_team_name(e->owner,names[i],sizeof(names[i]));
-        snprintf(values[i],sizeof(values[i]),"\xC2\xA7" "c%d",e->value);
-        snprintf(measure,sizeof(measure),"%s: %s",names[i],values[i]);
-        int w=text_width(measure);if(w>width)width=w;
+
+    if(objective&&all_count>0){
+        qsort(all,(size_t)all_count,sizeof(all[0]),j47_score_ptr_compare);
+        int first=all_count>15?all_count-15:0;
+        int total=all_count-first;
+        J47SidebarCache *cache=&g_j47.sidebar_cache;
+        memset(cache,0,sizeof(*cache));
+        cache->valid=1;
+        snprintf(cache->objective,sizeof(cache->objective),"%.*s",16,objective_name);
+        snprintf(cache->display_name,sizeof(cache->display_name),"%.*s",64,objective->display_name);
+        cache->count=total;
+        cache->width=text_width(cache->display_name);
+        for(int i=0;i<total;++i){
+            J47ScoreEntry *e=all[first+i];
+            char measure[256];
+            j47_format_team_name(e->owner,cache->names[i],sizeof(cache->names[i]));
+            snprintf(cache->values[i],sizeof(cache->values[i]),"\xC2\xA7" "c%d",e->value);
+            snprintf(measure,sizeof(measure),"%s: %s",cache->names[i],cache->values[i]);
+            int w=text_width(measure);if(w>cache->width)cache->width=w;
+        }
+    } else if(objective&&g_j47.sidebar_cache.valid&&
+              !strcmp(g_j47.sidebar_cache.objective,objective_name)) {
+        /* Objective display-name updates do not require score updates. */
+        snprintf(g_j47.sidebar_cache.display_name,sizeof(g_j47.sidebar_cache.display_name),"%.*s",64,objective->display_name);
+        int title_width=text_width(g_j47.sidebar_cache.display_name);
+        if(title_width>g_j47.sidebar_cache.width)g_j47.sidebar_cache.width=title_width;
     }
+
+    J47SidebarCache *cache=&g_j47.sidebar_cache;
+    if(!cache->valid||strcmp(cache->objective,objective_name)!=0||cache->count<=0)return;
     int font_h=9;
-    int content_h=total*font_h;
+    int content_h=cache->count*font_h;
     int base_y=g_gui_h/2+content_h/3;
     int right=g_gui_w-1;
-    int left=g_gui_w-width-3;
-    for(int i=0;i<total;++i){
+    int left=g_gui_w-cache->width-3;
+    for(int i=0;i<cache->count;++i){
         int row=i+1;
         int y=base_y-row*font_h;
         draw_rect(left-2,y,right,y+font_h,(int)0x50000000u);
-        draw_text_no_shadow(names[i],left,y,(int)0xFFFFFFFFu);
-        draw_text_no_shadow(values[i],right-text_width(values[i]),y,(int)0xFFFFFFFFu);
-        if(row==total){
+        draw_text_no_shadow(cache->names[i],left,y,(int)0xFFFFFFFFu);
+        draw_text_no_shadow(cache->values[i],right-text_width(cache->values[i]),y,(int)0xFFFFFFFFu);
+        if(row==cache->count){
             int title_y=y-font_h;
             draw_rect(left-2,title_y-1,right,y-1,(int)0x60000000u);
             draw_rect(left-2,y-1,right,y,(int)0x50000000u);
-            draw_text_no_shadow(objective->display_name,left+width/2-text_width(objective->display_name)/2,title_y,(int)0xFFFFFFFFu);
+            draw_text_no_shadow(cache->display_name,left+cache->width/2-text_width(cache->display_name)/2,title_y,(int)0xFFFFFFFFu);
         }
     }
 }
@@ -3805,7 +4130,7 @@ void pex_java47_draw_tab_overlay(void) {
 int pex_java47_begin_join(const char *host,int port,const char *username){
     pex_java47_disconnect();
     g_player_capabilities_server_authoritative=1;
-    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.daylight_cycle=1;g_j47.last_movement_game_tick=-1;g_j47.last_world_origin_x=g_flat_world_origin_x;g_j47.last_world_origin_z=g_flat_world_origin_z;
+    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.daylight_cycle=1;g_j47.last_movement_game_tick=-1;g_j47.last_world_origin_x=g_flat_world_origin_x;g_j47.last_world_origin_z=g_flat_world_origin_z;g_j47.title_last_tick=-1;j47_title_reset_timings();
     snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
     g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
     J47Writer hs; j47_writer_init(&hs,300);j47_w_varint(&hs,PEX_JAVA47_PROTOCOL_VERSION);j47_w_string_n(&hs,g_j47.host,255);j47_w_be16(&hs,g_j47.port);j47_w_varint(&hs,2);

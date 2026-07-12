@@ -616,8 +616,9 @@ static void draw_hud(void) {
             draw_text("F3+V: chunk info off  F3+J: task profiler", right_x, ry, 0xA0A0A0);
         }
     }
-    draw_chat_lines(g_screen == SCREEN_CHAT);
+    pex_java47_draw_title_overlay();
     pex_java47_draw_server_scoreboard();
+    draw_chat_lines(g_screen == SCREEN_CHAT);
     pex_java47_draw_tab_overlay();
     draw_save_message();
 }

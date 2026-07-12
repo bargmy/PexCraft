@@ -1925,7 +1925,9 @@ typedef enum PexDimension {
 
 
 #define PEX_ITEMSTACK_ENCHANT_MAX 4
+#define PEX_ENCHANT_AQUA_AFFINITY 6
 #define PEX_ENCHANT_LOOTING 21
+#define PEX_ENCHANT_EFFICIENCY 32
 
 typedef struct ItemStack {
     int id;
@@ -3173,7 +3175,6 @@ static int flat_player_suffocation_block(void);
 static int flat_player_head_block(void);
 static int flat_player_head_in_water(void);
 static int flat_player_head_in_lava(void);
-static int flat_block_is_underwater_target(int bx, int by, int bz);
 static void apply_player_fluid_velocity(int is_water);
 static void update_falling_blocks(void);
 static void passive_mobs_reset(void);

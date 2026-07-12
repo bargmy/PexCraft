@@ -77,6 +77,7 @@ int pex_java47_translate_item_id(int java_item_id);
 int pex_java47_translate_mob_type(int java_mob_type);
 
 void pex_java47_draw_server_scoreboard(void);
+void pex_java47_draw_title_overlay(void);
 void pex_java47_draw_tab_overlay(void);
 void pex_java47_draw_special_entities(float partial);
 
