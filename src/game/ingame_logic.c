@@ -1198,8 +1198,13 @@ static void ingame_tick(void) {
         player_add_exhaustion(g_player_sprinting ? 0.8f : 0.2f);
     }
 
-    /* Vanilla computes slipperiness once before moveEntity() for acceleration,
-       then recomputes it from the post-collision onGround state for drag. */
+    /* Vanilla computes both movement acceleration and this tick's horizontal
+       drag from the onGround state that existed before moveEntity(). The second
+       slipperiness lookup in EntityLivingBase also happens before moveEntity,
+       even though the multiplication is applied afterward. Using the
+       post-collision state makes takeoff ticks use 0.91 air drag (far too fast)
+       and landing ticks use ground drag (far too slow), which strict movement
+       checks identify as an invalid jump curve. */
     float java_ground_friction_before = 0.91f;
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE && g_player_on_ground) {
         int below = flat_get_block((int)floorf(g_player_x),
@@ -1479,14 +1484,10 @@ static void ingame_tick(void) {
         g_player_motion_y *= 0.98f;
         float friction = g_player_on_ground ? 0.54600006f : 0.91f;
         if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
-            friction = 0.91f;
-            if (g_player_on_ground) {
-                int below_after = flat_get_block((int)floorf(g_player_x),
-                                                 (int)floorf(g_player_y - 1.62f) - 1,
-                                                 (int)floorf(g_player_z));
-                friction = block_slipperiness_for_item(below_after) * 0.91f;
-                if (friction < 0.05f) friction = 0.54600006f;
-            }
+            /* EntityLivingBase chooses f4 before moveEntity(). Therefore a
+               jump tick still receives the ground block's drag, while the
+               tick that lands still receives air drag. */
+            friction = java_ground_friction_before;
         }
         g_player_motion_x *= friction;
         g_player_motion_z *= friction;
