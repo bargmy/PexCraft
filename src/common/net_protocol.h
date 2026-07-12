@@ -85,6 +85,11 @@ enum {
 };
 
 #define PEX_PLAYER_FLAG_SNEAKING 1
+/* Render-only state used by protocol adapters.  These bits are intentionally
+   outside the original PXNET flag set, so older private servers simply leave
+   them clear. */
+#define PEX_PLAYER_FLAG_INVISIBLE 2
+#define PEX_PLAYER_FLAG_HIDE_NAMETAG 4
 #define PEX_NET_SKIN_MAX_BYTES (64 * 64 * 4)
 
 typedef struct PexNetPacketHeader {

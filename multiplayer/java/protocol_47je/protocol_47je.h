@@ -60,6 +60,7 @@ int pex_java47_send_creative_slot(int pex_slot, const ItemStack *stack);
 
 int pex_java47_get_equipment(int entity_id, int *item_id, int *count, int *damage, int *slot);
 int pex_java47_entity_is_player(int entity_id);
+int pex_java47_player_name_tag_visible(const char *player_name);
 Texture *pex_java47_local_skin_texture(void);
 int pex_java47_try_attack_mob(float max_dist);
 int pex_java47_try_interact_entity(float max_dist);

@@ -119,6 +119,7 @@ typedef struct J47Team {
     char display_name[65];
     char prefix[65];
     char suffix[65];
+    char name_tag_visibility[24];
     int friendly_flags;
     int color;
     char members[J47_TEAM_MEMBER_MAX][41];
@@ -1932,6 +1933,7 @@ static J47Team *j47_team_put(const char *name) {
             memset(t, 0, sizeof(*t));
             t->used = 1;
             t->color = -1;
+            snprintf(t->name_tag_visibility, sizeof(t->name_tag_visibility), "always");
             snprintf(t->name, sizeof(t->name), "%.*s", 16, name ? name : "");
             return t;
         }
@@ -1981,6 +1983,19 @@ static J47Team *j47_team_for_member(const char *member) {
             if (strcmp(t->members[i], member) == 0) return t;
     }
     return NULL;
+}
+
+int pex_java47_player_name_tag_visible(const char *player_name) {
+    if (g_j47.state != PEX_JAVA47_PLAY || !player_name || !player_name[0]) return 1;
+    J47Team *target = j47_team_for_member(player_name);
+    if (!target || !target->name_tag_visibility[0] ||
+        !strcmp(target->name_tag_visibility, "always")) return 1;
+    if (!strcmp(target->name_tag_visibility, "never")) return 0;
+    J47Team *viewer = j47_team_for_member(g_j47.username);
+    int same_team = viewer && viewer == target;
+    if (!strcmp(target->name_tag_visibility, "hideForOtherTeams")) return same_team;
+    if (!strcmp(target->name_tag_visibility, "hideForOwnTeam")) return !same_team;
+    return 1;
 }
 
 static J47ScoreObjective *j47_objective_find(const char *name) {
@@ -2604,12 +2619,13 @@ static void j47_spawn_player(J47Reader *r) {
     float yaw = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
     float pitch = (float)((int8_t)j47_r_u8(r)) * 360.0f / 256.0f;
     int held = (int16_t)j47_r_be16(r);
-    if (!j47_skip_metadata(r) || r->failed) return;
     J47Profile *profile = j47_profile_find_uuid(uuid);
     /* Some skin plugins briefly destroy and respawn the local player entity.
        The vanilla client never renders that entity as a separate remote
        player, so ignore it here while still accepting the refreshed profile. */
     if (entity_id == g_j47.local_entity_id) {
+        j47_parse_entity_metadata(r, entity_id);
+        if (r->failed) return;
         if (profile && profile->skin_state == 3) j47_apply_profile_skin(profile);
         return;
     }
@@ -2627,6 +2643,8 @@ static void j47_spawn_player(J47Reader *r) {
     p->yaw = yaw; p->pitch = pitch; p->health = 20;
     snprintf(p->name, sizeof(p->name), "%s", profile && profile->name[0] ? profile->name : "Player");
     g_mp_prev_players[slot] = *p;
+    j47_parse_entity_metadata(r, entity_id);
+    if (r->failed) { j47_entity_remove(entity_id); return; }
     if (profile && profile->skin_state == 3) j47_apply_profile_skin(profile);
 }
 
@@ -2726,8 +2744,19 @@ static void j47_apply_entity_position(J47Entity *e, double x, double y, double z
     if (e->is_armor_stand) j47_sync_proxy_item_visual(e);
 }
 
+static void j47_apply_player_metadata_flags(J47Entity *e, int metadata_flags) {
+    if (!e || e->kind != J47_ENTITY_PLAYER || e->player_slot < 0 || e->player_slot >= g_mp_player_count) return;
+    PexNetPlayerState *p = &g_mp_players[e->player_slot];
+    p->flags &= ~(PEX_PLAYER_FLAG_SNEAKING | PEX_PLAYER_FLAG_INVISIBLE);
+    if (metadata_flags & 0x02) p->flags |= PEX_PLAYER_FLAG_SNEAKING;
+    if (metadata_flags & 0x20) p->flags |= PEX_PLAYER_FLAG_INVISIBLE;
+    PexNetRenderPlayerState *rp = pex_net_find_render_player(e->entity_id);
+    if (rp) rp->flags = p->flags;
+}
+
 static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
     J47Entity *e = j47_entity_find(entity_id);
+    int is_local_player = entity_id == g_j47.local_entity_id;
     for (;;) {
         int h = (int)j47_r_u8(r);
         if (r->failed || h == 0x7f) break;
@@ -2739,7 +2768,19 @@ static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
                 g_drops[e->drop_slot].stack = st;
         } else if (type == 0) {
             int v = (int8_t)j47_r_u8(r);
-            if (e && index == 0) e->metadata_flags = v;
+            if (e && index == 0) {
+                e->metadata_flags = v;
+                j47_apply_player_metadata_flags(e, v);
+            }
+            if (is_local_player && index == 0) {
+                /* The server owns the local entity flags. Keep the fire overlay
+                   in sync, but never derive health loss from it locally. */
+                if (v & 0x01) {
+                    if (g_player_fire_ticks < 2) g_player_fire_ticks = 2;
+                } else {
+                    g_player_fire_ticks = 0;
+                }
+            }
             if (e && index == 3) e->custom_name_visible = v ? 1 : 0;
             if (e && e->is_armor_stand && index == 10) e->armor_stand_flags = v & 0xff;
             if (e && e->kind == J47_ENTITY_MOB && index == 6 && e->mob_slot >= 0)
@@ -2747,7 +2788,12 @@ static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
             if (e && e->kind == J47_ENTITY_MOB && index == 12 && e->mob_slot >= 0)
                 g_passive_mobs[e->mob_slot].baby_age = v < 0 ? -24000 : 0;
         } else if (type == 1) {
-            (void)j47_r_be16(r);
+            int v = (int16_t)j47_r_be16(r);
+            if (is_local_player && index == 1) {
+                if (v < 0) v = 0;
+                if (v > 300) v = 300;
+                g_player_air = v;
+            }
         } else if (type == 2) {
             int v = j47_r_be32(r);
             if (e && e->kind == J47_ENTITY_MOB && e->java_type == 120 && index == 16 && e->mob_slot >= 0) {
@@ -2943,6 +2989,8 @@ static void j47_handle_teams(J47Reader *r) {
         snprintf(team->display_name, sizeof(team->display_name), "%.*s", 64, display);
         snprintf(team->prefix, sizeof(team->prefix), "%.*s", 64, prefix);
         snprintf(team->suffix, sizeof(team->suffix), "%.*s", 64, suffix);
+        snprintf(team->name_tag_visibility, sizeof(team->name_tag_visibility), "%.*s", 23,
+                 visibility[0] ? visibility : "always");
         team->friendly_flags = friendly;
         team->color = color;
     }
@@ -3248,8 +3296,10 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
                    movement; vanilla only sends C13 when the player actually
                    toggles flight. */
                 g_j47.last_abilities_flags=flags;
-                if(!(flags&4))g_creative_flying=0;
-                else g_creative_flying=(flags&2)?1:0;
+                g_player_capabilities.disable_damage=(flags&8)?1:0;
+                g_player_capabilities.is_flying=(flags&2)?1:0;
+                g_player_capabilities.allow_flying=(flags&4)?1:0;
+                g_player_capabilities.is_creative_mode=(flags&1)?1:0;
             }
             break;
         }
@@ -3617,6 +3667,7 @@ void pex_java47_draw_tab_overlay(void) {
 
 int pex_java47_begin_join(const char *host,int port,const char *username){
     pex_java47_disconnect();
+    g_player_capabilities_server_authoritative=1;
     memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.last_movement_game_tick=-1;g_j47.last_world_origin_x=g_flat_world_origin_x;g_j47.last_world_origin_z=g_flat_world_origin_z;
     snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
     g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
@@ -3651,6 +3702,7 @@ int pex_java47_tick(void){
 }
 
 void pex_java47_disconnect(void){
+    g_player_capabilities_server_authoritative=0;
     if(g_j47.socket!=INVALID_SOCKET)closesocket(g_j47.socket);
     j47_clear_remote_entities();
     free_texture(&g_j47_local_skin);

@@ -1281,6 +1281,8 @@ typedef struct PexPlayerCapabilities {
     int is_creative_mode;
 } PexPlayerCapabilities;
 static PexPlayerCapabilities g_player_capabilities = {0, 0, 0, 0};
+/* Set by protocol adapters that receive authoritative capability packets. */
+static int g_player_capabilities_server_authoritative = 0;
 static int g_world_map_features = 1;
 static long long g_world_seed = 0;
 static int g_current_dimension = 0; /* 0=Overworld, -1=Nether, 1=End (PexDimension) */
@@ -1331,6 +1333,16 @@ static float g_player_xp_progress = 0.0f;
 static int g_player_xp_pickup_cooldown = 0; /* EntityPlayer.xpCooldown */
 
 static void player_capabilities_apply_game_mode(void) {
+    /* Java multiplayer capabilities are assigned by S39 Player Abilities.
+       Re-deriving them from the local game-mode flag every tick could revoke
+       server-granted flight or invulnerability and then make the client send
+       movement that disagrees with the server.  Keep only the UI/gameplay
+       creative classification here; the protocol handler owns the remaining
+       capability bits while connected to protocol 47. */
+    if (g_mp_connected && g_player_capabilities_server_authoritative) {
+        g_player_capabilities.is_creative_mode = (g_game_mode == 1) ? 1 : 0;
+        return;
+    }
     if (g_game_mode == 1) {
         g_player_capabilities.disable_damage = 1;
         g_player_capabilities.allow_flying = 1;
@@ -1417,7 +1429,9 @@ static void player_food_sanitize(void) {
 }
 
 static void player_food_add_stats(int food, float saturation_modifier) {
-    if (food <= 0) return;
+    /* Multiplayer food state is supplied by the server's health packet.  Do not
+       predict eating locally or the HUD can briefly disagree with the server. */
+    if (g_mp_connected || food <= 0) return;
     g_player_prev_food_level = player_food_clamp(g_player_food_level);
     g_player_food_level = player_food_clamp(g_player_food_level + food);
     g_player_food_saturation += (float)food * saturation_modifier * 2.0f;
@@ -1430,7 +1444,8 @@ static int player_can_eat(int always_edible) {
 }
 
 static void player_add_exhaustion(float amount) {
-    if (player_is_creative()) return;
+    /* Exhaustion/hunger are server-authoritative in every multiplayer backend. */
+    if (g_mp_connected || player_is_creative()) return;
     if (amount <= 0.0f) return;
     g_player_food_exhaustion += amount;
     if (g_player_food_exhaustion > 40.0f) g_player_food_exhaustion = 40.0f;

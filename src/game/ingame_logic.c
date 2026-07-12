@@ -351,6 +351,10 @@ static int player_apply_potion_damage_reduction(int amount, int *carryover) {
 }
 
 static int player_attack_entity_from(PexDamageSource source, int amount) {
+    /* The server owns multiplayer health and death.  Local collision, fire,
+       projectiles, potion ticks and mob AI may still run for visuals/prediction,
+       but none of them may alter health while connected. */
+    if (g_mp_connected) return 0;
     if (player_damage_disabled() && !source.creative_allowed) return 0;
     if (amount <= 0 || g_player_dead) return 0;
     if (source.true_kind==PEX_DAMAGE_ENTITY_MOB && source.true_mob_index>=0 && source.true_mob_index<MAX_PASSIVE_MOBS) {
@@ -517,7 +521,7 @@ static float java47_snap_collision_edge(float value) {
        Vanilla collision bounds are on a 1/16 grid, so only repair values that
        are already within a tiny float-error distance of such an edge. */
     float snapped = roundf(value * 16.0f) * (1.0f / 16.0f);
-    return fabsf(value - snapped) <= 0.00002f ? snapped : value;
+    return fabsf(value - snapped) <= 0.00010f ? snapped : value;
 }
 
 static FlatAABB java47_player_box(void) {
@@ -558,6 +562,57 @@ static int java47_aabb_offset_has_collision(const FlatAABB *box, float dx, float
     aabb_offset(&query, dx, dy, dz);
     FlatAABB boxes[192];
     return flat_get_collision_boxes(&query, boxes, (int)(sizeof(boxes) / sizeof(boxes[0]))) > 0;
+}
+
+
+/* Resolve only tiny float-derived overlaps after the vanilla clipping pass.
+   This is deliberately capped at 1/32 block: it fixes reconstruction drift but
+   will not teleport a player out of a genuinely enclosing server block. */
+static void java47_resolve_small_penetration(FlatAABB *box, float *fix_x, float *fix_y, float *fix_z) {
+    const float max_fix = 1.0f / 32.0f;
+    const float epsilon = 1.0e-5f;
+    float total_x = 0.0f, total_y = 0.0f, total_z = 0.0f;
+    if (!box) return;
+
+    for (int pass = 0; pass < 8; ++pass) {
+        FlatAABB query = {box->minx - 0.001f, box->miny - 0.001f, box->minz - 0.001f,
+                          box->maxx + 0.001f, box->maxy + 0.001f, box->maxz + 0.001f};
+        FlatAABB boxes[192];
+        int count = flat_get_collision_boxes(&query, boxes, (int)(sizeof(boxes) / sizeof(boxes[0])));
+        int moved = 0;
+        for (int i = 0; i < count; ++i) {
+            const FlatAABB *b = &boxes[i];
+            float ox = fminf(box->maxx, b->maxx) - fmaxf(box->minx, b->minx);
+            float oy = fminf(box->maxy, b->maxy) - fmaxf(box->miny, b->miny);
+            float oz = fminf(box->maxz, b->maxz) - fmaxf(box->minz, b->minz);
+            if (ox <= 0.0f || oy <= 0.0f || oz <= 0.0f) continue;
+
+            float candidates[6] = {
+                b->minx - box->maxx - epsilon, b->maxx - box->minx + epsilon,
+                b->miny - box->maxy - epsilon, b->maxy - box->miny + epsilon,
+                b->minz - box->maxz - epsilon, b->maxz - box->minz + epsilon
+            };
+            int best = -1;
+            float best_abs = 999.0f;
+            for (int c = 0; c < 6; ++c) {
+                float a = fabsf(candidates[c]);
+                if (a <= max_fix + epsilon && a < best_abs) { best_abs = a; best = c; }
+            }
+            if (best < 0) continue;
+            float dx = 0.0f, dy = 0.0f, dz = 0.0f;
+            if (best < 2) dx = candidates[best];
+            else if (best < 4) dy = candidates[best];
+            else dz = candidates[best];
+            aabb_offset(box, dx, dy, dz);
+            total_x += dx; total_y += dy; total_z += dz;
+            moved = 1;
+            break;
+        }
+        if (!moved) break;
+    }
+    if (fix_x) *fix_x = total_x;
+    if (fix_y) *fix_y = total_y;
+    if (fix_z) *fix_z = total_z;
 }
 
 static int java47_player_intersects_block(int block_id) {
@@ -650,6 +705,28 @@ static void java47_player_move_entity(float move_x, float move_y, float move_z,
 
         if(clipped_x*clipped_x+clipped_z*clipped_z>=x*x+z*z){
             box=clipped_box;x=clipped_x;y=clipped_y;z=clipped_z;
+        }
+    }
+
+    {
+        float fix_x = 0.0f, fix_y = 0.0f, fix_z = 0.0f;
+        java47_resolve_small_penetration(&box, &fix_x, &fix_y, &fix_z);
+        x += fix_x; y += fix_y; z += fix_z;
+        if (fix_x != 0.0f) g_player_motion_x = 0.0f;
+        if (fix_y != 0.0f) g_player_motion_y = 0.0f;
+        if (fix_z != 0.0f) g_player_motion_z = 0.0f;
+
+        /* A vanilla clipping pass must never create a fresh solid overlap.
+           Translation fallbacks and float reconstruction can expose unusual
+           shapes, so keep the previous safe AABB rather than allowing the
+           player to become wedged and requiring them to walk backward. */
+        FlatAABB final_hits[64], start_hits[64];
+        int final_collision = flat_get_collision_boxes(&box, final_hits, 64) > 0;
+        int start_collision = flat_get_collision_boxes(&start_box, start_hits, 64) > 0;
+        if (final_collision && !start_collision) {
+            box = start_box;
+            x = y = z = 0.0f;
+            g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
         }
     }
 
@@ -1001,38 +1078,42 @@ static void ingame_tick(void) {
 
     int in_water = flat_player_in_water();
     int in_lava = flat_player_in_lava();
-    if (flat_player_head_in_water()) {
-        if (player_has_potion(PEX_POTION_WATER_BREATHING)) {
-            if (g_player_air < 300) g_player_air += 4;
+    if (!g_mp_connected) {
+        if (flat_player_head_in_water()) {
+            if (player_has_potion(PEX_POTION_WATER_BREATHING)) {
+                if (g_player_air < 300) g_player_air += 4;
+                if (g_player_air > 300) g_player_air = 300;
+            } else if (g_player_air > 0) g_player_air--;
+        } else {
+            g_player_air += 4;
             if (g_player_air > 300) g_player_air = 300;
-        } else if (g_player_air > 0) g_player_air--;
-    } else {
-        g_player_air += 4;
-        if (g_player_air > 300) g_player_air = 300;
+        }
     }
     if (in_water && !g_player_was_in_water) {
         spawn_water_entry_particles(g_player_x, g_player_y - 1.0f, g_player_z, g_player_motion_x, g_player_motion_z);
         pex_sound_play("random.splash", 1.0f, 1.0f);
     }
     g_player_was_in_water = in_water;
-    if (in_water && g_player_fire_ticks > 0) {
-        pex_sound_play("random.fizz", 0.7f, 1.6f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
-        g_player_fire_ticks = 0;
-    }
-    if (g_player_fire_ticks > 0) {
-        if ((g_player_fire_ticks % 20) == 0)
-            (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_ON_FIRE), 1);
-        --g_player_fire_ticks;
-    }
-    if (flat_get_block((int)floorf(g_player_x), (int)floorf(g_player_y - 0.9f), (int)floorf(g_player_z)) == BLOCK_FIRE) {
-        if (g_player_fire_ticks < 160) g_player_fire_ticks = 160;
-        (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_IN_FIRE), 1);
+    if (!g_mp_connected) {
+        if (in_water && g_player_fire_ticks > 0) {
+            pex_sound_play("random.fizz", 0.7f, 1.6f + (pex_rand_float01() - pex_rand_float01()) * 0.4f);
+            g_player_fire_ticks = 0;
+        }
+        if (g_player_fire_ticks > 0) {
+            if ((g_player_fire_ticks % 20) == 0)
+                (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_ON_FIRE), 1);
+            --g_player_fire_ticks;
+        }
+        if (flat_get_block((int)floorf(g_player_x), (int)floorf(g_player_y - 0.9f), (int)floorf(g_player_z)) == BLOCK_FIRE) {
+            if (g_player_fire_ticks < 160) g_player_fire_ticks = 160;
+            (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_IN_FIRE), 1);
+        }
     }
     int in_ladder = flat_player_in_ladder();
     if (in_water || in_lava || in_ladder) {
         g_player_fall_distance = 0.0f;
         if (in_water || in_lava) apply_player_fluid_velocity(in_water ? 1 : 0);
-        if (in_lava) {
+        if (in_lava && !g_mp_connected) {
             (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_LAVA), 4);
             if (g_player_fire_ticks < 300) g_player_fire_ticks = 300;
         }
@@ -1145,7 +1226,7 @@ static void ingame_tick(void) {
     int trying_water_exit = normal_jump && in_water &&
         flat_player_has_water_exit_ledge(g_player_x, g_player_y, g_player_z, water_exit_dx, water_exit_dz);
 
-    int suff_block = flat_player_suffocation_block();
+    int suff_block = g_mp_connected ? 0 : flat_player_suffocation_block();
     if (suff_block) {
         g_suffocation_damage_timer++;
         if (g_suffocation_damage_timer >= 20) {
@@ -1424,28 +1505,25 @@ static void ingame_tick(void) {
         }
     }
 
-    /* Deobf EntityLiving.fall: damage is ceil(fallDistance - 3). */
+    /* Deobf EntityLiving.fall: damage is ceil(fallDistance - 3).  In
+       multiplayer, only the server's health/status packets may apply damage. */
     if (g_player_on_ground) {
-        /* EntityPlayer.fall records the completed fall, not each airborne tick. */
-        if (!was_on_ground && !g_creative_flying && g_player_fall_distance >= 2.0f) {
-            pex_stats_add_general(PEX_STAT_FALL_CM, (long long)floorf(g_player_fall_distance * 100.0f + 0.5f));
-        }
-        /* b1.0 should not play the heavy landing sound on a normal jump.
-           Only play landing audio once the fall distance is near the damage
-           threshold; actual damage remains ceil(fallDistance - 3). */
-        if (!was_on_ground && g_player_fall_distance > 3.0f) {
-            pex_sound_play(g_player_fall_distance > 6.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
-        }
-        if (!was_on_ground && g_player_fall_distance > 3.0f) {
-            int dmg = (int)ceilf(g_player_fall_distance - 3.0f);
-            if (dmg > 0) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_FALL), dmg);
+        if (!g_mp_connected) {
+            if (!was_on_ground && !g_creative_flying && g_player_fall_distance >= 2.0f) {
+                pex_stats_add_general(PEX_STAT_FALL_CM, (long long)floorf(g_player_fall_distance * 100.0f + 0.5f));
+            }
+            if (!was_on_ground && g_player_fall_distance > 3.0f) {
+                pex_sound_play(g_player_fall_distance > 6.0f ? "damage.fallbig" : "damage.fallsmall", 1.0f, 1.0f);
+                int dmg = (int)ceilf(g_player_fall_distance - 3.0f);
+                if (dmg > 0) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_FALL), dmg);
+            }
         }
         g_player_fall_distance = 0.0f;
     } else if (previous_motion_y < 0.0f) {
         g_player_fall_distance += -previous_motion_y;
     }
 
-    if (g_player_y < -64.0f) {
+    if (!g_mp_connected && g_player_y < -64.0f) {
         (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_OUT_OF_WORLD), 4);
     }
 

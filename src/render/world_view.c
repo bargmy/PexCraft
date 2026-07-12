@@ -8691,7 +8691,7 @@ static int multiplayer_renderable_remote_player_count(void) {
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
         PexNetRenderPlayerState *r = &g_mp_render_players[i];
         if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
-        if (r->health <= 0) continue;
+        if (r->health <= 0 || (r->flags & PEX_PLAYER_FLAG_INVISIBLE)) continue;
         count++;
     }
     return count;
@@ -8824,6 +8824,7 @@ static void draw_multiplayer_remote_players(void) {
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
         PexNetRenderPlayerState *r = &g_mp_render_players[i];
         if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
+        if (r->flags & PEX_PLAYER_FLAG_INVISIBLE) continue;
 
         float rx = r->x;
         float ry = r->y;
@@ -8942,7 +8943,9 @@ static void draw_multiplayer_name_tags(void) {
     for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
         PexNetRenderPlayerState *r = &g_mp_render_players[i];
         if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
-        if (r->health <= 0) continue;
+        if (r->health <= 0 || (r->flags & PEX_PLAYER_FLAG_INVISIBLE)) continue;
+        const char *name = r->name[0] ? r->name : "Player";
+        if ((r->flags & PEX_PLAYER_FLAG_HIDE_NAMETAG) || !pex_java47_player_name_tag_visible(name)) continue;
 
         float dx = r->x - g_player_render_frame.x;
         float dy = r->y - g_player_render_frame.y;
@@ -8952,7 +8955,6 @@ static void draw_multiplayer_name_tags(void) {
         float max_dist = sneaking ? 32.0f : 64.0f;
         if (dist > max_dist) continue;
 
-        const char *name = r->name[0] ? r->name : "Player";
         int tw = text_width(name);
         if (tw <= 0) continue;
 

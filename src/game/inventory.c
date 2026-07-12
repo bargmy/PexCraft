@@ -5043,6 +5043,7 @@ static void flat_block_add_collision_boxes(int id, int x, int y, int z, const Fl
         flat_add_collision_box(boxes,count,max_boxes,query,x,top?y+0.5f:(float)y,z,x+1.0f,top?y+1.0f:y+0.5f,z+1.0f);
         return;
     }
+    if(id==BLOCK_FARMLAND){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.9375f,z+1.0f);return;}
     if(id==BLOCK_BED){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.5625f,z+1.0f);return;}
     if(id==BLOCK_SOUL_SAND){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.875f,z+1.0f);return;}
     if(id==BLOCK_ENCHANTMENT_TABLE){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.75f,z+1.0f);return;}
@@ -5759,6 +5760,10 @@ static void furnace_tick_tile(FurnaceTile *ft) {
 }
 
 static void furnace_tick_all(void) {
+    /* Container properties and slot contents are supplied by the server in
+       multiplayer.  Advancing cook/burn timers locally races those packets and
+       can display outputs or lit-state changes the server never accepted. */
+    if (g_mp_connected) return;
     for (int i = 0; i < MAX_FURNACE_TILES; i++) {
         if (g_furnace_tiles[i].active) furnace_tick_tile(&g_furnace_tiles[i]);
     }
@@ -6839,6 +6844,10 @@ static int player_over_pressure_plate_at(int x, int y, int z) {
 }
 
 static void update_buttons_and_plates(void) {
+    /* The server sends the authoritative powered metadata.  Local timers and
+       pressure-plate scans could otherwise toggle blocks without an S22/S23
+       update and leave collision/redstone state divergent from the server. */
+    if (g_mp_connected) return;
     for (int i = 0; i < MAX_BUTTON_TIMERS; i++) {
         ButtonTimer *bt = &g_button_timers[i];
         if (!bt->active) continue;
@@ -7676,6 +7685,9 @@ static int player_potion_amplifier(int potion_id) {
 }
 
 static void player_apply_potion_effect(int id, int duration, int amplifier, float splash_scale) {
+    /* In multiplayer, S1D/S1E add and remove effects.  Item-use or local mob
+       code must not predict an effect before the server accepts it. */
+    if (g_mp_connected) return;
     if (id <= 0 || id >= PEX_POTION_MAX) return;
     if (splash_scale < 0.0f) splash_scale = 0.0f;
     if (splash_scale > 1.0f) splash_scale = 1.0f;
@@ -7706,15 +7718,15 @@ static void player_potion_update_tick(void) {
     for (int i = 1; i < PEX_POTION_MAX; ++i) {
         PexPotionEffectState *e = &g_player_potion_effects[i];
         if (e->duration <= 0) continue;
-        if (i == PEX_POTION_REGENERATION) {
+        if (!g_mp_connected && i == PEX_POTION_REGENERATION) {
             int interval = 25 >> e->amplifier;
             if (interval < 1) interval = 1;
             if ((e->duration % interval) == 0 && g_player_health < 20) player_health_set_hearts(g_player_health + 1);
-        } else if (i == PEX_POTION_POISON) {
+        } else if (!g_mp_connected && i == PEX_POTION_POISON) {
             int interval = 25 >> e->amplifier;
             if (interval < 1) interval = 1;
             if ((e->duration % interval) == 0 && g_player_health > 1) (void)player_attack_entity_from(pex_damage_source_simple(PEX_DAMAGE_MAGIC), 1);
-        } else if (i == PEX_POTION_HUNGER) {
+        } else if (!g_mp_connected && i == PEX_POTION_HUNGER) {
             player_add_exhaustion(0.025f * (float)(e->amplifier + 1));
         }
         e->duration--;
@@ -9674,6 +9686,19 @@ static int psp_player_terrain_ready_or_hold(void) {
 #endif
 }
 
+
+static int flat_block_is_visually_opaque_for_suffocation(int id) {
+    /* Entity.isEntityInsideOpaqueBlock uses Block.isVisuallyOpaque(), not
+       generic solidity.  Slabs, stairs, fences, chests, farmland and other
+       partial/non-cube blocks must never trigger the full-screen wall overlay. */
+    if (id <= 0 || block_is_liquid(id) || block_is_door_id(id)) return 0;
+    if (block_has_custom_collision(id)) return 0;
+    if (id == BLOCK_FARMLAND || id == BLOCK_DRAGON_EGG || id == BLOCK_PISTON_EXTENSION ||
+        id == BLOCK_PISTON_MOVING || id == BLOCK_GLASS || id == BLOCK_LEAVES ||
+        id == BLOCK_ICE) return 0;
+    return flat_light_opacity_for_id(id) >= 255;
+}
+
 static int flat_player_suffocation_block(void) {
     /* Source does an "inside opaque block" test and renders that block texture over
        the screen.  Use the eye and upper-body samples for this flat renderer. */
@@ -9695,7 +9720,7 @@ static int flat_player_suffocation_block(void) {
         if (!flat_in_bounds(bx, FLAT_WORLD_Y_MIN, bz)) return 0;
         if (!flat_chunk_generated_at_block(bx, bz)) return 0;
         int id = flat_get_block(bx, (int)floorf(samples[i][1]), bz);
-        if (flat_solid_for_spawn(id) && id != BLOCK_GLASS && id != BLOCK_LEAVES) return id;
+        if (flat_block_is_visually_opaque_for_suffocation(id)) return id;
     }
     return 0;
 }
