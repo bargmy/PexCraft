@@ -63,6 +63,7 @@ int pex_java47_send_window_click(int pex_slot, int button, int mode, const ItemS
 int pex_java47_send_creative_slot(int pex_slot, const ItemStack *stack);
 
 int pex_java47_get_equipment(int entity_id, int *item_id, int *count, int *damage, int *slot);
+int pex_java47_get_armor(int entity_id, PexNetArmorRenderStack out_armor[4]);
 int pex_java47_entity_is_player(int entity_id);
 int pex_java47_player_name_tag_visible(const char *player_name);
 Texture *pex_java47_local_skin_texture(void);

@@ -741,6 +741,14 @@ typedef struct PexSystemInfo {
 } PexSystemInfo;
 
 
+typedef struct PexNetArmorRenderStack {
+    int id;
+    int count;
+    int damage;
+    int has_custom_color;
+    int custom_color;
+} PexNetArmorRenderStack;
+
 typedef struct PexNetRenderPlayerState {
     int active;
     int player_id;
@@ -768,6 +776,7 @@ typedef struct PexNetRenderPlayerState {
     int held_item_count;
     int held_item_damage;
     int held_slot;
+    PexNetArmorRenderStack armor[4]; /* boots, leggings, chestplate, helmet */
     int skin_only;
     int has_skin;
     Texture skin;
@@ -1940,6 +1949,11 @@ typedef struct ItemStack {
        be represented without cloning Minecraft's full NBT heap model. */
     int enchant_id[PEX_ITEMSTACK_ENCHANT_MAX];
     int enchant_level[PEX_ITEMSTACK_ENCHANT_MAX];
+    /* Java display.color from leather-armor NBT. Kept on the stack so remote
+       multiplayer equipment can be tinted without changing single-player
+       armor behavior. */
+    int has_custom_color;
+    int custom_color;
 } ItemStack;
 
 int pex_java47_try_interact_entity(float max_dist);

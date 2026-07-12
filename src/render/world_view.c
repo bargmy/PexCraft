@@ -8524,7 +8524,7 @@ static void rebuild_flat_geometry(void) {
 
 
 
-static void draw_armor_model_for_slots(const ItemStack armor_slots[4],
+static void draw_armor_model_for_slots(const ItemStack armor_slots[4], int allow_leather_dye,
                                        float head_pivot_y, float leg_pivot_y, float leg_pivot_z,
                                        float body_pitch, float head_pitch, float head_yaw,
                                        float right_arm_pitch, float right_arm_yaw, float right_arm_roll,
@@ -8542,8 +8542,16 @@ static void draw_armor_model_for_slots(const ItemStack armor_slots[4],
 
         glBindTexture(GL_TEXTURE_2D, tex_armor[mat][layer].id);
         steve_set_texture_dims(&tex_armor[mat][layer]);
-        steve_set_tint(1.0f, 1.0f, 1.0f);
-        glColor4f(1, 1, 1, 1);
+        if (allow_leather_dye && mat == 0 && st->has_custom_color) {
+            float dye_r = (float)((st->custom_color >> 16) & 255) / 255.0f;
+            float dye_g = (float)((st->custom_color >> 8) & 255) / 255.0f;
+            float dye_b = (float)(st->custom_color & 255) / 255.0f;
+            steve_set_tint(dye_r, dye_g, dye_b);
+            glColor4f(dye_r, dye_g, dye_b, 1.0f);
+        } else {
+            steve_set_tint(1.0f, 1.0f, 1.0f);
+            glColor4f(1, 1, 1, 1);
+        }
 
         if (pass == 0) {
             /* Helmet pass: ModelBiped(1.0F) head plus helmet/hat cube. */
@@ -8564,6 +8572,8 @@ static void draw_armor_model_for_slots(const ItemStack armor_slots[4],
             steve_part(0, 16, -2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 1.0f, 0, right_leg_pitch, 0, 0);
             steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 1.0f, 1, left_leg_pitch, 0, 0);
         }
+        steve_set_tint(1.0f, 1.0f, 1.0f);
+        glColor4f(1, 1, 1, 1);
     }
 }
 
@@ -8669,7 +8679,7 @@ static void draw_third_person_player(void) {
     steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.0f, 1, left_leg_pitch, 0, 0);
     steve_part(0, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, pitch, 0, 0);
     steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
-    draw_armor_model_for_slots(g_armor_inventory, head_pivot_y, leg_pivot_y, leg_pivot_z,
+    draw_armor_model_for_slots(g_armor_inventory, 0, head_pivot_y, leg_pivot_y, leg_pivot_z,
                                body_pitch, pitch, 0.0f,
                                right_arm_pitch, right_arm_yaw, right_arm_roll,
                                left_arm_pitch, left_arm_yaw, left_arm_roll,
@@ -8905,6 +8915,23 @@ static void draw_multiplayer_remote_players(void) {
         steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.0f, 1, left_leg_pitch, 0, 0);
         steve_part(0, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, pitch, 0, 0);
         steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
+        /* Java equipment slots 1..4 are copied into the remote player's
+           boots..helmet array. Dye tinting is intentionally multiplayer-only
+           so the legacy single-player appearance remains unchanged. */
+        ItemStack remote_armor[4];
+        memset(remote_armor, 0, sizeof(remote_armor));
+        for (int armor_i = 0; armor_i < 4; ++armor_i) {
+            remote_armor[armor_i].id = r->armor[armor_i].id;
+            remote_armor[armor_i].count = r->armor[armor_i].count;
+            remote_armor[armor_i].damage = r->armor[armor_i].damage;
+            remote_armor[armor_i].has_custom_color = r->armor[armor_i].has_custom_color;
+            remote_armor[armor_i].custom_color = r->armor[armor_i].custom_color;
+        }
+        draw_armor_model_for_slots(remote_armor, 1, head_pivot_y, leg_pivot_y, leg_pivot_z,
+                                   body_pitch, pitch, 0.0f,
+                                   right_arm_pitch, right_arm_yaw, right_arm_roll,
+                                   left_arm_pitch, left_arm_yaw, left_arm_roll,
+                                   right_leg_pitch, left_leg_pitch);
         draw_remote_player_held_item(r, right_arm_pitch, right_arm_yaw, right_arm_roll);
         glPopMatrix();
     }

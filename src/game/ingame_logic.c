@@ -661,7 +661,12 @@ static void java47_player_move_entity(float move_x, float move_y, float move_z,
 
     for(int i=0;i<count;i++)y=aabb_clip_y(&boxes[i],&box,y);
     aabb_offset(&box,0.0f,y,0.0f);
-    int may_step=was_on_ground||(original_y!=y&&original_y<0.0f);
+    /* Do not combine the 0.6 auto-step path with an upward jump impulse.
+       On full-block parkour/staircase jumps, tiny edge contacts could select
+       the step candidate and report a rise larger than the 0.42 jump motion.
+       The player can still jump naturally onto the next full block; ordinary
+       walking/downward stepping keeps vanilla's step solver. */
+    int may_step=(original_y<=0.0f)&&(was_on_ground||(original_y!=y&&original_y<0.0f));
     for(int i=0;i<count;i++)x=aabb_clip_x(&boxes[i],&box,x);
     aabb_offset(&box,x,0.0f,0.0f);
     for(int i=0;i<count;i++)z=aabb_clip_z(&boxes[i],&box,z);

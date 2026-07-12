@@ -2909,6 +2909,7 @@ static void pex_net_update_smoothing(void) {
         if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
             pex_java47_get_equipment(p->player_id, &r->held_item_id, &r->held_item_count,
                                      &r->held_item_damage, &r->held_slot);
+            pex_java47_get_armor(p->player_id, r->armor);
         } else {
             PexMpBedrockEntityMap *bm = pex_mp_bedrock_entity_by_player_id(p->player_id);
             if (bm) {
@@ -3303,6 +3304,15 @@ static void pex_net_poll(void) {
             snprintf(reason, sizeof(reason), "%s", pex_java47_disconnect_reason());
             pex_net_disconnect();
             open_notice("Disconnected", reason[0] ? reason : "Java connection lost.", "");
+            return;
+        }
+        /* A cross-dimension S07 temporarily clears world readiness. Resume the
+           existing session after S08 plus the first replacement chunk rather
+           than requiring the original connect screen state machine. */
+        if (g_mp_connected && !g_mp_world_ready && pex_java47_world_ready()) {
+            g_mp_world_ready = 1;
+            g_mp_connect_progress = 100;
+            pex_net_finish_world_download();
         }
         return;
     }

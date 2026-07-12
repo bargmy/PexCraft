@@ -67,6 +67,8 @@ typedef struct J47RawItem {
     char display_name[J47_ITEM_NAME_MAX];
     int lore_count;
     char lore[J47_ITEM_LORE_MAX][J47_ITEM_LORE_LINE_MAX];
+    int has_custom_color;
+    int custom_color;
     size_t nbt_len;
     unsigned char nbt[J47_ITEM_NBT_MAX];
 } J47RawItem;
@@ -1528,6 +1530,9 @@ static int j47_nbt_parse_item_compound(J47Reader *r, int depth, int in_display, 
             char value[512];
             if (!j47_nbt_read_string(r, value, sizeof(value))) return 0;
             j47_item_text_normalize(value, raw->display_name, sizeof(raw->display_name));
+        } else if (in_display && child == 3 && !strcmp(name, "color")) {
+            raw->custom_color = (int)j47_r_be32(r) & 0xFFFFFF;
+            raw->has_custom_color = !r->failed;
         } else if (in_display && child == 9 && !strcmp(name, "Lore")) {
             int item_type = (int)j47_r_u8(r);
             int32_t count = j47_r_be32(r);
@@ -1840,6 +1845,8 @@ static int j47_read_item_ex(J47Reader *r, ItemStack *out, J47RawItem *raw_out) {
         st.enchant_id[i] = raw.enchant_id[i];
         st.enchant_level[i] = raw.enchant_level[i];
     }
+    st.has_custom_color = raw.has_custom_color;
+    st.custom_color = raw.custom_color;
     if (raw.has_enchantment && raw.enchant_count == 0) {
         /* Preserve the enchanted-item glint for unusual or empty plugin NBT. */
         st.enchant_id[0] = 1;
@@ -3502,6 +3509,11 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x05:{int x,y,z;j47_read_block_pos(r,&x,&y,&z);break;}
         case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
         case 0x07:{
+            /* Vanilla 1.8.8 treats S07 as authoritative. Same-dimension
+               respawns recreate the local player while preserving the world;
+               dimension changes replace terrain immediately and wait for the
+               server's S08/chunks. The previous skin-refresh workaround could
+               ignore a genuine respawn and leave the client in the old world. */
             int old_dimension=g_j47.dimension;
             int new_dimension=j47_r_be32(r);
             g_j47.difficulty=(int)j47_r_u8(r);
@@ -3509,35 +3521,35 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
             g_game_mode=g_j47.game_mode==1?1:0;
             g_pending_game_mode=g_game_mode;
             if(!g_game_mode)g_creative_flying=0;
-            g_j47.last_abilities_flags=-1;
-            g_player_dead=0;
-            g_player_death_time=0;
-            g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;
             char wt[64];j47_r_string(r,wt,sizeof(wt));
             if(r->failed)break;
-            /* Skin-restoration plugins use either a same-dimension Respawn
-               or a rapid fake-dimension/real-dimension pair to force the
-               vanilla client to rebuild its skin. Do not erase terrain merely
-               because S07 arrived. A real dimension transfer is committed
-               when the server actually starts sending new chunk data. */
-            if(!g_j47.world_ready){
-                g_j47.dimension=new_dimension;
-                g_j47.pending_respawn_dimension=0;
+
+            g_j47.dimension=new_dimension;
+            g_j47.pending_respawn_dimension=0;
+            g_j47.pending_respawn_from=0;
+            g_j47.pending_respawn_to=0;
+            g_j47.position_received=0;
+            g_j47.last_movement_game_tick=-1;
+            g_j47.movement_ticks=0;
+            g_j47.last_abilities_flags=-1;
+            g_j47.server_movement_speed_scale=1.0f;
+            memset(g_player_potion_effects,0,sizeof(g_player_potion_effects));
+            g_player_motion_x=g_player_motion_y=g_player_motion_z=0.0f;
+            g_player_fall_distance=0.0f;
+            g_player_on_ground=0;
+            g_player_server_on_ground=0;
+            g_player_dead=0;
+            g_player_death_time=0;
+            g_player_hurt_time=0;
+            g_mp_pending_respawn_sync=0;
+            pex_net_java_server_closed_window();
+            set_screen(SCREEN_INGAME);
+
+            if(new_dimension!=old_dimension){
+                g_mp_world_ready=0;
+                g_mp_connect_progress=0;
                 j47_reset_world_for_respawn();
-            }else if(g_j47.pending_respawn_dimension){
-                if(new_dimension==g_j47.pending_respawn_from){
-                    /* Fake transition returned to the original dimension. */
-                    g_j47.pending_respawn_dimension=0;
-                    g_j47.dimension=new_dimension;
-                }else{
-                    g_j47.pending_respawn_to=new_dimension;
-                }
-            }else if(new_dimension!=old_dimension){
-                g_j47.pending_respawn_dimension=1;
-                g_j47.pending_respawn_from=old_dimension;
-                g_j47.pending_respawn_to=new_dimension;
-            }else{
-                g_j47.dimension=new_dimension;
+                j47_set_status("Downloading terrain");
             }
             break;
         }
@@ -4183,6 +4195,7 @@ int pex_java47_daylight_cycle_enabled(void){return g_j47.daylight_cycle;}
 int pex_java47_local_entity_id(void){return g_j47.local_entity_id;}
 float pex_java47_movement_speed_scale(void){return g_j47.server_movement_speed_scale>0.0f?g_j47.server_movement_speed_scale:1.0f;}
 int pex_java47_get_equipment(int entity_id,int *item_id,int *count,int *damage,int *slot){J47Entity*e=j47_entity_find(entity_id);if(!e)return 0;if(item_id)*item_id=e->held_item_id;if(count)*count=e->held_item_count;if(damage)*damage=e->held_item_damage;if(slot)*slot=e->held_slot;return 1;}
+int pex_java47_get_armor(int entity_id,PexNetArmorRenderStack out_armor[4]){J47Entity*e=j47_entity_find(entity_id);if(!e||!out_armor)return 0;for(int i=0;i<4;i++){const ItemStack*st=&e->equipment[i+1];out_armor[i].id=st->id;out_armor[i].count=st->count;out_armor[i].damage=st->damage;out_armor[i].has_custom_color=st->has_custom_color;out_armor[i].custom_color=st->custom_color;}return 1;}
 int pex_java47_entity_is_player(int entity_id){J47Entity*e=j47_entity_find(entity_id);return e&&e->kind==J47_ENTITY_PLAYER;}
 Texture *pex_java47_local_skin_texture(void){return g_j47_local_skin.id?&g_j47_local_skin:&tex_steve;}
 
