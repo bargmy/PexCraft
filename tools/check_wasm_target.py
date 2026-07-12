@@ -39,12 +39,18 @@ def main() -> int:
     assets = read("tools/prepare_wasm_assets.py")
     inventory = read("src/game/inventory.c")
     ingame = read("src/game/ingame_logic.c")
+    java47 = read("multiplayer/java/protocol_47je/protocol_47je.c")
+    gles2 = read("src/platform/lgwebos/lgwebos_gles2_renderer.c")
 
     require(root_entry, '#include "src/main_wasm.c"', "main_wasm.c")
     for define in ("PEX_PLATFORM_WASM", "PEX_WASM_NO_MULTIPLAYER", "PEX_SINGLE_THREADED"):
         require(unity, define, "src/main_wasm.c")
     require(unity, 'platform/lgwebos/lgwebos_gles2_renderer.c', "src/main_wasm.c")
     require(unity, 'platform/wasm/wasm_app.c', "src/main_wasm.c")
+    require(unity, "#define glColor4ub pex_lgwebos_glColor4ub", "src/main_wasm.c")
+    require(unity, "#define glDeleteLists pex_lgwebos_glDeleteLists", "src/main_wasm.c")
+    require(gles2, "static void pex_lgwebos_glColor4ub", "lgwebos_gles2_renderer.c")
+    require(gles2, "static void pex_lgwebos_glDeleteLists", "lgwebos_gles2_renderer.c")
 
     require(app, "emscripten_set_main_loop", "wasm_app.c")
     require(app, "pex_wasm_visibility_flush", "wasm_app.c")
@@ -56,6 +62,8 @@ def main() -> int:
     require(inventory, "if (stream_generation_active()) process_stream_generation_queue();", "inventory.c")
     require(inventory, "stream async disabled on WASM", "inventory.c")
     require(ingame, "defined(PEX_PLATFORM_WASM)", "ingame_logic.c")
+    require(java47, "defined(PEX_PLATFORM_WASM)", "protocol_47je.c")
+    require(java47, "Browser builds are offline-only", "protocol_47je.c")
 
     require(build, "-std=gnu99", "build_wasm.sh")
     reject(build, r"-std=c(?:89|90|99|11|17|23)\b", "build_wasm.sh")

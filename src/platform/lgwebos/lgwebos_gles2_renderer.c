@@ -455,6 +455,11 @@ static void pex_lgwebos_glFogf(GLenum pname, GLfloat param) { (void)pname; (void
 static void pex_lgwebos_glFogfv(GLenum pname, const GLfloat *params) { (void)pname; (void)params; }
 
 static void pex_lgwebos_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { g_lgwebos_cur_color[0]=r; g_lgwebos_cur_color[1]=g; g_lgwebos_cur_color[2]=b; g_lgwebos_cur_color[3]=a; }
+static void pex_lgwebos_glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) {
+    const GLfloat scale = 1.0f / 255.0f;
+    pex_lgwebos_glColor4f((GLfloat)r * scale, (GLfloat)g * scale,
+                          (GLfloat)b * scale, (GLfloat)a * scale);
+}
 static void pex_lgwebos_glTexCoord2f(GLfloat u, GLfloat v) { g_lgwebos_cur_u = u; g_lgwebos_cur_v = v; }
 static void pex_lgwebos_glBegin(GLenum mode) { g_lgwebos_begin_active = 1; g_lgwebos_begin_mode = mode; g_lgwebos_imm_count = 0; }
 static void pex_lgwebos_glVertex3f(GLfloat x, GLfloat y, GLfloat z) {
@@ -472,6 +477,13 @@ static GLuint pex_lgwebos_glGenLists(GLsizei range) { GLuint base = g_lgwebos_ne
 static void pex_lgwebos_glNewList(GLuint list, GLenum mode) { (void)mode; if (list > 0 && list < PEX_LGWEBOS_MAX_LISTS) lgwebos_list_free(list); g_lgwebos_compiling = 1; g_lgwebos_compile_list = list; }
 static void pex_lgwebos_glEndList(void) { g_lgwebos_compiling = 0; g_lgwebos_compile_list = 0; }
 static void pex_lgwebos_glCallList(GLuint list) { if (list == 0 || list >= PEX_LGWEBOS_MAX_LISTS) return; for (LgWebOSBatch *b = g_lgwebos_lists[list].first; b; b = b->next) lgwebos_draw_raw(b->v, b->count, b->mode, b); }
+static void pex_lgwebos_glDeleteLists(GLuint list, GLsizei range) {
+    if (range <= 0) return;
+    for (GLsizei i = 0; i < range; ++i) {
+        GLuint id = list + (GLuint)i;
+        if (id > 0 && id < PEX_LGWEBOS_MAX_LISTS) lgwebos_list_free(id);
+    }
+}
 
 static void pex_lgwebos_glGenTextures(GLsizei n, GLuint *textures) { glGenTextures(n, textures); }
 static void pex_lgwebos_glBindTexture(GLenum target, GLuint texture) { if (target == GL_TEXTURE_2D) g_lgwebos_bound_tex = texture; glBindTexture(target, texture); }

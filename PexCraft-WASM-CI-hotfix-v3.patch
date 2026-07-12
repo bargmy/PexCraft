@@ -1,0 +1,142 @@
+diff --git a/multiplayer/java/protocol_47je/protocol_47je.c b/multiplayer/java/protocol_47je/protocol_47je.c
+index eae619dce9878e10bcd430cf7ed4832f84fe091d..8c49f823533076a4c11896b674a095f9ecb876a9 100644
+--- a/multiplayer/java/protocol_47je/protocol_47je.c
++++ b/multiplayer/java/protocol_47je/protocol_47je.c
+@@ -2407,7 +2407,8 @@ static void j47_uuid_hex(const unsigned char uuid[16], char out[33]) {
+ }
+ 
+ static int j47_download_skin_file(const char *url, const char *path) {
+-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
++#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
++    /* Browser builds are offline-only and must never download player skins. */
+     (void)url; (void)path;
+     return 0;
+ #elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+diff --git a/src/audio/sound.c b/src/audio/sound.c
+index b2f6683664b9f58c6ae37b1f64cdbb4028d49a28..40bd1e68a97a552eb624d992cc7f9589868ecbb3 100644
+--- a/src/audio/sound.c
++++ b/src/audio/sound.c
+@@ -940,7 +940,7 @@ static void pex_menu_music_start_once(void) {
+     path_join(game, sizeof(game), music, "game");
+     pex_pick_music_file_from_list(menu_tracks, (int)ARRAY_COUNT(menu_tracks), menu, picked, sizeof(picked));
+     /* 1.2.5/legacy assets do not have modern menu1-menu4 files; their music
+-       lives in music/*.ogg.  The legacy downloader maps those into music/game,
++       lives in the music directory as OGG files.  The legacy downloader maps those into music/game,
+        so title-screen music should fall back to that pool instead of playing
+        the same one built-in/menu track forever. */
+     if (!picked[0]) pex_pick_music_file_from_list(legacy_title_tracks, (int)ARRAY_COUNT(legacy_title_tracks), game, picked, sizeof(picked));
+diff --git a/src/main_lgwebos.c b/src/main_lgwebos.c
+index 7e1081a423bb481681de619e22228dd15d3c6ea6..3816c6d7e9a23179959a05d85c59a90277f9866e 100644
+--- a/src/main_lgwebos.c
++++ b/src/main_lgwebos.c
+@@ -78,6 +78,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
+ #define glFogf pex_lgwebos_glFogf
+ #define glFogfv pex_lgwebos_glFogfv
+ #define glColor4f pex_lgwebos_glColor4f
++#define glColor4ub pex_lgwebos_glColor4ub
+ #define glTexCoord2f pex_lgwebos_glTexCoord2f
+ #define glBegin pex_lgwebos_glBegin
+ #define glVertex3f pex_lgwebos_glVertex3f
+@@ -87,6 +88,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
+ #define glNewList pex_lgwebos_glNewList
+ #define glEndList pex_lgwebos_glEndList
+ #define glCallList pex_lgwebos_glCallList
++#define glDeleteLists pex_lgwebos_glDeleteLists
+ #define glGenTextures pex_lgwebos_glGenTextures
+ #define glBindTexture pex_lgwebos_glBindTexture
+ #define glTexParameteri pex_lgwebos_glTexParameteri
+diff --git a/src/main_wasm.c b/src/main_wasm.c
+index 5a00cd3d8e1d6862a262a942450661c5df3d5485..e82dee9024e90ef36c2cc732575c02632215b8b4 100644
+--- a/src/main_wasm.c
++++ b/src/main_wasm.c
+@@ -78,6 +78,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
+ #define glFogf pex_lgwebos_glFogf
+ #define glFogfv pex_lgwebos_glFogfv
+ #define glColor4f pex_lgwebos_glColor4f
++#define glColor4ub pex_lgwebos_glColor4ub
+ #define glTexCoord2f pex_lgwebos_glTexCoord2f
+ #define glBegin pex_lgwebos_glBegin
+ #define glVertex3f pex_lgwebos_glVertex3f
+@@ -87,6 +88,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
+ #define glNewList pex_lgwebos_glNewList
+ #define glEndList pex_lgwebos_glEndList
+ #define glCallList pex_lgwebos_glCallList
++#define glDeleteLists pex_lgwebos_glDeleteLists
+ #define glGenTextures pex_lgwebos_glGenTextures
+ #define glBindTexture pex_lgwebos_glBindTexture
+ #define glTexParameteri pex_lgwebos_glTexParameteri
+diff --git a/src/platform/lgwebos/lgwebos_gles2_renderer.c b/src/platform/lgwebos/lgwebos_gles2_renderer.c
+index 8f71a74a770365c6523009dea2fb5623e85efbd8..7e36c6badeb0518c9e2cb0525d7a3e08cac5db57 100644
+--- a/src/platform/lgwebos/lgwebos_gles2_renderer.c
++++ b/src/platform/lgwebos/lgwebos_gles2_renderer.c
+@@ -455,6 +455,11 @@ static void pex_lgwebos_glFogf(GLenum pname, GLfloat param) { (void)pname; (void
+ static void pex_lgwebos_glFogfv(GLenum pname, const GLfloat *params) { (void)pname; (void)params; }
+ 
+ static void pex_lgwebos_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { g_lgwebos_cur_color[0]=r; g_lgwebos_cur_color[1]=g; g_lgwebos_cur_color[2]=b; g_lgwebos_cur_color[3]=a; }
++static void pex_lgwebos_glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) {
++    const GLfloat scale = 1.0f / 255.0f;
++    pex_lgwebos_glColor4f((GLfloat)r * scale, (GLfloat)g * scale,
++                          (GLfloat)b * scale, (GLfloat)a * scale);
++}
+ static void pex_lgwebos_glTexCoord2f(GLfloat u, GLfloat v) { g_lgwebos_cur_u = u; g_lgwebos_cur_v = v; }
+ static void pex_lgwebos_glBegin(GLenum mode) { g_lgwebos_begin_active = 1; g_lgwebos_begin_mode = mode; g_lgwebos_imm_count = 0; }
+ static void pex_lgwebos_glVertex3f(GLfloat x, GLfloat y, GLfloat z) {
+@@ -472,6 +477,13 @@ static GLuint pex_lgwebos_glGenLists(GLsizei range) { GLuint base = g_lgwebos_ne
+ static void pex_lgwebos_glNewList(GLuint list, GLenum mode) { (void)mode; if (list > 0 && list < PEX_LGWEBOS_MAX_LISTS) lgwebos_list_free(list); g_lgwebos_compiling = 1; g_lgwebos_compile_list = list; }
+ static void pex_lgwebos_glEndList(void) { g_lgwebos_compiling = 0; g_lgwebos_compile_list = 0; }
+ static void pex_lgwebos_glCallList(GLuint list) { if (list == 0 || list >= PEX_LGWEBOS_MAX_LISTS) return; for (LgWebOSBatch *b = g_lgwebos_lists[list].first; b; b = b->next) lgwebos_draw_raw(b->v, b->count, b->mode, b); }
++static void pex_lgwebos_glDeleteLists(GLuint list, GLsizei range) {
++    if (range <= 0) return;
++    for (GLsizei i = 0; i < range; ++i) {
++        GLuint id = list + (GLuint)i;
++        if (id > 0 && id < PEX_LGWEBOS_MAX_LISTS) lgwebos_list_free(id);
++    }
++}
+ 
+ static void pex_lgwebos_glGenTextures(GLsizei n, GLuint *textures) { glGenTextures(n, textures); }
+ static void pex_lgwebos_glBindTexture(GLenum target, GLuint texture) { if (target == GL_TEXTURE_2D) g_lgwebos_bound_tex = texture; glBindTexture(target, texture); }
+diff --git a/src/platform/wasm/wasm_compat.h b/src/platform/wasm/wasm_compat.h
+index a0bccc55cf8199d3495bb5f1b69cb227919c8f51..c3bd05240750f9f7da6fb8b0db31b471d0bc1d8c 100644
+--- a/src/platform/wasm/wasm_compat.h
++++ b/src/platform/wasm/wasm_compat.h
+@@ -290,7 +290,7 @@ static inline char *lstrcpynA(char *dst, const char *src, int cap) {
+     return dst;
+ }
+ 
+-/* Directory enumeration for the simple "path/*" patterns used by this project. */
++/* Directory enumeration for the simple path-glob patterns used by this project. */
+ typedef struct WIN32_FIND_DATAA {
+     DWORD dwFileAttributes;
+     char cFileName[260];
+diff --git a/tools/check_wasm_target.py b/tools/check_wasm_target.py
+index 21e78eabd2446c7fdea1e364945fed9ed48e639f..938148153d3a4fcb4420663ba751d0871c0a0ecf 100755
+--- a/tools/check_wasm_target.py
++++ b/tools/check_wasm_target.py
+@@ -39,12 +39,18 @@ def main() -> int:
+     assets = read("tools/prepare_wasm_assets.py")
+     inventory = read("src/game/inventory.c")
+     ingame = read("src/game/ingame_logic.c")
++    java47 = read("multiplayer/java/protocol_47je/protocol_47je.c")
++    gles2 = read("src/platform/lgwebos/lgwebos_gles2_renderer.c")
+ 
+     require(root_entry, '#include "src/main_wasm.c"', "main_wasm.c")
+     for define in ("PEX_PLATFORM_WASM", "PEX_WASM_NO_MULTIPLAYER", "PEX_SINGLE_THREADED"):
+         require(unity, define, "src/main_wasm.c")
+     require(unity, 'platform/lgwebos/lgwebos_gles2_renderer.c', "src/main_wasm.c")
+     require(unity, 'platform/wasm/wasm_app.c', "src/main_wasm.c")
++    require(unity, "#define glColor4ub pex_lgwebos_glColor4ub", "src/main_wasm.c")
++    require(unity, "#define glDeleteLists pex_lgwebos_glDeleteLists", "src/main_wasm.c")
++    require(gles2, "static void pex_lgwebos_glColor4ub", "lgwebos_gles2_renderer.c")
++    require(gles2, "static void pex_lgwebos_glDeleteLists", "lgwebos_gles2_renderer.c")
+ 
+     require(app, "emscripten_set_main_loop", "wasm_app.c")
+     require(app, "pex_wasm_visibility_flush", "wasm_app.c")
+@@ -56,6 +62,8 @@ def main() -> int:
+     require(inventory, "if (stream_generation_active()) process_stream_generation_queue();", "inventory.c")
+     require(inventory, "stream async disabled on WASM", "inventory.c")
+     require(ingame, "defined(PEX_PLATFORM_WASM)", "ingame_logic.c")
++    require(java47, "defined(PEX_PLATFORM_WASM)", "protocol_47je.c")
++    require(java47, "Browser builds are offline-only", "protocol_47je.c")
+ 
+     require(build, "-std=gnu99", "build_wasm.sh")
+     reject(build, r"-std=c(?:89|90|99|11|17|23)\b", "build_wasm.sh")

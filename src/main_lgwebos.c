@@ -78,6 +78,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #define glFogf pex_lgwebos_glFogf
 #define glFogfv pex_lgwebos_glFogfv
 #define glColor4f pex_lgwebos_glColor4f
+#define glColor4ub pex_lgwebos_glColor4ub
 #define glTexCoord2f pex_lgwebos_glTexCoord2f
 #define glBegin pex_lgwebos_glBegin
 #define glVertex3f pex_lgwebos_glVertex3f
@@ -87,6 +88,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #define glNewList pex_lgwebos_glNewList
 #define glEndList pex_lgwebos_glEndList
 #define glCallList pex_lgwebos_glCallList
+#define glDeleteLists pex_lgwebos_glDeleteLists
 #define glGenTextures pex_lgwebos_glGenTextures
 #define glBindTexture pex_lgwebos_glBindTexture
 #define glTexParameteri pex_lgwebos_glTexParameteri

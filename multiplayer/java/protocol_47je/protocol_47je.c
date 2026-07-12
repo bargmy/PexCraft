@@ -2407,7 +2407,8 @@ static void j47_uuid_hex(const unsigned char uuid[16], char out[33]) {
 }
 
 static int j47_download_skin_file(const char *url, const char *path) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
+    /* Browser builds are offline-only and must never download player skins. */
     (void)url; (void)path;
     return 0;
 #elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)

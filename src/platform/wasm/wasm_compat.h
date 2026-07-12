@@ -290,7 +290,7 @@ static inline char *lstrcpynA(char *dst, const char *src, int cap) {
     return dst;
 }
 
-/* Directory enumeration for the simple "path/*" patterns used by this project. */
+/* Directory enumeration for the simple path-glob patterns used by this project. */
 typedef struct WIN32_FIND_DATAA {
     DWORD dwFileAttributes;
     char cFileName[260];

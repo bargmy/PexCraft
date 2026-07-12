@@ -940,7 +940,7 @@ static void pex_menu_music_start_once(void) {
     path_join(game, sizeof(game), music, "game");
     pex_pick_music_file_from_list(menu_tracks, (int)ARRAY_COUNT(menu_tracks), menu, picked, sizeof(picked));
     /* 1.2.5/legacy assets do not have modern menu1-menu4 files; their music
-       lives in music/*.ogg.  The legacy downloader maps those into music/game,
+       lives in the music directory as OGG files.  The legacy downloader maps those into music/game,
        so title-screen music should fall back to that pool instead of playing
        the same one built-in/menu track forever. */
     if (!picked[0]) pex_pick_music_file_from_list(legacy_title_tracks, (int)ARRAY_COUNT(legacy_title_tracks), game, picked, sizeof(picked));
