@@ -26,7 +26,7 @@ or:
 make -f Makefile.wasm
 ```
 
-The script uses an installed `emcc` when available. Otherwise it installs the Emscripten SDK into `.cache/emsdk`.
+The script uses an installed `emcc` when available. Otherwise it installs Emscripten SDK 6.0.2 into `.cache/emsdk` by default. Set `EMSDK_VERSION` to override the pinned version. The build explicitly enables `GL_ENABLE_GET_PROC_ADDRESS` because Emscripten's SDL2 port requires `eglGetProcAddress` for its browser OpenGL ES context backend.
 
 At build time, `tools/prepare_wasm_assets.py` downloads the official Minecraft 1.2.5 `client.jar`, verifies SHA-1 `4a2fac7504182a97dcbcd7560c6392d7c8139928`, safely extracts its non-code resources, validates the textures and fonts required by PexCraft, and stages them under `build/wasm_assets/Release`. Emscripten embeds that directory at `/bundle/Release` in the output HTML.
 

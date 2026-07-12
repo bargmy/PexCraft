@@ -6,7 +6,7 @@ cd "$ROOT"
 
 python3 tools/check_wasm_target.py
 
-EMSDK_VERSION="${EMSDK_VERSION:-latest}"
+EMSDK_VERSION="${EMSDK_VERSION:-6.0.2}"
 EMSDK_DIR="${EMSDK_DIR:-$ROOT/.cache/emsdk}"
 OUTPUT="$ROOT/dist/PexCraft-WASM.html"
 
@@ -53,7 +53,7 @@ mkdir -p dist
   -sSTACK_SIZE=8388608 \
   -sMIN_WEBGL_VERSION=1 \
   -sMAX_WEBGL_VERSION=2 \
-  -sGL_ENABLE_GET_PROC_ADDRESS=0 \
+  -sGL_ENABLE_GET_PROC_ADDRESS=1 \
   -sFORCE_FILESYSTEM=1 \
   -sASSERTIONS=0 \
   -sEXPORTED_FUNCTIONS='["_main","_pex_wasm_visibility_flush"]' \
