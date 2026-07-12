@@ -60,10 +60,11 @@ static PexMpBedrockEntityMap *pex_mp_bedrock_entity_by_player_id(int player_id);
 
 #define PEX_MP_SERVER_LIST_MAX 32
 #define PEX_MP_SERVER_ROW_BASE 6000
+#define PEX_MP_SERVER_ROW_HEIGHT 48
 typedef struct PexMpServerEntry {
     char name[64];
     char host[96];
-    char motd[128];
+    char motd[256];
     char player_count[32];
     char version[24];
     int protocol;
@@ -708,7 +709,7 @@ static const PexMpServerEntry *pex_mp_server_entry_get(int index) {
 }
 
 static int pex_mp_server_visible_rows(void) {
-    int rows = (g_gui_h - 64 - 32) / 36;
+    int rows = (g_gui_h - 64 - 32) / PEX_MP_SERVER_ROW_HEIGHT;
     if (rows < 1) rows = 1;
     return rows;
 }

@@ -14,7 +14,7 @@ typedef struct PexJava47Status {
     int online_players;
     int max_players;
     char version[64];
-    char motd[192];
+    char motd[384];
 } PexJava47Status;
 
 typedef enum PexJava47State {
@@ -70,5 +70,9 @@ int pex_java47_slot_lore(int pex_slot, const char **out_lines, int max_lines);
 int pex_java47_translate_block_id(int java_block_id);
 int pex_java47_translate_item_id(int java_item_id);
 int pex_java47_translate_mob_type(int java_mob_type);
+
+void pex_java47_draw_server_scoreboard(void);
+void pex_java47_draw_tab_overlay(void);
+void pex_java47_draw_special_entities(float partial);
 
 #endif

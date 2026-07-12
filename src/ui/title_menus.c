@@ -879,6 +879,42 @@ static void draw_confirm_delete(void) {
     draw_all_buttons();
 }
 
+static int pex_mp_motd_wrap(const char *src,char out[2][256],int max_width) {
+    char normalized[512];int nn=0;
+    if(!src)src="";
+    for(int i=0;src[i]&&nn<(int)sizeof(normalized)-1;++i){
+        if(src[i]=='\r')continue;
+        if(src[i]=='\\'&&src[i+1]=='n'){normalized[nn++]='\n';++i;continue;}
+        normalized[nn++]=src[i];
+    }
+    normalized[nn]=0;
+    int line=0,pos=0,last_space=-1;
+    for(int i=0;normalized[i]&&line<2;){
+        if(normalized[i]=='\n'){out[line][pos]=0;++line;pos=0;last_space=-1;++i;continue;}
+        int bytes=1;unsigned char c=(unsigned char)normalized[i];
+        if((c&0xE0)==0xC0)bytes=2;else if((c&0xF0)==0xE0)bytes=3;else if((c&0xF8)==0xF0)bytes=4;
+        if(c==0xC2&&(unsigned char)normalized[i+1]==0xA7&&normalized[i+2])bytes=3;
+        if(pos+bytes>254)break;
+        memcpy(out[line]+pos,normalized+i,(size_t)bytes);pos+=bytes;out[line][pos]=0;
+        if(c==' ')last_space=pos-1;
+        i+=bytes;
+        if(text_width(out[line])>max_width){
+            if(last_space>=0){
+                int overflow=pos-last_space-1;char tail[256];
+                memcpy(tail,out[line]+last_space+1,(size_t)overflow);tail[overflow]=0;
+                out[line][last_space]=0;++line;if(line>=2)return 2;
+                snprintf(out[line],256,"%s",tail);pos=(int)strlen(out[line]);
+            }else{
+                pos-=bytes;out[line][pos]=0;++line;if(line>=2)return 2;
+                memcpy(out[line],normalized+i-bytes,(size_t)bytes);pos=bytes;out[line][pos]=0;
+            }
+            last_space=-1;
+        }
+    }
+    if(line<2){out[line][pos]=0;++line;}
+    return line;
+}
+
 static void draw_multiplayer(void) {
     pex_mp_server_list_ensure();
     draw_default_bg();
@@ -923,14 +959,17 @@ static void draw_multiplayer(void) {
         int index = scroll + row;
         const PexMpServerEntry *e = pex_mp_server_entry_get(index);
         if (!e) break;
-        int y = top + 4 + row * 36;
+        int y = top + 4 + row * PEX_MP_SERVER_ROW_HEIGHT;
         if (index == pex_mp_server_selected_get()) {
-            draw_rect(left, y - 2, right, y + 34, 8421504);
-            draw_rect(left + 1, y - 1, right - 1, y + 33, 0);
+            draw_rect(left, y - 2, right, y + PEX_MP_SERVER_ROW_HEIGHT - 2, 8421504);
+            draw_rect(left + 1, y - 1, right - 1, y + PEX_MP_SERVER_ROW_HEIGHT - 3, 0);
         }
         draw_text(e->name[0] ? e->name : "Minecraft Server", left + 2, y + 1, 16777215);
         int motd_color = (e->ping_ms < 0 && e->polled) ? 0xFF5555 : 8421504;
-        draw_text(e->motd[0] ? e->motd : (e->polling ? "Polling.." : ""), left + 2, y + 12, motd_color);
+        char motd_lines[2][256]={{0}};
+        pex_mp_motd_wrap(e->motd[0]?e->motd:(e->polling?"Polling..":""),motd_lines,158);
+        if(motd_lines[0][0])draw_text(motd_lines[0],left+2,y+12,motd_color);
+        if(motd_lines[1][0])draw_text(motd_lines[1],left+2,y+22,motd_color);
         if (e->player_count[0]) {
             int w = text_width(e->player_count);
             draw_text(e->player_count, left + 215 - w, y + 12, 8421504);
@@ -939,7 +978,7 @@ static void draw_multiplayer(void) {
         if (e->server_kind == 1) snprintf(server_line, sizeof(server_line), "%s  [Java %s]", e->host, e->version[0] ? e->version : "1.8.8");
         else if (e->server_kind == 2) snprintf(server_line, sizeof(server_line), "%s  [Bedrock %s]", e->host, e->version[0] ? e->version : "0.15.x");
         else snprintf(server_line, sizeof(server_line), "%s", e->host);
-        draw_text(server_line, left + 2, y + 23, 3158064);
+        draw_text(server_line, left + 2, y + 35, 3158064);
         int bars = 5;
         const char *tip = "Polling..";
         if (e->polled && !e->polling) {

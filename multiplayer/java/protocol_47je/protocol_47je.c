@@ -12,6 +12,12 @@
 #define J47_ITEM_LORE_MAX 8
 #define J47_ITEM_LORE_LINE_MAX 192
 #define J47_SKIN_URL_MAX 768
+#define J47_TEAM_MAX 64
+#define J47_TEAM_MEMBER_MAX 128
+#define J47_SCORE_OBJECTIVE_MAX 32
+#define J47_SCORE_ENTRY_MAX 512
+#define J47_BLOCK_UPDATE_CACHE_MAX 8192
+
 
 /* The Java adapter is unity-included after game/mobs.c and before
    platform/multiplayer_client.c. These declarations bind the protocol layer to
@@ -38,8 +44,12 @@ typedef struct J47Reader {
 
 typedef struct J47Profile {
     int used;
+    int listed;
     unsigned char uuid[16];
     char name[32];
+    char display_name[192];
+    int game_mode;
+    int ping;
     char skin_url[J47_SKIN_URL_MAX];
     char skin_path[MAX_PATHBUF];
     int skin_state; /* 0 none, 1 queued, 2 downloading, 3 ready, 4 failed */
@@ -80,9 +90,12 @@ typedef struct J47Entity {
     int held_slot;
     int is_armor_stand;
     int metadata_flags;
+    int custom_name_visible;
+    int armor_stand_flags;
     int proxy_item_drop_slot;
     ItemStack equipment[5];
     char custom_name[96];
+    float armor_pose[6][3]; /* head, body, left arm, right arm, left leg, right leg */
     double x, y, z;
     float yaw, pitch, head_yaw;
 } J47Entity;
@@ -98,6 +111,39 @@ typedef struct J47Window {
     ItemStack slots[J47_WINDOW_MAX_SLOTS];
     J47RawItem raw_slots[J47_WINDOW_MAX_SLOTS];
 } J47Window;
+
+typedef struct J47Team {
+    int used;
+    char name[17];
+    char display_name[65];
+    char prefix[65];
+    char suffix[65];
+    int friendly_flags;
+    int color;
+    char members[J47_TEAM_MEMBER_MAX][41];
+    int member_count;
+} J47Team;
+
+typedef struct J47ScoreObjective {
+    int used;
+    char name[17];
+    char display_name[65];
+    int render_hearts;
+} J47ScoreObjective;
+
+typedef struct J47ScoreEntry {
+    int used;
+    char owner[41];
+    char objective[17];
+    int value;
+} J47ScoreEntry;
+
+typedef struct J47BlockUpdate {
+    int used;
+    int x, y, z;
+    int state;
+    unsigned int serial;
+} J47BlockUpdate;
 
 typedef struct PexJava47Session {
     SOCKET socket;
@@ -149,6 +195,17 @@ typedef struct PexJava47Session {
     size_t tx_len;
     size_t tx_pos;
     size_t tx_cap;
+    unsigned int packet_serial;
+    int last_world_origin_x;
+    int last_world_origin_z;
+    char tab_header[512];
+    char tab_footer[512];
+    char display_objectives[19][17];
+    J47Team teams[J47_TEAM_MAX];
+    J47ScoreObjective objectives[J47_SCORE_OBJECTIVE_MAX];
+    J47ScoreEntry scores[J47_SCORE_ENTRY_MAX];
+    J47BlockUpdate block_updates[J47_BLOCK_UPDATE_CACHE_MAX];
+    int block_update_cursor;
     J47Profile profiles[J47_PROFILE_MAX];
     J47Entity entities[J47_ENTITY_MAX];
     J47RawItem raw_player_slots[46];
@@ -161,6 +218,7 @@ static CRITICAL_SECTION g_j47_tx_cs;
 static int g_j47_tx_cs_ready = 0;
 
 static void j47_parse_entity_metadata(J47Reader *r, int entity_id);
+static void multiplayer_name_tag_view_angles(float *out_yaw, float *out_pitch);
 
 typedef struct J47SkinDownloadJob {
     unsigned char uuid[16];
@@ -1617,6 +1675,10 @@ int pex_java47_translate_mob_type(int type) {
         case 62: return PASSIVE_MOB_MAGMA_CUBE;
         case 53: return PASSIVE_MOB_GIANT;
         case 63: return PASSIVE_MOB_ENDER_DRAGON;
+        case 65: return PASSIVE_MOB_CHICKEN;   /* bat: small existing flyer proxy */
+        case 66: return PASSIVE_MOB_VILLAGER;  /* witch: closest humanoid NPC */
+        case 67: return PASSIVE_MOB_SILVERFISH;/* endermite */
+        case 68: return PASSIVE_MOB_SQUID;     /* guardian */
         case 90: return PASSIVE_MOB_PIG;
         case 91: return PASSIVE_MOB_SHEEP;
         case 92: return PASSIVE_MOB_COW;
@@ -1627,6 +1689,8 @@ int pex_java47_translate_mob_type(int type) {
         case 97: return PASSIVE_MOB_SNOWMAN;
         case 98: return PASSIVE_MOB_OCELOT;
         case 99: return PASSIVE_MOB_IRON_GOLEM;
+        case 100: return PASSIVE_MOB_PIG;      /* horse */
+        case 101: return PASSIVE_MOB_CHICKEN;  /* rabbit */
         case 120: return PASSIVE_MOB_VILLAGER;
         default: return PASSIVE_MOB_PIG;
     }
@@ -1800,6 +1864,8 @@ static void j47_reset_world_for_respawn_ex(int preserve_position) {
     }
     g_flat_renderer_sort_dirty = 1;
     j47_clear_remote_entities();
+    memset(g_j47.block_updates, 0, sizeof(g_j47.block_updates));
+    g_j47.block_update_cursor = 0;
     g_j47.chunks_received = 0;
     g_j47.world_ready = 0;
     if (!preserve_position) g_j47.position_received = 0;
@@ -1816,6 +1882,186 @@ static void j47_commit_pending_respawn_dimension(void) {
     /* S08 commonly arrives before the first chunk. Keep that acknowledged
        position while replacing the old dimension's terrain. */
     j47_reset_world_for_respawn_ex(g_j47.position_received ? 1 : 0);
+}
+
+static J47Team *j47_team_find(const char *name) {
+    if (!name || !name[0]) return NULL;
+    for (int i = 0; i < J47_TEAM_MAX; ++i)
+        if (g_j47.teams[i].used && strcmp(g_j47.teams[i].name, name) == 0) return &g_j47.teams[i];
+    return NULL;
+}
+
+static J47Team *j47_team_put(const char *name) {
+    J47Team *t = j47_team_find(name);
+    if (t) return t;
+    for (int i = 0; i < J47_TEAM_MAX; ++i) {
+        if (!g_j47.teams[i].used) {
+            t = &g_j47.teams[i];
+            memset(t, 0, sizeof(*t));
+            t->used = 1;
+            t->color = -1;
+            snprintf(t->name, sizeof(t->name), "%.*s", 16, name ? name : "");
+            return t;
+        }
+    }
+    return NULL;
+}
+
+static void j47_team_remove_member_from_all(const char *member) {
+    if (!member || !member[0]) return;
+    for (int ti = 0; ti < J47_TEAM_MAX; ++ti) {
+        J47Team *t = &g_j47.teams[ti];
+        if (!t->used) continue;
+        for (int i = 0; i < t->member_count; ) {
+            if (strcmp(t->members[i], member) == 0) {
+                for (int j = i; j + 1 < t->member_count; ++j)
+                    memcpy(t->members[j], t->members[j + 1], sizeof(t->members[j]));
+                --t->member_count;
+            } else ++i;
+        }
+    }
+}
+
+static void j47_team_add_member(J47Team *t, const char *member) {
+    if (!t || !member || !member[0]) return;
+    j47_team_remove_member_from_all(member);
+    if (t->member_count >= J47_TEAM_MEMBER_MAX) return;
+    snprintf(t->members[t->member_count++], sizeof(t->members[0]), "%.*s", 40, member);
+}
+
+static void j47_team_remove_member(J47Team *t, const char *member) {
+    if (!t || !member) return;
+    for (int i = 0; i < t->member_count; ++i) {
+        if (strcmp(t->members[i], member) != 0) continue;
+        for (int j = i; j + 1 < t->member_count; ++j)
+            memcpy(t->members[j], t->members[j + 1], sizeof(t->members[j]));
+        --t->member_count;
+        return;
+    }
+}
+
+static J47Team *j47_team_for_member(const char *member) {
+    if (!member || !member[0]) return NULL;
+    for (int ti = 0; ti < J47_TEAM_MAX; ++ti) {
+        J47Team *t = &g_j47.teams[ti];
+        if (!t->used) continue;
+        for (int i = 0; i < t->member_count; ++i)
+            if (strcmp(t->members[i], member) == 0) return t;
+    }
+    return NULL;
+}
+
+static J47ScoreObjective *j47_objective_find(const char *name) {
+    if (!name || !name[0]) return NULL;
+    for (int i = 0; i < J47_SCORE_OBJECTIVE_MAX; ++i)
+        if (g_j47.objectives[i].used && strcmp(g_j47.objectives[i].name, name) == 0) return &g_j47.objectives[i];
+    return NULL;
+}
+
+static J47ScoreObjective *j47_objective_put(const char *name) {
+    J47ScoreObjective *o = j47_objective_find(name);
+    if (o) return o;
+    for (int i = 0; i < J47_SCORE_OBJECTIVE_MAX; ++i) {
+        if (!g_j47.objectives[i].used) {
+            o = &g_j47.objectives[i];
+            memset(o, 0, sizeof(*o));
+            o->used = 1;
+            snprintf(o->name, sizeof(o->name), "%.*s", 16, name ? name : "");
+            return o;
+        }
+    }
+    return NULL;
+}
+
+static void j47_objective_remove(const char *name) {
+    J47ScoreObjective *o = j47_objective_find(name);
+    if (o) memset(o, 0, sizeof(*o));
+    for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i)
+        if (g_j47.scores[i].used && strcmp(g_j47.scores[i].objective, name) == 0)
+            memset(&g_j47.scores[i], 0, sizeof(g_j47.scores[i]));
+    for (int i = 0; i < 19; ++i)
+        if (strcmp(g_j47.display_objectives[i], name) == 0) g_j47.display_objectives[i][0] = 0;
+}
+
+static J47ScoreEntry *j47_score_find(const char *owner, const char *objective) {
+    for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i) {
+        J47ScoreEntry *e = &g_j47.scores[i];
+        if (e->used && strcmp(e->owner, owner) == 0 && strcmp(e->objective, objective) == 0) return e;
+    }
+    return NULL;
+}
+
+static void j47_score_set(const char *owner, const char *objective, int value) {
+    J47ScoreEntry *e = j47_score_find(owner, objective);
+    if (!e) {
+        for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i) if (!g_j47.scores[i].used) { e = &g_j47.scores[i]; break; }
+    }
+    if (!e) return;
+    memset(e, 0, sizeof(*e));
+    e->used = 1;
+    snprintf(e->owner, sizeof(e->owner), "%.*s", 40, owner ? owner : "");
+    snprintf(e->objective, sizeof(e->objective), "%.*s", 16, objective ? objective : "");
+    e->value = value;
+}
+
+static void j47_score_remove(const char *owner, const char *objective) {
+    for (int i = 0; i < J47_SCORE_ENTRY_MAX; ++i) {
+        J47ScoreEntry *e = &g_j47.scores[i];
+        if (!e->used || strcmp(e->owner, owner) != 0) continue;
+        if (objective && objective[0] && strcmp(e->objective, objective) != 0) continue;
+        memset(e, 0, sizeof(*e));
+    }
+}
+
+static void j47_format_team_name(const char *raw, char *out, size_t cap) {
+    static const char color_codes[] = "0123456789abcdef";
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    if (!raw) raw = "";
+    J47Team *t = j47_team_for_member(raw);
+    if (t) {
+        if (t->color >= 0 && t->color < 16)
+            snprintf(out, cap, "%s\xC2\xA7%c%s%s\xC2\xA7r", t->prefix, color_codes[t->color], raw, t->suffix);
+        else snprintf(out, cap, "%s%s%s\xC2\xA7r", t->prefix, raw, t->suffix);
+    } else snprintf(out, cap, "%s", raw);
+}
+
+static void j47_record_block_update(int x, int y, int z, int state) {
+    J47BlockUpdate *u = NULL;
+    for (int i = 0; i < J47_BLOCK_UPDATE_CACHE_MAX; ++i) {
+        J47BlockUpdate *candidate = &g_j47.block_updates[i];
+        if (candidate->used && candidate->x == x && candidate->y == y && candidate->z == z) { u = candidate; break; }
+    }
+    if (!u) {
+        u = &g_j47.block_updates[g_j47.block_update_cursor++ % J47_BLOCK_UPDATE_CACHE_MAX];
+        memset(u, 0, sizeof(*u));
+    }
+    u->used = 1;
+    u->x = x; u->y = y; u->z = z; u->state = state; u->serial = g_j47.packet_serial;
+}
+
+static void j47_apply_block_state_visible(int x, int y, int z, int state) {
+    if (!flat_in_bounds(x, y, z)) return;
+    int id = BLOCK_STONE;
+    int meta = 0;
+    j47_translate_block_state_parts((state >> 4) & 0xfff, state & 15, &id, &meta);
+    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
+    int old = g_flat_blocks[yi][zi][xi];
+    g_flat_blocks[yi][zi][xi] = (unsigned char)id;
+    g_flat_meta[yi][zi][xi] = (unsigned char)meta;
+    g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)meta : 0;
+    flat_update_section_after_block_change(x, y, z, id);
+    flat_mark_sections_dirty_near_block(x, y, z);
+    flat_mark_chunks_dirty_near(x, z);
+    if (old != id) flat_mark_light_dirty_for_change(x, y, z, old, id);
+}
+
+static void j47_reapply_cached_block_updates(void) {
+    for (int i = 0; i < J47_BLOCK_UPDATE_CACHE_MAX; ++i) {
+        J47BlockUpdate *u = &g_j47.block_updates[i];
+        if (u->used && flat_in_bounds(u->x, u->y, u->z))
+            j47_apply_block_state_visible(u->x, u->y, u->z, u->state);
+    }
 }
 
 static J47Profile *j47_profile_find_uuid(const unsigned char uuid[16]) {
@@ -2043,19 +2289,12 @@ static int j47_mob_alloc_slot(void) {
 }
 
 static void j47_set_block_state(int x, int y, int z, int state) {
-    if (!flat_in_bounds(x, y, z)) return;
-    int id = BLOCK_STONE;
-    int meta = 0;
-    j47_translate_block_state_parts((state >> 4) & 0xfff, state & 15, &id, &meta);
-    int yi = flat_y_index(y), zi = flat_storage_z_index(z), xi = flat_storage_index(x);
-    int old = g_flat_blocks[yi][zi][xi];
-    g_flat_blocks[yi][zi][xi] = (unsigned char)id;
-    g_flat_meta[yi][zi][xi] = (unsigned char)meta;
-    g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)meta : 0;
-    flat_update_section_after_block_change(x, y, z, id);
-    flat_mark_sections_dirty_near_block(x, y, z);
-    flat_mark_chunks_dirty_near(x, z);
-    if (old != id) flat_mark_light_dirty_for_change(x, y, z, old, id);
+    /* BedWars places often arrive just outside the currently mapped ring while
+       the local world origin is moving. Keep the authoritative Java state and
+       replay it whenever that coordinate becomes visible instead of silently
+       dropping the update. */
+    j47_record_block_update(x, y, z, state);
+    j47_apply_block_state_visible(x, y, z, state);
 }
 
 static void j47_unload_chunk(int cx, int cz) {
@@ -2148,6 +2387,15 @@ static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const
             g_flat_section_dirty[sy][lcz][lcx] = 1;
             g_flat_section_valid[sy][lcz][lcx] = 0;
             flat_note_section_mesh_changed(sy, lcz, lcx);
+        }
+        /* This chunk snapshot is newer than every block update already
+           parsed before it. Retire those older cached records for the sections
+           replaced by the snapshot; later S22/S23 packets will be cached and
+           applied in normal TCP order. */
+        for (int i = 0; i < J47_BLOCK_UPDATE_CACHE_MAX; ++i) {
+            J47BlockUpdate *u = &g_j47.block_updates[i];
+            if (!u->used || (u->x >> 4) != cx || (u->z >> 4) != cz) continue;
+            if (full || (mask & (1u << ((unsigned)u->y >> 4)))) u->used = 0;
         }
         g_flat_renderer_sort_dirty = 1;
         pex_net_mark_chunk_ready(cx, cz);
@@ -2399,22 +2647,17 @@ static void j47_spawn_object(J47Reader *r) {
             e->kind=J47_ENTITY_DROP; e->drop_slot=slot;
         }
     } else if (type == 78) { /* EntityArmorStand: protocol-47 spawn-object type */
-        int slot = j47_mob_alloc_slot();
-        if (slot >= 0) {
-            /* PexCraft has no armor-stand model. A pig proxy supplies a visible,
-               targetable entity while equipment is rendered as a local item
-               display above it. The real Java entity ID remains authoritative. */
-            passive_mob_init(&g_passive_mobs[slot], PASSIVE_MOB_PIG, (float)x, (float)y, (float)z);
-            PassiveMob *m = &g_passive_mobs[slot];
-            m->entity_id = entity_id;
-            m->yaw = m->prev_yaw = yaw;
-            m->pitch = m->prev_pitch = pitch;
-            m->head_yaw = m->prev_head_yaw = yaw;
-            m->render_yaw = m->prev_render_yaw = yaw;
-            e->kind = J47_ENTITY_MOB;
-            e->mob_slot = slot;
-            e->is_armor_stand = 1;
-        }
+        /* Keep it as its own protocol entity instead of pretending it is a pig.
+           The renderer below understands the 1.8 armor-stand metadata flags,
+           poses, equipment and name while preserving the real entity ID for
+           plugin interactions. */
+        e->kind = J47_ENTITY_OTHER;
+        e->mob_slot = -1;
+        e->is_armor_stand = 1;
+        e->armor_pose[2][0] = -10.0f; e->armor_pose[2][2] = -10.0f;
+        e->armor_pose[3][0] = -15.0f; e->armor_pose[3][2] =  10.0f;
+        e->armor_pose[4][0] =  -1.0f; e->armor_pose[4][2] =  -1.0f;
+        e->armor_pose[5][0] =   1.0f; e->armor_pose[5][2] =   1.0f;
     }
 }
 
@@ -2434,43 +2677,56 @@ static void j47_apply_entity_position(J47Entity *e, double x, double y, double z
 }
 
 static void j47_parse_entity_metadata(J47Reader *r, int entity_id) {
-    J47Entity *e=j47_entity_find(entity_id);
+    J47Entity *e = j47_entity_find(entity_id);
     for (;;) {
-        int h=(int)j47_r_u8(r);
-        if(r->failed||h==0x7f) break;
-        int type=(h>>5)&7, index=h&31;
-        if(type==5){
+        int h = (int)j47_r_u8(r);
+        if (r->failed || h == 0x7f) break;
+        int type = (h >> 5) & 7, index = h & 31;
+        if (type == 5) {
             ItemStack st;
-            if(!j47_read_item(r,&st))return;
-            if(e&&e->kind==J47_ENTITY_DROP&&index==10&&e->drop_slot>=0)g_drops[e->drop_slot].stack=st;
-        } else if(type==0){
-            int v=(int8_t)j47_r_u8(r);
-            if(e&&index==0)e->metadata_flags=v;
-            if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=v;
-            if(e&&e->kind==J47_ENTITY_MOB&&index==12&&e->mob_slot>=0)
-                g_passive_mobs[e->mob_slot].baby_age=v<0?-24000:0;
-        } else if(type==1){
+            if (!j47_read_item(r, &st)) return;
+            if (e && e->kind == J47_ENTITY_DROP && index == 10 && e->drop_slot >= 0)
+                g_drops[e->drop_slot].stack = st;
+        } else if (type == 0) {
+            int v = (int8_t)j47_r_u8(r);
+            if (e && index == 0) e->metadata_flags = v;
+            if (e && index == 3) e->custom_name_visible = v ? 1 : 0;
+            if (e && e->is_armor_stand && index == 10) e->armor_stand_flags = v & 0xff;
+            if (e && e->kind == J47_ENTITY_MOB && index == 6 && e->mob_slot >= 0)
+                g_passive_mobs[e->mob_slot].health = v;
+            if (e && e->kind == J47_ENTITY_MOB && index == 12 && e->mob_slot >= 0)
+                g_passive_mobs[e->mob_slot].baby_age = v < 0 ? -24000 : 0;
+        } else if (type == 1) {
             (void)j47_r_be16(r);
-        } else if(type==2){
-            int v=j47_r_be32(r);
-            if(e&&e->kind==J47_ENTITY_MOB&&e->java_type==120&&index==16&&e->mob_slot>=0){
-                if(v<0)v=0;if(v>4)v%=5;
-                g_passive_mobs[e->mob_slot].fleece_color=v;
+        } else if (type == 2) {
+            int v = j47_r_be32(r);
+            if (e && e->kind == J47_ENTITY_MOB && e->java_type == 120 && index == 16 && e->mob_slot >= 0) {
+                if (v < 0) v = 0;
+                if (v > 4) v %= 5;
+                g_passive_mobs[e->mob_slot].fleece_color = v;
             }
-        } else if(type==3){
-            float v=j47_r_float(r);
-            if(e&&e->kind==J47_ENTITY_MOB&&index==6&&e->mob_slot>=0)g_passive_mobs[e->mob_slot].health=(int)ceilf(v);
-        } else if(type==4){
+        } else if (type == 3) {
+            float v = j47_r_float(r);
+            if (e && e->kind == J47_ENTITY_MOB && index == 6 && e->mob_slot >= 0)
+                g_passive_mobs[e->mob_slot].health = (int)ceilf(v);
+        } else if (type == 4) {
             char tmp[512];
-            if(!j47_r_string(r,tmp,sizeof(tmp)))return;
-            if(e&&index==2)snprintf(e->custom_name,sizeof(e->custom_name),"%.*s",(int)sizeof(e->custom_name)-1,tmp);
-        } else if(type==6){
-            (void)j47_r_be32(r);(void)j47_r_be32(r);(void)j47_r_be32(r);
-        } else if(type==7){
-            (void)j47_r_float(r);(void)j47_r_float(r);(void)j47_r_float(r);
+            if (!j47_r_string(r, tmp, sizeof(tmp))) return;
+            if (e && index == 2)
+                snprintf(e->custom_name, sizeof(e->custom_name), "%.*s", (int)sizeof(e->custom_name) - 1, tmp);
+        } else if (type == 6) {
+            (void)j47_r_be32(r); (void)j47_r_be32(r); (void)j47_r_be32(r);
+        } else if (type == 7) {
+            float px = j47_r_float(r), py = j47_r_float(r), pz = j47_r_float(r);
+            if (e && e->is_armor_stand && index >= 11 && index <= 16) {
+                int pose = index - 11;
+                e->armor_pose[pose][0] = px;
+                e->armor_pose[pose][1] = py;
+                e->armor_pose[pose][2] = pz;
+            }
         }
     }
-    if(e&&e->is_armor_stand)j47_sync_proxy_item_visual(e);
+    if (e && e->is_armor_stand) j47_sync_proxy_item_visual(e);
 }
 
 static int j47_send_position_look_immediate(double x, double feet_y, double z,
@@ -2499,17 +2755,167 @@ static int j47_send_position_look_immediate(double x, double feet_y, double z,
 }
 
 static void j47_handle_player_list(J47Reader *r) {
-    int32_t action=0,count=0;if(!j47_r_varint(r,&action)||!j47_r_varint(r,&count)||count<0||count>10000)return;
-    for(int i=0;i<count;i++){
-        if(r->pos+16>r->len){r->failed=1;return;}unsigned char uuid[16];memcpy(uuid,r->data+r->pos,16);r->pos+=16;
-        if(action==0){char name[64];char skin_url[J47_SKIN_URL_MAX]={0};int32_t props=0,gm=0,ping=0;j47_r_string(r,name,sizeof(name));j47_r_varint(r,&props);
-            for(int p=0;p<props;p++){char a[128],b[8192];j47_r_string(r,a,sizeof(a));j47_r_string(r,b,sizeof(b));int sig=j47_r_u8(r);if(sig){char c[8192];j47_r_string(r,c,sizeof(c));}if(!strcmp(a,"textures"))j47_extract_skin_url(b,skin_url,sizeof(skin_url));}
-            j47_r_varint(r,&gm);j47_r_varint(r,&ping);int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}J47Profile*profile=j47_profile_put(uuid,name);if(profile)j47_profile_set_skin_url(profile,skin_url);
-        } else if(action==1||action==2){int32_t v;j47_r_varint(r,&v);} else if(action==3){int display=j47_r_u8(r);if(display){char d[4096];j47_r_string(r,d,sizeof(d));}}
-        else if(action==4){/* Keep cached name/skin data. Skin plugins remove
-                              and immediately re-add profiles during refresh. */}
-        if(r->failed)return;
+    int32_t action = 0, count = 0;
+    if (!j47_r_varint(r, &action) || !j47_r_varint(r, &count) || count < 0 || count > 10000) return;
+    for (int i = 0; i < count; ++i) {
+        if (r->pos + 16 > r->len) { r->failed = 1; return; }
+        unsigned char uuid[16];
+        memcpy(uuid, r->data + r->pos, 16);
+        r->pos += 16;
+        J47Profile *profile = j47_profile_find_uuid(uuid);
+
+        if (action == 0) { /* ADD_PLAYER */
+            char name[64] = {0};
+            char skin_url[J47_SKIN_URL_MAX] = {0};
+            int32_t props = 0, gm = 0, ping = 0;
+            if (!j47_r_string(r, name, sizeof(name)) || !j47_r_varint(r, &props) || props < 0 || props > 256) return;
+            for (int pidx = 0; pidx < props; ++pidx) {
+                char property_name[128], value[8192];
+                if (!j47_r_string(r, property_name, sizeof(property_name)) ||
+                    !j47_r_string(r, value, sizeof(value))) return;
+                int signed_property = j47_r_u8(r);
+                if (signed_property) {
+                    char signature[8192];
+                    if (!j47_r_string(r, signature, sizeof(signature))) return;
+                }
+                if (!strcmp(property_name, "textures"))
+                    j47_extract_skin_url(value, skin_url, sizeof(skin_url));
+            }
+            if (!j47_r_varint(r, &gm) || !j47_r_varint(r, &ping)) return;
+            int has_display = j47_r_u8(r);
+            char display_text[192] = {0};
+            if (has_display) {
+                char display_json[4096];
+                if (!j47_r_string(r, display_json, sizeof(display_json))) return;
+                j47_json_collect_text(display_json, display_text, sizeof(display_text));
+            }
+            profile = j47_profile_put(uuid, name);
+            if (profile) {
+                profile->listed = 1;
+                profile->game_mode = gm;
+                profile->ping = ping;
+                snprintf(profile->display_name, sizeof(profile->display_name), "%s", display_text);
+                j47_profile_set_skin_url(profile, skin_url);
+            }
+        } else if (action == 1) { /* UPDATE_GAME_MODE */
+            int32_t gm = 0;
+            if (!j47_r_varint(r, &gm)) return;
+            if (profile) profile->game_mode = gm;
+        } else if (action == 2) { /* UPDATE_LATENCY */
+            int32_t ping = 0;
+            if (!j47_r_varint(r, &ping)) return;
+            if (profile) profile->ping = ping;
+        } else if (action == 3) { /* UPDATE_DISPLAY_NAME */
+            int has_display = j47_r_u8(r);
+            char display_text[192] = {0};
+            if (has_display) {
+                char display_json[4096];
+                if (!j47_r_string(r, display_json, sizeof(display_json))) return;
+                j47_json_collect_text(display_json, display_text, sizeof(display_text));
+            }
+            if (profile) snprintf(profile->display_name, sizeof(profile->display_name), "%s", display_text);
+        } else if (action == 4) { /* REMOVE_PLAYER */
+            /* Preserve cached skin/profile data for skin-plugin remove/re-add
+               sequences, but remove the player from the visible tab list. */
+            if (profile) profile->listed = 0;
+        } else {
+            r->failed = 1;
+            return;
+        }
+        if (r->failed) return;
     }
+}
+
+static void j47_handle_scoreboard_objective(J47Reader *r) {
+    char name[32] = {0};
+    if (!j47_r_string(r, name, sizeof(name))) return;
+    int mode = (int)(int8_t)j47_r_u8(r);
+    if (mode == 1) {
+        j47_objective_remove(name);
+        return;
+    }
+    if (mode != 0 && mode != 2) { r->failed = 1; return; }
+    char display_json[256] = {0};
+    char render_type[32] = {0};
+    if (!j47_r_string(r, display_json, sizeof(display_json)) ||
+        !j47_r_string(r, render_type, sizeof(render_type))) return;
+    J47ScoreObjective *o = j47_objective_put(name);
+    if (!o) return;
+    /* Objective display names are legacy formatted strings in protocol 47,
+       not chat JSON. Preserve section-sign colour/style codes verbatim. */
+    snprintf(o->display_name, sizeof(o->display_name), "%.*s", 64, display_json);
+    o->render_hearts = !strcmp(render_type, "hearts");
+}
+
+static void j47_handle_update_score(J47Reader *r) {
+    char owner[64] = {0};
+    if (!j47_r_string(r, owner, sizeof(owner))) return;
+    int32_t action = 0;
+    if (!j47_r_varint(r, &action)) return;
+    char objective[32] = {0};
+    if (!j47_r_string(r, objective, sizeof(objective))) return;
+    if (action == 1) {
+        j47_score_remove(owner, objective);
+    } else if (action == 0) {
+        int32_t value = 0;
+        if (!j47_r_varint(r, &value)) return;
+        j47_score_set(owner, objective, value);
+    } else r->failed = 1;
+}
+
+static void j47_handle_display_scoreboard(J47Reader *r) {
+    int slot = (int)(int8_t)j47_r_u8(r);
+    char objective[32] = {0};
+    if (!j47_r_string(r, objective, sizeof(objective))) return;
+    if (slot >= 0 && slot < 19)
+        snprintf(g_j47.display_objectives[slot], sizeof(g_j47.display_objectives[slot]), "%.*s", 16, objective);
+}
+
+static void j47_handle_teams(J47Reader *r) {
+    char name[32] = {0};
+    if (!j47_r_string(r, name, sizeof(name))) return;
+    int action = (int)(int8_t)j47_r_u8(r);
+    if (action == 1) {
+        J47Team *old = j47_team_find(name);
+        if (old) memset(old, 0, sizeof(*old));
+        return;
+    }
+    J47Team *team = j47_team_put(name);
+    if (!team) return;
+    if (action == 0 || action == 2) {
+        char display[128], prefix[128], suffix[128], visibility[64];
+        if (!j47_r_string(r, display, sizeof(display)) ||
+            !j47_r_string(r, prefix, sizeof(prefix)) ||
+            !j47_r_string(r, suffix, sizeof(suffix))) return;
+        int friendly = j47_r_u8(r);
+        if (!j47_r_string(r, visibility, sizeof(visibility))) return;
+        int color = (int)(int8_t)j47_r_u8(r);
+        snprintf(team->display_name, sizeof(team->display_name), "%.*s", 64, display);
+        snprintf(team->prefix, sizeof(team->prefix), "%.*s", 64, prefix);
+        snprintf(team->suffix, sizeof(team->suffix), "%.*s", 64, suffix);
+        team->friendly_flags = friendly;
+        team->color = color;
+    }
+    if (action == 0 || action == 3 || action == 4) {
+        int32_t member_count = 0;
+        if (!j47_r_varint(r, &member_count) || member_count < 0 || member_count > 10000) return;
+        if (action == 0) team->member_count = 0;
+        for (int i = 0; i < member_count; ++i) {
+            char member[64];
+            if (!j47_r_string(r, member, sizeof(member))) return;
+            if (action == 4) j47_team_remove_member(team, member);
+            else j47_team_add_member(team, member);
+        }
+    }
+    if (action < 0 || action > 4) r->failed = 1;
+}
+
+static void j47_handle_tab_header_footer(J47Reader *r) {
+    char header_json[8192], footer_json[8192];
+    if (!j47_r_string(r, header_json, sizeof(header_json)) ||
+        !j47_r_string(r, footer_json, sizeof(footer_json))) return;
+    j47_json_collect_text(header_json, g_j47.tab_header, sizeof(g_j47.tab_header));
+    j47_json_collect_text(footer_json, g_j47.tab_footer, sizeof(g_j47.tab_footer));
 }
 
 static int j47_send_client_identity(void) {
@@ -2775,6 +3181,10 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x31:{int wid=j47_r_u8(r);int property=(int16_t)j47_r_be16(r);int value=(int16_t)j47_r_be16(r);if(g_j47.window.open&&wid==g_j47.window.window_id&&!strcmp(g_j47.window.type,"minecraft:furnace")){FurnaceTile*ft=furnace_open_tile();if(ft){if(property==0)ft->burn_time=value;else if(property==1)ft->current_item_burn_time=value;else if(property==2)ft->cook_time=value;}}break;}
         case 0x32:{int wid=j47_r_u8(r);int action=(int16_t)j47_r_be16(r);int accepted=j47_r_u8(r);if(!accepted){J47Writer w;j47_writer_init(&w,8);j47_w_u8(&w,wid);j47_w_be16(&w,action);j47_w_u8(&w,1);j47_send_packet(0x0F,w.data,w.len);j47_writer_free(&w);}break;}
         case 0x38:j47_handle_player_list(r);break;
+        case 0x3B:j47_handle_scoreboard_objective(r);break;
+        case 0x3C:j47_handle_update_score(r);break;
+        case 0x3D:j47_handle_display_scoreboard(r);break;
+        case 0x3E:j47_handle_teams(r);break;
         case 0x39:{
             int flags=j47_r_u8(r);
             float fly_speed=j47_r_float(r);
@@ -2796,6 +3206,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x40:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Disconnected by Java server");}break;}
         case 0x41:g_j47.difficulty=j47_r_u8(r);break;
         case 0x46:{int32_t threshold;if(j47_r_varint(r,&threshold))g_j47.compression_threshold=threshold;break;}
+        case 0x47:j47_handle_tab_header_footer(r);break;
         case 0x48:{char url[2048],hash[128];j47_r_string(r,url,sizeof(url));j47_r_string(r,hash,sizeof(hash));J47Writer w;j47_writer_init(&w,128);j47_w_string(&w,hash);j47_w_varint(&w,1);j47_send_packet(0x19,w.data,w.len);j47_writer_free(&w);break;}
         default: break;
     }
@@ -2803,6 +3214,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
 
 static void j47_handle_packet(const unsigned char *data,size_t len){
     J47Reader r;int32_t id=-1;j47_reader_init(&r,data,len);if(!j47_r_varint(&r,&id))return;
+    ++g_j47.packet_serial;
     if(g_j47.state==PEX_JAVA47_LOGIN){
         if(id==0){char json[8192],text[512];if(j47_r_string(&r,json,sizeof(json))){j47_json_collect_text(json,text,sizeof(text));j47_fail(text[0]?text:"Login rejected");}}
         else if(id==1){j47_fail("This Java server requires online-mode authentication");}
@@ -2828,14 +3240,245 @@ static int j47_process_rx(void){
            starves local movement, so bound play-state work per rendered frame
            while leaving the remaining complete frames buffered. */
         if(!g_j47.peer_closed && g_j47.state==PEX_JAVA47_PLAY &&
-           (packet_count>=256 || now_seconds()-started>=0.004))break;
+           (packet_count>=4096 || now_seconds()-started>=0.010))break;
     }
     if(consumed){memmove(g_j47.rx,g_j47.rx+consumed,g_j47.rx_len-consumed);g_j47.rx_len-=consumed;}return 1;
 }
 
+
+static void j47_draw_solid_box(float x0,float y0,float z0,float x1,float y1,float z1) {
+    glBegin(GL_QUADS);
+    glNormal3f(0,0,-1); glVertex3f(x1,y0,z0);glVertex3f(x0,y0,z0);glVertex3f(x0,y1,z0);glVertex3f(x1,y1,z0);
+    glNormal3f(0,0, 1); glVertex3f(x0,y0,z1);glVertex3f(x1,y0,z1);glVertex3f(x1,y1,z1);glVertex3f(x0,y1,z1);
+    glNormal3f(-1,0,0); glVertex3f(x0,y0,z0);glVertex3f(x0,y0,z1);glVertex3f(x0,y1,z1);glVertex3f(x0,y1,z0);
+    glNormal3f( 1,0,0); glVertex3f(x1,y0,z1);glVertex3f(x1,y0,z0);glVertex3f(x1,y1,z0);glVertex3f(x1,y1,z1);
+    glNormal3f(0, 1,0); glVertex3f(x0,y1,z1);glVertex3f(x1,y1,z1);glVertex3f(x1,y1,z0);glVertex3f(x0,y1,z0);
+    glNormal3f(0,-1,0); glVertex3f(x0,y0,z0);glVertex3f(x1,y0,z0);glVertex3f(x1,y0,z1);glVertex3f(x0,y0,z1);
+    glEnd();
+}
+
+static void j47_draw_armor_part(float cx,float cy,float cz,float sx,float sy,float sz,const float pose[3]) {
+    glPushMatrix();
+    glTranslatef(cx,cy,cz);
+    glRotatef(pose[2],0,0,1);
+    glRotatef(pose[1],0,1,0);
+    glRotatef(pose[0],1,0,0);
+    j47_draw_solid_box(-sx*.5f,-sy*.5f,-sz*.5f,sx*.5f,sy*.5f,sz*.5f);
+    glPopMatrix();
+}
+
+static void j47_draw_armor_stand_name(const J47Entity *e,float label_y) {
+    if (!e || !e->custom_name_visible || !e->custom_name[0] || !tex_font.id) return;
+    float dx=(float)e->x-g_player_render_frame.x,dy=label_y-g_player_render_frame.y,dz=(float)e->z-g_player_render_frame.z;
+    if (dx*dx+dy*dy+dz*dz > 64.0f*64.0f) return;
+    int tw=text_width(e->custom_name);
+    if(tw<=0)return;
+    float view_yaw=0.0f,view_pitch=0.0f;
+    multiplayer_name_tag_view_angles(&view_yaw,&view_pitch);
+    float scale=(1.0f/60.0f)*1.6f;
+    glPushMatrix();
+    glTranslatef((float)e->x,label_y,(float)e->z);
+    glRotatef(-view_yaw,0,1,0);glRotatef(view_pitch,1,0,0);glScalef(-scale,-scale,scale);
+    glDepthMask(GL_FALSE);glDisable(GL_DEPTH_TEST);glDisable(GL_TEXTURE_2D);
+    draw_rect(-tw/2-1,-1,tw/2+1,8,(int)0x40000000u);
+    glEnable(GL_TEXTURE_2D);draw_text_no_shadow(e->custom_name,-tw/2,0,(int)0x20FFFFFFu);
+    glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);draw_text_no_shadow(e->custom_name,-tw/2,0,0xFFFFFF);
+    glPopMatrix();
+}
+
+void pex_java47_draw_special_entities(float partial) {
+    (void)partial;
+    if(g_j47.state!=PEX_JAVA47_PLAY)return;
+    glEnable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glDisable(GL_TEXTURE_2D);
+    for(int i=0;i<J47_ENTITY_MAX;++i){
+        J47Entity *e=&g_j47.entities[i];
+        if(!e->used||!e->is_armor_stand)continue;
+        int invisible=(e->metadata_flags&0x20)!=0;
+        int small=(e->armor_stand_flags&0x01)!=0;
+        int show_arms=(e->armor_stand_flags&0x04)!=0;
+        int no_base=(e->armor_stand_flags&0x08)!=0;
+        float scale=small?0.5f:1.0f;
+        if(!invisible){
+            glPushMatrix();
+            glTranslatef((float)e->x,(float)e->y,(float)e->z);
+            glRotatef(180.0f-e->yaw,0,1,0);
+            glScalef(scale,scale,scale);
+            glColor4f(0.58f,0.39f,0.20f,1.0f);
+            if(!no_base)j47_draw_solid_box(-0.38f,0.0f,-0.38f,0.38f,0.06f,0.38f);
+            j47_draw_solid_box(-0.035f,0.06f,-0.035f,0.035f,1.48f,0.035f);
+            j47_draw_armor_part(0.0f,1.60f,0.0f,0.50f,0.50f,0.50f,e->armor_pose[0]);
+            glPushMatrix();
+            glTranslatef(0.0f,1.15f,0.0f);
+            glRotatef(e->armor_pose[1][2],0,0,1);glRotatef(e->armor_pose[1][1],0,1,0);glRotatef(e->armor_pose[1][0],1,0,0);
+            j47_draw_solid_box(-0.30f,0.24f,-0.035f,0.30f,0.31f,0.035f);
+            j47_draw_solid_box(-0.22f,-0.31f,-0.035f,-0.15f,0.28f,0.035f);
+            j47_draw_solid_box( 0.15f,-0.31f,-0.035f, 0.22f,0.28f,0.035f);
+            j47_draw_solid_box(-0.23f,-0.35f,-0.055f,0.23f,-0.28f,0.055f);
+            glPopMatrix();
+            j47_draw_armor_part(-0.12f,0.52f,0.0f,0.10f,1.02f,0.10f,e->armor_pose[4]);
+            j47_draw_armor_part( 0.12f,0.52f,0.0f,0.10f,1.02f,0.10f,e->armor_pose[5]);
+            if(show_arms){
+                j47_draw_armor_part(-0.36f,1.10f,0.0f,0.10f,0.88f,0.10f,e->armor_pose[2]);
+                j47_draw_armor_part( 0.36f,1.10f,0.0f,0.10f,0.88f,0.10f,e->armor_pose[3]);
+            }
+            glPopMatrix();
+        }
+        glEnable(GL_TEXTURE_2D);
+        j47_draw_armor_stand_name(e,(float)e->y+(small?1.25f:2.18f));
+        glDisable(GL_TEXTURE_2D);
+    }
+    glEnable(GL_TEXTURE_2D);glEnable(GL_CULL_FACE);glColor4f(1,1,1,1);
+}
+
+
+static int j47_ascii_casecmp(const char *a,const char *b) {
+    if(!a)a="";if(!b)b="";
+    while(*a&&*b){unsigned char ca=(unsigned char)*a++,cb=(unsigned char)*b++;if(ca>='A'&&ca<='Z')ca=(unsigned char)(ca+32);if(cb>='A'&&cb<='Z')cb=(unsigned char)(cb+32);if(ca!=cb)return (int)ca-(int)cb;}
+    return (unsigned char)*a-(unsigned char)*b;
+}
+
+typedef struct J47TabSortEntry {
+    J47Profile *profile;
+    J47Team *team;
+} J47TabSortEntry;
+
+static int j47_tab_compare(const void *ap,const void *bp) {
+    const J47TabSortEntry *a=(const J47TabSortEntry*)ap,*b=(const J47TabSortEntry*)bp;
+    int aspec=a->profile->game_mode==3,bspec=b->profile->game_mode==3;
+    if(aspec!=bspec)return aspec-bspec;
+    const char *at=a->team?a->team->name:"",*bt=b->team?b->team->name:"";
+    int c=j47_ascii_casecmp(at,bt);if(c)return c;
+    return j47_ascii_casecmp(a->profile->name,b->profile->name);
+}
+
+static int j47_split_lines(const char *text,char lines[][512],int max_lines) {
+    if(!text||!text[0]||max_lines<=0)return 0;
+    int n=0,pos=0;
+    for(const unsigned char *p=(const unsigned char*)text;*p&&n<max_lines;++p){
+        if(*p=='\r')continue;
+        if(*p=='\n'){
+            lines[n][pos]=0;++n;pos=0;continue;
+        }
+        if(pos<(int)sizeof(lines[0])-1)lines[n][pos++]=(char)*p;
+    }
+    if((pos>0||n==0)&&n<max_lines){lines[n][pos]=0;++n;}
+    return n;
+}
+
+void pex_java47_draw_server_scoreboard(void) {
+    if(g_j47.state!=PEX_JAVA47_PLAY||g_screen!=SCREEN_INGAME)return;
+    int slot=1;
+    J47Team *local_team=j47_team_for_member(g_j47.username);
+    if(local_team&&local_team->color>=0&&local_team->color<16&&g_j47.display_objectives[3+local_team->color][0])
+        slot=3+local_team->color;
+    const char *objective_name=g_j47.display_objectives[slot];
+    if(!objective_name[0])return;
+    J47ScoreObjective *objective=j47_objective_find(objective_name);
+    if(!objective)return;
+    J47ScoreEntry *entries[15];
+    int total=0;
+    for(int i=0;i<J47_SCORE_ENTRY_MAX;++i){
+        J47ScoreEntry *e=&g_j47.scores[i];
+        if(!e->used||strcmp(e->objective,objective_name)||e->owner[0]=='#')continue;
+        if(total<15)entries[total++]=e;
+        else{
+            int min_i=0;
+            for(int k=1;k<15;++k)if(entries[k]->value<entries[min_i]->value)min_i=k;
+            if(e->value>entries[min_i]->value)entries[min_i]=e;
+        }
+    }
+    for(int i=0;i<total;++i)for(int j=i+1;j<total;++j){
+        if(entries[j]->value>entries[i]->value||
+           (entries[j]->value==entries[i]->value&&j47_ascii_casecmp(entries[j]->owner,entries[i]->owner)<0)){
+            J47ScoreEntry *q=entries[i];entries[i]=entries[j];entries[j]=q;
+        }
+    }
+    int width=text_width(objective->display_name);
+    char names[15][192],values[15][32];
+    for(int i=0;i<total;++i){
+        j47_format_team_name(entries[i]->owner,names[i],sizeof(names[i]));
+        snprintf(values[i],sizeof(values[i]),"\xC2\xA7" "c%d",entries[i]->value);
+        int linew=text_width(names[i])+2+text_width(values[i]);if(linew>width)width=linew;
+    }
+    if(width<40)width=40;
+    int right=g_gui_w-3,left=right-width-6;
+    int line_h=10;
+    int bottom=g_gui_h/2+total*line_h/2;
+    int top=bottom-(total+1)*line_h;
+    draw_rect(left,top,right,bottom,(int)0x50000000u);
+    draw_rect(left,top,right,top+line_h,(int)0x60000000u);
+    draw_centered_text(objective->display_name,(left+right)/2,top+1,0xFFFFFF);
+    for(int i=0;i<total;++i){
+        int y=top+line_h*(i+1)+1;
+        draw_text_no_shadow(names[i],left+2,y,0xFFFFFF);
+        draw_text_no_shadow(values[i],right-2-text_width(values[i]),y,0xFFFFFF);
+    }
+}
+
+void pex_java47_draw_tab_overlay(void) {
+    if(g_j47.state!=PEX_JAVA47_PLAY||g_screen!=SCREEN_INGAME||!key_down_vk(VK_TAB))return;
+    J47TabSortEntry entries[J47_PROFILE_MAX];int count=0;
+    for(int i=0;i<J47_PROFILE_MAX;++i){
+        J47Profile *p=&g_j47.profiles[i];
+        if(!p->used||!p->listed||!p->name[0])continue;
+        if(count < 80){entries[count].profile=p;entries[count].team=j47_team_for_member(p->name);++count;}
+    }
+    if(count<=0)return;
+    qsort(entries,(size_t)count,sizeof(entries[0]),j47_tab_compare);
+    int columns=1,rows=count;
+    while(rows>20){++columns;rows=(count+columns-1)/columns;}
+    int col_width=72;
+    char names[J47_PROFILE_MAX][192];
+    char list_scores[J47_PROFILE_MAX][32];
+    J47ScoreObjective *list_objective=NULL;
+    if(g_j47.display_objectives[0][0])list_objective=j47_objective_find(g_j47.display_objectives[0]);
+    for(int i=0;i<count;++i){
+        J47Profile *p=entries[i].profile;
+        list_scores[i][0]=0;
+        if(p->display_name[0])snprintf(names[i],sizeof(names[i]),"%s",p->display_name);
+        else j47_format_team_name(p->name,names[i],sizeof(names[i]));
+        if(list_objective){
+            J47ScoreEntry *score=j47_score_find(p->name,list_objective->name);
+            if(score)snprintf(list_scores[i],sizeof(list_scores[i]),list_objective->render_hearts?"\xC2\xA7" "c%d":"%d",score->value);
+        }
+        int w=text_width(names[i])+18+(list_scores[i][0]?text_width(list_scores[i])+4:0);if(w>col_width)col_width=w;
+    }
+    int max_col=(g_gui_w-20)/columns;if(col_width>max_col)col_width=max_col;if(col_width<48)col_width=48;
+    int total_width=columns*col_width;
+    char header[16][512],footer[16][512];
+    int hn=j47_split_lines(g_j47.tab_header,header,16),fn=j47_split_lines(g_j47.tab_footer,footer,16);
+    int y=10;
+    int panel_left=(g_gui_w-total_width)/2-2,panel_right=panel_left+total_width+4;
+    int widest=total_width;
+    for(int i=0;i<hn;++i)if(text_width(header[i])+8>widest)widest=text_width(header[i])+8;
+    for(int i=0;i<fn;++i)if(text_width(footer[i])+8>widest)widest=text_width(footer[i])+8;
+    panel_left=(g_gui_w-widest)/2;panel_right=panel_left+widest;
+    int list_left=(g_gui_w-total_width)/2;
+    int panel_height=hn*10+rows*10+fn*10+6;
+    draw_rect(panel_left,y-2,panel_right,y+panel_height,(int)0x90000000u);
+    for(int i=0;i<hn;++i){draw_centered_text(header[i],g_gui_w/2,y,0xFFFFFF);y+=10;}
+    for(int i=0;i<count;++i){
+        int col=i/rows,row=i%rows;
+        int x=list_left+col*col_width,py=y+row*10;
+        draw_rect(x,py,x+col_width-1,py+9,(int)0x30000000u);
+        int color=entries[i].profile->game_mode==3?0x909090:0xFFFFFF;
+        draw_text_no_shadow(names[i],x+2,py+1,color);
+        if(list_scores[i][0]){
+            int score_x=x+col_width-14-text_width(list_scores[i]);
+            draw_text_no_shadow(list_scores[i],score_x,py+1,0xFFFFFF);
+        }
+        int ping=entries[i].profile->ping,bars=5;
+        if(ping<0)bars=0;else if(ping<150)bars=5;else if(ping<300)bars=4;else if(ping<600)bars=3;else if(ping<1000)bars=2;else bars=1;
+        int bx=x+col_width-12;
+        for(int b=0;b<5;++b){int bh=2+b;draw_rect(bx+b*2,py+8-bh,bx+b*2+1,py+8,b<bars?0x55FF55:0x555555);}
+    }
+    y+=rows*10;
+    for(int i=0;i<fn;++i){draw_centered_text(footer[i],g_gui_w/2,y,0xFFFFFF);y+=10;}
+}
+
 int pex_java47_begin_join(const char *host,int port,const char *username){
     pex_java47_disconnect();
-    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.last_movement_game_tick=-1;
+    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.last_movement_game_tick=-1;g_j47.last_world_origin_x=g_flat_world_origin_x;g_j47.last_world_origin_z=g_flat_world_origin_z;
     snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
     g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
     J47Writer hs; j47_writer_init(&hs,300);j47_w_varint(&hs,PEX_JAVA47_PROTOCOL_VERSION);j47_w_string_n(&hs,g_j47.host,255);j47_w_be16(&hs,g_j47.port);j47_w_varint(&hs,2);
@@ -2851,6 +3494,12 @@ int pex_java47_tick(void){
     if(!j47_flush_tx())return 0;
     if(!j47_receive_available())return 0;
     if(!j47_process_rx())return 0;
+    if (g_j47.last_world_origin_x != g_flat_world_origin_x ||
+        g_j47.last_world_origin_z != g_flat_world_origin_z) {
+        g_j47.last_world_origin_x = g_flat_world_origin_x;
+        g_j47.last_world_origin_z = g_flat_world_origin_z;
+        j47_reapply_cached_block_updates();
+    }
     if(g_j47.peer_closed){
         /* If a valid disconnect packet was buffered, j47_process_rx() has
            already converted it into the real server-provided reason.  Reach
@@ -2968,10 +3617,20 @@ int pex_java47_send_interact(int entity_id,float hit_x,float hit_y,float hit_z){
     J47Entity *entity=j47_entity_find(entity_id);
     J47Writer w;j47_writer_init(&w,32);j47_w_varint(&w,entity_id);
     if(entity&&entity->is_armor_stand){
-        /* Vanilla 1.8.8 handles armor stands through INTERACT_AT. Sending a
-           second generic interaction can make plugin menus fire twice. */
+        /* Vanilla first targets the exact armor-stand hit vector. A large
+           number of server-menu plugins, however, listen only for the generic
+           PlayerInteractEntity event, so follow INTERACT_AT with INTERACT just
+           like a normal right-click fallback. */
         j47_w_varint(&w,2);
         j47_w_float(&w,hit_x);j47_w_float(&w,hit_y);j47_w_float(&w,hit_z);
+        int ok=j47_send_packet(0x02,w.data,w.len);
+        j47_writer_free(&w);
+        if(!ok)return 0;
+        J47Writer generic;j47_writer_init(&generic,16);
+        j47_w_varint(&generic,entity_id);j47_w_varint(&generic,0);
+        ok=j47_send_packet(0x02,generic.data,generic.len);
+        j47_writer_free(&generic);
+        return ok;
     }else{
         /* Villagers, fake-player NPCs and other ordinary entities use the
            generic right-click action. */
@@ -3073,18 +3732,23 @@ int pex_java47_try_interact_entity(float max_dist) {
         if(!e->used||e->entity_id==g_j47.local_entity_id||e->kind==J47_ENTITY_DROP)continue;
         float width=0.7f,height=1.8f,feet_y=(float)e->y;
         if(e->kind==J47_ENTITY_PLAYER){width=0.7f;height=1.8f;}
+        else if(e->is_armor_stand){
+            int small=(e->armor_stand_flags&0x01)!=0;
+            int marker=(e->armor_stand_flags&0x10)!=0;
+            width=small?0.35f:0.65f;
+            height=small?1.15f:2.05f;
+            /* Marker stands have a zero vanilla collision box but are heavily
+               used as clickable menu icons. Give only the client raycast a
+               practical item-sized target without changing world collision. */
+            if(marker){width=0.75f;height=small?1.25f:2.15f;}
+            feet_y=(float)e->y;
+        }
         else if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0&&e->mob_slot<MAX_PASSIVE_MOBS){
             PassiveMob *m=&g_passive_mobs[e->mob_slot];
             if(!m->active||m->death_time>0)continue;
-            if(e->is_armor_stand){
-                /* Keep the real armor-stand interaction volume rather than the
-                   shorter pig renderer, so a helmet/menu icon can be clicked. */
-                width=0.65f;height=2.0f;feet_y=(float)e->y;
-            }else{
-                width=m->width>0.1f?m->width:0.9f;
-                height=m->height>0.1f?m->height:0.9f;
-                feet_y=m->y;
-            }
+            width=m->width>0.1f?m->width:0.9f;
+            height=m->height>0.1f?m->height:0.9f;
+            feet_y=m->y;
         }
         float half=width*0.5f;
         float mn[3]={(float)e->x-half,feet_y,(float)e->z-half};

@@ -33,7 +33,7 @@ The game remains a 1.2.5 gameplay client. Java 1.8.8 content that PexCraft does 
 - 1.8-only items are mapped to the closest usable 1.2.5 icon (emerald to diamond, rabbit to chicken, banners/armor stands to signs, and so on)
 - the original server item ID, damage, count, and bounded raw NBT are retained for clicks and use packets, so a substitute icon does not become the wrong network item
 - unsupported living entity types -> pig
-- armor stands -> pig proxy plus the closest mapped equipped-item display
+- armor stands -> protocol-47 metadata-aware compatibility model with translated equipment display
 - completely unknown blocks fall back to stone; completely unknown standalone items fall back to paper
 
 Chat messages are wrapped to the existing HUD width and continue on additional chat lines rather than clipping off-screen.

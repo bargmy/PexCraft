@@ -1097,8 +1097,8 @@ static void rebuild_screen(void) {
             for (int i = 0; i < visible_rows; i++) {
                 int idx = scroll + i;
                 if (idx >= pex_mp_server_count_get()) break;
-                int y = top + 4 + i * 36;
-                int h = 32;
+                int y = top + 4 + i * PEX_MP_SERVER_ROW_HEIGHT;
+                int h = PEX_MP_SERVER_ROW_HEIGHT - 4;
                 if (y + h > bottom) h = bottom - y;
                 if (h > 0) add_button_full(PEX_MP_SERVER_ROW_BASE + idx, g_gui_w / 2 - 110, y, 220, h, "", BUTTON_HITBOX);
             }

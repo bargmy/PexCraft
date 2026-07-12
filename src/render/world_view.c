@@ -9612,6 +9612,7 @@ static void draw_flat_test_world(void) {
 
     entity_part = profile_begin();
     draw_passive_mobs(g_frame_partial);
+    pex_java47_draw_special_entities(g_frame_partial);
     draw_vehicles(g_frame_partial);
     draw_projectiles(g_frame_partial);
     draw_xp_orbs(g_frame_partial);

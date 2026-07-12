@@ -617,6 +617,8 @@ static void draw_hud(void) {
         }
     }
     draw_chat_lines(g_screen == SCREEN_CHAT);
+    pex_java47_draw_server_scoreboard();
+    pex_java47_draw_tab_overlay();
     draw_save_message();
 }
 
