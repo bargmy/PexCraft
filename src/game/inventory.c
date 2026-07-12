@@ -9096,6 +9096,13 @@ static void ingame_right_click_impl(void) {
     if (g_right_click_delay_timer > 0) return;
     g_right_click_delay_timer = 4;
 
+    /* Route every input device through the same entity-first objectMouseOver
+       order used by the Java client. Previously only the desktop mouse-down
+       edge tried entity interaction; controller/touch/repeat paths went
+       straight to block/item use, so villagers and armor-stand menu entities
+       appeared unclickable. */
+    if (passive_mobs_player_interact()) return;
+
     FlatRayHit hit = flat_raycast();
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (!hit.hit) {
@@ -9150,9 +9157,20 @@ static void ingame_right_click_impl(void) {
         }
     }
 
-    if (stack_empty(held)) return;
+    if (stack_empty(held)) {
+        /* Java still sends C08 for an empty-hand right-click on an ordinary
+           block. Server NPC/menu implementations sometimes use that event. */
+        if (g_mp_connected) pex_net_send_block_interact(hit.bx, hit.by, hit.bz, hit.face);
+        return;
+    }
     { int used_id = held->id; if (try_use_nonblock_item(held, &hit, target_id)) { pex_stats_add_used(used_id, 1); return; } }
-    if (!item_is_placeable_block_id(held->id)) return;
+    if (!item_is_placeable_block_id(held->id)) {
+        /* A translated server-side menu item is commonly paper, a star, a
+           head, etc. It is not locally placeable, but vanilla still sends the
+           clicked-block C08 packet with the held item. */
+        if (g_mp_connected) pex_net_send_block_interact(hit.bx, hit.by, hit.bz, hit.face);
+        return;
+    }
 
     int px = hit.bx;
     int py = hit.by;

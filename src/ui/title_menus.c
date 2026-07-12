@@ -915,101 +915,125 @@ static int pex_mp_motd_wrap(const char *src,char out[2][256],int max_width) {
     return line;
 }
 
+static void pex_mp_draw_unknown_server_icon(int x,int y) {
+    draw_rect(x,y,x+32,y+32,0x202020);
+    for(int yy=0;yy<4;++yy)for(int xx=0;xx<4;++xx){
+        int c=((xx+yy)&1)?0x383838:0x2A2A2A;
+        draw_rect(x+xx*8,y+yy*8,x+xx*8+8,y+yy*8+8,c);
+    }
+    draw_rect(x+7,y+7,x+25,y+25,0x505050);
+    draw_rect(x+10,y+10,x+22,y+22,0x303030);
+    draw_rect(x+14,y+13,x+18,y+19,0x707070);
+}
+
+
 static void draw_multiplayer(void) {
     pex_mp_server_list_ensure();
     draw_default_bg();
 
-    if (pex_mp_server_mode_get() != 0) {
-        int mode = pex_mp_server_mode_get();
-        const char *title = mode == 1 ? tr_key_default("selectServer.direct", "Direct Connect") :
-                            mode == 2 ? tr_key_default("selectServer.add", "Add Server") :
-                                        tr_key_default("selectServer.edit", "Edit Server");
-        draw_centered_text(title, g_gui_w / 2, g_gui_h / 4 - 60 + 20, 16777215);
-        int x = g_gui_w / 2 - 100;
-        int y = 96;
-        if (mode != 1) {
-            draw_text(tr_key_default("addServer.enterName", "Server Name"), x, y - 14, 10526880);
-            draw_rect(x - 1, y - 1, x + 201, y + 21, pex_mp_server_edit_field_get() == 1 ? -1 : -6250336);
-            draw_rect(x, y, x + 200, y + 20, -16777216);
-            char name_line[96];
-            snprintf(name_line, sizeof(name_line), "%s%s", pex_mp_server_edit_name_get(), (pex_mp_server_edit_field_get() == 1 && g_ticks / 6 % 2 == 0) ? "_" : "");
-            draw_text(name_line, x + 4, y + 6, 14737632);
-            y += 44;
-        }
-        draw_text(tr_key_default("addServer.enterIp", "Server Address"), x, y - 14, 10526880);
-        draw_rect(x - 1, y - 1, x + 201, y + 21, pex_mp_server_edit_field_get() == 0 ? -1 : -6250336);
-        draw_rect(x, y, x + 200, y + 20, -16777216);
-        char address_line[128];
-        snprintf(address_line, sizeof(address_line), "%s%s", pex_mp_server_edit_address_get(), (pex_mp_server_edit_field_get() == 0 && g_ticks / 6 % 2 == 0) ? "_" : "");
-        draw_text(address_line, x + 4, y + 6, 14737632);
+    int mode=pex_mp_server_mode_get();
+    if(mode==4){
+        const PexMpServerEntry *e=pex_mp_server_entry_get(pex_mp_server_selected_get());
+        char warning[192];
+        snprintf(warning,sizeof(warning),"'%s' %s",e&&e->name[0]?e->name:"Minecraft Server",
+                 tr_key_default("selectServer.deleteWarning","will be lost forever! (A long time!)"));
+        draw_centered_text(tr_key_default("selectServer.deleteQuestion","Are you sure you want to delete this server?"),g_gui_w/2,70,0xFFFFFF);
+        draw_centered_text(warning,g_gui_w/2,90,0xFFFFFF);
         draw_all_buttons();
         return;
     }
 
-    int top = 32;
-    int bottom = g_gui_h - 64;
-    int left = g_gui_w / 2 - 110;
-    int right = g_gui_w / 2 + 110;
+    if(mode!=0){
+        int x=g_gui_w/2-100;
+        if(mode==1){
+            draw_centered_text(tr_key_default("selectServer.direct","Direct Connect"),g_gui_w/2,20,0xFFFFFF);
+            draw_text(tr_key_default("addServer.enterIp","Server Address"),x,100,0xA0A0A0);
+            int y=116;
+            draw_rect(x-1,y-1,x+201,y+21,-1);
+            draw_rect(x,y,x+200,y+20,-16777216);
+            char address[160];
+            snprintf(address,sizeof(address),"%s%s",pex_mp_server_edit_address_get(),(pex_mp_server_edit_field_get()==0&&g_ticks/6%2==0)?"_":"");
+            draw_text(address,x+4,y+6,0xE0E0E0);
+        }else{
+            draw_centered_text(tr_key_default("addServer.title","Edit Server Info"),g_gui_w/2,17,0xFFFFFF);
+            draw_text(tr_key_default("addServer.enterName","Server Name"),x,53,0xA0A0A0);
+            draw_rect(x-1,65,x+201,87,pex_mp_server_edit_field_get()==1?-1:-6250336);
+            draw_rect(x,66,x+200,86,-16777216);
+            char name[128];
+            snprintf(name,sizeof(name),"%s%s",pex_mp_server_edit_name_get(),(pex_mp_server_edit_field_get()==1&&g_ticks/6%2==0)?"_":"");
+            draw_text(name,x+4,72,0xE0E0E0);
+            draw_text(tr_key_default("addServer.enterIp","Server Address"),x,94,0xA0A0A0);
+            draw_rect(x-1,105,x+201,127,pex_mp_server_edit_field_get()==0?-1:-6250336);
+            draw_rect(x,106,x+200,126,-16777216);
+            char address[160];
+            snprintf(address,sizeof(address),"%s%s",pex_mp_server_edit_address_get(),(pex_mp_server_edit_field_get()==0&&g_ticks/6%2==0)?"_":"");
+            draw_text(address,x+4,112,0xE0E0E0);
+        }
+        draw_all_buttons();
+        return;
+    }
+
+    int top=32,bottom=g_gui_h-64;
+    int list_width=305;
+    int left=g_gui_w/2-list_width/2;
+    int right=left+list_width;
     pex_mp_server_clamp_scroll();
-    draw_tiled_rect_tint(0, top, g_gui_w, bottom, 0x202020, 0);
+    draw_tiled_rect_tint(0,top,g_gui_w,bottom,0x202020,0);
 
-    int visible = pex_mp_server_visible_rows();
-    int scroll = pex_mp_server_scroll_get();
-    for (int row = 0; row < visible; ++row) {
-        int index = scroll + row;
-        const PexMpServerEntry *e = pex_mp_server_entry_get(index);
-        if (!e) break;
-        int y = top + 4 + row * PEX_MP_SERVER_ROW_HEIGHT;
-        if (index == pex_mp_server_selected_get()) {
-            draw_rect(left, y - 2, right, y + PEX_MP_SERVER_ROW_HEIGHT - 2, 8421504);
-            draw_rect(left + 1, y - 1, right - 1, y + PEX_MP_SERVER_ROW_HEIGHT - 3, 0);
+    int visible=pex_mp_server_visible_rows();
+    int scroll=pex_mp_server_scroll_get();
+    for(int row=0;row<visible;++row){
+        int index=scroll+row;
+        const PexMpServerEntry *e=pex_mp_server_entry_get(index);
+        if(!e)break;
+        int y=top+row*PEX_MP_SERVER_ROW_HEIGHT;
+        int selected=index==pex_mp_server_selected_get();
+        if(selected){
+            draw_rect(left-2,y-2,right+2,y+34,0x808080);
+            draw_rect(left-1,y-1,right+1,y+33,0x000000);
         }
-        draw_text(e->name[0] ? e->name : "Minecraft Server", left + 2, y + 1, 16777215);
-        int motd_color = (e->ping_ms < 0 && e->polled) ? 0xFF5555 : 8421504;
-        char motd_lines[2][256]={{0}};
-        pex_mp_motd_wrap(e->motd[0]?e->motd:(e->polling?"Polling..":""),motd_lines,158);
-        if(motd_lines[0][0])draw_text(motd_lines[0],left+2,y+12,motd_color);
-        if(motd_lines[1][0])draw_text(motd_lines[1],left+2,y+22,motd_color);
-        if (e->player_count[0]) {
-            int w = text_width(e->player_count);
-            draw_text(e->player_count, left + 215 - w, y + 12, 8421504);
+        pex_mp_draw_unknown_server_icon(left,y);
+        if(selected){
+            draw_rect(left,y,left+32,y+32,(int)0xA0000000u);
+            draw_rect(left+18,y+8,left+21,y+24,0xFFFFFF);
+            draw_rect(left+21,y+11,left+24,y+21,0xFFFFFF);
+            draw_rect(left+24,y+14,left+27,y+18,0xFFFFFF);
         }
-        char server_line[160];
-        if (e->server_kind == 1) snprintf(server_line, sizeof(server_line), "%s  [Java %s]", e->host, e->version[0] ? e->version : "1.8.8");
-        else if (e->server_kind == 2) snprintf(server_line, sizeof(server_line), "%s  [Bedrock %s]", e->host, e->version[0] ? e->version : "0.15.x");
-        else snprintf(server_line, sizeof(server_line), "%s", e->host);
-        draw_text(server_line, left + 2, y + 35, 3158064);
-        int bars = 5;
-        const char *tip = "Polling..";
-        if (e->polled && !e->polling) {
-            if (e->ping_ms < 0) { bars = 0; tip = "(no connection)"; }
-            else if (e->ping_ms < 150) { bars = 5; tip = "fast"; }
-            else if (e->ping_ms < 300) { bars = 4; tip = "good"; }
-            else if (e->ping_ms < 600) { bars = 3; tip = "slow"; }
-            else if (e->ping_ms < 1000) { bars = 2; tip = "very slow"; }
-            else { bars = 1; tip = "bad"; }
-        } else {
-            bars = 1 + ((g_ticks / 8 + index) % 5);
+        int tx=left+35;
+        draw_text(e->name[0]?e->name:tr_key_default("selectServer.defaultName","Minecraft Server"),tx,y+1,0xFFFFFF);
+        char motd[2][256]={{0}};
+        pex_mp_motd_wrap(e->motd[0]?e->motd:(e->polling?"Pinging...":""),motd,list_width-37);
+        int motd_color=(e->ping_ms<0&&e->polled)?0xFF5555:0x808080;
+        if(motd[0][0])draw_text(motd[0],tx,y+12,motd_color);
+        if(motd[1][0])draw_text(motd[1],tx,y+21,motd_color);
+
+        int incompatible=e->server_kind==1&&e->polled&&e->protocol>0&&e->protocol!=PEX_JAVA47_PROTOCOL_VERSION;
+        char right_text[80];
+        if(incompatible)snprintf(right_text,sizeof(right_text),"\xC2\xA7" "4%s",e->version[0]?e->version:"Unknown");
+        else snprintf(right_text,sizeof(right_text),"%s",e->player_count);
+        if(right_text[0])draw_text(right_text,right-17-text_width(right_text),y+1,0x808080);
+
+        int level=5,anim=0;
+        if(e->polled&&!e->polling){
+            if(incompatible||e->ping_ms<0)level=5;
+            else if(e->ping_ms<150)level=0;
+            else if(e->ping_ms<300)level=1;
+            else if(e->ping_ms<600)level=2;
+            else if(e->ping_ms<1000)level=3;
+            else level=4;
+        }else{
+            anim=1;level=(g_ticks/2+index*2)&7;if(level>4)level=8-level;
         }
-        int bx = left + 205;
-        for (int b = 0; b < 5; ++b) {
-            int bh = 2 + b;
-            int col = (b < bars) ? 0x55FF55 : 0x555555;
-            draw_rect(bx + b * 2, y + 8 - bh, bx + b * 2 + 1, y + 8, col);
-        }
-        (void)tip;
+        int active=level==5?0:5-level;
+        int bx=right-12;
+        for(int b=0;b<5;++b){int bh=2+b;int c=b<active?0x55FF55:0x555555;if(anim&&b==level)c=0xFFFF55;draw_rect(bx+b*2,y+8-bh,bx+b*2+1,y+8,c);}
     }
 
-    if (pex_mp_server_count_get() == 0) {
-        draw_centered_text("No servers added", g_gui_w / 2, top + 24, 8421504);
-    }
-
-    draw_tiled_rect_tint(0, 0, g_gui_w, top, 0x404040, 0);
-    draw_tiled_rect_tint(0, bottom, g_gui_w, g_gui_h, 0x404040, 0);
-    draw_gradient(0, top, g_gui_w, top + 4, 0xFF000000, 0x00000000);
-    draw_gradient(0, bottom - 4, g_gui_w, bottom, 0x00000000, 0xFF000000);
-    draw_centered_text(tr_key_default("multiplayer.title", "Play Multiplayer"), g_gui_w / 2, 20, 16777215);
-    if (g_multiplayer_status[0]) draw_centered_text(g_multiplayer_status, g_gui_w / 2, bottom + 5, 10526880);
+    draw_tiled_rect_tint(0,0,g_gui_w,top,0x404040,0);
+    draw_tiled_rect_tint(0,bottom,g_gui_w,g_gui_h,0x404040,0);
+    draw_gradient(0,top,g_gui_w,top+4,0xFF000000,0x00000000);
+    draw_gradient(0,bottom-4,g_gui_w,bottom,0x00000000,0xFF000000);
+    draw_centered_text(tr_key_default("multiplayer.title","Play Multiplayer"),g_gui_w/2,20,0xFFFFFF);
     draw_all_buttons();
 }
 

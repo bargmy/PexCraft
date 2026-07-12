@@ -60,7 +60,7 @@ static PexMpBedrockEntityMap *pex_mp_bedrock_entity_by_player_id(int player_id);
 
 #define PEX_MP_SERVER_LIST_MAX 32
 #define PEX_MP_SERVER_ROW_BASE 6000
-#define PEX_MP_SERVER_ROW_HEIGHT 48
+#define PEX_MP_SERVER_ROW_HEIGHT 36
 typedef struct PexMpServerEntry {
     char name[64];
     char host[96];
@@ -73,16 +73,20 @@ typedef struct PexMpServerEntry {
     int polling;
     int valid_mcpe;
     int server_kind; /* 0 unknown, 1 Java, 2 Bedrock */
+    int resource_mode; /* 0 prompt, 1 enabled, 2 disabled (1.8.8 server-list UI) */
     HANDLE thread;
 } PexMpServerEntry;
 static PexMpServerEntry g_mp_server_entries[PEX_MP_SERVER_LIST_MAX];
 static int g_mp_server_count = 0;
 static int g_mp_server_selected = -1;
 static int g_mp_server_scroll = 0;
-static int g_mp_server_mode = 0; /* 0=list, 1=direct, 2=add, 3=edit */
+static int g_mp_server_mode = 0; /* 0=list, 1=direct, 2=add, 3=edit, 4=delete confirm */
 static int g_mp_server_edit_field = 0; /* 0=address, 1=name */
 static char g_mp_server_edit_name[64] = "Minecraft Server";
 static char g_mp_server_edit_address[96] = "";
+static int g_mp_server_edit_resource_mode = 0;
+static int g_mp_server_last_clicked = -1;
+static int g_mp_server_last_click_tick = -1000;
 static volatile LONG g_mp_server_threads_pending = 0;
 
 static LONG pex_mp_server_pending_get(void) {
@@ -701,6 +705,12 @@ static int pex_mp_server_selected_get(void) { return g_mp_server_selected; }
 static int pex_mp_server_scroll_get(void) { return g_mp_server_scroll; }
 static int pex_mp_server_mode_get(void) { return g_mp_server_mode; }
 static int pex_mp_server_edit_field_get(void) { return g_mp_server_edit_field; }
+static int pex_mp_server_edit_resource_mode_get(void) { return g_mp_server_edit_resource_mode; }
+static const char *pex_mp_resource_mode_name(int mode) {
+    if (mode == 1) return tr_key_default("addServer.resourcePack.enabled", "Enabled");
+    if (mode == 2) return tr_key_default("addServer.resourcePack.disabled", "Disabled");
+    return tr_key_default("addServer.resourcePack.prompt", "Prompt");
+}
 static const char *pex_mp_server_edit_name_get(void) { return g_mp_server_edit_name; }
 static const char *pex_mp_server_edit_address_get(void) { return g_mp_server_edit_address; }
 static const PexMpServerEntry *pex_mp_server_entry_get(int index) {
@@ -733,7 +743,10 @@ static void pex_mp_server_list_save(void) {
     if (!f) return;
     for (int i = 0; i < g_mp_server_count; ++i) {
         if (!g_mp_server_entries[i].host[0]) continue;
-        fprintf(f, "%s\t%s\n", g_mp_server_entries[i].name[0] ? g_mp_server_entries[i].name : "Minecraft Server", g_mp_server_entries[i].host);
+        fprintf(f, "%s\t%s\t%d\n",
+                g_mp_server_entries[i].name[0] ? g_mp_server_entries[i].name : "Minecraft Server",
+                g_mp_server_entries[i].host,
+                g_mp_server_entries[i].resource_mode);
     }
     fclose(f);
 }
@@ -756,6 +769,12 @@ static void pex_mp_server_list_load(void) {
             memset(e, 0, sizeof(*e));
             if (tab) {
                 *tab++ = 0;
+                char *mode_tab = strchr(tab, '\t');
+                if (mode_tab) {
+                    *mode_tab++ = 0;
+                    e->resource_mode = atoi(mode_tab);
+                    if (e->resource_mode < 0 || e->resource_mode > 2) e->resource_mode = 0;
+                }
                 snprintf(e->name, sizeof(e->name), "%s", line[0] ? line : "Minecraft Server");
                 snprintf(e->host, sizeof(e->host), "%s", tab);
             } else {
@@ -912,6 +931,7 @@ static void pex_mp_server_begin_direct(void) {
     g_mp_server_edit_field = 0;
     snprintf(g_mp_server_edit_address, sizeof(g_mp_server_edit_address), "%s", g_multiplayer_ip[0] ? g_multiplayer_ip : (g_opts.last_server[0] ? g_opts.last_server : ""));
     snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "Minecraft Server");
+    g_mp_server_edit_resource_mode = 0;
 }
 
 static void pex_mp_server_begin_add(void) {
@@ -919,6 +939,7 @@ static void pex_mp_server_begin_add(void) {
     g_mp_server_edit_field = 1;
     snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "Minecraft Server");
     g_mp_server_edit_address[0] = 0;
+    g_mp_server_edit_resource_mode = 0;
 }
 
 static void pex_mp_server_begin_edit(void) {
@@ -928,6 +949,16 @@ static void pex_mp_server_begin_edit(void) {
     g_mp_server_edit_field = 1;
     snprintf(g_mp_server_edit_name, sizeof(g_mp_server_edit_name), "%s", e->name);
     snprintf(g_mp_server_edit_address, sizeof(g_mp_server_edit_address), "%s", e->host);
+    g_mp_server_edit_resource_mode = e->resource_mode;
+}
+
+static void pex_mp_server_cycle_resource_mode(void) {
+    g_mp_server_edit_resource_mode = (g_mp_server_edit_resource_mode + 1) % 3;
+}
+
+static void pex_mp_server_begin_delete_confirm(void) {
+    if (g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) return;
+    g_mp_server_mode = 4;
 }
 
 static void pex_mp_server_cancel_edit(void) {
@@ -959,6 +990,7 @@ static void pex_mp_server_commit_edit(void) {
     memset(e, 0, sizeof(*e));
     snprintf(e->name, sizeof(e->name), "%s", g_mp_server_edit_name);
     snprintf(e->host, sizeof(e->host), "%s", g_mp_server_edit_address);
+    e->resource_mode = g_mp_server_edit_resource_mode;
     e->ping_ms = -2;
     snprintf(e->motd, sizeof(e->motd), "Polling..");
     g_mp_server_mode = 0;
@@ -970,6 +1002,15 @@ static int pex_mp_server_connect_selected(void) {
     if (g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) return 0;
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_mp_server_entries[g_mp_server_selected].host);
     return 1;
+}
+
+static int pex_mp_server_select_or_double_click(int index) {
+    if (index < 0 || index >= g_mp_server_count) return 0;
+    int activate = index == g_mp_server_last_clicked && g_ticks - g_mp_server_last_click_tick < 5;
+    g_mp_server_last_clicked = index;
+    g_mp_server_last_click_tick = g_ticks;
+    pex_mp_server_select(index);
+    return activate;
 }
 
 static int pex_net_floor_chunk_coord(float v) {

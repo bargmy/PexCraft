@@ -322,10 +322,14 @@ static void pex_ui_text_input_begin_for_current_field(void) {
         pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, g_gui_h / 2 - 8, 200, 20);
     } else if (g_screen == SCREEN_CREATE_WORLD || g_screen == SCREEN_RENAME_WORLD) {
         pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, 60, 200, 20);
-    } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() != 0) {
-        int y = 96;
-        if (pex_mp_server_mode_get() != 1 && pex_mp_server_edit_field_get() == 0) y += 44;
-        pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, y, 200, 20);
+    } else if (g_screen == SCREEN_MULTIPLAYER) {
+        int mode = pex_mp_server_mode_get();
+        if (mode == 1) {
+            pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, 116, 200, 20);
+        } else if (mode == 2 || mode == 3) {
+            int y = pex_mp_server_edit_field_get() == 1 ? 66 : 106;
+            pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 100, y, 200, 20);
+        }
     }
 }
 
@@ -1097,10 +1101,10 @@ static void rebuild_screen(void) {
             for (int i = 0; i < visible_rows; i++) {
                 int idx = scroll + i;
                 if (idx >= pex_mp_server_count_get()) break;
-                int y = top + 4 + i * PEX_MP_SERVER_ROW_HEIGHT;
-                int h = PEX_MP_SERVER_ROW_HEIGHT - 4;
+                int y = top + i * PEX_MP_SERVER_ROW_HEIGHT;
+                int h = PEX_MP_SERVER_ROW_HEIGHT;
                 if (y + h > bottom) h = bottom - y;
-                if (h > 0) add_button_full(PEX_MP_SERVER_ROW_BASE + idx, g_gui_w / 2 - 110, y, 220, h, "", BUTTON_HITBOX);
+                if (h > 0) add_button_full(PEX_MP_SERVER_ROW_BASE + idx, g_gui_w / 2 - 152, y, 305, h, "", BUTTON_HITBOX);
             }
             int has_server = pex_mp_server_selected_get() >= 0 && pex_mp_server_selected_get() < pex_mp_server_count_get();
             Button *select = add_button_full(10, g_gui_w / 2 - 154, g_gui_h - 52, 100, 20, tr_key_default("selectServer.select", "Join Server"), BUTTON_NORMAL);
@@ -1113,10 +1117,28 @@ static void rebuild_screen(void) {
             select->enabled = has_server;
             edit->enabled = has_server;
             del->enabled = has_server;
-        } else {
-            Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 108 + 12, 200, 20, tr_key_default("selectServer.select", "Select"), BUTTON_NORMAL);
+        } else if (pex_mp_server_mode_get() == 4) {
+            add_button_full(20, g_gui_w / 2 - 155, g_gui_h / 6 + 96, 150, 20,
+                            tr_key_default("selectServer.deleteButton", "Delete"), BUTTON_NORMAL);
+            add_button_full(21, g_gui_w / 2 + 5, g_gui_h / 6 + 96, 150, 20,
+                            tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
+        } else if (pex_mp_server_mode_get() == 1) {
+            Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 108, 200, 20,
+                                             tr_key_default("selectServer.select", "Join Server"), BUTTON_NORMAL);
             select->enabled = pex_mp_server_edit_address_get()[0] != 0;
-            add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 132 + 12, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
+            add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 132, 200, 20,
+                            tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
+        } else {
+            char resource_label[128];
+            snprintf(resource_label, sizeof(resource_label), "%s: %s",
+                     tr_key_default("addServer.resourcePack", "Server Resource Packs"),
+                     pex_mp_resource_mode_name(pex_mp_server_edit_resource_mode_get()));
+            add_button_full(9, g_gui_w / 2 - 100, g_gui_h / 4 + 72, 200, 20, resource_label, BUTTON_NORMAL);
+            Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 114, 200, 20,
+                                             pex_mp_server_mode_get() == 2 ? tr_key_default("addServer.add", "Add Server") : tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
+            select->enabled = pex_mp_server_edit_address_get()[0] != 0 && pex_mp_server_edit_name_get()[0] != 0;
+            add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 138, 200, 20,
+                            tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         }
     } else if (g_screen == SCREEN_CONNECTING) {
         add_button(0, g_gui_w / 2 - 100, g_gui_h / 4 + 120 + 12, tr_key_default("gui.cancel", "Cancel"));
@@ -1443,8 +1465,16 @@ static void on_button(Button *b) {
     } else if (g_screen == SCREEN_MULTIPLAYER) {
         if (b->id >= PEX_MP_SERVER_ROW_BASE && b->id < PEX_MP_SERVER_ROW_BASE + PEX_MP_SERVER_LIST_MAX) {
             int idx = b->id - PEX_MP_SERVER_ROW_BASE;
-            pex_mp_server_select(idx);
+            int activate = pex_mp_server_select_or_double_click(idx);
             rebuild_screen();
+            if (activate) {
+                for (int i = 0; i < g_button_count; ++i) {
+                    if (g_buttons[i].id == 10 && g_buttons[i].enabled) {
+                        on_button(&g_buttons[i]);
+                        break;
+                    }
+                }
+            }
         } else if (pex_mp_server_mode_get() == 0) {
             if (b->id == 1) set_screen(g_parent_screen);
             else if (b->id == 10) {
@@ -1466,15 +1496,27 @@ static void on_button(Button *b) {
                 pex_mp_server_begin_edit();
                 rebuild_screen();
             } else if (b->id == 2) {
-                pex_mp_server_delete_selected();
+                pex_mp_server_begin_delete_confirm();
                 rebuild_screen();
             } else if (b->id == 8) {
                 pex_mp_server_refresh_all();
                 rebuild_screen();
             }
+        } else if (pex_mp_server_mode_get() == 4) {
+            if (b->id == 20) {
+                pex_mp_server_delete_selected();
+                pex_mp_server_cancel_edit();
+                rebuild_screen();
+            } else if (b->id == 21) {
+                pex_mp_server_cancel_edit();
+                rebuild_screen();
+            }
         } else {
             if (b->id == 1) {
                 pex_mp_server_cancel_edit();
+                rebuild_screen();
+            } else if (b->id == 9) {
+                pex_mp_server_cycle_resource_mode();
                 rebuild_screen();
             } else if (b->id == 10) {
                 if (pex_mp_server_mode_get() == 1) {
@@ -1642,7 +1684,7 @@ static void mouse_right_down(int mx, int my) {
 
     if (g_screen == SCREEN_CREATIVE) { creative_mouse_click(mx, my, 1); return; }
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 1); return; }
-    if (g_screen == SCREEN_INGAME) { g_right_use_button_down = 1; set_mouse_grabbed(1); if (passive_mobs_player_interact()) return; ingame_right_click(); return; }
+    if (g_screen == SCREEN_INGAME) { g_right_use_button_down = 1; set_mouse_grabbed(1); ingame_right_click(); return; }
     (void)mx; (void)my;
 }
 
@@ -1692,21 +1734,26 @@ static void mouse_down(int mx, int my) {
         int y = g_gui_h / 2 - 8;
         if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) { pex_ui_text_input_begin_for_current_field(); rebuild_screen(); }
     }
-    if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() != 0) {
+    if (g_screen == SCREEN_MULTIPLAYER) {
+        int mode = pex_mp_server_mode_get();
         int x = g_gui_w / 2 - 100;
-        int y = 96;
-        if (pex_mp_server_mode_get() != 1) {
+        if (mode == 1) {
+            int y = 116;
             if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
-                g_mp_server_edit_field = 1;
+                g_mp_server_edit_field = 0;
                 pex_ui_text_input_begin_for_current_field();
                 rebuild_screen();
             }
-            y += 44;
-        }
-        if (mx >= x - 1 && mx < x + 201 && my >= y - 1 && my < y + 21) {
-            g_mp_server_edit_field = 0;
-            pex_ui_text_input_begin_for_current_field();
-            rebuild_screen();
+        } else if (mode == 2 || mode == 3) {
+            if (mx >= x - 1 && mx < x + 201 && my >= 65 && my < 87) {
+                g_mp_server_edit_field = 1;
+                pex_ui_text_input_begin_for_current_field();
+                rebuild_screen();
+            } else if (mx >= x - 1 && mx < x + 201 && my >= 105 && my < 127) {
+                g_mp_server_edit_field = 0;
+                pex_ui_text_input_begin_for_current_field();
+                rebuild_screen();
+            }
         }
     }
     int hit_button = 0;
@@ -2225,7 +2272,10 @@ static void handle_keydown(WPARAM vk) {
         else if (g_screen == SCREEN_RENAME_WORLD) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_WORLD_DELETE) set_screen(SCREEN_WORLD_SELECT);
         else if (g_screen == SCREEN_CONFIRM_DELETE) set_screen(SCREEN_WORLD_SELECT);
-        else if (g_screen == SCREEN_MULTIPLAYER) set_screen(g_parent_screen);
+        else if (g_screen == SCREEN_MULTIPLAYER) {
+            if (pex_mp_server_mode_get() != 0) { pex_mp_server_cancel_edit(); rebuild_screen(); }
+            else set_screen(g_parent_screen);
+        }
         else if (g_screen == SCREEN_CONNECTING) { pex_net_disconnect(); set_screen(SCREEN_MULTIPLAYER); }
         else if (g_screen == SCREEN_TEXPACK) set_screen(g_parent_screen);
         else if (g_screen == SCREEN_NOTICE) set_screen(SCREEN_TITLE);
@@ -2261,7 +2311,8 @@ static void handle_keydown(WPARAM vk) {
         return;
     }
     if (g_screen == SCREEN_MULTIPLAYER) {
-        if (pex_mp_server_mode_get() == 0) {
+        int mp_mode = pex_mp_server_mode_get();
+        if (mp_mode == 0) {
             int sel = pex_mp_server_selected_get();
             if (vk == VK_UP) { pex_mp_server_select(sel > 0 ? sel - 1 : 0); rebuild_screen(); }
             else if (vk == VK_DOWN) { pex_mp_server_select(sel + 1); rebuild_screen(); }
@@ -2269,6 +2320,10 @@ static void handle_keydown(WPARAM vk) {
             else if (vk == VK_NEXT) { pex_mp_server_scroll_by(5); rebuild_screen(); }
             else if (vk == VK_RETURN && sel >= 0) {
                 for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { on_button(&g_buttons[i]); break; }
+            }
+        } else if (mp_mode == 4) {
+            if (vk == VK_RETURN) {
+                for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 20) { on_button(&g_buttons[i]); break; }
             }
         } else {
             if (vk == VK_RETURN && (pex_tv_remote_platform_enabled() || pex_virtual_keyboard_enabled()) && !g_ui_text_input_active) { pex_ui_text_input_begin_for_current_field(); return; }
@@ -2402,7 +2457,8 @@ static void handle_char(WPARAM ch) {
         return;
     }
     if (g_screen == SCREEN_MULTIPLAYER) {
-        if (ch == 13 || ch == 8 || ch == 9 || pex_mp_server_mode_get() == 0) return;
+        int mp_mode = pex_mp_server_mode_get();
+        if (ch == 13 || ch == 8 || ch == 9 || mp_mode < 1 || mp_mode > 3) return;
         char *field = pex_mp_server_edit_field_get() == 1 ? g_mp_server_edit_name : g_mp_server_edit_address;
         size_t cap = pex_mp_server_edit_field_get() == 1 ? sizeof(g_mp_server_edit_name) : sizeof(g_mp_server_edit_address);
         const char *allowed_name = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
