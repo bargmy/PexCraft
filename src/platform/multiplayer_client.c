@@ -12,7 +12,6 @@ static int g_mp_last_request_cz = 999999;
 static unsigned short g_mp_chunk_section_recv_mask[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static unsigned int g_mp_chunk_hash_cache[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
 static int g_mp_chunk_cache_loaded[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-static int g_mp_pending_respawn_sync = 0;
 static HANDLE g_mp_connect_thread = NULL;
 static volatile LONG g_mp_connect_thread_done = 0;
 static volatile LONG g_mp_connect_thread_ok = 0;

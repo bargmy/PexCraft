@@ -1254,6 +1254,10 @@ static PexNetPlayerState g_mp_players[PEX_NET_MAX_PLAYERS];
 static PexNetPlayerState g_mp_prev_players[PEX_NET_MAX_PLAYERS];
 static PexNetRenderPlayerState g_mp_render_players[PEX_NET_MAX_PLAYERS];
 static PexNetRenderDropState g_mp_render_drops[PEX_NET_MAX_DROPS];
+/* Shared multiplayer respawn handshake state.  This must be declared in the
+   common unity-build section because the Java protocol handler is included
+   before platform/multiplayer_client.c on desktop and SDL2 targets. */
+static int g_mp_pending_respawn_sync = 0;
 static int g_mp_player_count = 0;
 static double g_mp_interp_start_time = 0.0;
 static double g_mp_interp_duration = 0.10;
