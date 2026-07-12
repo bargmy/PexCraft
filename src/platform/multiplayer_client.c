@@ -3171,7 +3171,11 @@ static int pex_net_reserve_recv(size_t need) {
 }
 
 static int pex_net_is_connecting(void) {
+#if defined(PEX_WASM_NO_MULTIPLAYER)
+    return 0;
+#else
     return g_mp_connecting;
+#endif
 }
 
 static void pex_net_connect_fail(const char *msg) {
@@ -3294,6 +3298,9 @@ static void pex_net_connect_tick(void) {
 }
 
 static void pex_net_poll(void) {
+#if defined(PEX_WASM_NO_MULTIPLAYER)
+    return;
+#else
     if (world_quit_is_active() || g_screen == SCREEN_SAVING_QUIT) return;
     if (g_mp_connecting) pex_net_connect_tick();
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
@@ -3381,9 +3388,15 @@ static void pex_net_poll(void) {
     g_prof_packets_last = packets_this_frame;
     g_prof_chunks_last = chunk_packets_this_frame;
     net_request_chunks_around_player(0);
+#endif
 }
 
 static int pex_net_connect_to_server(const char *server) {
+#if defined(PEX_WASM_NO_MULTIPLAYER)
+    (void)server;
+    pex_net_set_status("Multiplayer is unavailable in the offline browser build.");
+    return 0;
+#else
     char host[96];
     int parsed_port = PEX_NET_DEFAULT_PORT;
     int port_was_given = 0;
@@ -3483,6 +3496,7 @@ static int pex_net_connect_to_server(const char *server) {
     g_mp_connect_progress = 1;
     pex_net_set_status("Locating server");
     return 1;
+#endif
 }
 
 static int pex_mp_bedrock_stack_same_simple(const ItemStack *a, const ItemStack *b) {

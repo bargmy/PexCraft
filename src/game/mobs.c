@@ -8089,7 +8089,7 @@ static void passive_mobs_build_render_list(const PassiveMob *src, float partial,
     if (out_count) *out_count = count;
 }
 
-#if PEX_PASSIVE_RENDER_WORKER && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+#if PEX_PASSIVE_RENDER_WORKER && !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII) && !defined(PEX_PLATFORM_WASM)
 static CRITICAL_SECTION g_passive_render_cs;
 static int g_passive_render_initialized = 0;
 static volatile LONG g_passive_render_stop = 0;

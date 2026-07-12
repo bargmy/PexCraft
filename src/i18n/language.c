@@ -1173,7 +1173,7 @@ static int pex_language_download_from_jar_blocking(void) {
     int ok = 0;
     ensure_dir(g_texpack_dir);
     pack_asset_path(pack_dir, sizeof(pack_dir));
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_WASM)
     pack_install_fail("Runtime language download from client.jar is not available on this build");
     return 0;
 #elif defined(PEX_PLATFORM_ANDROID)

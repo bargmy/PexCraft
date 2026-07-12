@@ -29,3 +29,6 @@ android_tv/app/src/main/jniLibs/
 android_tv/app/signing/
 android_tv/third_party/cache/
 android_tv/third_party/SDL2/
+
+# Local downloaded toolchains and verified resource cache
+.cache/

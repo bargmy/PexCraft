@@ -1,0 +1,12 @@
+.PHONY: all wasm check clean
+
+all: wasm
+
+wasm:
+	./build_wasm.sh
+
+check:
+	python3 tools/check_wasm_target.py
+
+clean:
+	rm -rf build/wasm_assets dist/PexCraft-WASM.html

@@ -21,6 +21,13 @@ PexCraft is an experimental custom client written in C. It is trying to work lik
 - OpenGL = working.
 - SDL2-OpenGL = working.
 
+
+## WebAssembly / standalone HTML
+
+An offline single-player browser target is available through `main_wasm.c`. It uses the existing GLES2 compatibility renderer, embeds the verified Minecraft 1.2.5 textures/fonts and the WebAssembly module into one `dist/PexCraft-WASM.html`, stores saves in browser IndexedDB when available, and disables multiplayer.
+
+Build with `./build_wasm.sh` or `make -f Makefile.wasm`. See `docs/WASM_BUILD.md` for resource verification, offline/network guarantees, Telegram-only CI delivery, and browser validation.
+
 ## Android TV
 
 See `android_tv/README.md` for the APK build, signing, TV remote mapping, and Google TV channel integration.

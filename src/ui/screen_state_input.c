@@ -847,7 +847,14 @@ static void rebuild_screen(void) {
         if (is_seasonal_splash(seasonal, sizeof(seasonal))) snprintf(g_splash, sizeof(g_splash), "%s", seasonal);
         int y0 = g_gui_h / 4 + 48;
         add_button(1, g_gui_w / 2 - 100, y0, "Singleplayer");
+#if defined(PEX_PLATFORM_WASM)
+        {
+            Button *multiplayer = add_button(2, g_gui_w / 2 - 100, y0 + 24, "Multiplayer (Unavailable)");
+            if (multiplayer) multiplayer->enabled = 0;
+        }
+#else
         add_button(2, g_gui_w / 2 - 100, y0 + 24, "Multiplayer");
+#endif
         add_button(3, g_gui_w / 2 - 100, y0 + 48, "Texture Packs");
         add_button_full(0, g_gui_w / 2 - 100, y0 + 72 + 12, 98, 20, "Options...", BUTTON_NORMAL);
         add_button_full(4, g_gui_w / 2 + 2, y0 + 72 + 12, 98, 20, "Quit Game", BUTTON_NORMAL);

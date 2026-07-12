@@ -1993,8 +1993,8 @@ static void flat_direct_free_builder(FlatDirectMeshBuilder *b) {
 }
 
 static int flat_async_section_mesh_enabled(void) {
-#if defined(PEX_PLATFORM_WII)
-    /* libogc/LWP builds have been crashing in the worker-mesh path while
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
+    /* libogc/LWP and single-threaded browser builds have been crashing in the worker-mesh path while
        preparing chunks: Dolphin reports DSI at flat_get_block() with a bogus
        async snapshot pointer. Keep Wii section meshing synchronous on the
        main thread until the port is stable. */

@@ -951,7 +951,7 @@ static void ingame_tick(void) {
         update_falling_blocks();
         profile_add_time(PROF_FALLING, prof_part);
         prof_part = profile_begin();
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
         update_infinite_world_streaming();
         flat_flush_pending_lighting();
 #else

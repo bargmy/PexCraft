@@ -538,6 +538,7 @@ static void stream_queue_add_chunk(int wcx, int wcz);
 static void stream_queue_chunk_safety(int base_cx, int base_cz, int pcx, int pcz, int radius);
 static int stream_queue_visible_chunks(void);
 static void process_stream_generation_queue(void);
+static void flat_run_initial_light_settle(void);
 static int stream_generation_active(void);
 static int stream_generation_near_player_pending(int radius);
 static int psp_player_terrain_ready_or_hold(void);
@@ -3814,7 +3815,15 @@ static void flat_begin_initial_generation(void) {
 }
 
 static void flat_continue_initial_generation(void) {
+#if defined(PEX_PLATFORM_WASM)
+    /* The browser has no stream worker. Advance one bounded cooperative slice
+       from the 20 Hz loading-screen tick, then finish the lightweight settle. */
+    if (stream_generation_active()) process_stream_generation_queue();
+    else if (g_stream_initial_light_settle_requested && !g_stream_initial_light_settle_done)
+        flat_run_initial_light_settle();
+#else
     world_stream_service_ensure();
+#endif
 }
 
 static int flat_initial_generation_active(void) {
@@ -10333,7 +10342,7 @@ static int g_flat_lighting_worker_initialized = 0;
 static volatile LONG g_flat_lighting_worker_stop = 0;
 static int g_flat_lighting_worker_busy = 0;
 static HANDLE g_flat_lighting_worker_event = NULL;
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
 #define FLAT_LIGHTING_WORKER_COUNT 0
 #else
 #define FLAT_LIGHTING_WORKER_COUNT 2
@@ -10395,7 +10404,7 @@ static DWORD WINAPI flat_lighting_worker_proc(LPVOID unused) {
 }
 
 static void flat_lighting_worker_ensure(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     if (g_flat_lighting_worker_initialized) return;
@@ -10424,7 +10433,7 @@ static void flat_lighting_worker_ensure(void) {
 }
 
 static void flat_lighting_worker_wake(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     flat_lighting_worker_ensure();
@@ -10435,7 +10444,7 @@ static void flat_lighting_worker_wake(void) {
 }
 
 static void flat_lighting_worker_request_stop(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     if (!g_flat_lighting_worker_initialized) return;
@@ -10447,7 +10456,7 @@ static void flat_lighting_worker_request_stop(void) {
 }
 
 static void flat_lighting_worker_shutdown(void) {
-#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     if (!g_flat_lighting_worker_initialized) return;
@@ -10532,6 +10541,9 @@ static void stream_async_reset_event(HANDLE h) {
         while (sceKernelWaitSema(h->uid, 1, &t) >= 0) { t = 0; }
         h->signaled = 0;
     }
+#elif defined(PEX_PLATFORM_WASM)
+    /* No worker waits on this cooperative browser target. */
+    if (h && h->kind == PEX_HANDLE_EVENT) h->signaled = 0;
 #else
     if (h && h->kind == PEX_HANDLE_EVENT) {
         pthread_mutex_lock(&h->mutex);
@@ -10700,15 +10712,19 @@ static DWORD WINAPI stream_async_worker_proc(LPVOID unused) {
 
 static void stream_async_init(void) {
     if (g_stream_async_initialized) return;
-#if defined(PEX_PLATFORM_WII)
-    /* Keep the first Wii port single-threaded.  The Win32-shaped pthread shim
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
+    /* Keep the first Wii port and browser build single-threaded.  The Win32-shaped pthread shim
        and libogc/Dolphin thread scheduling made world generation crash with
        unknown-pointer exceptions.  The cooperative fallback still generates one
        chunk per tick, just without a worker thread touching worldgen/heap data. */
     g_stream_async_event = NULL;
     g_stream_async_worker_count = 0;
     g_stream_async_initialized = 1;
+    #if defined(PEX_PLATFORM_WII)
     wii_debug_logf("stream async disabled on Wii; using cooperative generation");
+#else
+    pex_logf("stream async disabled on WASM; using cooperative generation");
+#endif
     return;
 #endif
 #if defined(PEX_PLATFORM_PSP) && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
@@ -11942,7 +11958,7 @@ static DWORD WINAPI world_stream_service_proc(LPVOID unused) {
 }
 
 static void world_stream_service_ensure(void) {
-#if defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     if (g_world_stream_service_initialized) return;
@@ -11966,7 +11982,7 @@ static void world_stream_service_ensure(void) {
 }
 
 static void world_stream_service_request_stop(void) {
-#if defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     if (g_world_stream_service_initialized) {
@@ -11979,7 +11995,7 @@ static void world_stream_service_request_stop(void) {
 }
 
 static void world_stream_service_shutdown(void) {
-#if defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     world_stream_service_request_stop();
@@ -12003,7 +12019,7 @@ static void world_stream_service_shutdown(void) {
 }
 
 static void world_stream_shared_locks_shutdown(void) {
-#if defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
     return;
 #else
     /* Call only after simulation, stream, lighting, and section-mesh workers
@@ -12026,7 +12042,10 @@ static void world_stream_shared_locks_shutdown(void) {
 
 static int world_stream_service_active(void) {
     if (world_quit_is_active()) return 0;
-#if defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WASM)
+    return stream_generation_active() || g_stream_initial_light_settle_requested ||
+           g_stream_initial_light_settle_running || flat_lighting_pending_dirty();
+#elif defined(PEX_PLATFORM_WII)
     return 0;
 #endif
     if (!g_world_stream_service_initialized) return 0;

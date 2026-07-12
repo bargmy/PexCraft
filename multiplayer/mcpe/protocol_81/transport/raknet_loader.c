@@ -6,7 +6,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#else
+#elif !defined(PEX_PLATFORM_WASM)
 #include <dlfcn.h>
 #endif
 
@@ -83,7 +83,11 @@ static int pex_win_get_exe_dir(char *buf, size_t cap) {
 #endif
 
 static void* pex_dyn_open(const char *path, char *err, size_t err_cap) {
-#if defined(_WIN32)
+#if defined(PEX_PLATFORM_WASM)
+    (void)path;
+    if (err && err_cap) snprintf(err, err_cap, "Dynamic RakNet libraries are disabled in the browser build");
+    return NULL;
+#elif defined(_WIN32)
     HMODULE h = NULL;
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
 
@@ -114,7 +118,9 @@ static void* pex_dyn_open(const char *path, char *err, size_t err_cap) {
 
 static void pex_dyn_close(void *handle) {
     if (!handle) return;
-#if defined(_WIN32)
+#if defined(PEX_PLATFORM_WASM)
+    (void)handle;
+#elif defined(_WIN32)
     FreeLibrary((HMODULE)handle);
 #else
     dlclose(handle);
@@ -122,7 +128,9 @@ static void pex_dyn_close(void *handle) {
 }
 
 static void* pex_dyn_sym(void *handle, const char *name) {
-#if defined(_WIN32)
+#if defined(PEX_PLATFORM_WASM)
+    (void)handle; (void)name; return NULL;
+#elif defined(_WIN32)
     return (void*)GetProcAddress((HMODULE)handle, name);
 #else
     return dlsym(handle, name);

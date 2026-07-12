@@ -930,6 +930,13 @@ static int save_worker_ensure_started(void) {
 
 static int pex_save_enqueue_snapshot(PexSaveSnapshot *ss) {
     if (!ss) return 0;
+#if defined(PEX_PLATFORM_WASM)
+    /* Browser target has no pthreads. Preserve autosave semantics by writing the
+       immutable snapshot synchronously; IDBFS is flushed by the platform loop. */
+    save_snapshot_world_state(ss);
+    pex_save_snapshot_free(ss);
+    return 1;
+#else
     if (!save_worker_ensure_started()) return 0;
 
     EnterCriticalSection(&g_save_cs);
@@ -942,6 +949,7 @@ static int pex_save_enqueue_snapshot(PexSaveSnapshot *ss) {
 
     SetEvent(g_save_event);
     return 1;
+#endif
 }
 
 static void request_chunk_save_async(void) {
