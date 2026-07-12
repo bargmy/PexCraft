@@ -45,6 +45,7 @@ mkdir -p dist
   -sUSE_ZLIB=1 \
   -sWASM=1 \
   -sSINGLE_FILE=1 \
+  -sSINGLE_FILE_BINARY_ENCODE=0 \
   -sENVIRONMENT=web \
   -sEXIT_RUNTIME=0 \
   -sALLOW_MEMORY_GROWTH=1 \
@@ -79,6 +80,13 @@ python3 - "$OUTPUT" <<'PY'
 import hashlib, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 data = path.read_bytes()
+try:
+    text = data.decode("utf-8")
+except UnicodeDecodeError as exc:
+    raise SystemExit(f"Standalone HTML is not valid UTF-8: {exc}")
+if "AGFzbQE" not in text:
+    raise SystemExit("Embedded WASM is not using the required base64 encoding")
 print(f"Built {path} ({len(data)} bytes)")
+print("Embedded WASM encoding: base64")
 print("SHA-256:", hashlib.sha256(data).hexdigest())
 PY

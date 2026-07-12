@@ -70,9 +70,12 @@ def main() -> int:
     require(build, 'EMSDK_VERSION="${EMSDK_VERSION:-6.0.2}"', "build_wasm.sh")
     require(build, "-sGL_ENABLE_GET_PROC_ADDRESS=1", "build_wasm.sh")
     reject(build, r"-sGL_ENABLE_GET_PROC_ADDRESS=0\b", "build_wasm.sh")
-    for flag in ("-sWASM=1", "-sSINGLE_FILE=1", "--embed-file", "-sUSE_SDL=2", "-sUSE_SDL_IMAGE=2", "-lidbfs.js"):
+    for flag in ("-sWASM=1", "-sSINGLE_FILE=1", "-sSINGLE_FILE_BINARY_ENCODE=0", "--embed-file", "-sUSE_SDL=2", "-sUSE_SDL_IMAGE=2", "-lidbfs.js"):
         require(build, flag, "build_wasm.sh")
+    reject(build, r"-sSINGLE_FILE_BINARY_ENCODE=(?:1|true)\b", "build_wasm.sh")
     require(build, "PexCraft-WASM.html", "build_wasm.sh")
+    require(build, 'if "AGFzbQE" not in text:', "build_wasm.sh")
+    require(build, "Embedded WASM encoding: base64", "build_wasm.sh")
     require(shell, "connect-src 'none'", "wasm_shell.html")
     require(shell, "FS.mount(IDBFS", "wasm_shell.html")
     reject(shell, r"https?://|wss?://", "wasm_shell.html")

@@ -26,7 +26,7 @@ or:
 make -f Makefile.wasm
 ```
 
-The script uses an installed `emcc` when available. Otherwise it installs Emscripten SDK 6.0.2 into `.cache/emsdk` by default. Set `EMSDK_VERSION` to override the pinned version. The build explicitly enables `GL_ENABLE_GET_PROC_ADDRESS` because Emscripten's SDL2 port requires `eglGetProcAddress` for its browser OpenGL ES context backend.
+The script uses an installed `emcc` when available. Otherwise it installs Emscripten SDK 6.0.2 into `.cache/emsdk` by default. Set `EMSDK_VERSION` to override the pinned version. The build explicitly enables `GL_ENABLE_GET_PROC_ADDRESS` because Emscripten's SDL2 port requires `eglGetProcAddress` for its browser OpenGL ES context backend. The build also forces `SINGLE_FILE_BINARY_ENCODE=0`, so the embedded WASM uses base64 instead of the newer custom UTF-8 encoding. This avoids corrupted WASM bytes when the standalone HTML is opened through `file://` or transferred by file-sharing applications.
 
 At build time, `tools/prepare_wasm_assets.py` downloads the official Minecraft 1.2.5 `client.jar`, verifies SHA-1 `4a2fac7504182a97dcbcd7560c6392d7c8139928`, safely extracts its non-code resources, validates the textures and fonts required by PexCraft, and stages them under `build/wasm_assets/Release`. Emscripten embeds that directory at `/bundle/Release` in the output HTML.
 
@@ -62,6 +62,6 @@ A release-grade validation still requires an Emscripten build and browser smoke 
 
 ## Notes
 
-Opening the single file through `file://` is supported by the single-file packaging approach, but some browsers restrict IndexedDB on local-file origins. In that case the game still runs and saves are temporary. Serving the same one-file HTML from a static HTTPS origin gives persistent storage the most reliable origin.
+Opening the single file through `file://` is supported by the single-file packaging approach. The WASM payload is deliberately base64-encoded inside the HTML to avoid character-encoding corruption on local files. Some browsers still restrict IndexedDB on local-file origins; in that case the game runs but saves may be temporary. Serving the same one-file HTML from a static HTTPS origin gives persistent storage the most reliable origin.
 
 Only distribute the bundled Minecraft resources where you have the rights and permission to do so.
