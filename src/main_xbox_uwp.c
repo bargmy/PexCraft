@@ -93,6 +93,8 @@ static void steve_set_texture_dims(const Texture *tex);
 static void steve_set_tint(float r, float g, float b);
 
 #include "game/inventory.c"
+#include "game/block_logic.c"
+#include "game/dimension_logic.c"
 #include "../multiplayer/mcpe/protocol_81/packets/packet_codec.c"
 #include "../multiplayer/mcpe/protocol_81/packets/login_packet.c"
 #include "../multiplayer/mcpe/protocol_81/packets/play_status_packet.c"

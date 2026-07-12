@@ -353,6 +353,7 @@ static __inline void glCallList(GLuint id) { (void)id; }
 static __inline void glGenTextures(GLsizei n, GLuint *tex) { if (tex) for (GLsizei i=0;i<n;i++) tex[i]=0; }
 static __inline void glBindTexture(GLenum target, GLuint tex) { (void)target;(void)tex; }
 static __inline void glTexParameteri(GLenum t, GLenum p, GLint v) { (void)t;(void)p;(void)v; }
+static __inline void glTexParameterf(GLenum t, GLenum p, GLfloat v) { (void)t;(void)p;(void)v; }
 static __inline void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels) { (void)target;(void)level;(void)internalformat;(void)width;(void)height;(void)border;(void)format;(void)type;(void)pixels; }
 static __inline void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels) { (void)target;(void)level;(void)xoffset;(void)yoffset;(void)width;(void)height;(void)format;(void)type;(void)pixels; }
 static __inline void glDeleteTextures(GLsizei n, const GLuint *tex) { (void)n;(void)tex; }
