@@ -126,7 +126,6 @@ static void sdl2_handle_text_input(const SDL_TextInputEvent *txt) {
 
 static void sdl2_handle_event(SDL_Event *e) {
     if (!e) return;
-    if (loggy_handle_event(e)) return;
     switch (e->type) {
         case SDL_QUIT:
             save_world_state_for_exit();

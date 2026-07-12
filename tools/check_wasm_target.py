@@ -48,6 +48,7 @@ def main() -> int:
 
     require(app, "emscripten_set_main_loop", "wasm_app.c")
     require(app, "pex_wasm_visibility_flush", "wasm_app.c")
+    reject(app, r"\bloggy_handle_event\s*\(", "wasm_app.c")
     reject(app, r"\bwhile\s*\(\s*g_running\s*\)", "wasm_app.c")
 
     require(ui, '"Multiplayer (Unavailable)"', "screen_state_input.c")
@@ -56,6 +57,8 @@ def main() -> int:
     require(inventory, "stream async disabled on WASM", "inventory.c")
     require(ingame, "defined(PEX_PLATFORM_WASM)", "ingame_logic.c")
 
+    require(build, "-std=gnu99", "build_wasm.sh")
+    reject(build, r"-std=c(?:89|90|99|11|17|23)\b", "build_wasm.sh")
     for flag in ("-sWASM=1", "-sSINGLE_FILE=1", "--embed-file", "-sUSE_SDL=2", "-sUSE_SDL_IMAGE=2", "-lidbfs.js"):
         require(build, flag, "build_wasm.sh")
     require(build, "PexCraft-WASM.html", "build_wasm.sh")

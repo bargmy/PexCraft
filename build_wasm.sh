@@ -38,7 +38,7 @@ python3 tools/prepare_wasm_assets.py --output build/wasm_assets
 rm -rf dist
 mkdir -p dist
 
-"$EMCC" -std=c99 -O3 -DNDEBUG main_wasm.c -o "$OUTPUT" \
+"$EMCC" -std=gnu99 -O3 -DNDEBUG main_wasm.c -o "$OUTPUT" \
   -sUSE_SDL=2 \
   -sUSE_SDL_IMAGE=2 \
   -sSDL2_IMAGE_FORMATS='["png"]' \
