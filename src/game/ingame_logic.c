@@ -508,6 +508,165 @@ static int flat_player_try_step_move(float nx, float base_y, float nz) {
 }
 
 
+static int g_java47_jump_ticks = 0;
+
+static float java47_snap_collision_edge(float value) {
+    /* The gameplay globals are floats and store eye Y, while vanilla keeps a
+       double-precision feet position/AABB.  Reconstructing 2.62f - 1.62f can
+       produce 0.99999988, leaving the box microscopically inside the floor.
+       Vanilla collision bounds are on a 1/16 grid, so only repair values that
+       are already within a tiny float-error distance of such an edge. */
+    float snapped = roundf(value * 16.0f) * (1.0f / 16.0f);
+    return fabsf(value - snapped) <= 0.00002f ? snapped : value;
+}
+
+static FlatAABB java47_player_box(void) {
+    float minx = g_player_x - 0.30f, maxx = g_player_x + 0.30f;
+    float feet = g_player_y - 1.62f;
+    float minz = g_player_z - 0.30f, maxz = g_player_z + 0.30f;
+
+    float sx0 = java47_snap_collision_edge(minx);
+    float sx1 = java47_snap_collision_edge(maxx);
+    if (sx0 != minx) { minx = sx0; maxx = minx + 0.60f; }
+    else if (sx1 != maxx) { maxx = sx1; minx = maxx - 0.60f; }
+    float sz0 = java47_snap_collision_edge(minz);
+    float sz1 = java47_snap_collision_edge(maxz);
+    if (sz0 != minz) { minz = sz0; maxz = minz + 0.60f; }
+    else if (sz1 != maxz) { maxz = sz1; minz = maxz - 0.60f; }
+    feet = java47_snap_collision_edge(feet);
+
+    FlatAABB box = {minx, feet, minz, maxx, feet + 1.80f, maxz};
+    return box;
+}
+
+static void java47_player_network_position(double *x, double *feet_y, double *z) {
+    FlatAABB box = java47_player_box();
+    if (x) *x = ((double)box.minx + (double)box.maxx) * 0.5;
+    if (feet_y) *feet_y = (double)box.miny;
+    if (z) *z = ((double)box.minz + (double)box.maxz) * 0.5;
+}
+
+static FlatAABB java47_aabb_add_coord(FlatAABB box, float dx, float dy, float dz) {
+    if (dx < 0.0f) box.minx += dx; else box.maxx += dx;
+    if (dy < 0.0f) box.miny += dy; else box.maxy += dy;
+    if (dz < 0.0f) box.minz += dz; else box.maxz += dz;
+    return box;
+}
+
+static int java47_aabb_offset_has_collision(const FlatAABB *box, float dx, float dy, float dz) {
+    FlatAABB query = *box;
+    aabb_offset(&query, dx, dy, dz);
+    FlatAABB boxes[192];
+    return flat_get_collision_boxes(&query, boxes, (int)(sizeof(boxes) / sizeof(boxes[0]))) > 0;
+}
+
+static int java47_player_intersects_block(int block_id) {
+    FlatAABB box = java47_player_box();
+    int x0=(int)floorf(box.minx),x1=(int)floorf(box.maxx-1.0e-4f);
+    int y0=(int)floorf(box.miny),y1=(int)floorf(box.maxy-1.0e-4f);
+    int z0=(int)floorf(box.minz),z1=(int)floorf(box.maxz-1.0e-4f);
+    for(int y=y0;y<=y1;y++)for(int z=z0;z<=z1;z++)for(int x=x0;x<=x1;x++)
+        if(flat_get_block(x,y,z)==block_id)return 1;
+    return 0;
+}
+
+/* Port of the collision-order and step selection in 1.8.8 Entity.moveEntity.
+   The old shared controller moved X and Z independently, then implemented a
+   step by jumping the complete 0.6 blocks.  That produces positions a vanilla
+   client can never report around slabs, stairs, panes and ledges. */
+static void java47_player_move_entity(float move_x, float move_y, float move_z,
+                                      int sneaking, int was_on_ground) {
+    FlatAABB box = java47_player_box();
+    float x=move_x,y=move_y,z=move_z;
+    float original_x=x,original_y=y,original_z=z;
+
+    flat_world_map_enter();
+
+    if (was_on_ground && sneaking) {
+        const float edge_step=0.05f;
+        while(x!=0.0f&&!java47_aabb_offset_has_collision(&box,x,-1.0f,0.0f)){
+            if(x<edge_step&&x>=-edge_step)x=0.0f;else x+=x>0.0f?-edge_step:edge_step;
+            original_x=x;
+        }
+        while(z!=0.0f&&!java47_aabb_offset_has_collision(&box,0.0f,-1.0f,z)){
+            if(z<edge_step&&z>=-edge_step)z=0.0f;else z+=z>0.0f?-edge_step:edge_step;
+            original_z=z;
+        }
+        while(x!=0.0f&&z!=0.0f&&!java47_aabb_offset_has_collision(&box,x,-1.0f,z)){
+            if(x<edge_step&&x>=-edge_step)x=0.0f;else x+=x>0.0f?-edge_step:edge_step;
+            if(z<edge_step&&z>=-edge_step)z=0.0f;else z+=z>0.0f?-edge_step:edge_step;
+            original_x=x;original_z=z;
+        }
+    }
+
+    FlatAABB start_box=box;
+    FlatAABB sweep=java47_aabb_add_coord(box,x,y,z);
+    FlatAABB boxes[192];
+    int count=flat_get_collision_boxes(&sweep,boxes,(int)(sizeof(boxes)/sizeof(boxes[0])));
+
+    for(int i=0;i<count;i++)y=aabb_clip_y(&boxes[i],&box,y);
+    aabb_offset(&box,0.0f,y,0.0f);
+    int may_step=was_on_ground||(original_y!=y&&original_y<0.0f);
+    for(int i=0;i<count;i++)x=aabb_clip_x(&boxes[i],&box,x);
+    aabb_offset(&box,x,0.0f,0.0f);
+    for(int i=0;i<count;i++)z=aabb_clip_z(&boxes[i],&box,z);
+    aabb_offset(&box,0.0f,0.0f,z);
+
+    if(may_step&&(original_x!=x||original_z!=z)){
+        float clipped_x=x,clipped_y=y,clipped_z=z;
+        FlatAABB clipped_box=box;
+        float step_y=0.6f;
+        FlatAABB step_sweep=java47_aabb_add_coord(start_box,original_x,step_y,original_z);
+        FlatAABB step_boxes[192];
+        int step_count=flat_get_collision_boxes(&step_sweep,step_boxes,(int)(sizeof(step_boxes)/sizeof(step_boxes[0])));
+
+        FlatAABB path_a=start_box;
+        FlatAABB horizontal_a=java47_aabb_add_coord(path_a,original_x,0.0f,original_z);
+        float rise_a=step_y;
+        for(int i=0;i<step_count;i++)rise_a=aabb_clip_y(&step_boxes[i],&horizontal_a,rise_a);
+        aabb_offset(&path_a,0.0f,rise_a,0.0f);
+        float ax=original_x;
+        for(int i=0;i<step_count;i++)ax=aabb_clip_x(&step_boxes[i],&path_a,ax);
+        aabb_offset(&path_a,ax,0.0f,0.0f);
+        float az=original_z;
+        for(int i=0;i<step_count;i++)az=aabb_clip_z(&step_boxes[i],&path_a,az);
+        aabb_offset(&path_a,0.0f,0.0f,az);
+
+        FlatAABB path_b=start_box;
+        float rise_b=step_y;
+        for(int i=0;i<step_count;i++)rise_b=aabb_clip_y(&step_boxes[i],&path_b,rise_b);
+        aabb_offset(&path_b,0.0f,rise_b,0.0f);
+        float bx=original_x;
+        for(int i=0;i<step_count;i++)bx=aabb_clip_x(&step_boxes[i],&path_b,bx);
+        aabb_offset(&path_b,bx,0.0f,0.0f);
+        float bz=original_z;
+        for(int i=0;i<step_count;i++)bz=aabb_clip_z(&step_boxes[i],&path_b,bz);
+        aabb_offset(&path_b,0.0f,0.0f,bz);
+
+        if(ax*ax+az*az>bx*bx+bz*bz){box=path_a;x=ax;z=az;y=-rise_a;}
+        else {box=path_b;x=bx;z=bz;y=-rise_b;}
+        for(int i=0;i<step_count;i++)y=aabb_clip_y(&step_boxes[i],&box,y);
+        aabb_offset(&box,0.0f,y,0.0f);
+
+        if(clipped_x*clipped_x+clipped_z*clipped_z>=x*x+z*z){
+            box=clipped_box;x=clipped_x;y=clipped_y;z=clipped_z;
+        }
+    }
+
+    flat_world_map_leave();
+
+    g_player_x=(box.minx+box.maxx)*0.5f;
+    g_player_y=box.miny+1.62f;
+    g_player_z=(box.minz+box.maxz)*0.5f;
+    g_player_collided_horiz=(original_x!=x||original_z!=z);
+    g_player_on_ground=(original_y!=y&&original_y<0.0f)?1:0;
+    g_player_server_on_ground=g_player_on_ground;
+    if(original_x!=x)g_player_motion_x=0.0f;
+    if(original_y!=y)g_player_motion_y=0.0f;
+    if(original_z!=z)g_player_motion_z=0.0f;
+}
+
+
 /* Async tick context flags are defined before ingame_tick() because the
    synchronous function checks whether it is currently running on the tick
    worker. */
@@ -885,6 +1044,19 @@ static void ingame_tick(void) {
     }
     if (g_sprint_toggle_timer > 0) g_sprint_toggle_timer--;
 
+    /* EntityLivingBase.onLivingUpdate clears tiny residual velocity before
+       reading movement input. Leaving sub-0.005 drift alive changes both the
+       position threshold cadence and the horizontal deltas seen by movement
+       checks. */
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        if (fabsf(g_player_motion_x) < 0.005f) g_player_motion_x = 0.0f;
+        if (fabsf(g_player_motion_y) < 0.005f) g_player_motion_y = 0.0f;
+        if (fabsf(g_player_motion_z) < 0.005f) g_player_motion_z = 0.0f;
+        if (g_java47_jump_ticks > 0) g_java47_jump_ticks--;
+    } else {
+        g_java47_jump_ticks = 0;
+    }
+
     float strafe = 0.0f;
     float forward = 0.0f;
     float raw_forward_input = 0.0f;
@@ -956,6 +1128,8 @@ static void ingame_tick(void) {
     g_fov_modifier_hand += (player_fov_target_multiplier_125() - g_fov_modifier_hand) * 0.5f;
 
     int normal_jump = jumping && !(player_is_creative() && g_creative_flying);
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE && !normal_jump)
+        g_java47_jump_ticks = 0;
 
     float raw_strafe = strafe;
     float raw_forward = forward;
@@ -1002,12 +1176,14 @@ static void ingame_tick(void) {
     } else if (normal_jump && in_lava) {
         /* Lava remains heavy/slow. */
         g_player_motion_y += 0.04f;
-    } else if (normal_jump && g_player_on_ground) {
+    } else if (normal_jump && g_player_on_ground &&
+               (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE || g_java47_jump_ticks == 0)) {
         pex_stats_add_general(PEX_STAT_JUMPS, 1);
         /* The old controller subtracts gravity before moving, hence its 0.50
            compensation. Protocol 47 follows EntityLivingBase exactly: move
            by 0.42 on the jump tick, then apply gravity and drag afterward. */
         g_player_motion_y = (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) ? 0.42f : 0.50f;
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) g_java47_jump_ticks = 10;
         if (player_has_potion(PEX_POTION_JUMP)) g_player_motion_y += 0.10f * (float)(player_potion_amplifier(PEX_POTION_JUMP) + 1);
         if (g_player_sprinting) {
             float yaw_rad = g_player_yaw * (float)M_PI / 180.0f;
@@ -1022,17 +1198,22 @@ static void ingame_tick(void) {
         player_add_exhaustion(g_player_sprinting ? 0.8f : 0.2f);
     }
 
-    /* Vanilla computes f4 before moveEntity() and reuses that exact value
-       after the move.  Thus a jump tick uses ground friction and a landing
-       tick uses air friction; recomputing from the post-move onGround flag
-       produces recognizably non-vanilla deltas. */
+    /* Vanilla computes slipperiness once before moveEntity() for acceleration,
+       then recomputes it from the post-collision onGround state for drag. */
     float java_ground_friction_before = 0.91f;
     if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE && g_player_on_ground) {
         int below = flat_get_block((int)floorf(g_player_x),
-                                   (int)floorf((g_player_y - 1.62f) - 0.01f),
+                                   (int)floorf(g_player_y - 1.62f) - 1,
                                    (int)floorf(g_player_z));
         java_ground_friction_before = block_slipperiness_for_item(below) * 0.91f;
         if (java_ground_friction_before < 0.05f) java_ground_friction_before = 0.54600006f;
+    }
+
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        /* EntityLivingBase.onLivingUpdate applies this after MovementInput has
+           already handled sneak's 0.3 multiplier. */
+        strafe *= 0.98f;
+        forward *= 0.98f;
     }
 
     float input_len = sqrtf(strafe * strafe + forward * forward);
@@ -1078,7 +1259,7 @@ static void ingame_tick(void) {
     float previous_motion_y = g_player_motion_y;
     int java_delayed_gravity =
         g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
-        !g_creative_flying && !in_water && !in_lava && !in_ladder;
+        !g_creative_flying && !in_water && !in_lava;
     if (g_creative_flying) {
         /* PlayerControllerCreative flying skips gravity; EntityPlayer restores
            motionY from before super.moveEntityWithHeading and damps it later. */
@@ -1088,7 +1269,8 @@ static void ingame_tick(void) {
         g_player_motion_y -= (in_water ? 0.010f : (in_lava ? 0.02f : 0.08f));
     }
 
-    if (!g_creative_flying && input_active && sneaking && flat_player_has_sneak_support(g_player_x, g_player_y, g_player_z)) {
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
+        !g_creative_flying && input_active && sneaking && flat_player_has_sneak_support(g_player_x, g_player_y, g_player_z)) {
         const float step = 0.05f;
         while (fabsf(g_player_motion_x) > 0.00001f &&
                !flat_player_has_sneak_support(g_player_x + g_player_motion_x, g_player_y, g_player_z)) {
@@ -1103,95 +1285,114 @@ static void ingame_tick(void) {
     }
 
     int liquid_horizontal_collision = 0;
-    int player_collided_horiz_this_tick = 0;
-    float step_base_y = g_player_y;
-
-    float old_x = g_player_x;
-    g_player_x += g_player_motion_x;
-    if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
-        float try_x = g_player_x;
-        g_player_x = old_x;
-        if (!flat_player_try_step_move(try_x, step_base_y, g_player_z)) {
-            g_player_motion_x = 0.0f;
-            liquid_horizontal_collision = 1;
-            player_collided_horiz_this_tick = 1;
-        }
-    }
-
-    float old_z = g_player_z;
-    g_player_z += g_player_motion_z;
-    if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
-        float try_z = g_player_z;
-        g_player_z = old_z;
-        if (!flat_player_try_step_move(g_player_x, step_base_y, try_z)) {
-            g_player_motion_z = 0.0f;
-            liquid_horizontal_collision = 1;
-            player_collided_horiz_this_tick = 1;
-        }
-    }
-
-    g_player_collided_horiz = player_collided_horiz_this_tick;
-    if (g_player_sprinting && g_player_collided_horiz) player_set_sprinting_125(0);
-
-    if (in_ladder && (liquid_horizontal_collision || (input_active && raw_forward > 0.01f))) {
-        if (g_player_motion_y < 0.20f) g_player_motion_y = 0.20f;
-        g_player_on_ground = 0;
-    }
-
-    float old_y = g_player_y;
     int was_on_ground = g_player_on_ground;
-    g_player_on_ground = 0;
-    g_player_server_on_ground = 0;
-#if defined(PEX_PLATFORM_PSP)
-    (void)old_y;
-    /* PSP real-world mode can briefly run with low FPS while chunks/meshes are
-       being installed.  A large accumulated downward velocity could tunnel
-       through a one-block surface if we only tested the final Y position.
-       Sweep vertical movement in small steps on PSP only. */
-    {
-        float total_dy = g_player_motion_y;
-        int steps = (int)ceilf(fabsf(total_dy) / 0.25f);
-        if (steps < 1) steps = 1;
-        if (steps > 24) steps = 24;
-        float step_dy = total_dy / (float)steps;
-        for (int i = 0; i < steps; i++) {
-            float before_step_y = g_player_y;
-            g_player_y += step_dy;
-            if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
-                g_player_y = before_step_y;
-                if (total_dy < 0.0f) {
-                    g_player_on_ground = 1;
-                    g_player_server_on_ground = 1;
-                }
-                g_player_motion_y = 0.0f;
-                break;
+
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
+        int java_in_web = java47_player_intersects_block(BLOCK_WEB);
+        if (java_in_web) {
+            /* Entity.moveEntity consumes a web flag by scaling this tick's
+               displacement, then zeroing motion before gravity/drag. */
+            g_player_motion_x *= 0.25f;
+            g_player_motion_y *= 0.05000000074505806f;
+            g_player_motion_z *= 0.25f;
+        }
+        if (in_ladder) {
+            if (g_player_motion_x < -0.15f) g_player_motion_x = -0.15f;
+            if (g_player_motion_x >  0.15f) g_player_motion_x =  0.15f;
+            if (g_player_motion_z < -0.15f) g_player_motion_z = -0.15f;
+            if (g_player_motion_z >  0.15f) g_player_motion_z =  0.15f;
+            if (g_player_motion_y < -0.15f) g_player_motion_y = -0.15f;
+            if (sneaking && g_player_motion_y < 0.0f) g_player_motion_y = 0.0f;
+        }
+        java47_player_move_entity(g_player_motion_x, g_player_motion_y, g_player_motion_z,
+                                  input_active && sneaking, was_on_ground);
+        liquid_horizontal_collision = g_player_collided_horiz;
+        if (in_ladder && g_player_collided_horiz) g_player_motion_y = 0.20f;
+        if (java47_player_intersects_block(BLOCK_SOUL_SAND)) {
+            g_player_motion_x *= 0.4f;
+            g_player_motion_z *= 0.4f;
+        }
+        if (java_in_web) g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
+    } else {
+        int player_collided_horiz_this_tick = 0;
+        float step_base_y = g_player_y;
+
+        float old_x = g_player_x;
+        g_player_x += g_player_motion_x;
+        if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
+            float try_x = g_player_x;
+            g_player_x = old_x;
+            if (!flat_player_try_step_move(try_x, step_base_y, g_player_z)) {
+                g_player_motion_x = 0.0f;
+                liquid_horizontal_collision = 1;
+                player_collided_horiz_this_tick = 1;
             }
         }
-    }
+
+        float old_z = g_player_z;
+        g_player_z += g_player_motion_z;
+        if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
+            float try_z = g_player_z;
+            g_player_z = old_z;
+            if (!flat_player_try_step_move(g_player_x, step_base_y, try_z)) {
+                g_player_motion_z = 0.0f;
+                liquid_horizontal_collision = 1;
+                player_collided_horiz_this_tick = 1;
+            }
+        }
+
+        g_player_collided_horiz = player_collided_horiz_this_tick;
+        if (in_ladder && (liquid_horizontal_collision || (input_active && raw_forward > 0.01f))) {
+            if (g_player_motion_y < 0.20f) g_player_motion_y = 0.20f;
+            g_player_on_ground = 0;
+        }
+
+        float old_y = g_player_y;
+        g_player_on_ground = 0;
+        g_player_server_on_ground = 0;
+#if defined(PEX_PLATFORM_PSP)
+        (void)old_y;
+        {
+            float total_dy = g_player_motion_y;
+            int steps = (int)ceilf(fabsf(total_dy) / 0.25f);
+            if (steps < 1) steps = 1;
+            if (steps > 24) steps = 24;
+            float step_dy = total_dy / (float)steps;
+            for (int i = 0; i < steps; i++) {
+                float before_step_y = g_player_y;
+                g_player_y += step_dy;
+                if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
+                    g_player_y = before_step_y;
+                    if (total_dy < 0.0f) {
+                        g_player_on_ground = 1;
+                        g_player_server_on_ground = 1;
+                    }
+                    g_player_motion_y = 0.0f;
+                    break;
+                }
+            }
+        }
 #else
-    g_player_y += g_player_motion_y;
-    if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
-        g_player_y = old_y;
-        if (g_player_motion_y < 0.0f) {
+        g_player_y += g_player_motion_y;
+        if (flat_player_aabb_collides(g_player_x, g_player_y, g_player_z)) {
+            g_player_y = old_y;
+            if (g_player_motion_y < 0.0f) {
+                g_player_on_ground = 1;
+                g_player_server_on_ground = 1;
+            }
+            g_player_motion_y = 0.0f;
+        }
+#endif
+        if (!g_player_on_ground &&
+            flat_player_aabb_collides(g_player_x, g_player_y - 0.05f, g_player_z)) {
             g_player_on_ground = 1;
             g_player_server_on_ground = 1;
         }
-        g_player_motion_y = 0.0f;
-    }
-#endif
-
-    /* The native 1.2.5 controller uses a broad support probe to feel stable
-       at block edges. Do not use it for protocol 47: besides falsifying the
-       packet onGround bit, it grants ground acceleration and jumping while
-       the server's AABB already considers the player airborne. */
-    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE &&
-        !g_player_on_ground &&
-        flat_player_aabb_collides(g_player_x, g_player_y - 0.05f, g_player_z)) {
-        g_player_on_ground = 1;
-        g_player_server_on_ground = 1;
     }
 
-    if (normal_jump && in_water && trying_water_exit) {
+    if (g_player_sprinting && g_player_collided_horiz) player_set_sprinting_125(0);
+
+    if (g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE && normal_jump && in_water && trying_water_exit) {
         /* Shore mantle: only run when the player is pressing into a detected
            ledge.  Open water gets no direct Y teleport/lift, so it cannot fly. */
         if (!flat_player_aabb_collides(g_player_x, g_player_y + 0.06f, g_player_z)) {
@@ -1258,7 +1459,7 @@ static void ingame_tick(void) {
         g_player_motion_y *= 0.60f;
         g_player_motion_x *= 0.91f;
         g_player_motion_z *= 0.91f;
-    } else if (in_ladder) {
+    } else if (in_ladder && g_mp_join_backend != PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
         g_player_motion_x *= 0.50f;
         g_player_motion_z *= 0.50f;
         if (g_player_motion_y < -0.15f) g_player_motion_y = -0.15f;
@@ -1278,7 +1479,14 @@ static void ingame_tick(void) {
         g_player_motion_y *= 0.98f;
         float friction = g_player_on_ground ? 0.54600006f : 0.91f;
         if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) {
-            friction = java_ground_friction_before;
+            friction = 0.91f;
+            if (g_player_on_ground) {
+                int below_after = flat_get_block((int)floorf(g_player_x),
+                                                 (int)floorf(g_player_y - 1.62f) - 1,
+                                                 (int)floorf(g_player_z));
+                friction = block_slipperiness_for_item(below_after) * 0.91f;
+                if (friction < 0.05f) friction = 0.54600006f;
+            }
         }
         g_player_motion_x *= friction;
         g_player_motion_z *= friction;

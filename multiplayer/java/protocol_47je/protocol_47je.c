@@ -1489,7 +1489,7 @@ static void j47_translate_block_state_parts(int id, int meta, int *out_id, int *
             case 168: mapped_id = BLOCK_MOSSY_COBBLESTONE; mapped_meta = 0; break;
             case 169: mapped_id = BLOCK_GLOWSTONE; mapped_meta = 0; break;
             case 170: mapped_id = BLOCK_WOOL; mapped_meta = 4; break;                  /* yellow wool */
-            case 171: mapped_id = BLOCK_SNOW_LAYER; mapped_meta = 0; break;
+            case 171: mapped_id = BLOCK_SNOW_LAYER; mapped_meta = 15; break;
             case 172: mapped_id = BLOCK_CLAY; mapped_meta = 0; break;
             case 173: mapped_id = BLOCK_OBSIDIAN; mapped_meta = 0; break;
             case 174: mapped_id = BLOCK_ICE; mapped_meta = 0; break;

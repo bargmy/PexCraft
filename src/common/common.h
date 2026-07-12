@@ -3222,6 +3222,7 @@ static void pex_net_release_render_resources(void);
 static void pex_mp_cache_save_request_stop(void);
 static void pex_mp_cache_save_shutdown(void);
 static void pex_net_send_player_state(void);
+static void java47_player_network_position(double *x, double *feet_y, double *z);
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id);
 static int pex_net_send_block_interact(int x, int y, int z, int face);
 static int pex_net_send_use_item_air(void);

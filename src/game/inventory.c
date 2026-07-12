@@ -4250,7 +4250,9 @@ static int flat_block_is_solid(int id) {
            id != BLOCK_REDSTONE_TORCH_OFF && id != BLOCK_REDSTONE_TORCH_ON &&
            id != BLOCK_REEDS && id != BLOCK_SNOW_LAYER && id != BLOCK_LADDER &&
            id != BLOCK_TALL_GRASS && id != BLOCK_DEAD_BUSH && id != BLOCK_VINE &&
-           id != BLOCK_LILY_PAD && id != BLOCK_NETHER_WART && id != BLOCK_PUMPKIN_STEM &&
+           id != BLOCK_WEB && id != BLOCK_FENCE_GATE && id != BLOCK_BED &&
+           id != BLOCK_SOUL_SAND && id != BLOCK_CAKE && id != BLOCK_ENCHANTMENT_TABLE &&
+           id != BLOCK_BREWING_STAND && id != BLOCK_LILY_PAD && id != BLOCK_NETHER_WART && id != BLOCK_PUMPKIN_STEM &&
            id != BLOCK_MELON_STEM && id != BLOCK_RAILS && id != BLOCK_POWERED_RAIL &&
            id != BLOCK_DETECTOR_RAIL && id != BLOCK_LEVER && id != BLOCK_STONE_BUTTON &&
            id != BLOCK_STONE_PRESSURE_PLATE && id != BLOCK_WOOD_PRESSURE_PLATE &&
@@ -4303,19 +4305,53 @@ static int flat_block_occludes_for_support(int id);
 
 static int block_custom_collision_intersects(int id, float minx, float maxx, float miny, float maxy, float minz, float maxz, int x, int y, int z) {
     if (id == BLOCK_LADDER) return ladder_thin_aabb_intersects(minx, maxx, miny, maxy, minz, maxz, x, y, z, 0.0f);
-    if (id == BLOCK_SLAB) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f);
+    if (id == BLOCK_SLAB) {
+        int top = (flat_get_meta(x, y, z) & 8) != 0;
+        float y0 = top ? y + 0.5f : (float)y;
+        float y1 = top ? y + 1.0f : y + 0.5f;
+        return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y0, z, x + 1.0f, y1, z + 1.0f);
+    }
+    if (id == BLOCK_BED)
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+0.5625f,z+1.0f);
+    if (id == BLOCK_SOUL_SAND)
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+0.875f,z+1.0f);
+    if (id == BLOCK_ENCHANTMENT_TABLE)
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+0.75f,z+1.0f);
+    if (id == BLOCK_CAKE) {
+        int bites=flat_get_meta(x,y,z)&7;
+        if(bites>6)bites=6;
+        float x0=x+(1.0f+(float)bites*2.0f)/16.0f;
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x0,y,z+0.0625f,x+0.9375f,y+0.5f,z+0.9375f);
+    }
+    if (id == BLOCK_BREWING_STAND) {
+        if(aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x+0.4375f,y,z+0.4375f,x+0.5625f,y+0.875f,z+0.5625f))return 1;
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+0.125f,z+1.0f);
+    }
+    if (id == BLOCK_SNOW_LAYER) {
+        /* Protocol 47 carpet uses the otherwise-unused sentinel metadata 15.
+           Vanilla snow collision uses (layers - 1) / 8 while carpet is 1/16. */
+        int raw_meta = flat_get_meta(x, y, z);
+        int meta = raw_meta & 7;
+        float h = (raw_meta == 15) ? (1.0f / 16.0f) : ((float)meta / 8.0f);
+        if (h <= 0.0f) return 0;
+        return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + h, z + 1.0f);
+    }
     if (id == BLOCK_CHEST) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 14.0f/16.0f, z + 15.0f/16.0f);
     if (id == BLOCK_CACTUS) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 1.0f, z + 15.0f/16.0f);
     if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS ||
         id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) {
-        if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f)) return 1;
-        int dir = flat_get_meta(x, y, z) & 3;
-        /* Beta BlockStairs metadata collision: 0=east half tall,
-           1=west half tall, 2=south half tall, 3=north half tall. */
-        if (dir == 0) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.5f, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 1.0f);
-        if (dir == 1) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y + 0.5f, z, x + 0.5f, y + 1.0f, z + 1.0f);
-        if (dir == 2) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y + 0.5f, z + 0.5f, x + 1.0f, y + 1.0f, z + 1.0f);
-        return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 0.5f);
+        int meta = flat_get_meta(x, y, z);
+        int dir = meta & 3;
+        int upside = (meta & 4) != 0;
+        float base0 = upside ? y + 0.5f : (float)y;
+        float base1 = upside ? y + 1.0f : y + 0.5f;
+        if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, base0, z, x + 1.0f, base1, z + 1.0f)) return 1;
+        float part0 = upside ? (float)y : y + 0.5f;
+        float part1 = upside ? y + 0.5f : y + 1.0f;
+        if (dir == 0) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.5f, part0, z, x + 1.0f, part1, z + 1.0f);
+        if (dir == 1) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, part0, z, x + 0.5f, part1, z + 1.0f);
+        if (dir == 2) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, part0, z + 0.5f, x + 1.0f, part1, z + 1.0f);
+        return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, part0, z, x + 1.0f, part1, z + 0.5f);
     }
     if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) {
         if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z + 0.375f, x + 0.625f, y + 1.5f, z + 0.625f)) return 1;
@@ -4329,7 +4365,14 @@ static int block_custom_collision_intersects(int id, float minx, float maxx, flo
             if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z + 0.5f, x + 0.625f, y + 1.5f, z + 1.0f)) return 1;
         return 0;
     }
-    if (id == BLOCK_WEB) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
+    if (id == BLOCK_FENCE_GATE) {
+        int meta = flat_get_meta(x, y, z);
+        if (meta & 4) return 0;
+        int dir = meta & 3;
+        if (dir == 0 || dir == 2)
+            return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z + 0.375f, x + 1.0f, y + 1.5f, z + 0.625f);
+        return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.375f, y, z, x + 0.625f, y + 1.5f, z + 1.0f);
+    }
     if (id == BLOCK_LILY_PAD) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 0.0625f, z + 1.0f);
     if (id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS) {
         if (aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x + 0.4375f, y, z + 0.4375f, x + 0.5625f, y + 1.0f, z + 0.5625f)) return 1;
@@ -4344,17 +4387,39 @@ static int block_custom_collision_intersects(int id, float minx, float maxx, flo
         return 0;
     }
     if (id == BLOCK_END_PORTAL_FRAME) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 13.0f/16.0f, z + 1.0f);
-    if (id == BLOCK_TRAPDOOR) return aabb_intersects_box(minx, maxx, miny, maxy, minz, maxz, x, y, z, x + 1.0f, y + 3.0f/16.0f, z + 1.0f);
+    if (id == BLOCK_TRAPDOOR) {
+        int meta = flat_get_meta(x, y, z);
+        const float t = 3.0f / 16.0f;
+        if (meta & 4) {
+            switch (meta & 3) {
+                case 0: return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z+1.0f-t,x+1.0f,y+1.0f,z+1.0f);
+                case 1: return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+1.0f,z+t);
+                case 2: return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x+1.0f-t,y,z,x+1.0f,y+1.0f,z+1.0f);
+                default:return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+t,y+1.0f,z+1.0f);
+            }
+        }
+        float y0=(meta&8)?y+1.0f-t:(float)y;
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y0,z,x+1.0f,y0+t,z+1.0f);
+    }
+    if (id == BLOCK_CAULDRON) {
+        if (aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+0.3125f,z+1.0f)) return 1;
+        if (aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+0.125f,y+1.0f,z+1.0f)) return 1;
+        if (aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x+0.875f,y,z,x+1.0f,y+1.0f,z+1.0f)) return 1;
+        if (aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z,x+1.0f,y+1.0f,z+0.125f)) return 1;
+        return aabb_intersects_box(minx,maxx,miny,maxy,minz,maxz,x,y,z+0.875f,x+1.0f,y+1.0f,z+1.0f);
+    }
     return 0;
 }
 
 static int block_has_custom_collision(int id) {
-    return id == BLOCK_LADDER || id == BLOCK_SLAB || id == BLOCK_CHEST || id == BLOCK_CACTUS ||
+    return id == BLOCK_LADDER || id == BLOCK_SLAB || id == BLOCK_BED || id == BLOCK_SOUL_SAND ||
+           id == BLOCK_CAKE || id == BLOCK_ENCHANTMENT_TABLE || id == BLOCK_BREWING_STAND ||
+           id == BLOCK_SNOW_LAYER || id == BLOCK_CHEST || id == BLOCK_CACTUS ||
            id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS ||
            id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
-           id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE ||
+           id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_FENCE_GATE || id == BLOCK_GLASS_PANE ||
            id == BLOCK_IRON_BARS || id == BLOCK_LILY_PAD || id == BLOCK_END_PORTAL_FRAME ||
-           id == BLOCK_WEB || id == BLOCK_TRAPDOOR;
+           id == BLOCK_TRAPDOOR || id == BLOCK_CAULDRON;
 }
 
 static int flat_player_in_ladder(void) {
@@ -4960,7 +5025,7 @@ static void flat_add_collision_box(FlatAABB *boxes, int *count, int max_boxes, c
 }
 
 static void flat_block_add_collision_boxes(int id, int x, int y, int z, const FlatAABB *query, FlatAABB *boxes, int *count, int max_boxes) {
-    if (id <= 0 || block_is_liquid(id)) return;
+    if (id <= 0 || block_is_liquid(id) || id == BLOCK_WEB || id == BLOCK_LADDER) return;
     if (block_is_door_id(id)) {
         int m = flat_get_meta(x, y, z);
         int lower_y = door_meta_is_upper(m) ? y - 1 : y;
@@ -4973,31 +5038,56 @@ static void flat_block_add_collision_boxes(int id, int x, int y, int z, const Fl
         else flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + t, y + 1.0f, z + 1.0f);
         return;
     }
-    if (id == BLOCK_LADDER) return;
-    if (id == BLOCK_SLAB) { flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f); return; }
+    if (id == BLOCK_SLAB) {
+        int top=(flat_get_meta(x,y,z)&8)!=0;
+        flat_add_collision_box(boxes,count,max_boxes,query,x,top?y+0.5f:(float)y,z,x+1.0f,top?y+1.0f:y+0.5f,z+1.0f);
+        return;
+    }
+    if(id==BLOCK_BED){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.5625f,z+1.0f);return;}
+    if(id==BLOCK_SOUL_SAND){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.875f,z+1.0f);return;}
+    if(id==BLOCK_ENCHANTMENT_TABLE){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.75f,z+1.0f);return;}
+    if(id==BLOCK_CAKE){int bites=flat_get_meta(x,y,z)&7;if(bites>6)bites=6;float x0=x+(1.0f+(float)bites*2.0f)/16.0f;flat_add_collision_box(boxes,count,max_boxes,query,x0,y,z+0.0625f,x+0.9375f,y+0.5f,z+0.9375f);return;}
+    if(id==BLOCK_BREWING_STAND){flat_add_collision_box(boxes,count,max_boxes,query,x+0.4375f,y,z+0.4375f,x+0.5625f,y+0.875f,z+0.5625f);flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.125f,z+1.0f);return;}
+    if (id == BLOCK_SNOW_LAYER) {
+        int raw_meta=flat_get_meta(x,y,z),meta=raw_meta&7;
+        float h=(raw_meta==15)?1.0f/16.0f:(float)meta/8.0f;
+        if(h>0.0f)flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+h,z+1.0f);
+        return;
+    }
     if (id == BLOCK_CHEST) { flat_add_collision_box(boxes, count, max_boxes, query, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 14.0f/16.0f, z + 15.0f/16.0f); return; }
     if (id == BLOCK_CACTUS) { flat_add_collision_box(boxes, count, max_boxes, query, x + 1.0f/16.0f, y, z + 1.0f/16.0f, x + 15.0f/16.0f, y + 1.0f, z + 15.0f/16.0f); return; }
-    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS) {
-        flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 0.5f, z + 1.0f);
-        int dir = flat_get_meta(x, y, z) & 3;
-        if (dir == 0) flat_add_collision_box(boxes, count, max_boxes, query, x + 0.5f, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 1.0f);
-        else if (dir == 1) flat_add_collision_box(boxes, count, max_boxes, query, x, y + 0.5f, z, x + 0.5f, y + 1.0f, z + 1.0f);
-        else if (dir == 2) flat_add_collision_box(boxes, count, max_boxes, query, x, y + 0.5f, z + 0.5f, x + 1.0f, y + 1.0f, z + 1.0f);
-        else flat_add_collision_box(boxes, count, max_boxes, query, x, y + 0.5f, z, x + 1.0f, y + 1.0f, z + 0.5f);
+    if (id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS || id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS) {
+        int meta=flat_get_meta(x,y,z),dir=meta&3,upside=(meta&4)!=0;
+        float b0=upside?y+0.5f:(float)y,b1=upside?y+1.0f:y+0.5f;
+        float p0=upside?(float)y:y+0.5f,p1=upside?y+0.5f:y+1.0f;
+        flat_add_collision_box(boxes,count,max_boxes,query,x,b0,z,x+1.0f,b1,z+1.0f);
+        if(dir==0)flat_add_collision_box(boxes,count,max_boxes,query,x+0.5f,p0,z,x+1.0f,p1,z+1.0f);
+        else if(dir==1)flat_add_collision_box(boxes,count,max_boxes,query,x,p0,z,x+0.5f,p1,z+1.0f);
+        else if(dir==2)flat_add_collision_box(boxes,count,max_boxes,query,x,p0,z+0.5f,x+1.0f,p1,z+1.0f);
+        else flat_add_collision_box(boxes,count,max_boxes,query,x,p0,z,x+1.0f,p1,z+0.5f);
         return;
     }
-    if (id == BLOCK_FENCE) {
-        flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z + 0.375f, x + 0.625f, y + 1.5f, z + 0.625f);
-        if (flat_block_is_solid(flat_get_block(x - 1, y, z)) || flat_get_block(x - 1, y, z) == BLOCK_FENCE)
-            flat_add_collision_box(boxes, count, max_boxes, query, x, y, z + 0.375f, x + 0.5f, y + 1.5f, z + 0.625f);
-        if (flat_block_is_solid(flat_get_block(x + 1, y, z)) || flat_get_block(x + 1, y, z) == BLOCK_FENCE)
-            flat_add_collision_box(boxes, count, max_boxes, query, x + 0.5f, y, z + 0.375f, x + 1.0f, y + 1.5f, z + 0.625f);
-        if (flat_block_is_solid(flat_get_block(x, y, z - 1)) || flat_get_block(x, y, z - 1) == BLOCK_FENCE)
-            flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z, x + 0.625f, y + 1.5f, z + 0.5f);
-        if (flat_block_is_solid(flat_get_block(x, y, z + 1)) || flat_get_block(x, y, z + 1) == BLOCK_FENCE)
-            flat_add_collision_box(boxes, count, max_boxes, query, x + 0.375f, y, z + 0.5f, x + 0.625f, y + 1.5f, z + 1.0f);
+    if (id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE) {
+        flat_add_collision_box(boxes,count,max_boxes,query,x+0.375f,y,z+0.375f,x+0.625f,y+1.5f,z+0.625f);
+        if(flat_block_is_solid(flat_get_block(x-1,y,z))||flat_get_block(x-1,y,z)==BLOCK_FENCE||flat_get_block(x-1,y,z)==BLOCK_NETHER_BRICK_FENCE)flat_add_collision_box(boxes,count,max_boxes,query,x,y,z+0.375f,x+0.5f,y+1.5f,z+0.625f);
+        if(flat_block_is_solid(flat_get_block(x+1,y,z))||flat_get_block(x+1,y,z)==BLOCK_FENCE||flat_get_block(x+1,y,z)==BLOCK_NETHER_BRICK_FENCE)flat_add_collision_box(boxes,count,max_boxes,query,x+0.5f,y,z+0.375f,x+1.0f,y+1.5f,z+0.625f);
+        if(flat_block_is_solid(flat_get_block(x,y,z-1))||flat_get_block(x,y,z-1)==BLOCK_FENCE||flat_get_block(x,y,z-1)==BLOCK_NETHER_BRICK_FENCE)flat_add_collision_box(boxes,count,max_boxes,query,x+0.375f,y,z,x+0.625f,y+1.5f,z+0.5f);
+        if(flat_block_is_solid(flat_get_block(x,y,z+1))||flat_get_block(x,y,z+1)==BLOCK_FENCE||flat_get_block(x,y,z+1)==BLOCK_NETHER_BRICK_FENCE)flat_add_collision_box(boxes,count,max_boxes,query,x+0.375f,y,z+0.5f,x+0.625f,y+1.5f,z+1.0f);
         return;
     }
+    if(id==BLOCK_FENCE_GATE){int meta=flat_get_meta(x,y,z);if(meta&4)return;if((meta&3)==0||(meta&3)==2)flat_add_collision_box(boxes,count,max_boxes,query,x,y,z+0.375f,x+1.0f,y+1.5f,z+0.625f);else flat_add_collision_box(boxes,count,max_boxes,query,x+0.375f,y,z,x+0.625f,y+1.5f,z+1.0f);return;}
+    if(id==BLOCK_GLASS_PANE||id==BLOCK_IRON_BARS){
+        flat_add_collision_box(boxes,count,max_boxes,query,x+0.4375f,y,z+0.4375f,x+0.5625f,y+1.0f,z+0.5625f);
+        if(flat_block_occludes_for_support(flat_get_block(x-1,y,z))||flat_get_block(x-1,y,z)==id)flat_add_collision_box(boxes,count,max_boxes,query,x,y,z+0.4375f,x+0.5f,y+1.0f,z+0.5625f);
+        if(flat_block_occludes_for_support(flat_get_block(x+1,y,z))||flat_get_block(x+1,y,z)==id)flat_add_collision_box(boxes,count,max_boxes,query,x+0.5f,y,z+0.4375f,x+1.0f,y+1.0f,z+0.5625f);
+        if(flat_block_occludes_for_support(flat_get_block(x,y,z-1))||flat_get_block(x,y,z-1)==id)flat_add_collision_box(boxes,count,max_boxes,query,x+0.4375f,y,z,x+0.5625f,y+1.0f,z+0.5f);
+        if(flat_block_occludes_for_support(flat_get_block(x,y,z+1))||flat_get_block(x,y,z+1)==id)flat_add_collision_box(boxes,count,max_boxes,query,x+0.4375f,y,z+0.5f,x+0.5625f,y+1.0f,z+1.0f);
+        return;
+    }
+    if(id==BLOCK_LILY_PAD){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.0625f,z+1.0f);return;}
+    if(id==BLOCK_END_PORTAL_FRAME){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+13.0f/16.0f,z+1.0f);return;}
+    if(id==BLOCK_TRAPDOOR){int meta=flat_get_meta(x,y,z);const float t=3.0f/16.0f;if(meta&4){if((meta&3)==0)flat_add_collision_box(boxes,count,max_boxes,query,x,y,z+1.0f-t,x+1.0f,y+1.0f,z+1.0f);else if((meta&3)==1)flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+1.0f,z+t);else if((meta&3)==2)flat_add_collision_box(boxes,count,max_boxes,query,x+1.0f-t,y,z,x+1.0f,y+1.0f,z+1.0f);else flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+t,y+1.0f,z+1.0f);}else{float y0=(meta&8)?y+1.0f-t:(float)y;flat_add_collision_box(boxes,count,max_boxes,query,x,y0,z,x+1.0f,y0+t,z+1.0f);}return;}
+    if(id==BLOCK_CAULDRON){flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+0.3125f,z+1.0f);flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+0.125f,y+1.0f,z+1.0f);flat_add_collision_box(boxes,count,max_boxes,query,x+0.875f,y,z,x+1.0f,y+1.0f,z+1.0f);flat_add_collision_box(boxes,count,max_boxes,query,x,y,z,x+1.0f,y+1.0f,z+0.125f);flat_add_collision_box(boxes,count,max_boxes,query,x,y,z+0.875f,x+1.0f,y+1.0f,z+1.0f);return;}
     if (flat_block_is_solid(id)) flat_add_collision_box(boxes, count, max_boxes, query, x, y, z, x + 1.0f, y + 1.0f, z + 1.0f);
 }
 
