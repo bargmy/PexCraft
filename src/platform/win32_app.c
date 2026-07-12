@@ -188,6 +188,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
             if (g_mouse_down && g_screen == SCREEN_LANGUAGE) language_drag_scroll(g_mouse_y - old_mouse_y);
             if (g_mouse_down && (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE)) world_save_drag_scroll(g_mouse_y - old_mouse_y);
+                if (g_mouse_down && g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) pex_mp_server_scrollbar_drag(g_mouse_y - old_mouse_y);
             return 0;
         }
         case WM_LBUTTONDOWN: {

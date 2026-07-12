@@ -96,6 +96,10 @@ typedef struct J47Entity {
     int custom_name_visible;
     int armor_stand_flags;
     int proxy_item_drop_slot;
+    int vehicle_entity_id;
+    int passenger_entity_id;
+    int has_vehicle_entity;
+    int has_passenger_entity;
     ItemStack equipment[5];
     char custom_name[96];
     float armor_pose[6][3]; /* head, body, left arm, right arm, left leg, right leg */
@@ -1088,7 +1092,7 @@ int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava4
     J47Reader r;
     j47_reader_init(&r, frame, frame_len);
     int32_t packet_id = -1;
-    char json[16384];
+    char json[131072];
     json[0] = 0;
     if (!j47_r_varint(&r, &packet_id) || packet_id != 0 || !j47_r_string(&r, json, sizeof(json))) {
         free(frame); closesocket(s); if (out_status) *out_status = st; return 0;
@@ -1116,6 +1120,21 @@ int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava4
         snprintf(st.version, sizeof(st.version), "Java");
     const char *description = j47_json_find_key(json, "description");
     j47_json_collect_text(description ? description : "", st.motd, sizeof(st.motd));
+    {
+        /* A 1.8 server icon is a top-level data:image/png;base64 string. Decode
+           it during the status probe, but upload it later on the render thread. */
+        char favicon_b64[98304];
+        const char *prefix="data:image/png;base64,";
+        if(j47_json_get_string(json,"favicon",favicon_b64,sizeof(favicon_b64))&&
+           !strncmp(favicon_b64,prefix,strlen(prefix))){
+            size_t png_len=0;
+            if(j47_base64_decode(favicon_b64+strlen(prefix),st.favicon_png,sizeof(st.favicon_png),&png_len)&&
+               png_len>=8&&st.favicon_png[0]==0x89&&st.favicon_png[1]=='P'&&st.favicon_png[2]=='N'&&st.favicon_png[3]=='G'&&
+               st.favicon_png[4]==0x0d&&st.favicon_png[5]==0x0a&&st.favicon_png[6]==0x1a&&st.favicon_png[7]==0x0a){
+                st.favicon_png_len=png_len;
+            }
+        }
+    }
 
     int64_t stamp = (int64_t)(now_seconds() * 1000.0);
     J47Writer ping_payload, ping_frame;
@@ -1825,6 +1844,20 @@ static J47Entity *j47_entity_alloc(int entity_id) {
 
 static void j47_entity_clear_visuals(J47Entity *e) {
     if (!e || !e->used) return;
+    if (e->has_vehicle_entity) {
+        J47Entity *vehicle = j47_entity_find(e->vehicle_entity_id);
+        if (vehicle && vehicle->has_passenger_entity && vehicle->passenger_entity_id == e->entity_id) {
+            vehicle->passenger_entity_id = 0;
+            vehicle->has_passenger_entity = 0;
+        }
+    }
+    if (e->has_passenger_entity) {
+        J47Entity *passenger = j47_entity_find(e->passenger_entity_id);
+        if (passenger && passenger->has_vehicle_entity && passenger->vehicle_entity_id == e->entity_id) {
+            passenger->vehicle_entity_id = 0;
+            passenger->has_vehicle_entity = 0;
+        }
+    }
     if (e->kind == J47_ENTITY_PLAYER && e->player_slot >= 0 && e->player_slot < PEX_NET_MAX_PLAYERS) {
         int slot = e->player_slot;
         for (int i = slot; i + 1 < g_mp_player_count; i++) {
@@ -1850,6 +1883,10 @@ static void j47_entity_clear_visuals(J47Entity *e) {
     e->drop_slot = -1;
     e->projectile_slot = -1;
     e->proxy_item_drop_slot = -1;
+    e->vehicle_entity_id = 0;
+    e->passenger_entity_id = 0;
+    e->has_vehicle_entity = 0;
+    e->has_passenger_entity = 0;
     e->is_armor_stand = 0;
     memset(e->equipment, 0, sizeof(e->equipment));
 }
@@ -3293,6 +3330,29 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x18:{int32_t id;if(j47_r_varint(r,&id)){double x=j47_r_be32(r)/32.0,y=j47_r_be32(r)/32.0,z=j47_r_be32(r)/32.0;float yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f,pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;(void)j47_r_u8(r);j47_apply_entity_position(j47_entity_find(id),x,y,z,yaw,pitch,1);}break;}
         case 0x19:{int32_t id;if(j47_r_varint(r,&id)){float head=(int8_t)j47_r_u8(r)*360.0f/256.0f;J47Entity*e=j47_entity_find(id);if(e){e->head_yaw=head;if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){g_passive_mobs[e->mob_slot].prev_head_yaw=g_passive_mobs[e->mob_slot].head_yaw;g_passive_mobs[e->mob_slot].head_yaw=head;}}}break;}
         case 0x1A:{int32_t id;if(j47_r_varint(r,&id)){int status=(int8_t)j47_r_u8(r);J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){PassiveMob*m=&g_passive_mobs[e->mob_slot];if(status==2)m->hurt_time=10;if(status==3)m->death_time=1;}}break;}
+        case 0x1B:{
+            /* S1B Entity Attach uses fixed big-endian ints, not VarInts. NPC
+               plugins frequently stack an invisible click target on a visible
+               pig. Keep that relationship so a right click can address the
+               rendered entity and its attached partner using their real IDs. */
+            int entity_id=j47_r_be32(r),vehicle_id=j47_r_be32(r),leash=j47_r_u8(r);
+            if(!r->failed&&leash==0){
+                J47Entity *entity=j47_entity_find(entity_id);
+                if(entity){
+                    if(entity->has_vehicle_entity){
+                        J47Entity *oldv=j47_entity_find(entity->vehicle_entity_id);
+                        if(oldv&&oldv->has_passenger_entity&&oldv->passenger_entity_id==entity_id){oldv->passenger_entity_id=0;oldv->has_passenger_entity=0;}
+                    }
+                    entity->has_vehicle_entity=vehicle_id!=-1;
+                    entity->vehicle_entity_id=vehicle_id;
+                }
+                if(vehicle_id!=-1){
+                    J47Entity *vehicle=j47_entity_find(vehicle_id);
+                    if(vehicle){vehicle->has_passenger_entity=1;vehicle->passenger_entity_id=entity_id;}
+                }
+            }
+            break;
+        }
         case 0x1C:{int32_t id;if(j47_r_varint(r,&id))j47_parse_entity_metadata(r,id);break;}
         case 0x1D:{int32_t id=0,duration=0;if(j47_r_varint(r,&id)){int effect=(int)(int8_t)j47_r_u8(r);int amplifier=(int)(int8_t)j47_r_u8(r);j47_r_varint(r,&duration);(void)j47_r_u8(r);if(!r->failed&&id==g_j47.local_entity_id&&effect>0&&effect<PEX_POTION_MAX){if(amplifier<0)amplifier=0;g_player_potion_effects[effect].duration=duration>0?duration:1;g_player_potion_effects[effect].amplifier=amplifier;}}break;}
         case 0x1E:{int32_t id=0;if(j47_r_varint(r,&id)){int effect=j47_r_u8(r);if(!r->failed&&id==g_j47.local_entity_id&&effect>0&&effect<PEX_POTION_MAX){g_player_potion_effects[effect].duration=0;g_player_potion_effects[effect].amplifier=0;}}break;}
@@ -3901,8 +3961,22 @@ int pex_java47_send_chat(const char*text){if(g_j47.state!=PEX_JAVA47_PLAY||!text
 int pex_java47_send_swing(void){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;return j47_send_packet(0x0A,NULL,0);}
 int pex_java47_send_attack(int entity_id){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,entity_id);j47_w_varint(&w,1);int ok=j47_send_packet(0x02,w.data,w.len);j47_writer_free(&w);return ok;}
 
+static int j47_sync_current_play_item(void){
+    int held=g_selected_hotbar_slot;
+    if(held<0||held>8)held=0;
+    if(g_j47.last_held_slot==held)return 1;
+    J47Writer w;j47_writer_init(&w,4);j47_w_be16(&w,held);
+    int ok=j47_send_packet(0x09,w.data,w.len);j47_writer_free(&w);
+    if(ok)g_j47.last_held_slot=held;
+    return ok;
+}
+
 static int j47_send_use_entity_action(int entity_id,int action,float hit_x,float hit_y,float hit_z){
-    if(g_j47.state!=PEX_JAVA47_PLAY)return 0;
+    if(g_j47.state!=PEX_JAVA47_PLAY||entity_id==g_j47.local_entity_id)return 0;
+    /* PlayerControllerMP.syncCurrentPlayItem() is called before every C02 in
+       vanilla. Without this immediate C09, a click on the same frame as a
+       hotbar change can be rejected by shop/anti-cheat plugins. */
+    if(!j47_sync_current_play_item())return 0;
     J47Writer w;j47_writer_init(&w,32);
     j47_w_varint(&w,entity_id);j47_w_varint(&w,action);
     if(action==2){j47_w_float(&w,hit_x);j47_w_float(&w,hit_y);j47_w_float(&w,hit_z);}
@@ -3912,21 +3986,21 @@ static int j47_send_use_entity_action(int entity_id,int action,float hit_x,float
 }
 
 int pex_java47_send_interact(int entity_id,float hit_x,float hit_y,float hit_z){
-    (void)hit_x;(void)hit_y;(void)hit_z;
-    /* Villagers, fake players and ordinary NPCs use the vanilla INTERACT
-       action. Sending INTERACT_AT first can be cancelled by NPC plugins or
-       duplicate their click event, so reserve the precise action for actual
-       armor stands. */
-    return j47_send_use_entity_action(entity_id,0,0.0f,0.0f,0.0f);
+    /* Minecraft.rightClickMouse first sends INTERACT_AT for every entity and
+       then sends INTERACT when the local entity's interactAt() does not consume
+       the action. Pigs use the default false interactAt implementation, so a
+       vanilla 1.8.8 client sends both packets. Sending only INTERACT was not a
+       faithful emulation and misses NPC plugins listening to the at-entity
+       event. Sending both also covers armor-stand and stacked-plugin NPCs. */
+    int at_ok=j47_send_use_entity_action(entity_id,2,hit_x,hit_y,hit_z);
+    int generic_ok=j47_send_use_entity_action(entity_id,0,0.0f,0.0f,0.0f);
+    return at_ok||generic_ok;
 }
 
 static int j47_send_armor_stand_interact(int entity_id,float hit_x,float hit_y,float hit_z){
-    /* EntityArmorStand implements interactAt in 1.8.8. Send the precise hit
-       first, then the generic action as a compatibility fallback for shop
-       plugins that listen only for PlayerInteractEntityEvent. */
-    if(!j47_send_use_entity_action(entity_id,2,hit_x,hit_y,hit_z))return 0;
-    return j47_send_use_entity_action(entity_id,0,0.0f,0.0f,0.0f);
+    return pex_java47_send_interact(entity_id,hit_x,hit_y,hit_z);
 }
+
 int pex_java47_send_dig(int status,int x,int y,int z,int face){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,24);j47_w_varint(&w,status);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);int ok=j47_send_packet(0x07,w.data,w.len);j47_writer_free(&w);return ok;}
 int pex_java47_send_place(int x,int y,int z,int face,int item_id,int count,int damage,float cursor_x,float cursor_y,float cursor_z){if(g_j47.state!=PEX_JAVA47_PLAY)return 0;J47Writer w;j47_writer_init(&w,48);j47_write_block_pos(&w,x,y,z);j47_w_u8(&w,face);j47_write_held_or_local_item(&w,item_id,count,damage);int cx=(int)(cursor_x*16.0f);int cy=(int)(cursor_y*16.0f);int cz=(int)(cursor_z*16.0f);if(cx<0)cx=0;if(cx>15)cx=15;if(cy<0)cy=0;if(cy>15)cy=15;if(cz<0)cz=0;if(cz>15)cz=15;j47_w_u8(&w,cx);j47_w_u8(&w,cy);j47_w_u8(&w,cz);int ok=j47_send_packet(0x08,w.data,w.len);j47_writer_free(&w);return ok;}
 int pex_java47_send_drop(int whole_stack){return pex_java47_send_dig(whole_stack?3:4,0,0,0,0);}
@@ -4000,26 +4074,47 @@ static int j47_ray_aabb(const float origin[3], const float dir[3], const float m
 
 int pex_java47_try_interact_entity(float max_dist) {
     if(g_j47.state!=PEX_JAVA47_PLAY||g_player_dead)return 0;
-    if(max_dist<=0.0f)max_dist=player_is_creative()?5.0f:4.5f;
+    if(max_dist<=0.0f)max_dist=player_is_creative()?6.0f:4.5f;
 
     float look_x,look_y,look_z;
     pex_touch_aware_look_vector(&look_x,&look_y,&look_z);
     float origin[3]={g_player_x,g_player_y,g_player_z};
     float dir[3]={look_x,look_y,look_z};
     float best=max_dist;
-    float best_fallback=max_dist;
-    J47Entity *best_entity=NULL,*fallback_entity=NULL;
+    J47Entity *best_entity=NULL;
+    int best_entity_id=0;
+    int best_found=0;
+    float best_hit_x=0.0f,best_hit_y=0.0f,best_hit_z=0.0f;
+    float clicked_x=0.0f,clicked_y=0.0f,clicked_z=0.0f;
+
+    /* Start with the actually rendered passive-mob model. Packet-only NPC
+       implementations often use negative entity IDs; those are fully legal
+       signed VarInts, so never use >0 as an existence test. */
+    {
+        float mob_t=0.0f;
+        PassiveMob *m=passive_mob_raycast(max_dist,&mob_t);
+        if(m&&m->active&&m->death_time<=0&&mob_t>=0.0f&&mob_t<best){
+            J47Entity *network_entity=j47_entity_find(m->entity_id);
+            if(network_entity){
+                best=mob_t;best_entity_id=m->entity_id;best_entity=network_entity;best_found=1;
+                best_hit_x=origin[0]+dir[0]*mob_t-m->x;
+                best_hit_y=origin[1]+dir[1]*mob_t-m->y;
+                best_hit_z=origin[2]+dir[2]*mob_t-m->z;
+                clicked_x=m->x;clicked_y=m->y;clicked_z=m->z;
+            }
+        }
+    }
 
     for(int i=0;i<J47_ENTITY_MAX;i++){
         J47Entity *e=&g_j47.entities[i];
         if(!e->used||e->entity_id==g_j47.local_entity_id)continue;
         float width=0.75f,height=0.75f,feet_y=(float)e->y;
-        if(e->kind==J47_ENTITY_PLAYER){width=0.7f;height=1.8f;}
+        if(e->kind==J47_ENTITY_PLAYER){width=0.6f;height=1.8f;}
         else if(e->is_armor_stand){
             int small=(e->armor_stand_flags&0x01)!=0;
             int marker=(e->armor_stand_flags&0x10)!=0;
-            width=small?0.35f:0.65f;height=small?1.15f:2.05f;
-            if(marker){width=0.90f;height=small?1.35f:2.25f;}
+            width=small?0.25f:0.5f;height=small?0.9875f:1.975f;
+            if(marker){width=0.55f;height=small?1.15f:2.15f;}
         } else if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0&&e->mob_slot<MAX_PASSIVE_MOBS){
             PassiveMob *m=&g_passive_mobs[e->mob_slot];
             if(!m->active||m->death_time>0)continue;
@@ -4027,41 +4122,70 @@ int pex_java47_try_interact_entity(float max_dist) {
         } else if(e->kind==J47_ENTITY_DROP&&e->drop_slot>=0&&e->drop_slot<MAX_DROP_ENTITIES){
             FlatDroppedItem *d=&g_drops[e->drop_slot];
             if(!d->active)continue;
-            width=0.55f;height=0.55f;feet_y=d->y-0.15f;
-        } else if(e->projectile_slot>=0) { width=1.0f;height=1.0f;feet_y=(float)e->y-0.5f; }
+            width=0.5f;height=0.5f;feet_y=d->y-0.15f;
+        } else if(e->projectile_slot>=0){width=1.0f;height=1.0f;feet_y=(float)e->y-0.5f;}
 
-        /* Use a generous collision-border expansion for server NPCs. Plugin
-           entities are often invisible, tiny, inside a slab, or represented by
-           a pig while their clickable point sits slightly away from the model. */
-        float half=width*0.5f+0.18f;
-        float mn[3]={(float)e->x-half,feet_y-0.18f,(float)e->z-half};
-        float mx[3]={(float)e->x+half,feet_y+height+0.18f,(float)e->z+half};
+        float half=width*0.5f+0.12f;
+        float mn[3]={(float)e->x-half,feet_y-0.12f,(float)e->z-half};
+        float mx[3]={(float)e->x+half,feet_y+height+0.12f,(float)e->z+half};
         float t=best;
-        if(j47_ray_aabb(origin,dir,mn,mx,best,&t)&&t<best){best=t;best_entity=e;}
-
-        /* Final compatibility cone: if the crosshair is very close to an NPC
-           model, still send C02 instead of falling through to item use. This is
-           intentionally interaction-only and does not change collision. */
-        float cx=(float)e->x,cy=feet_y+height*0.5f,cz=(float)e->z;
-        float vx=cx-origin[0],vy=cy-origin[1],vz=cz-origin[2];
-        float along=vx*dir[0]+vy*dir[1]+vz*dir[2];
-        if(along>0.0f&&along<=max_dist){
-            float d2=vx*vx+vy*vy+vz*vz;
-            float off2=d2-along*along;
-            float radius=half+0.30f;
-            if(off2<=radius*radius&&along<best_fallback){best_fallback=along;fallback_entity=e;}
+        if(j47_ray_aabb(origin,dir,mn,mx,best,&t)&&t>=0.0f&&t<best){
+            best=t;best_entity=e;best_entity_id=e->entity_id;best_found=1;
+            best_hit_x=origin[0]+dir[0]*t-(float)e->x;
+            best_hit_y=origin[1]+dir[1]*t-(float)e->y;
+            best_hit_z=origin[2]+dir[2]*t-(float)e->z;
+            clicked_x=(float)e->x;clicked_y=(float)e->y;clicked_z=(float)e->z;
         }
     }
 
-    if(!best_entity)best_entity=fallback_entity;
-    if(!best_entity)return 0;
-    float use_t=best_entity==fallback_entity?best_fallback:best;
-    float hit_x=origin[0]+dir[0]*use_t-(float)best_entity->x;
-    float hit_y=origin[1]+dir[1]*use_t-(float)best_entity->y;
-    float hit_z=origin[2]+dir[2]*use_t-(float)best_entity->z;
-    if(best_entity->is_armor_stand)
-        return j47_send_armor_stand_interact(best_entity->entity_id,hit_x,hit_y,hit_z)?1:0;
-    /* Every other server entity—including pig NPCs, dropped menu icons and
-       generic object proxies—gets a normal right-click INTERACT packet. */
-    return pex_java47_send_interact(best_entity->entity_id,hit_x,hit_y,hit_z)?1:0;
+    if(!best_found)return 0;
+
+    /* Send to the visible entity first, then to entities that form the same
+       packet NPC stack. Besides S1B mounts, many plugins place an invisible
+       fake player/armor stand at the exact pig coordinates without attaching
+       it. Vanilla can only select one world entity, but a compatibility client
+       does not know which packet entity owns the plugin click listener. A
+       tightly bounded co-location fallback makes the rendered pig clickable
+       without spraying C02 packets across nearby real players. */
+    int ids[12];
+    float hit_x[12],hit_y[12],hit_z[12];
+    int count=0;
+#define J47_ADD_INTERACT_TARGET(id_,hx_,hy_,hz_) do { \
+        int _id=(id_); int _seen=0; \
+        if(_id==g_j47.local_entity_id)break; \
+        for(int _k=0;_k<count;_k++)if(ids[_k]==_id){_seen=1;break;} \
+        if(!_seen&&count<(int)ARRAY_COUNT(ids)){ids[count]=_id;hit_x[count]=(hx_);hit_y[count]=(hy_);hit_z[count]=(hz_);count++;} \
+    } while(0)
+
+    J47_ADD_INTERACT_TARGET(best_entity_id,best_hit_x,best_hit_y,best_hit_z);
+    if(best_entity){
+        if(best_entity->has_vehicle_entity){
+            J47Entity *r=j47_entity_find(best_entity->vehicle_entity_id);
+            J47_ADD_INTERACT_TARGET(best_entity->vehicle_entity_id,
+                r?origin[0]+dir[0]*best-(float)r->x:best_hit_x,
+                r?origin[1]+dir[1]*best-(float)r->y:best_hit_y,
+                r?origin[2]+dir[2]*best-(float)r->z:best_hit_z);
+        }
+        if(best_entity->has_passenger_entity){
+            J47Entity *r=j47_entity_find(best_entity->passenger_entity_id);
+            J47_ADD_INTERACT_TARGET(best_entity->passenger_entity_id,
+                r?origin[0]+dir[0]*best-(float)r->x:best_hit_x,
+                r?origin[1]+dir[1]*best-(float)r->y:best_hit_y,
+                r?origin[2]+dir[2]*best-(float)r->z:best_hit_z);
+        }
+    }
+
+    for(int i=0;i<J47_ENTITY_MAX&&count<(int)ARRAY_COUNT(ids);i++){
+        J47Entity *e=&g_j47.entities[i];
+        if(!e->used||e->entity_id==g_j47.local_entity_id||e->entity_id==best_entity_id)continue;
+        double dx=e->x-clicked_x,dy=e->y-clicked_y,dz=e->z-clicked_z;
+        if(dx*dx+dz*dz>0.85*0.85||fabs(dy)>2.25)continue;
+        float wx=origin[0]+dir[0]*best,wy=origin[1]+dir[1]*best,wz=origin[2]+dir[2]*best;
+        J47_ADD_INTERACT_TARGET(e->entity_id,wx-(float)e->x,wy-(float)e->y,wz-(float)e->z);
+    }
+
+    int sent=0;
+    for(int i=0;i<count;i++)if(pex_java47_send_interact(ids[i],hit_x[i],hit_y[i],hit_z[i]))sent=1;
+#undef J47_ADD_INTERACT_TARGET
+    return sent;
 }

@@ -1007,7 +1007,9 @@ static void draw_multiplayer(void) {
             draw_rect(left-2,y-2,right+2,y+34,0x808080);
             draw_rect(left-1,y-1,right+1,y+33,0x000000);
         }
-        pex_mp_draw_unknown_server_icon(left,y);
+        Texture *server_icon=pex_mp_server_icon_texture(index);
+        if(server_icon)draw_texture_scaled_full(server_icon,left,y,32,32,0xFFFFFF);
+        else pex_mp_draw_unknown_server_icon(left,y);
         if(selected){
             draw_rect(left,y,left+32,y+32,(int)0xA0000000u);
             draw_rect(left+18,y+8,left+21,y+24,0xFFFFFF);
@@ -1047,6 +1049,16 @@ static void draw_multiplayer(void) {
             else if(e->ping_ms<0)snprintf(ping_tooltip,sizeof(ping_tooltip),"Can't connect to server.");
             else if(incompatible)snprintf(ping_tooltip,sizeof(ping_tooltip),"%s",e->protocol>PEX_JAVA47_PROTOCOL_VERSION?"Client out of date!":"Server out of date!");
             else snprintf(ping_tooltip,sizeof(ping_tooltip),"Ping: %dms",e->ping_ms);
+        }
+    }
+
+    {
+        int sx,st,sb,thumb_y,thumb_h;
+        if(pex_mp_server_scrollbar_geometry(&sx,&st,&sb,&thumb_y,&thumb_h)){
+            /* GuiSlot-style six-pixel scrollbar beside the server list. */
+            draw_rect(sx,st,sx+6,sb,0x000000);
+            draw_rect(sx,thumb_y,sx+6,thumb_y+thumb_h,0x808080);
+            draw_rect(sx,thumb_y,sx+5,thumb_y+thumb_h-1,0xC0C0C0);
         }
     }
 

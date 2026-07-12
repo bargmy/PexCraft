@@ -6,6 +6,7 @@
 
 #define PEX_JAVA47_PROTOCOL_VERSION 47
 #define PEX_JAVA47_DEFAULT_PORT 25565
+#define PEX_JAVA47_FAVICON_PNG_MAX 65536
 
 typedef struct PexJava47Status {
     int ok;
@@ -15,6 +16,8 @@ typedef struct PexJava47Status {
     int max_players;
     char version[64];
     char motd[384];
+    size_t favicon_png_len;
+    unsigned char favicon_png[PEX_JAVA47_FAVICON_PNG_MAX];
 } PexJava47Status;
 
 typedef enum PexJava47State {

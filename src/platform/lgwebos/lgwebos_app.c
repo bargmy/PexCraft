@@ -151,6 +151,7 @@ static void sdl2_handle_event(SDL_Event *e) {
                 handle_grabbed_mouse_move(e->motion.xrel, e->motion.yrel);
                 g_mouse_x = g_gui_w / 2; g_mouse_y = g_gui_h / 2;
             } else {
+                int old_mouse_y = g_mouse_y;
                 g_mouse_x = e->motion.x * g_gui_w / (g_win_w ? g_win_w : 1);
                 g_mouse_y = e->motion.y * g_gui_h / (g_win_h ? g_win_h : 1);
                 if (g_mouse_down && g_drag_slider) update_slider(g_drag_slider, g_mouse_x);
@@ -158,6 +159,7 @@ static void sdl2_handle_event(SDL_Event *e) {
                 if (g_mouse_down && g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_drag(g_mouse_x, g_mouse_y);
                 if (g_mouse_down && g_screen == SCREEN_STATISTICS) pex_statistics_mouse_drag(g_mouse_x, g_mouse_y);
                 if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
+                if (g_mouse_down && g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) pex_mp_server_scrollbar_drag(g_mouse_y - old_mouse_y);
             }
             break;
         case SDL_MOUSEBUTTONDOWN:
@@ -184,6 +186,10 @@ static void sdl2_handle_event(SDL_Event *e) {
             } else if (g_screen == SCREEN_LANGUAGE) {
                 if (e->wheel.y > 0) language_scroll_by(-1);
                 else if (e->wheel.y < 0) language_scroll_by(1);
+            } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) {
+                if (e->wheel.y > 0) pex_mp_server_scroll_by(-1);
+                else if (e->wheel.y < 0) pex_mp_server_scroll_by(1);
+                rebuild_screen();
             } else if (g_screen == SCREEN_STATISTICS) {
                 if (e->wheel.y > 0) pex_statistics_scroll_by(-1);
                 else if (e->wheel.y < 0) pex_statistics_scroll_by(1);

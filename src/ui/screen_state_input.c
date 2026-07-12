@@ -1709,6 +1709,7 @@ static void mouse_down(int mx, int my) {
     if (g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_down(mx, my);
     if (g_screen == SCREEN_STATISTICS) pex_statistics_mouse_down(mx, my);
     if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) world_save_mouse_down(mx, my);
+    if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) pex_mp_server_scrollbar_mouse_down(mx, my);
 
     if (g_screen == SCREEN_CREATE_WORLD) {
         int x = g_gui_w / 2 - 100;
@@ -1783,6 +1784,7 @@ static void mouse_up(int mx, int my) {
     if (g_screen == SCREEN_ACHIEVEMENTS) pex_achievements_mouse_up();
     if (g_screen == SCREEN_STATISTICS) pex_statistics_mouse_up();
     if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) world_save_mouse_up();
+    if (g_screen == SCREEN_MULTIPLAYER) pex_mp_server_scrollbar_mouse_up();
     if (g_screen == SCREEN_CREATIVE) g_creative_dragging_scroll = 0;
 }
 

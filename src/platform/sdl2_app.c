@@ -168,6 +168,7 @@ static void sdl2_handle_event(SDL_Event *e) {
                 if (g_mouse_down && g_screen == SCREEN_CREATIVE) creative_mouse_drag(g_mouse_y);
                 if (g_mouse_down && g_screen == SCREEN_LANGUAGE) language_drag_scroll(g_mouse_y - old_mouse_y);
                 if (g_mouse_down && (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE)) world_save_drag_scroll(g_mouse_y - old_mouse_y);
+                if (g_mouse_down && g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) pex_mp_server_scrollbar_drag(g_mouse_y - old_mouse_y);
             }
             break;
         case SDL_MOUSEBUTTONDOWN:
@@ -194,6 +195,10 @@ static void sdl2_handle_event(SDL_Event *e) {
             } else if (g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_WORLD_DELETE) {
                 if (e->wheel.y > 0) world_save_scroll_by(-1);
                 else if (e->wheel.y < 0) world_save_scroll_by(1);
+            } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) {
+                if (e->wheel.y > 0) pex_mp_server_scroll_by(-1);
+                else if (e->wheel.y < 0) pex_mp_server_scroll_by(1);
+                rebuild_screen();
             } else if (g_screen == SCREEN_STATISTICS) {
                 if (e->wheel.y > 0) pex_statistics_scroll_by(-1);
                 else if (e->wheel.y < 0) pex_statistics_scroll_by(1);

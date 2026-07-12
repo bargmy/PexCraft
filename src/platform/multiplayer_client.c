@@ -73,7 +73,12 @@ typedef struct PexMpServerEntry {
     int polling;
     int valid_mcpe;
     int server_kind; /* 0 unknown, 1 Java, 2 Bedrock */
-    int resource_mode; /* 0 prompt, 1 enabled, 2 disabled (1.8.8 server-list UI) */
+    int resource_mode; /* retained in servers.txt for compatibility */
+    char icon_path[MAX_PATHBUF];
+    int icon_available;
+    int icon_generation;
+    int icon_loaded_generation;
+    Texture icon;
     HANDLE thread;
 } PexMpServerEntry;
 static PexMpServerEntry g_mp_server_entries[PEX_MP_SERVER_LIST_MAX];
@@ -87,6 +92,9 @@ static char g_mp_server_edit_address[96] = "";
 static int g_mp_server_edit_resource_mode = 0;
 static int g_mp_server_last_clicked = -1;
 static int g_mp_server_last_click_tick = -1000;
+static int g_mp_server_dragging_scrollbar = 0;
+static int g_mp_server_drag_start_y = 0;
+static int g_mp_server_drag_start_scroll = 0;
 static volatile LONG g_mp_server_threads_pending = 0;
 
 static LONG pex_mp_server_pending_get(void) {
@@ -713,10 +721,72 @@ static const char *pex_mp_resource_mode_name(int mode) {
 }
 static const char *pex_mp_server_edit_name_get(void) { return g_mp_server_edit_name; }
 static const char *pex_mp_server_edit_address_get(void) { return g_mp_server_edit_address; }
+static int pex_mp_server_visible_rows(void);
+static void pex_mp_server_clamp_scroll(void);
+static void pex_mp_server_scroll_by(int rows);
+static void rebuild_screen(void);
 static const PexMpServerEntry *pex_mp_server_entry_get(int index) {
     if (index < 0 || index >= g_mp_server_count) return NULL;
     return &g_mp_server_entries[index];
 }
+
+static Texture *pex_mp_server_icon_texture(int index) {
+    if (index < 0 || index >= g_mp_server_count) return NULL;
+    PexMpServerEntry *e=&g_mp_server_entries[index];
+    if(e->icon_loaded_generation!=e->icon_generation){
+        free_texture(&e->icon);
+        if(e->icon_available&&e->icon_path[0]){
+            if(!load_png_texture(&e->icon,e->icon_path,0))e->icon_available=0;
+        }
+        e->icon_loaded_generation=e->icon_generation;
+    }
+    return (e->icon.id||e->icon.rgba)?&e->icon:NULL;
+}
+
+static int pex_mp_server_scrollbar_geometry(int *out_x,int *out_top,int *out_bottom,int *out_thumb_y,int *out_thumb_h){
+    int top=32,bottom=g_gui_h-64,view_h=bottom-top;
+    int visible=pex_mp_server_visible_rows();
+    int total=g_mp_server_count;
+    { int sx=g_gui_w/2+160; if(sx>g_gui_w-8)sx=g_gui_w-8; if(out_x)*out_x=sx; }
+    if(out_top)*out_top=top;
+    if(out_bottom)*out_bottom=bottom;
+    if(total<=visible||view_h<=0){if(out_thumb_y)*out_thumb_y=top;if(out_thumb_h)*out_thumb_h=view_h;return 0;}
+    int thumb_h=view_h*visible/total;
+    if(thumb_h<32)thumb_h=32;
+    if(thumb_h>view_h-8)thumb_h=view_h-8;
+    int max_scroll=total-visible;
+    int thumb_y=top+(view_h-thumb_h)*g_mp_server_scroll/max_scroll;
+    if(out_thumb_y)*out_thumb_y=thumb_y;
+    if(out_thumb_h)*out_thumb_h=thumb_h;
+    return 1;
+}
+
+static void pex_mp_server_scrollbar_mouse_down(int mx,int my){
+    int x,top,bottom,thumb_y,thumb_h;
+    g_mp_server_dragging_scrollbar=0;
+    if(g_mp_server_mode!=0||!pex_mp_server_scrollbar_geometry(&x,&top,&bottom,&thumb_y,&thumb_h))return;
+    if(mx<x-3||mx>x+9||my<top||my>bottom)return;
+    if(my<thumb_y){pex_mp_server_scroll_by(-pex_mp_server_visible_rows());rebuild_screen();}
+    else if(my>thumb_y+thumb_h){pex_mp_server_scroll_by(pex_mp_server_visible_rows());rebuild_screen();}
+    else {g_mp_server_dragging_scrollbar=1;g_mp_server_drag_start_y=my;g_mp_server_drag_start_scroll=g_mp_server_scroll;}
+}
+
+static void pex_mp_server_scrollbar_drag(int delta_y){
+    (void)delta_y;
+    if(!g_mp_server_dragging_scrollbar||g_mp_server_mode!=0)return;
+    int x,top,bottom,thumb_y,thumb_h;
+    if(!pex_mp_server_scrollbar_geometry(&x,&top,&bottom,&thumb_y,&thumb_h))return;
+    int visible=pex_mp_server_visible_rows();
+    int max_scroll=g_mp_server_count-visible;
+    int track=(bottom-top)-thumb_h;
+    if(track>0&&max_scroll>0){
+        g_mp_server_scroll=g_mp_server_drag_start_scroll+(g_mouse_y-g_mp_server_drag_start_y)*max_scroll/track;
+        pex_mp_server_clamp_scroll();
+        rebuild_screen();
+    }
+}
+
+static void pex_mp_server_scrollbar_mouse_up(void){g_mp_server_dragging_scrollbar=0;}
 
 static int pex_mp_server_visible_rows(void) {
     int rows = (g_gui_h - 64 - 32) / PEX_MP_SERVER_ROW_HEIGHT;
@@ -822,6 +892,39 @@ static void pex_mp_server_parse_player_count(const char *motd, char *out, size_t
     if (n >= 6) snprintf(out, cap, "%s/%s", fields[4], fields[5]);
 }
 
+static unsigned int pex_mp_server_icon_hash(const char *text){
+    unsigned int h=2166136261u;
+    if(!text)return h;
+    while(*text){h^=(unsigned char)*text++;h*=16777619u;}
+    return h;
+}
+
+static int pex_mp_server_write_icon(PexMpServerEntry *e,const unsigned char *png,size_t png_len){
+    if(!e||!png||png_len<8)return 0;
+    char dir[MAX_PATHBUF],path[MAX_PATHBUF],name[64];
+    if(g_mc_dir[0])path_join(dir,sizeof(dir),g_mc_dir,"server-icons");
+    else snprintf(dir,sizeof(dir),"server-icons");
+    ensure_dir(dir);
+    snprintf(name,sizeof(name),"%08x.png",pex_mp_server_icon_hash(e->host));
+    path_join(path,sizeof(path),dir,name);
+    FILE *f=fopen(path,"wb");
+    if(!f)return 0;
+    int ok=fwrite(png,1,png_len,f)==png_len;
+    fclose(f);
+    if(!ok){remove(path);return 0;}
+    snprintf(e->icon_path,sizeof(e->icon_path),"%s",path);
+    return 1;
+}
+
+static void pex_mp_server_publish_icon(PexMpServerEntry *e,const PexJava47Status *status){
+    int available=0;
+    if(status&&status->favicon_png_len>0)available=pex_mp_server_write_icon(e,status->favicon_png,status->favicon_png_len);
+    e->icon_available=available;
+    if(!available)e->icon_path[0]=0;
+    e->icon_generation++;
+    if(e->icon_generation<=0)e->icon_generation=1;
+}
+
 static DWORD WINAPI pex_mp_server_ping_worker(LPVOID param) {
     int index = (int)(intptr_t)param;
     if (index < 0 || index >= PEX_MP_SERVER_LIST_MAX) return 0;
@@ -847,7 +950,9 @@ static DWORD WINAPI pex_mp_server_ping_worker(LPVOID param) {
         snprintf(e->version, sizeof(e->version), "%s", java_status.version[0] ? java_status.version : "Java");
         snprintf(e->motd, sizeof(e->motd), "%s", java_status.motd[0] ? java_status.motd : "Java server");
         snprintf(e->player_count, sizeof(e->player_count), "%d/%d", java_status.online_players, java_status.max_players);
+        pex_mp_server_publish_icon(e,&java_status);
     } else {
+        pex_mp_server_publish_icon(e,NULL);
         int bedrock_port = port_was_given ? parsed_port : 19132;
         char motd[256]; motd[0] = 0;
         double start_time = now_seconds();
@@ -968,8 +1073,9 @@ static void pex_mp_server_cancel_edit(void) {
 
 static void pex_mp_server_delete_selected(void) {
     if (g_mp_server_selected < 0 || g_mp_server_selected >= g_mp_server_count) return;
+    free_texture(&g_mp_server_entries[g_mp_server_selected].icon);
     for (int i = g_mp_server_selected; i + 1 < g_mp_server_count; ++i) g_mp_server_entries[i] = g_mp_server_entries[i + 1];
-    if (g_mp_server_count > 0) g_mp_server_count--;
+    if (g_mp_server_count > 0) {g_mp_server_count--;memset(&g_mp_server_entries[g_mp_server_count],0,sizeof(g_mp_server_entries[0]));}
     if (g_mp_server_selected >= g_mp_server_count) g_mp_server_selected = g_mp_server_count - 1;
     pex_mp_server_clamp_scroll();
     pex_mp_server_list_save();
@@ -987,6 +1093,7 @@ static void pex_mp_server_commit_edit(void) {
         return;
     }
     PexMpServerEntry *e = &g_mp_server_entries[g_mp_server_selected];
+    free_texture(&e->icon);
     memset(e, 0, sizeof(*e));
     snprintf(e->name, sizeof(e->name), "%s", g_mp_server_edit_name);
     snprintf(e->host, sizeof(e->host), "%s", g_mp_server_edit_address);
