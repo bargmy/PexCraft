@@ -215,6 +215,10 @@ static void draw_title_logo_3d(float partial) {
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
 static int g_release_panorama_boot_reset_done = 0;
+#if defined(PEX_PLATFORM_WASM)
+static double g_release_wasm_panorama_last_update = -1000.0;
+static int g_release_wasm_panorama_valid = 0;
+#endif
 #define RELEASE_PANORAMA_TEX_SIZE 256
 
 static void release_title_state_enter(void) {
@@ -228,6 +232,10 @@ static void release_title_state_enter(void) {
         g_release_panorama_viewport_tex = 0;
     }
     g_release_panorama_alloc_size = 0;
+#if defined(PEX_PLATFORM_WASM)
+    g_release_wasm_panorama_last_update = -1000.0;
+    g_release_wasm_panorama_valid = 0;
+#endif
 }
 static int release_panorama_target_size(void) {
     /* Java GuiMainMenu.renderSkybox always renders and copies a 256x256
@@ -299,7 +307,7 @@ static void ensure_panorama_viewport_texture(void) {
     free(blank);
 }
 
-static void draw_release_panorama_cube(float partial) {
+static void draw_release_panorama_cube_samples(float partial, int samples) {
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
@@ -314,12 +322,13 @@ static void draw_release_panorama_cube(float partial) {
     glDisable(GL_CULL_FACE);
     glDepthMask(GL_FALSE);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    const int samples = 8;
+    if (samples < 1) samples = 1;
+    if (samples > 8) samples = 8;
     float timer = (float)g_release_panorama_timer + partial;
     for (int pass = 0; pass < samples * samples; ++pass) {
         glPushMatrix();
-        float ox = (((float)(pass % samples) / (float)samples) - 0.5f) / 64.0f;
-        float oy = (((float)(pass / samples) / (float)samples) - 0.5f) / 64.0f;
+        float ox = samples == 1 ? 0.0f : ((((float)(pass % samples) / (float)samples) - 0.5f) / 64.0f);
+        float oy = samples == 1 ? 0.0f : ((((float)(pass / samples) / (float)samples) - 0.5f) / 64.0f);
         glTranslatef(ox, oy, 0.0f);
         glRotatef(sinf(timer / 400.0f) * 25.0f + 20.0f, 1.0f, 0.0f, 0.0f);
         glRotatef(-timer * 0.1f, 0.0f, 1.0f, 0.0f);
@@ -390,11 +399,10 @@ static void draw_release_panorama_cube_direct(float partial) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    /* WebAssembly uses all 8x8 samples from the original panorama stage so
-       the result remains visibly soft even though the fragile feedback-copy
-       blur is bypassed. Android keeps the lighter 4x4 path for mobile GPUs. */
+    /* This is only the fallback path on WASM. Keep it lightweight because the
+       normal browser path performs a real low-resolution Gaussian blur. */
 #if defined(PEX_PLATFORM_WASM)
-    const int samples = 8;
+    const int samples = 2;
 #else
     const int samples = 4;
 #endif
@@ -440,6 +448,48 @@ static void draw_release_panorama_cube_direct(float partial) {
     glColor4f(1,1,1,1);
     setup_gui_projection();
 }
+
+#if defined(PEX_PLATFORM_WASM)
+static void draw_release_panorama_wasm(float partial) {
+    const int target_size = RELEASE_PANORAMA_TEX_SIZE;
+    double now = now_seconds();
+    int rebuild = !g_release_wasm_panorama_valid ||
+                  (now - g_release_wasm_panorama_last_update) >= (1.0 / 30.0);
+
+    if (rebuild) panorama_reset_gl_state();
+    if (rebuild && pex_lgwebos_panorama_begin(target_size)) {
+        /* Render one cubemap sample at 256x256. The separable shader blur does
+           the expensive softening, so the old 64 full-screen jitter samples
+           are no longer needed. */
+        glViewport(0, 0, target_size, target_size);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        draw_release_panorama_cube_samples(partial, 1);
+        if (pex_lgwebos_panorama_blur(2)) {
+            g_release_wasm_panorama_valid = 1;
+            g_release_wasm_panorama_last_update = now;
+        }
+    }
+
+    if (g_release_wasm_panorama_valid) {
+        float scale = g_gui_w > g_gui_h ? 120.0f / (float)g_gui_w : 120.0f / (float)g_gui_h;
+        float u = (float)g_gui_h * scale / 256.0f;
+        float v = (float)g_gui_w * scale / 256.0f;
+        if (pex_lgwebos_panorama_present(g_render_w, g_render_h,
+                                         0.5f - u, 0.5f - v,
+                                         0.5f + u, 0.5f + v)) {
+            panorama_reset_gl_state();
+            glViewport(0, 0, g_render_w, g_render_h);
+            setup_gui_projection();
+            return;
+        }
+    }
+
+    /* FBO or shader creation can fail on unusually restricted WebGL drivers.
+       Preserve a functional title screen with the lightweight direct path. */
+    draw_release_panorama_cube_direct(partial);
+}
+#endif
 #endif
 
 static void release_panorama_blur_pass(void) {
@@ -491,7 +541,13 @@ static void draw_release_skybox(float partial) {
     static int s_have_panorama_frame = 0;
     static int s_cached_panorama_size = 0;
 
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_WASM)
+#if defined(PEX_PLATFORM_WASM)
+    (void)s_last_panorama_update;
+    (void)s_have_panorama_frame;
+    (void)s_cached_panorama_size;
+    draw_release_panorama_wasm(partial);
+    return;
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
     (void)s_last_panorama_update;
     (void)s_have_panorama_frame;
     (void)s_cached_panorama_size;
@@ -514,7 +570,7 @@ static void draw_release_skybox(float partial) {
     if (rebuild_panorama) {
         glViewport(0, release_panorama_viewport_y(target_size), target_size, target_size);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        draw_release_panorama_cube(partial);
+        draw_release_panorama_cube_samples(partial, 8);
         glDisable(GL_TEXTURE_2D);
         glEnable(GL_TEXTURE_2D);
         for (int i = 0; i < 8; ++i) release_panorama_blur_pass();

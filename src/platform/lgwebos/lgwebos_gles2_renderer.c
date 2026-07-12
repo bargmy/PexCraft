@@ -56,6 +56,23 @@ static GLfloat g_lgwebos_cur_u = 0.0f, g_lgwebos_cur_v = 0.0f;
 static GLfloat g_lgwebos_cur_color[4] = {1,1,1,1};
 static GLint g_lgwebos_viewport[4] = {0,0,854,480};
 
+#if defined(PEX_PLATFORM_WASM)
+typedef struct LgWebOSPanoramaFx {
+    GLuint fbo;
+    GLuint tex[2];
+    GLuint program;
+    GLuint vbo;
+    GLint a_pos;
+    GLint a_uv;
+    GLint u_tex;
+    GLint u_step;
+    GLuint output_tex;
+    int size;
+} LgWebOSPanoramaFx;
+
+static LgWebOSPanoramaFx g_lgwebos_panorama_fx;
+#endif
+
 static GLenum g_lgwebos_begin_mode = 0;
 static int g_lgwebos_begin_active = 0;
 static LgWebOSVertex *g_lgwebos_imm = NULL;
@@ -154,6 +171,218 @@ static GLuint lgwebos_compile_shader(GLenum type, const char *src) {
     }
     return sh;
 }
+
+
+#if defined(PEX_PLATFORM_WASM)
+static void lgwebos_panorama_fx_destroy(void) {
+    LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
+    if (fx->vbo) glDeleteBuffers(1, &fx->vbo);
+    if (fx->program) glDeleteProgram(fx->program);
+    if (fx->tex[0] || fx->tex[1]) glDeleteTextures(2, fx->tex);
+    if (fx->fbo) glDeleteFramebuffers(1, &fx->fbo);
+    memset(fx, 0, sizeof(*fx));
+}
+
+static int lgwebos_panorama_fx_ensure(int size) {
+    LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
+    if (size < 64) size = 64;
+    if (size > 512) size = 512;
+    if (fx->program && fx->fbo && fx->tex[0] && fx->tex[1] && fx->size == size) return 1;
+
+    lgwebos_panorama_fx_destroy();
+
+    const char *vs =
+        "attribute vec2 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); v_uv = a_uv; }\n";
+    /* Five bilinear samples implement a nine-tap Gaussian kernel. Two
+       horizontal/vertical iterations approximate the soft desktop panorama
+       feedback blur while remaining cheap at a 256x256 render target. */
+    const char *fs =
+        "precision mediump float;\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform vec2 u_step;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){\n"
+        "  vec4 c = texture2D(u_tex, v_uv) * 0.2270270270;\n"
+        "  c += texture2D(u_tex, v_uv + u_step * 1.3846153846) * 0.3162162162;\n"
+        "  c += texture2D(u_tex, v_uv - u_step * 1.3846153846) * 0.3162162162;\n"
+        "  c += texture2D(u_tex, v_uv + u_step * 3.2307692308) * 0.0702702703;\n"
+        "  c += texture2D(u_tex, v_uv - u_step * 3.2307692308) * 0.0702702703;\n"
+        "  gl_FragColor = c;\n"
+        "}\n";
+
+    GLuint v = lgwebos_compile_shader(GL_VERTEX_SHADER, vs);
+    GLuint f = lgwebos_compile_shader(GL_FRAGMENT_SHADER, fs);
+    if (!v || !f) {
+        if (v) glDeleteShader(v);
+        if (f) glDeleteShader(f);
+        return 0;
+    }
+    fx->program = glCreateProgram();
+    glAttachShader(fx->program, v);
+    glAttachShader(fx->program, f);
+    glLinkProgram(fx->program);
+    glDeleteShader(v);
+    glDeleteShader(f);
+    GLint linked = 0;
+    glGetProgramiv(fx->program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[1024]; GLsizei len = 0;
+        glGetProgramInfoLog(fx->program, sizeof(log), &len, log);
+        fprintf(stderr, "WASM panorama shader link failed: %s\n", log);
+        lgwebos_panorama_fx_destroy();
+        return 0;
+    }
+
+    fx->a_pos = glGetAttribLocation(fx->program, "a_pos");
+    fx->a_uv = glGetAttribLocation(fx->program, "a_uv");
+    fx->u_tex = glGetUniformLocation(fx->program, "u_tex");
+    fx->u_step = glGetUniformLocation(fx->program, "u_step");
+    glGenBuffers(1, &fx->vbo);
+    glGenFramebuffers(1, &fx->fbo);
+    glGenTextures(2, fx->tex);
+    for (int i = 0; i < 2; ++i) {
+        glBindTexture(GL_TEXTURE_2D, fx->tex[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    }
+    fx->size = size;
+    fx->output_tex = fx->tex[0];
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->tex[0], 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, g_lgwebos_bound_tex);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "WASM panorama framebuffer incomplete: 0x%x\n", (unsigned)status);
+        lgwebos_panorama_fx_destroy();
+        return 0;
+    }
+    return 1;
+}
+
+static void lgwebos_panorama_fx_restore_compat(void) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(g_lgwebos_program);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_lgwebos_bound_tex);
+    if (g_lgwebos_blend_enabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (g_lgwebos_depth_enabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (g_lgwebos_cull_enabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
+static void lgwebos_panorama_fx_draw(GLuint tex, GLfloat step_x, GLfloat step_y,
+                                     const GLfloat vertices[16]) {
+    LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
+    glUseProgram(fx->program);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    if (fx->u_tex >= 0) glUniform1i(fx->u_tex, 0);
+    if (fx->u_step >= 0) glUniform2f(fx->u_step, step_x, step_y);
+    glBindBuffer(GL_ARRAY_BUFFER, fx->vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(16 * sizeof(GLfloat)), vertices, GL_DYNAMIC_DRAW);
+    if (fx->a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)fx->a_pos);
+        glVertexAttribPointer((GLuint)fx->a_pos, 2, GL_FLOAT, GL_FALSE,
+                              4 * (GLsizei)sizeof(GLfloat), (const GLvoid*)0);
+    }
+    if (fx->a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)fx->a_uv);
+        glVertexAttribPointer((GLuint)fx->a_uv, 2, GL_FLOAT, GL_FALSE,
+                              4 * (GLsizei)sizeof(GLfloat), (const GLvoid*)(2 * sizeof(GLfloat)));
+    }
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+static int pex_lgwebos_panorama_begin(int size) {
+    if (!lgwebos_panorama_fx_ensure(size)) return 0;
+    LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->tex[0], 0);
+    glViewport(0, 0, fx->size, fx->size);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    fx->output_tex = fx->tex[0];
+    return 1;
+}
+
+static int pex_lgwebos_panorama_blur(int iterations) {
+    LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
+    if (!fx->fbo || !fx->program || !fx->tex[0] || !fx->tex[1]) return 0;
+    if (iterations < 1) iterations = 1;
+    if (iterations > 4) iterations = 4;
+
+    static const GLfloat quad[16] = {
+        -1.0f, -1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, 1.0f, 0.0f,
+        -1.0f,  1.0f, 0.0f, 1.0f,
+         1.0f,  1.0f, 1.0f, 1.0f
+    };
+    GLuint src = fx->tex[0];
+    GLuint dst = fx->tex[1];
+    GLfloat inv = 1.0f / (GLfloat)fx->size;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glViewport(0, 0, fx->size, fx->size);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    for (int i = 0; i < iterations; ++i) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst, 0);
+        lgwebos_panorama_fx_draw(src, inv, 0.0f, quad);
+        GLuint swap = src; src = dst; dst = swap;
+
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst, 0);
+        lgwebos_panorama_fx_draw(src, 0.0f, inv, quad);
+        swap = src; src = dst; dst = swap;
+    }
+    fx->output_tex = src;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return 1;
+}
+
+static int pex_lgwebos_panorama_present(int render_w, int render_h,
+                                        GLfloat u0, GLfloat v0, GLfloat u1, GLfloat v1) {
+    LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
+    if (!fx->output_tex || !fx->program) return 0;
+    /* Match GuiMainMenu's final 256x256 crop/rotation. The FBO texture is
+       sampled directly, avoiding default-framebuffer copies and preserving
+       the classic orientation. */
+    const GLfloat quad[16] = {
+        -1.0f, -1.0f, u0, v1,
+         1.0f, -1.0f, u0, v0,
+        -1.0f,  1.0f, u1, v1,
+         1.0f,  1.0f, u1, v0
+    };
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, render_w, render_h);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    lgwebos_panorama_fx_draw(fx->output_tex, 0.0f, 0.0f, quad);
+    lgwebos_panorama_fx_restore_compat();
+    return 1;
+}
+#endif
 
 static int pex_lgwebos_gles2_init(void) {
     const char *vs =
@@ -611,6 +840,9 @@ static int pex_lgwebos_gluProject(GLdouble objx, GLdouble objy, GLdouble objz,
 }
 
 static void pex_lgwebos_gles2_shutdown(void) {
+#if defined(PEX_PLATFORM_WASM)
+    lgwebos_panorama_fx_destroy();
+#endif
     for (GLuint i = 1; i < PEX_LGWEBOS_MAX_LISTS; ++i) lgwebos_list_free(i);
     free(g_lgwebos_imm); g_lgwebos_imm = NULL; g_lgwebos_imm_cap = 0;
     free(g_lgwebos_index16_tmp); g_lgwebos_index16_tmp = NULL; g_lgwebos_index16_cap = 0;
