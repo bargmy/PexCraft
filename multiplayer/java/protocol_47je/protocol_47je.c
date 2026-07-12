@@ -3792,10 +3792,10 @@ void pex_java47_draw_special_entities(float partial) {
         J47Entity *e=&g_j47.entities[i];
         if(!e->used||!e->is_armor_stand)continue;
         int invisible=(e->metadata_flags&0x20)!=0;
-        int small=(e->armor_stand_flags&0x01)!=0;
+        int is_small=(e->armor_stand_flags&0x01)!=0;
         int show_arms=(e->armor_stand_flags&0x04)!=0;
         int no_base=(e->armor_stand_flags&0x08)!=0;
-        float scale=small?0.5f:1.0f;
+        float scale=is_small?0.5f:1.0f;
         if(!invisible){
             glPushMatrix();
             glTranslatef((float)e->x,(float)e->y,(float)e->z);
@@ -3822,7 +3822,7 @@ void pex_java47_draw_special_entities(float partial) {
             glPopMatrix();
         }
         glEnable(GL_TEXTURE_2D);
-        j47_draw_armor_stand_name(e,(float)e->y+(small?1.25f:2.18f));
+        j47_draw_armor_stand_name(e,(float)e->y+(is_small?1.25f:2.18f));
         glDisable(GL_TEXTURE_2D);
     }
     glEnable(GL_TEXTURE_2D);glEnable(GL_CULL_FACE);glColor4f(1,1,1,1);
@@ -4449,10 +4449,10 @@ int pex_java47_try_interact_entity(float max_dist) {
         float width=0.75f,height=0.75f,feet_y=(float)e->y;
         if(e->kind==J47_ENTITY_PLAYER){width=0.6f;height=1.8f;}
         else if(e->is_armor_stand){
-            int small=(e->armor_stand_flags&0x01)!=0;
+            int is_small=(e->armor_stand_flags&0x01)!=0;
             int marker=(e->armor_stand_flags&0x10)!=0;
-            width=small?0.25f:0.5f;height=small?0.9875f:1.975f;
-            if(marker){width=0.55f;height=small?1.15f:2.15f;}
+            width=is_small?0.25f:0.5f;height=is_small?0.9875f:1.975f;
+            if(marker){width=0.55f;height=is_small?1.15f:2.15f;}
         } else if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0&&e->mob_slot<MAX_PASSIVE_MOBS){
             PassiveMob *m=&g_passive_mobs[e->mob_slot];
             if(!m->active||m->death_time>0)continue;

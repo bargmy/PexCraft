@@ -70,6 +70,7 @@ static int pex_renderer_d3d11_xbox_init_corewindow(void *core_window_unknown, in
 #define glBindTexture pex_glBindTexture
 #define glTexParameteri pex_glTexParameteri
 #define glTexImage2D pex_glTexImage2D
+#define glTexSubImage2D pex_glTexSubImage2D
 #define glDeleteTextures pex_glDeleteTextures
 #define glCopyTexSubImage2D pex_glCopyTexSubImage2D
 

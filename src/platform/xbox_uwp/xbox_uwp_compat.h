@@ -28,6 +28,14 @@
 #include <time.h>
 #include <stdint.h>
 
+/* Windows RPC headers expose IDL keywords such as `small` as preprocessor
+   macros.  Shared game code uses ordinary identifiers with that name, so keep
+   the SDK macro from rewriting C declarations (for example `int small` into
+   the invalid `int char`). */
+#ifdef small
+#undef small
+#endif
+
 /* GL-shaped constants/types used by the old immediate-mode renderer facade.
    The Xbox target translates them to Direct3D 11 in backend_compat.c; no OpenGL
    library is loaded. */
@@ -179,6 +187,12 @@ typedef void GLvoid;
 #endif
 #ifndef GL_EXP
 #define GL_EXP 0x0800
+#endif
+#ifndef GL_EXP2
+#define GL_EXP2 0x0801
+#endif
+#ifndef GL_POLYGON_OFFSET_FILL
+#define GL_POLYGON_OFFSET_FILL 0x8037
 #endif
 
 /* Extra GL-shaped constants/types used by backend_compat.c.  They are only
@@ -340,9 +354,12 @@ static __inline void glGenTextures(GLsizei n, GLuint *tex) { if (tex) for (GLsiz
 static __inline void glBindTexture(GLenum target, GLuint tex) { (void)target;(void)tex; }
 static __inline void glTexParameteri(GLenum t, GLenum p, GLint v) { (void)t;(void)p;(void)v; }
 static __inline void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels) { (void)target;(void)level;(void)internalformat;(void)width;(void)height;(void)border;(void)format;(void)type;(void)pixels; }
+static __inline void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels) { (void)target;(void)level;(void)xoffset;(void)yoffset;(void)width;(void)height;(void)format;(void)type;(void)pixels; }
 static __inline void glDeleteTextures(GLsizei n, const GLuint *tex) { (void)n;(void)tex; }
 static __inline void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) { (void)target;(void)level;(void)xoffset;(void)yoffset;(void)x;(void)y;(void)width;(void)height; }
 static __inline void glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) { (void)r;(void)g;(void)b;(void)a; }
+static __inline void glNormal3f(GLfloat x, GLfloat y, GLfloat z) { (void)x;(void)y;(void)z; }
+static __inline void glPolygonOffset(GLfloat factor, GLfloat units) { (void)factor;(void)units; }
 static __inline void glEnableClientState(GLenum array) { (void)array; }
 static __inline void glDisableClientState(GLenum array) { (void)array; }
 static __inline void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { (void)size;(void)type;(void)stride;(void)ptr; }

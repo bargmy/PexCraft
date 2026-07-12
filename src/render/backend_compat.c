@@ -1571,7 +1571,7 @@ static void pex_glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei
         if(g_d3d9.textures[id].tex11){ ID3D11Texture2D_Release(g_d3d9.textures[id].tex11); g_d3d9.textures[id].tex11=NULL; }
         if(!g_d3d11.dev || w<=0 || h<=0) return;
         D3D11_TEXTURE2D_DESC td; memset(&td,0,sizeof(td));
-        td.Width=(UINT)w; td.Height=(UINT)h; td.MipLevels=1; td.ArraySize=1; td.Format=DXGI_FORMAT_R8G8B8A8_UNORM; td.SampleDesc.Count=1; td.Usage=pixels ? D3D11_USAGE_IMMUTABLE : D3D11_USAGE_DEFAULT; td.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+        td.Width=(UINT)w; td.Height=(UINT)h; td.MipLevels=1; td.ArraySize=1; td.Format=DXGI_FORMAT_R8G8B8A8_UNORM; td.SampleDesc.Count=1; td.Usage=D3D11_USAGE_DEFAULT; td.BindFlags=D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA init; memset(&init,0,sizeof(init));
         unsigned char *rgba = NULL;
         if(pixels) { rgba=(unsigned char*)malloc((size_t)w*(size_t)h*4u); if(!rgba) return; memcpy(rgba,pixels,(size_t)w*(size_t)h*4u); init.pSysMem=rgba; init.SysMemPitch=(UINT)w*4u; }
@@ -1585,6 +1585,38 @@ static void pex_glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei
     if(g_d3d9.textures[id].tex){ if (g_d3d9.cache.texture0 == (IDirect3DBaseTexture9*)g_d3d9.textures[id].tex) g_d3d9.cache.texture_valid = 0; IDirect3DTexture9_Release(g_d3d9.textures[id].tex); g_d3d9.textures[id].tex=NULL; }
     if(FAILED(IDirect3DDevice9_CreateTexture(g_d3d9.dev,w,h,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&g_d3d9.textures[id].tex,NULL))) return;
     if(pixels){ D3DLOCKED_RECT lr; if(SUCCEEDED(IDirect3DTexture9_LockRect(g_d3d9.textures[id].tex,0,&lr,NULL,0))){ const unsigned char *src=(const unsigned char*)pixels; for(int y=0;y<h;y++){ DWORD *dst=(DWORD*)((unsigned char*)lr.pBits + y*lr.Pitch); for(int x=0;x<w;x++){ const unsigned char *p=&src[(y*w+x)*4]; dst[x]=D3DCOLOR_ARGB(p[3],p[0],p[1],p[2]); } } IDirect3DTexture9_UnlockRect(g_d3d9.textures[id].tex,0); } }
+}
+static void pex_glTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid *pixels) {
+    if (!pex_using_gpu_backend()) { glTexSubImage2D(target,level,xoff,yoff,w,h,format,type,pixels); return; }
+    pex_gpu_flush_immediate_stream();
+    (void)target; (void)level;
+    if (!pixels || format != GL_RGBA || type != GL_UNSIGNED_BYTE || w <= 0 || h <= 0) return;
+    unsigned int id = g_d3d9.bound_texture;
+    if (id == 0 || id >= PEX_D3D_MAX_TEXTURES) return;
+    PexD3DTexture *t = &g_d3d9.textures[id];
+    if (xoff < 0 || yoff < 0 || xoff + w > t->w || yoff + h > t->h) return;
+    if (pex_using_d3d11()) {
+        if (!g_d3d11.ctx || !t->tex11) return;
+        D3D11_BOX box;
+        box.left=(UINT)xoff; box.top=(UINT)yoff; box.front=0;
+        box.right=(UINT)(xoff+w); box.bottom=(UINT)(yoff+h); box.back=1;
+        ID3D11DeviceContext_UpdateSubresource(g_d3d11.ctx,(ID3D11Resource*)t->tex11,0,&box,pixels,(UINT)w*4u,0);
+        return;
+    }
+    if (!t->tex) return;
+    RECT rect; rect.left=xoff; rect.top=yoff; rect.right=xoff+w; rect.bottom=yoff+h;
+    D3DLOCKED_RECT lr;
+    if (SUCCEEDED(IDirect3DTexture9_LockRect(t->tex,0,&lr,&rect,0))) {
+        const unsigned char *src=(const unsigned char*)pixels;
+        for (int y=0; y<h; ++y) {
+            DWORD *dst=(DWORD*)((unsigned char*)lr.pBits + y*lr.Pitch);
+            for (int x=0; x<w; ++x) {
+                const unsigned char *px=&src[(y*w+x)*4];
+                dst[x]=D3DCOLOR_ARGB(px[3],px[0],px[1],px[2]);
+            }
+        }
+        IDirect3DTexture9_UnlockRect(t->tex,0);
+    }
 }
 static void pex_glDeleteTextures(GLsizei n, const GLuint *ids) { if (!pex_using_gpu_backend()) { glDeleteTextures(n,ids); return; } pex_gpu_flush_immediate_stream(); for(int i=0;i<n;i++){ unsigned int id=ids[i]; if(id<PEX_D3D_MAX_TEXTURES){ if(g_d3d9.textures[id].tex){ if (g_d3d9.cache.texture0 == (IDirect3DBaseTexture9*)g_d3d9.textures[id].tex) g_d3d9.cache.texture_valid = 0; IDirect3DTexture9_Release(g_d3d9.textures[id].tex); g_d3d9.textures[id].tex=NULL; } if(g_d3d9.textures[id].srv11){ ID3D11ShaderResourceView_Release(g_d3d9.textures[id].srv11); g_d3d9.textures[id].srv11=NULL; } if(g_d3d9.textures[id].tex11){ ID3D11Texture2D_Release(g_d3d9.textures[id].tex11); g_d3d9.textures[id].tex11=NULL; } } } }
 static void pex_glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h) {
