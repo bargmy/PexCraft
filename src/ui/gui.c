@@ -824,7 +824,7 @@ static void draw_inventory_steve(int inv_x, int inv_y) {
     steve_part(0, 16,  2, 12, 0, -2, 0, -2, 4, 12, 4, 0.0f, 1, 0, 0, 0);
     steve_part(0, 0, 0, 0, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, head_pitch, head_yaw, 0);
     steve_part(32, 0, 0, 0, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, head_pitch, head_yaw, 0);
-    draw_armor_model_for_slots(g_armor_inventory, 0.0f, 12.0f, 0.0f,
+    draw_armor_model_for_slots(g_armor_inventory, 0, 0.0f, 12.0f, 0.0f,
                                0.0f, head_pitch, head_yaw,
                                arm_pitch, 0.0f, arm_roll,
                                -arm_pitch, 0.0f, -arm_roll,
