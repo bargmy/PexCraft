@@ -85,6 +85,8 @@ typedef struct J47Entity {
     int player_slot;
     int mob_slot;
     int drop_slot;
+    int projectile_slot;
+    float projectile_ax, projectile_ay, projectile_az;
     int held_item_id;
     int held_item_count;
     int held_item_damage;
@@ -160,6 +162,7 @@ typedef struct PexJava47Session {
     int dimension;
     int game_mode;
     int difficulty;
+    int daylight_cycle;
     int local_entity_id;
     unsigned char local_profile_uuid[16];
     int local_profile_uuid_valid;
@@ -1813,6 +1816,7 @@ static J47Entity *j47_entity_alloc(int entity_id) {
         g_j47.entities[i].player_slot = -1;
         g_j47.entities[i].mob_slot = -1;
         g_j47.entities[i].drop_slot = -1;
+        g_j47.entities[i].projectile_slot = -1;
         g_j47.entities[i].proxy_item_drop_slot = -1;
         return &g_j47.entities[i];
     }
@@ -1836,12 +1840,15 @@ static void j47_entity_clear_visuals(J47Entity *e) {
     } else if (e->kind == J47_ENTITY_DROP && e->drop_slot >= 0 && e->drop_slot < MAX_DROP_ENTITIES) {
         g_drops[e->drop_slot].active = 0;
     }
+    if (e->projectile_slot >= 0 && e->projectile_slot < MAX_PROJECTILE_ENTITIES)
+        g_projectiles[e->projectile_slot].active = 0;
     if (e->proxy_item_drop_slot >= 0 && e->proxy_item_drop_slot < MAX_DROP_ENTITIES)
         g_drops[e->proxy_item_drop_slot].active = 0;
     e->kind = J47_ENTITY_NONE;
     e->player_slot = -1;
     e->mob_slot = -1;
     e->drop_slot = -1;
+    e->projectile_slot = -1;
     e->proxy_item_drop_slot = -1;
     e->is_armor_stand = 0;
     memset(e->equipment, 0, sizeof(e->equipment));
@@ -1860,6 +1867,7 @@ static J47Entity *j47_entity_prepare_spawn(int entity_id) {
         e->player_slot = -1;
         e->mob_slot = -1;
         e->drop_slot = -1;
+        e->projectile_slot = -1;
         e->proxy_item_drop_slot = -1;
     }
     return e;
@@ -2088,7 +2096,37 @@ static void j47_record_block_update(int x, int y, int z, int state) {
     u->x = x; u->y = y; u->z = z; u->state = state; u->serial = g_j47.packet_serial;
 }
 
+static void j47_prepare_visible_chunk_for_update(int x, int z) {
+    int cx = x >> 4, cz = z >> 4;
+    int lcx = (cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (cz * 16 - g_flat_world_origin_z) / 16;
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
+    if (g_flat_world_chunk_generated[lcz][lcx] &&
+        g_flat_chunk_world_cx[lcz][lcx] == cx && g_flat_chunk_world_cz[lcz][lcx] == cz) return;
+
+    /* A block change is valid even when the chunk snapshot was completely air
+       (common on void/BedWars maps). Publish an empty client chunk first so the
+       mesh system has a real owner for the new block instead of silently
+       ignoring it because the local ring slot is still marked missing. */
+    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; ++y) {
+        int yi = flat_y_index(y);
+        for (int lz = 0; lz < 16; ++lz) for (int lx = 0; lx < 16; ++lx) {
+            int wx = cx * 16 + lx, wz = cz * 16 + lz;
+            int zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
+            g_flat_blocks[yi][zi][xi] = 0;
+            g_flat_meta[yi][zi][xi] = 0;
+            g_flat_levels[yi][zi][xi] = 0;
+            g_flat_block_light[yi][zi][xi] = 0;
+            g_flat_sky_light[yi][zi][xi] = g_j47.dimension == 0 ? 15 : 0;
+        }
+    }
+    g_flat_chunk_section_non_empty_mask[lcz][lcx] = 0;
+    g_flat_world_chunk_has_liquid[lcz][lcx] = 0;
+    stream_mark_chunk_generated(lcx, lcz);
+}
+
 static void j47_apply_block_state_visible(int x, int y, int z, int state) {
+    j47_prepare_visible_chunk_for_update(x, z);
     if (!flat_in_bounds(x, y, z)) return;
     int id = BLOCK_STONE;
     int meta = 0;
@@ -2376,8 +2414,8 @@ static void j47_unload_chunk(int cx, int cz) {
     g_flat_renderer_sort_dirty = 1;
 }
 
-static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const unsigned char *data, size_t len, int has_sky) {
-    if (full && mask == 0) {
+static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const unsigned char *data, size_t len, int has_sky, int empty_means_unload) {
+    if (full && mask == 0 && empty_means_unload) {
         j47_unload_chunk(cx, cz);
         return;
     }
@@ -2691,6 +2729,34 @@ static void j47_spawn_mob(J47Reader *r) {
     if(r->failed){j47_entity_remove(entity_id);return;}
 }
 
+static int j47_projectile_alloc_slot(void) {
+    for (int i = 0; i < MAX_PROJECTILE_ENTITIES; ++i)
+        if (!g_projectiles[i].active) return i;
+    /* Prefer replacing another server-owned visual rather than a local arrow. */
+    for (int i = 0; i < MAX_PROJECTILE_ENTITIES; ++i)
+        if (g_projectiles[i].owner_type == 2) return i;
+    return -1;
+}
+
+static void j47_spawn_server_fireball(J47Entity *e, int large, double x, double y, double z, int vx, int vy, int vz) {
+    int slot = j47_projectile_alloc_slot();
+    if (!e || slot < 0) return;
+    FlatProjectile *p = &g_projectiles[slot];
+    memset(p, 0, sizeof(*p));
+    p->active = 1;
+    p->type = large ? FLAT_PROJECTILE_LARGE_FIREBALL : FLAT_PROJECTILE_SMALL_FIREBALL;
+    p->owner_type = 2; /* server-owned: rendered/predicted, never locally impacts */
+    p->owner_mob_index = -1;
+    p->x = p->prev_x = (float)x;
+    p->y = p->prev_y = (float)y;
+    p->z = p->prev_z = (float)z;
+    p->fire_ticks = 2;
+    e->projectile_slot = slot;
+    e->projectile_ax = (float)vx / 8000.0f;
+    e->projectile_ay = (float)vy / 8000.0f;
+    e->projectile_az = (float)vz / 8000.0f;
+}
+
 static void j47_spawn_object(J47Reader *r) {
     int32_t entity_id = 0;
     if (!j47_r_varint(r, &entity_id)) return;
@@ -2714,6 +2780,10 @@ static void j47_spawn_object(J47Reader *r) {
             d->mx=(float)vx/8000.0f; d->my=(float)vy/8000.0f; d->mz=(float)vz/8000.0f; d->stack.id=BLOCK_STONE; d->stack.count=1;
             e->kind=J47_ENTITY_DROP; e->drop_slot=slot;
         }
+    } else if (type == 63 || type == 64 || type == 66) {
+        /* Large fireball, small fireball and wither skull.  The speed fields
+           are acceleration vectors in protocol 47, not ordinary velocity. */
+        j47_spawn_server_fireball(e, type == 63, x, y, z, vx, vy, vz);
     } else if (type == 78) { /* EntityArmorStand: protocol-47 spawn-object type */
         /* Keep it as its own protocol entity instead of pretending it is a pig.
            The renderer below understands the 1.8 armor-stand metadata flags,
@@ -2740,6 +2810,13 @@ static void j47_apply_entity_position(J47Entity *e, double x, double y, double z
         if(set_rot){m->prev_yaw=m->yaw;m->yaw=yaw;m->prev_pitch=m->pitch;m->pitch=pitch;m->prev_head_yaw=m->head_yaw;m->head_yaw=yaw;}
     } else if (e->kind==J47_ENTITY_DROP && e->drop_slot>=0 && e->drop_slot<MAX_DROP_ENTITIES) {
         FlatDroppedItem *d=&g_drops[e->drop_slot]; d->prev_x=d->x;d->prev_y=d->y;d->prev_z=d->z;d->x=(float)x;d->y=(float)y;d->z=(float)z;
+    }
+    if (e->projectile_slot >= 0 && e->projectile_slot < MAX_PROJECTILE_ENTITIES) {
+        FlatProjectile *p = &g_projectiles[e->projectile_slot];
+        if (p->active) {
+            p->prev_x = p->x; p->prev_y = p->y; p->prev_z = p->z;
+            p->x = (float)x; p->y = (float)y; p->z = (float)z;
+        }
     }
     if (e->is_armor_stand) j47_sync_proxy_item_visual(e);
 }
@@ -3116,7 +3193,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x00:{int32_t id;if(j47_r_varint(r,&id)){J47Writer w;j47_writer_init(&w,8);j47_w_varint(&w,id);j47_send_packet(0x00,w.data,w.len);j47_writer_free(&w);}break;}
         case 0x01:{g_j47.local_entity_id=j47_r_be32(r);g_mp_player_id=g_j47.local_entity_id;int gm=(int)j47_r_u8(r);g_j47.game_mode=gm&7;g_game_mode=g_j47.game_mode==1?1:0;g_pending_game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;memset(g_player_potion_effects,0,sizeof(g_player_potion_effects));g_j47.server_movement_speed_scale=1.0f;g_j47.last_abilities_flags=-1;g_j47.dimension=(int8_t)j47_r_u8(r);g_j47.difficulty=(int)j47_r_u8(r);(void)j47_r_u8(r);char wt[64];j47_r_string(r,wt,sizeof(wt));g_j47.has_join_game=1;g_j47.progress=35;j47_set_status("Downloading terrain");if(!r->failed&&!j47_send_client_identity())j47_fail("Could not send Java client settings");break;}
         case 0x02:{char json[8192],text[512];if(j47_r_string(r,json,sizeof(json))){(void)j47_r_u8(r);j47_json_collect_text(json,text,sizeof(text));if(text[0])hud_add_chat(text);}break;}
-        case 0x03:{(void)j47_r_be64(r);g_world_time=j47_r_be64(r);break;}
+        case 0x03:{(void)j47_r_be64(r);long long t=j47_r_be64(r);g_j47.daylight_cycle=t>=0;g_world_time=t<0?-t:t;break;}
         case 0x04:{
             int32_t id;
             if(j47_r_varint(r,&id)){
@@ -3210,7 +3287,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x0D:{int32_t collected,collector;j47_r_varint(r,&collected);j47_r_varint(r,&collector);j47_entity_remove(collected);break;}
         case 0x0E:j47_spawn_object(r);break;
         case 0x0F:j47_spawn_mob(r);break;
-        case 0x12:{int32_t id;if(j47_r_varint(r,&id)){int vx=(int16_t)j47_r_be16(r),vy=(int16_t)j47_r_be16(r),vz=(int16_t)j47_r_be16(r);if(id==g_j47.local_entity_id){g_player_motion_x=vx/8000.0f;g_player_motion_y=vy/8000.0f;g_player_motion_z=vz/8000.0f;if(vy>0)g_player_on_ground=0;}else{J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_DROP&&e->drop_slot>=0){g_drops[e->drop_slot].mx=vx/8000.0f;g_drops[e->drop_slot].my=vy/8000.0f;g_drops[e->drop_slot].mz=vz/8000.0f;}}}break;}
+        case 0x12:{int32_t id;if(j47_r_varint(r,&id)){int vx=(int16_t)j47_r_be16(r),vy=(int16_t)j47_r_be16(r),vz=(int16_t)j47_r_be16(r);if(id==g_j47.local_entity_id){g_player_motion_x=vx/8000.0f;g_player_motion_y=vy/8000.0f;g_player_motion_z=vz/8000.0f;if(vy>0)g_player_on_ground=0;}else{J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_DROP&&e->drop_slot>=0){g_drops[e->drop_slot].mx=vx/8000.0f;g_drops[e->drop_slot].my=vy/8000.0f;g_drops[e->drop_slot].mz=vz/8000.0f;}if(e&&e->projectile_slot>=0&&e->projectile_slot<MAX_PROJECTILE_ENTITIES){FlatProjectile*p=&g_projectiles[e->projectile_slot];p->mx=vx/8000.0f;p->my=vy/8000.0f;p->mz=vz/8000.0f;}}}break;}
         case 0x13:{int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int32_t id;if(!j47_r_varint(r,&id))break;j47_entity_remove(id);}break;}
         case 0x14:case 0x15:case 0x16:case 0x17:{int32_t id;if(!j47_r_varint(r,&id))break;J47Entity*e=j47_entity_find(id);double x=e?e->x:0,y=e?e->y:0,z=e?e->z:0;float yaw=e?e->yaw:0,pitch=e?e->pitch:0;int rot=packet_id==0x16||packet_id==0x17;if(packet_id==0x15||packet_id==0x17){x+=(int8_t)j47_r_u8(r)/32.0;y+=(int8_t)j47_r_u8(r)/32.0;z+=(int8_t)j47_r_u8(r)/32.0;}if(rot){yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f;pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;}(void)j47_r_u8(r);j47_apply_entity_position(e,x,y,z,yaw,pitch,rot);break;}
         case 0x18:{int32_t id;if(j47_r_varint(r,&id)){double x=j47_r_be32(r)/32.0,y=j47_r_be32(r)/32.0,z=j47_r_be32(r)/32.0;float yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f,pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;(void)j47_r_u8(r);j47_apply_entity_position(j47_entity_find(id),x,y,z,yaw,pitch,1);}break;}
@@ -3221,10 +3298,10 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x1E:{int32_t id=0;if(j47_r_varint(r,&id)){int effect=j47_r_u8(r);if(!r->failed&&id==g_j47.local_entity_id&&effect>0&&effect<PEX_POTION_MAX){g_player_potion_effects[effect].duration=0;g_player_potion_effects[effect].amplifier=0;}}break;}
         case 0x1F:{g_player_xp_progress=j47_r_float(r);int32_t level,total;j47_r_varint(r,&level);j47_r_varint(r,&total);g_player_xp_level=level;g_player_xp_total=total;break;}
         case 0x20:j47_handle_entity_properties(r);break;
-        case 0x21:{j47_commit_pending_respawn_dimension();int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0);break;}
+        case 0x21:{j47_commit_pending_respawn_dimension();int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0,1);break;}
         case 0x22:{int cx=j47_r_be32(r),cz=j47_r_be32(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int packed=j47_r_be16(r);int32_t state;j47_r_varint(r,&state);int x=cx*16+((packed>>12)&15),z=cz*16+((packed>>8)&15),y=packed&255;j47_set_block_state(x,y,z,state);}break;}
         case 0x23:{int x=0,y=0,z=0;int32_t s;if(j47_read_block_pos(r,&x,&y,&z)&&j47_r_varint(r,&s))j47_set_block_state(x,y,z,s);break;}
-        case 0x26:{j47_commit_pending_respawn_dimension();int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=0;for(int sy=0;sy<16;sy++)if(mask[i]&(1u<<sy))bytes+=8192+2048+(has_sky?2048:0);bytes+=256;if(bytes>r->len-r->pos){r->failed=1;break;}j47_install_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky);r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
+        case 0x26:{j47_commit_pending_respawn_dimension();int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=0;for(int sy=0;sy<16;sy++)if(mask[i]&(1u<<sy))bytes+=8192+2048+(has_sky?2048:0);bytes+=256;if(bytes>r->len-r->pos){r->failed=1;break;}j47_install_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky,0);r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
         case 0x2B:{int reason=j47_r_u8(r);float v=j47_r_float(r);if(reason==3){g_game_mode=(int)v==1?1:0;g_pending_game_mode=g_game_mode;g_j47.game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;}break;}
         case 0x2D:{
             memset(&g_j47.window,0,sizeof(g_j47.window));
@@ -3573,13 +3650,13 @@ void pex_java47_draw_server_scoreboard(void) {
         int row=i+1;
         int y=base_y-row*font_h;
         draw_rect(left-2,y,right,y+font_h,(int)0x50000000u);
-        draw_text_no_shadow(names[i],left,y,(int)0x20FFFFFFu);
-        draw_text_no_shadow(values[i],right-text_width(values[i]),y,(int)0x20FFFFFFu);
+        draw_text_no_shadow(names[i],left,y,(int)0xFFFFFFFFu);
+        draw_text_no_shadow(values[i],right-text_width(values[i]),y,(int)0xFFFFFFFFu);
         if(row==total){
             int title_y=y-font_h;
             draw_rect(left-2,title_y-1,right,y-1,(int)0x60000000u);
             draw_rect(left-2,y-1,right,y,(int)0x50000000u);
-            draw_text_no_shadow(objective->display_name,left+width/2-text_width(objective->display_name)/2,title_y,(int)0x20FFFFFFu);
+            draw_text_no_shadow(objective->display_name,left+width/2-text_width(objective->display_name)/2,title_y,(int)0xFFFFFFFFu);
         }
     }
 }
@@ -3668,7 +3745,7 @@ void pex_java47_draw_tab_overlay(void) {
 int pex_java47_begin_join(const char *host,int port,const char *username){
     pex_java47_disconnect();
     g_player_capabilities_server_authoritative=1;
-    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.last_movement_game_tick=-1;g_j47.last_world_origin_x=g_flat_world_origin_x;g_j47.last_world_origin_z=g_flat_world_origin_z;
+    memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.server_protocol=PEX_JAVA47_PROTOCOL_VERSION;g_j47.state=PEX_JAVA47_CONNECTING;g_j47.active=1;g_j47.port=port>0?port:PEX_JAVA47_DEFAULT_PORT;g_j47.progress=5;g_j47.last_abilities_flags=-1;g_j47.server_movement_speed_scale=1.0f;g_j47.daylight_cycle=1;g_j47.last_movement_game_tick=-1;g_j47.last_world_origin_x=g_flat_world_origin_x;g_j47.last_world_origin_z=g_flat_world_origin_z;
     snprintf(g_j47.host,sizeof(g_j47.host),"%s",host?host:"");snprintf(g_j47.username,sizeof(g_j47.username),"%.16s",username&&username[0]?username:"Player");j47_set_status("Connecting to Java server");
     g_j47.socket=j47_connect_timeout(g_j47.host,g_j47.port,5000);if(g_j47.socket==INVALID_SOCKET){j47_fail("Could not connect to Java server");return 0;}
     J47Writer hs; j47_writer_init(&hs,300);j47_w_varint(&hs,PEX_JAVA47_PROTOCOL_VERSION);j47_w_string_n(&hs,g_j47.host,255);j47_w_be16(&hs,g_j47.port);j47_w_varint(&hs,2);
@@ -3717,6 +3794,7 @@ int pex_java47_progress(void){return g_j47.progress;}
 const char*pex_java47_status_text(void){return g_j47.status;}
 const char*pex_java47_disconnect_reason(void){return g_j47.disconnect_reason;}
 int pex_java47_server_protocol(void){return g_j47.server_protocol;}
+int pex_java47_daylight_cycle_enabled(void){return g_j47.daylight_cycle;}
 int pex_java47_local_entity_id(void){return g_j47.local_entity_id;}
 float pex_java47_movement_speed_scale(void){return g_j47.server_movement_speed_scale>0.0f?g_j47.server_movement_speed_scale:1.0f;}
 int pex_java47_get_equipment(int entity_id,int *item_id,int *count,int *damage,int *slot){J47Entity*e=j47_entity_find(entity_id);if(!e)return 0;if(item_id)*item_id=e->held_item_id;if(count)*count=e->held_item_count;if(damage)*damage=e->held_item_damage;if(slot)*slot=e->held_slot;return 1;}
@@ -3738,6 +3816,25 @@ int pex_java47_open_container_slot_count(void){
 }
 
 static int j47_send_entity_action(int action){J47Writer w;j47_writer_init(&w,16);j47_w_varint(&w,g_j47.local_entity_id);j47_w_varint(&w,action);j47_w_varint(&w,0);int ok=j47_send_packet(0x0B,w.data,w.len);j47_writer_free(&w);return ok;}
+
+static void j47_tick_server_projectiles(void) {
+    for (int i = 0; i < J47_ENTITY_MAX; ++i) {
+        J47Entity *e = &g_j47.entities[i];
+        if (!e->used || e->projectile_slot < 0 || e->projectile_slot >= MAX_PROJECTILE_ENTITIES) continue;
+        FlatProjectile *p = &g_projectiles[e->projectile_slot];
+        if (!p->active || p->owner_type != 2) continue;
+        p->prev_x=p->x; p->prev_y=p->y; p->prev_z=p->z;
+        p->prev_yaw=p->yaw; p->prev_pitch=p->pitch;
+        p->x += p->mx; p->y += p->my; p->z += p->mz;
+        p->mx = (p->mx + e->projectile_ax) * 0.95f;
+        p->my = (p->my + e->projectile_ay) * 0.95f;
+        p->mz = (p->mz + e->projectile_az) * 0.95f;
+        p->fire_ticks = 2;
+        pex_projectile_update_rotation_125(p);
+        e->x=p->x; e->y=p->y; e->z=p->z;
+        add_smoke_particle(p->x,p->y+0.5f,p->z,0.0f,0.0f,0.0f,1.0f);
+    }
+}
 
 int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float pitch,int on_ground,int sneaking,int sprinting,int held_slot){
     if(g_j47.state!=PEX_JAVA47_PLAY||!g_j47.position_received)return 0;
@@ -3772,6 +3869,7 @@ int pex_java47_send_player_state(double x,double feet_y,double z,float yaw,float
        impossible movement to stricter servers. */
     if(g_j47.last_movement_game_tick==g_ingame_ticks)return 1;
     g_j47.last_movement_game_tick=g_ingame_ticks;
+    j47_tick_server_projectiles();
 
     double dx=x-g_j47.last_x,dy=feet_y-g_j47.last_y,dz=z-g_j47.last_z;
     double dist2=dx*dx+dy*dy+dz*dz;
@@ -3902,60 +4000,68 @@ static int j47_ray_aabb(const float origin[3], const float dir[3], const float m
 
 int pex_java47_try_interact_entity(float max_dist) {
     if(g_j47.state!=PEX_JAVA47_PLAY||g_player_dead)return 0;
-    if(max_dist<=0.0f)max_dist=player_is_creative()?5.0f:4.0f;
-
-    FlatRayHit block=flat_raycast();
-    if(block.hit){
-        float dx=block.hx-g_player_x,dy=block.hy-g_player_y,dz=block.hz-g_player_z;
-        float block_dist=sqrtf(dx*dx+dy*dy+dz*dz);
-        if(block_dist<max_dist)max_dist=block_dist;
-    }
+    if(max_dist<=0.0f)max_dist=player_is_creative()?5.0f:4.5f;
 
     float look_x,look_y,look_z;
     pex_touch_aware_look_vector(&look_x,&look_y,&look_z);
     float origin[3]={g_player_x,g_player_y,g_player_z};
     float dir[3]={look_x,look_y,look_z};
     float best=max_dist;
-    J47Entity *best_entity=NULL;
+    float best_fallback=max_dist;
+    J47Entity *best_entity=NULL,*fallback_entity=NULL;
 
     for(int i=0;i<J47_ENTITY_MAX;i++){
         J47Entity *e=&g_j47.entities[i];
-        if(!e->used||e->entity_id==g_j47.local_entity_id||e->kind==J47_ENTITY_DROP)continue;
-        float width=0.7f,height=1.8f,feet_y=(float)e->y;
+        if(!e->used||e->entity_id==g_j47.local_entity_id)continue;
+        float width=0.75f,height=0.75f,feet_y=(float)e->y;
         if(e->kind==J47_ENTITY_PLAYER){width=0.7f;height=1.8f;}
         else if(e->is_armor_stand){
             int small=(e->armor_stand_flags&0x01)!=0;
             int marker=(e->armor_stand_flags&0x10)!=0;
-            width=small?0.35f:0.65f;
-            height=small?1.15f:2.05f;
-            /* Marker stands have a zero vanilla collision box but are heavily
-               used as clickable menu icons. Give only the client raycast a
-               practical item-sized target without changing world collision. */
-            if(marker){width=0.75f;height=small?1.25f:2.15f;}
-            feet_y=(float)e->y;
-        }
-        else if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0&&e->mob_slot<MAX_PASSIVE_MOBS){
+            width=small?0.35f:0.65f;height=small?1.15f:2.05f;
+            if(marker){width=0.90f;height=small?1.35f:2.25f;}
+        } else if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0&&e->mob_slot<MAX_PASSIVE_MOBS){
             PassiveMob *m=&g_passive_mobs[e->mob_slot];
             if(!m->active||m->death_time>0)continue;
-            width=m->width>0.1f?m->width:0.9f;
-            height=m->height>0.1f?m->height:0.9f;
-            feet_y=m->y;
-        }
-        /* EntityRenderer#getMouseOver expands entity boxes by their collision
-           border before ray testing. The 0.1 margin is important for narrow
-           villagers/armor stands when the crosshair is on the model edge. */
-        float half=width*0.5f+0.10f;
-        float mn[3]={(float)e->x-half,feet_y-0.10f,(float)e->z-half};
-        float mx[3]={(float)e->x+half,feet_y+height+0.10f,(float)e->z+half};
+            width=m->width>0.1f?m->width:0.9f;height=m->height>0.1f?m->height:0.9f;feet_y=m->y;
+        } else if(e->kind==J47_ENTITY_DROP&&e->drop_slot>=0&&e->drop_slot<MAX_DROP_ENTITIES){
+            FlatDroppedItem *d=&g_drops[e->drop_slot];
+            if(!d->active)continue;
+            width=0.55f;height=0.55f;feet_y=d->y-0.15f;
+        } else if(e->projectile_slot>=0) { width=1.0f;height=1.0f;feet_y=(float)e->y-0.5f; }
+
+        /* Use a generous collision-border expansion for server NPCs. Plugin
+           entities are often invisible, tiny, inside a slab, or represented by
+           a pig while their clickable point sits slightly away from the model. */
+        float half=width*0.5f+0.18f;
+        float mn[3]={(float)e->x-half,feet_y-0.18f,(float)e->z-half};
+        float mx[3]={(float)e->x+half,feet_y+height+0.18f,(float)e->z+half};
         float t=best;
         if(j47_ray_aabb(origin,dir,mn,mx,best,&t)&&t<best){best=t;best_entity=e;}
+
+        /* Final compatibility cone: if the crosshair is very close to an NPC
+           model, still send C02 instead of falling through to item use. This is
+           intentionally interaction-only and does not change collision. */
+        float cx=(float)e->x,cy=feet_y+height*0.5f,cz=(float)e->z;
+        float vx=cx-origin[0],vy=cy-origin[1],vz=cz-origin[2];
+        float along=vx*dir[0]+vy*dir[1]+vz*dir[2];
+        if(along>0.0f&&along<=max_dist){
+            float d2=vx*vx+vy*vy+vz*vz;
+            float off2=d2-along*along;
+            float radius=half+0.30f;
+            if(off2<=radius*radius&&along<best_fallback){best_fallback=along;fallback_entity=e;}
+        }
     }
 
+    if(!best_entity)best_entity=fallback_entity;
     if(!best_entity)return 0;
-    float hit_x=origin[0]+dir[0]*best-(float)best_entity->x;
-    float hit_y=origin[1]+dir[1]*best-(float)best_entity->y;
-    float hit_z=origin[2]+dir[2]*best-(float)best_entity->z;
+    float use_t=best_entity==fallback_entity?best_fallback:best;
+    float hit_x=origin[0]+dir[0]*use_t-(float)best_entity->x;
+    float hit_y=origin[1]+dir[1]*use_t-(float)best_entity->y;
+    float hit_z=origin[2]+dir[2]*use_t-(float)best_entity->z;
     if(best_entity->is_armor_stand)
-        return j47_send_armor_stand_interact(best_entity->entity_id,hit_x,hit_y,hit_z) ? 1 : 0;
-    return pex_java47_send_interact(best_entity->entity_id,hit_x,hit_y,hit_z) ? 1 : 0;
+        return j47_send_armor_stand_interact(best_entity->entity_id,hit_x,hit_y,hit_z)?1:0;
+    /* Every other server entity—including pig NPCs, dropped menu icons and
+       generic object proxies—gets a normal right-click INTERACT packet. */
+    return pex_java47_send_interact(best_entity->entity_id,hit_x,hit_y,hit_z)?1:0;
 }

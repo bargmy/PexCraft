@@ -37,6 +37,7 @@ int pex_java47_progress(void);
 const char *pex_java47_status_text(void);
 const char *pex_java47_disconnect_reason(void);
 int pex_java47_server_protocol(void);
+int pex_java47_daylight_cycle_enabled(void);
 int pex_java47_local_entity_id(void);
 float pex_java47_movement_speed_scale(void);
 

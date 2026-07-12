@@ -915,6 +915,20 @@ static int pex_mp_motd_wrap(const char *src,char out[2][256],int max_width) {
     return line;
 }
 
+static void pex_mp_draw_ping_tooltip(const char *text, int mx, int my) {
+    if (!text || !text[0]) return;
+    int w = text_width(text);
+    int x = mx + 12, y = my - 12;
+    if (x + w + 8 > g_gui_w) x = mx - w - 12;
+    if (y < 4) y = 4;
+    draw_rect(x-4,y-4,x+w+4,y+12,(int)0xF0100010u);
+    draw_rect(x-5,y-3,x-4,y+11,(int)0x505000FFu);
+    draw_rect(x+w+4,y-3,x+w+5,y+11,(int)0x5028007Fu);
+    draw_rect(x-4,y-5,x+w+4,y-4,(int)0x505000FFu);
+    draw_rect(x-4,y+12,x+w+4,y+13,(int)0x5028007Fu);
+    draw_text(text,x,y,0xFFFFFF);
+}
+
 static void pex_mp_draw_unknown_server_icon(int x,int y) {
     draw_rect(x,y,x+32,y+32,0x202020);
     for(int yy=0;yy<4;++yy)for(int xx=0;xx<4;++xx){
@@ -982,6 +996,7 @@ static void draw_multiplayer(void) {
 
     int visible=pex_mp_server_visible_rows();
     int scroll=pex_mp_server_scroll_get();
+    char ping_tooltip[160]; ping_tooltip[0]=0;
     for(int row=0;row<visible;++row){
         int index=scroll+row;
         const PexMpServerEntry *e=pex_mp_server_entry_get(index);
@@ -1027,6 +1042,12 @@ static void draw_multiplayer(void) {
         int active=level==5?0:5-level;
         int bx=right-12;
         for(int b=0;b<5;++b){int bh=2+b;int c=b<active?0x55FF55:0x555555;if(anim&&b==level)c=0xFFFF55;draw_rect(bx+b*2,y+8-bh,bx+b*2+1,y+8,c);}
+        if(g_mouse_x>=right-15&&g_mouse_x<=right&&g_mouse_y>=y&&g_mouse_y<y+12){
+            if(e->polling||!e->polled)snprintf(ping_tooltip,sizeof(ping_tooltip),"Pinging...");
+            else if(e->ping_ms<0)snprintf(ping_tooltip,sizeof(ping_tooltip),"Can't connect to server.");
+            else if(incompatible)snprintf(ping_tooltip,sizeof(ping_tooltip),"%s",e->protocol>PEX_JAVA47_PROTOCOL_VERSION?"Client out of date!":"Server out of date!");
+            else snprintf(ping_tooltip,sizeof(ping_tooltip),"Ping: %dms",e->ping_ms);
+        }
     }
 
     draw_tiled_rect_tint(0,0,g_gui_w,top,0x404040,0);
@@ -1035,6 +1056,7 @@ static void draw_multiplayer(void) {
     draw_gradient(0,bottom-4,g_gui_w,bottom,0x00000000,0xFF000000);
     draw_centered_text(tr_key_default("multiplayer.title","Play Multiplayer"),g_gui_w/2,20,0xFFFFFF);
     draw_all_buttons();
+    if(ping_tooltip[0])pex_mp_draw_ping_tooltip(ping_tooltip,g_mouse_x,g_mouse_y);
 }
 
 static void draw_connecting_screen(void) {

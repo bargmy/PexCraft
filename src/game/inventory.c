@@ -8411,6 +8411,11 @@ static void update_projectiles(void) {
         p->prev_yaw = p->yaw; p->prev_pitch = p->pitch;
         if (p->fire_ticks > 0) --p->fire_ticks;
         p->age++;
+        /* Java projectiles are server-owned. Their lightweight visual
+           prediction is advanced by protocol_47je once per network movement
+           tick; never let 1.2.5 local impact/damage logic delete or explode
+           them before the server sends Destroy Entities. */
+        if (g_mp_connected && p->owner_type == 2) continue;
         if(p->type==FLAT_PROJECTILE_ARROW){
             if(p->arrow_shake>0)--p->arrow_shake;
             if(p->in_ground){

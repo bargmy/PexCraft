@@ -1129,15 +1129,13 @@ static void rebuild_screen(void) {
             add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 132, 200, 20,
                             tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         } else {
-            char resource_label[128];
-            snprintf(resource_label, sizeof(resource_label), "%s: %s",
-                     tr_key_default("addServer.resourcePack", "Server Resource Packs"),
-                     pex_mp_resource_mode_name(pex_mp_server_edit_resource_mode_get()));
-            add_button_full(9, g_gui_w / 2 - 100, g_gui_h / 4 + 72, 200, 20, resource_label, BUTTON_NORMAL);
-            Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 114, 200, 20,
+            /* Deliberately omit the server-resource-pack selector. PexCraft's
+               compatibility client does not download/apply server packs, so a
+               dead control only makes the 1.8-style server editor misleading. */
+            Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 96, 200, 20,
                                              pex_mp_server_mode_get() == 2 ? tr_key_default("addServer.add", "Add Server") : tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
             select->enabled = pex_mp_server_edit_address_get()[0] != 0 && pex_mp_server_edit_name_get()[0] != 0;
-            add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 138, 200, 20,
+            add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 120, 200, 20,
                             tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         }
     } else if (g_screen == SCREEN_CONNECTING) {
@@ -1514,9 +1512,6 @@ static void on_button(Button *b) {
         } else {
             if (b->id == 1) {
                 pex_mp_server_cancel_edit();
-                rebuild_screen();
-            } else if (b->id == 9) {
-                pex_mp_server_cycle_resource_mode();
                 rebuild_screen();
             } else if (b->id == 10) {
                 if (pex_mp_server_mode_get() == 1) {

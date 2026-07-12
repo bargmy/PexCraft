@@ -911,7 +911,7 @@ static void ingame_tick(void) {
     int input_active = (g_screen == SCREEN_INGAME && !g_player_dead);
 
     g_ingame_ticks++;
-    g_world_time++;
+    if (!(g_mp_connected && pex_java47_is_playing() && !pex_java47_daylight_cycle_enabled())) g_world_time++;
     pex_stats_tick();
     prof_part = profile_begin();
     pex_update_time_light_bucket();
