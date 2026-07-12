@@ -73,13 +73,16 @@ static void ensure_dir(const char *path) {
 static void init_dirs(void) {
     snprintf(g_mc_dir, sizeof(g_mc_dir), "/persist");
     snprintf(g_save_dir, sizeof(g_save_dir), "/persist/saves");
-    /* The build embeds client.jar resources here; keep them separate from IDBFS. */
-    snprintf(g_texpack_dir, sizeof(g_texpack_dir), "/bundle");
+    /* Custom packs are user data in IDBFS. The immutable built-in Release pack
+       remains embedded separately at /bundle/Release. */
+    snprintf(g_texpack_dir, sizeof(g_texpack_dir), "/persist/texturepacks");
     snprintf(g_skin_dir, sizeof(g_skin_dir), "/persist/skins");
     ensure_dir(g_mc_dir);
     ensure_dir(g_save_dir);
+    ensure_dir(g_texpack_dir);
     ensure_dir(g_skin_dir);
-    fprintf(stderr, "PEXCRAFT WASM data dir: %s; resources: %s/Release\n", g_mc_dir, g_texpack_dir);
+    fprintf(stderr, "PEXCRAFT WASM data dir: %s; built-in resources: /bundle/Release; custom packs: %s\n",
+            g_mc_dir, g_texpack_dir);
 }
 
 static void delete_recursive(const char *path) {

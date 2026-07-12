@@ -849,7 +849,8 @@ static void rebuild_screen(void) {
         add_button(1, g_gui_w / 2 - 100, y0, "Singleplayer");
 #if defined(PEX_PLATFORM_WASM)
         {
-            Button *multiplayer = add_button(2, g_gui_w / 2 - 100, y0 + 24, "Multiplayer (Unavailable)");
+            Button *multiplayer = add_button(2, g_gui_w / 2 - 100, y0 + 24,
+                                             tr_key_default("menu.multiplayer", "Multiplayer"));
             if (multiplayer) multiplayer->enabled = 0;
         }
 #else
@@ -1151,7 +1152,12 @@ static void rebuild_screen(void) {
         add_button(1, g_gui_w / 2 - 100, g_gui_h / 2 + 34, tr_key_default("gui.cancel", "Cancel"));
     } else if (g_screen == SCREEN_TEXPACK) {
         scan_texture_packs();
+#if defined(PEX_PLATFORM_WASM)
+        add_button_full(5, g_gui_w / 2 - 154, g_gui_h - 48, 150, 20,
+                        tr_key_default("texturePack.import", "Import Texture Pack..."), BUTTON_NORMAL);
+#else
         add_button_full(5, g_gui_w / 2 - 154, g_gui_h - 48, 150, 20, tr_key_default("texturePack.openFolder", "Open texture pack folder"), BUTTON_NORMAL);
+#endif
         add_button_full(6, g_gui_w / 2 + 4, g_gui_h - 48, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_PAUSE) {
         /* Exact GuiIngameMenu 1.2.5 placement (the original var1 offset is -16). */
@@ -1543,8 +1549,13 @@ static void on_button(Button *b) {
     } else if (g_screen == SCREEN_TEXPACK_INSTALL) {
         if (b->id == 1) pack_install_request_cancel();
     } else if (g_screen == SCREEN_TEXPACK) {
-        if (b->id == 5) ShellExecuteA(NULL, "open", g_texpack_dir, NULL, NULL, SW_SHOWNORMAL);
-        else if (b->id == 6) set_screen(g_parent_screen);
+        if (b->id == 5) {
+#if defined(PEX_PLATFORM_WASM)
+            pex_wasm_choose_texture_pack_file();
+#else
+            ShellExecuteA(NULL, "open", g_texpack_dir, NULL, NULL, SW_SHOWNORMAL);
+#endif
+        } else if (b->id == 6) set_screen(g_parent_screen);
     } else if (g_screen == SCREEN_PAUSE) {
         if (b->id == 4) set_screen(SCREEN_INGAME);
         else if (b->id == 0) { g_parent_screen = SCREEN_PAUSE; set_screen(SCREEN_OPTIONS); }

@@ -38,6 +38,53 @@
           progressElement.style.display = text ? 'inline-block' : 'none';
         }
       },
+      pexPickLocalFile({accept, maxBytes, dataPath, namePath, callback}) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = accept;
+        input.style.display = 'none';
+        input.addEventListener('change', async () => {
+          const file = input.files && input.files[0];
+          input.remove();
+          if (!file) return;
+          if (file.size <= 0 || file.size > maxBytes) {
+            alert('The selected file is empty or too large.');
+            return;
+          }
+          try {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            FS.mkdirTree(dataPath.slice(0, dataPath.lastIndexOf('/')));
+            FS.writeFile(dataPath, bytes);
+            if (namePath) FS.writeFile(namePath, file.name, {encoding: 'utf8'});
+            const fn = Module[callback];
+            if (typeof fn !== 'function') throw new Error('WASM import callback is unavailable: ' + callback);
+            fn();
+          } catch (error) {
+            console.error(error);
+            alert('PexCraft could not import that file.');
+          }
+        }, {once: true});
+        document.body.appendChild(input);
+        input.click();
+      },
+      pexPickSkin() {
+        Module.pexPickLocalFile({
+          accept: '.png,image/png',
+          maxBytes: 8 * 1024 * 1024,
+          dataPath: '/persist/skins/custom.png',
+          namePath: null,
+          callback: '_pex_wasm_finish_skin_import'
+        });
+      },
+      pexPickTexturePack() {
+        Module.pexPickLocalFile({
+          accept: '.zip,application/zip,application/x-zip-compressed',
+          maxBytes: 128 * 1024 * 1024,
+          dataPath: '/persist/imports/texturepack.zip',
+          namePath: '/persist/imports/texturepack.name',
+          callback: '_pex_wasm_finish_texture_pack_import'
+        });
+      },
       preRun: [function () {
         try { FS.mkdir('/persist'); } catch (_) {}
         try { FS.mount(IDBFS, {}, '/persist'); } catch (error) {

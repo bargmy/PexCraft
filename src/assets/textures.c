@@ -1202,7 +1202,9 @@ static int load_custom_skin_path(const char *path, int persist) {
 }
 
 static int choose_and_import_skin(void) {
-#ifdef PEX_PLATFORM_PSP
+#if defined(PEX_PLATFORM_WASM)
+    return pex_wasm_choose_skin_file();
+#elif defined(PEX_PLATFORM_PSP)
     open_notice("Skins", "Skin import is not available on PSP.", "Copy converted assets before building the EBOOT.");
     return 0;
 #elif defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_XBOX_UWP)
@@ -1270,7 +1272,13 @@ static void load_pack_icon(TexturePackEntry *e) {
 
 
 static void pack_asset_path(char *out, size_t cap) {
+#if defined(PEX_PLATFORM_WASM)
+    /* The built-in 1.2.5 resources are immutable and embedded in the HTML.
+       g_texpack_dir points to persistent user-imported packs on WASM. */
+    snprintf(out, cap, "/bundle/%s", CLASSIC_PACK_NAME);
+#else
     path_join(out, cap, g_texpack_dir, CLASSIC_PACK_NAME);
+#endif
 }
 
 static int release_file_exists_in_dir(const char *dir, const char *rel) {

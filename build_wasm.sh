@@ -57,7 +57,7 @@ mkdir -p dist
   -sGL_ENABLE_GET_PROC_ADDRESS=1 \
   -sFORCE_FILESYSTEM=1 \
   -sASSERTIONS=0 \
-  -sEXPORTED_FUNCTIONS='["_main","_pex_wasm_visibility_flush"]' \
+  -sEXPORTED_FUNCTIONS='["_main","_pex_wasm_visibility_flush","_pex_wasm_finish_skin_import","_pex_wasm_finish_texture_pack_import"]' \
   -sEXPORTED_RUNTIME_METHODS='["FS"]' \
   -lidbfs.js \
   --embed-file build/wasm_assets/Release@/bundle/Release \

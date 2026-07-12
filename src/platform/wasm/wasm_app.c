@@ -28,6 +28,223 @@ static void wasm_sync_idbfs(void) {
     });
 }
 
+static int pex_wasm_choose_skin_file(void) {
+    EM_ASM({
+        if (Module.pexPickSkin) Module.pexPickSkin();
+    });
+    return 1;
+}
+
+static int pex_wasm_choose_texture_pack_file(void) {
+    EM_ASM({
+        if (Module.pexPickTexturePack) Module.pexPickTexturePack();
+    });
+    return 1;
+}
+
+static int wasm_read_first_line(const char *path, char *out, size_t cap) {
+    FILE *f;
+    if (!out || cap == 0) return 0;
+    out[0] = 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    if (!fgets(out, (int)cap, f)) { fclose(f); return 0; }
+    fclose(f);
+    out[strcspn(out, "\r\n")] = 0;
+    return out[0] != 0;
+}
+
+static void wasm_sanitize_pack_name(const char *input, char *out, size_t cap) {
+    const char *name = input ? input : "";
+    const char *slash = strrchr(name, '/');
+    const char *backslash = strrchr(name, '\\');
+    size_t n = 0;
+    if (slash && slash + 1 > name) name = slash + 1;
+    if (backslash && backslash + 1 > name) name = backslash + 1;
+    if (!out || cap == 0) return;
+    while (*name && n + 1 < cap) {
+        unsigned char c = (unsigned char)*name++;
+        if (c == '.' && (!strcasecmp(name, "zip") || !strcasecmp(name, "jar"))) break;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_' || c == '.') {
+            out[n++] = (char)c;
+        } else {
+            out[n++] = '_';
+        }
+    }
+    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '.')) --n;
+    out[n] = 0;
+    if (!out[0]) snprintf(out, cap, "Imported Pack");
+}
+
+static int wasm_pack_has_root_assets(const char *dir) {
+    static const char *const candidates[] = {
+        "terrain.png", "gui/gui.png", "gui/items.png", "gui/background.png",
+        "mob/char.png", "char.png", "environment/clouds.png",
+        "misc/grasscolor.png", "font/default.png"
+    };
+    char path[MAX_PATHBUF];
+    for (int i = 0; i < (int)ARRAY_COUNT(candidates); ++i) {
+        path_join(path, sizeof(path), dir, candidates[i]);
+        if (file_exists(path)) return 1;
+    }
+    return 0;
+}
+
+static int wasm_move_directory_contents(const char *src, const char *dst) {
+    DIR *d = opendir(src);
+    struct dirent *de;
+    if (!d) return 0;
+    while ((de = readdir(d)) != NULL) {
+        char from[MAX_PATHBUF], to[MAX_PATHBUF];
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        path_join(from, sizeof(from), src, de->d_name);
+        path_join(to, sizeof(to), dst, de->d_name);
+        delete_recursive(to);
+        unlink(to);
+        if (rename(from, to) != 0) {
+            closedir(d);
+            return 0;
+        }
+    }
+    closedir(d);
+    return rmdir(src) == 0 || errno == ENOENT;
+}
+
+static int wasm_flatten_single_pack_directory(const char *root) {
+    DIR *d;
+    struct dirent *de;
+    char only_dir[MAX_PATHBUF] = "";
+    int dir_count = 0;
+    if (wasm_pack_has_root_assets(root)) return 1;
+    d = opendir(root);
+    if (!d) return 0;
+    while ((de = readdir(d)) != NULL) {
+        char child[MAX_PATHBUF];
+        struct stat st;
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        path_join(child, sizeof(child), root, de->d_name);
+        if (!strcmp(de->d_name, "__MACOSX") || !strcmp(de->d_name, ".DS_Store")) {
+            delete_recursive(child);
+            unlink(child);
+            continue;
+        }
+        if (stat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+            ++dir_count;
+            snprintf(only_dir, sizeof(only_dir), "%s", child);
+        } else {
+            /* A root file means this is not a simple one-folder wrapper. */
+            closedir(d);
+            return 0;
+        }
+    }
+    closedir(d);
+    if (dir_count != 1 || !wasm_pack_has_root_assets(only_dir)) return 0;
+    return wasm_move_directory_contents(only_dir, root);
+}
+
+EMSCRIPTEN_KEEPALIVE void pex_wasm_finish_skin_import(void) {
+    const char *path = "/persist/skins/custom.png";
+    if (!load_custom_skin_path(path, 1)) {
+        unlink(path);
+        wasm_sync_idbfs();
+        return;
+    }
+    wasm_sync_idbfs();
+    if (g_screen == SCREEN_SKINS) rebuild_screen();
+}
+
+EMSCRIPTEN_KEEPALIVE void pex_wasm_finish_texture_pack_import(void) {
+    const char *zip_path = "/persist/imports/texturepack.zip";
+    const char *name_path = "/persist/imports/texturepack.name";
+    char original_name[256] = "Imported Pack.zip";
+    char pack_name[64];
+    char dest[MAX_PATHBUF];
+    char err[256] = "";
+    int old_lang = pxc_zip_extract_lang_only;
+    int old_pack_txt = pxc_zip_write_pack_txt_after_extract;
+    int ok;
+
+    wasm_read_first_line(name_path, original_name, sizeof(original_name));
+    wasm_sanitize_pack_name(original_name, pack_name, sizeof(pack_name));
+    if (!strcasecmp(pack_name, CLASSIC_PACK_NAME))
+        snprintf(pack_name, sizeof(pack_name), "%s Imported", CLASSIC_PACK_NAME);
+    path_join(dest, sizeof(dest), g_texpack_dir, pack_name);
+    /* Re-importing a pack replaces it atomically from the user's perspective;
+       stale files from an older ZIP must not remain in the directory. */
+    delete_recursive(dest);
+
+    pxc_zip_extract_lang_only = 0;
+    pxc_zip_write_pack_txt_after_extract = 0;
+    ok = pxc_extract_zip_file(zip_path, dest, err, sizeof(err));
+    pxc_zip_extract_lang_only = old_lang;
+    pxc_zip_write_pack_txt_after_extract = old_pack_txt;
+
+    if (ok && !wasm_pack_has_root_assets(dest)) ok = wasm_flatten_single_pack_directory(dest);
+    if (ok && !wasm_pack_has_root_assets(dest)) {
+        snprintf(err, sizeof(err), "The ZIP does not contain a compatible classic texture pack.");
+        ok = 0;
+    }
+    if (ok) {
+        char pack_txt[MAX_PATHBUF];
+        path_join(pack_txt, sizeof(pack_txt), dest, "pack.txt");
+        if (!file_exists(pack_txt)) {
+            char text[160];
+            snprintf(text, sizeof(text), "%s\nImported in the WebAssembly client\n", pack_name);
+            pxc_write_file_all(pack_txt, (const unsigned char *)text, strlen(text));
+        }
+    }
+
+    unlink(zip_path);
+    unlink(name_path);
+    if (!ok) {
+        delete_recursive(dest);
+        wasm_sync_idbfs();
+        open_notice("Texture Packs", "Could not import the selected ZIP.",
+                    err[0] ? err : "Use a Minecraft 1.2.5-style texture pack ZIP.");
+        return;
+    }
+
+    scan_texture_packs();
+    int applied = 0;
+    for (int i = 0; i < g_texpack_count; ++i) {
+        if (!strcmp(g_texpacks[i].name, pack_name)) {
+            apply_texture_pack_index(i);
+            applied = 1;
+            break;
+        }
+    }
+    wasm_sync_idbfs();
+    if (!applied) {
+        open_notice("Texture Packs", "The ZIP was extracted, but the pack could not be selected.", pack_name);
+        return;
+    }
+    set_screen(SCREEN_TEXPACK);
+}
+
+static void wasm_apply_first_run_graphics_defaults(void) {
+    /* These are browser-only first-run defaults. Once options.txt exists, every
+       player change is respected on later launches. */
+    g_opts.fancy_graphics = 0;
+    g_opts.render_distance = 4;
+    g_opts.sf_ao_level = 0.0f;
+    g_opts.sf_gamma = 1.0f;
+    g_opts.sf_clouds = SF_FAST;
+    g_opts.sf_trees = SF_FAST;
+    g_opts.sf_grass = SF_OFF;
+    g_opts.sf_particles = 2;
+    g_opts.sf_random_mobs = 0;
+    g_opts.sf_smooth_biomes = 0;
+    g_opts.sf_mipmap_level = 0;
+    g_opts.sf_mipmap_linear = 0;
+    g_opts.sf_connected_textures = SF_OFF;
+    g_opts.sf_natural_textures = 0;
+    g_opts.sf_aa_level = 0;
+    g_opts.sf_af_level = 1;
+    g_opts.sf_chunk_updates = 1;
+    g_opts.sf_chunk_updates_dynamic = 0;
+}
+
 static int init_gl(SDL_Window *window) {
     (void)window;
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -411,19 +628,25 @@ int main(int argc, char **argv) {
     }
 
     srand((unsigned int)time(NULL));
+    char wasm_options_path[MAX_PATHBUF];
+    path_join(wasm_options_path, sizeof(wasm_options_path), g_mc_dir, "options.txt");
+    int wasm_first_run = !file_exists(wasm_options_path);
     load_options();
-    /* Browser profile: resources are bundled, multiplayer/audio downloads are off,
-       and conservative render distance keeps the single-threaded build responsive. */
+    /* Browser resources are bundled and network-backed audio/multiplayer paths
+       stay disabled. Performance preferences are defaults only, not forced. */
     g_opts.download_classic_textures = 1;
     g_opts.download_classic_sounds = 0;
     g_opts.classic_audio_mask = 0;
     g_opts.ignore_classic_sounds_warning = 1;
     g_opts.ignore_classic_resources_warning = 1;
     g_opts.renderer_backend = RENDERER_OPENGL;
-    g_opts.sf_aa_level = 0;
-    if (g_opts.render_distance > 4) g_opts.render_distance = 4;
-    if (g_opts.render_distance < 2) g_opts.render_distance = 2;
-    if (!g_opts.skin[0] || !strcmp(g_opts.skin, "Default")) snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
+    if (wasm_first_run) wasm_apply_first_run_graphics_defaults();
+    if (!g_opts.skin[0] || !strcmp(g_opts.skin, "Default"))
+        snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
+    if (wasm_first_run) {
+        save_options();
+        wasm_sync_idbfs();
+    }
     g_runtime_renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
 

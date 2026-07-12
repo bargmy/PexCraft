@@ -7,8 +7,10 @@ The WASM target builds PexCraft as one self-contained `dist/PexCraft-WASM.html` 
 - WebAssembly through Emscripten, SDL2, SDL_image, and WebGL/OpenGL ES 2.
 - Browser-compatible frame callback instead of a blocking native loop.
 - Responsive canvas sizing: CSS viewport size, WebGL drawing-buffer size, DPI, and GUI projection stay synchronized on resize/fullscreen.
-- WebGL-safe title panorama rendered once into a 256x256 offscreen framebuffer, softened with two separable Gaussian shader iterations, cached at 30 FPS, and composited to the responsive canvas. It avoids both the flickering default-framebuffer copy path and the expensive 8x8 full-resolution accumulation path.
-- Single-player only. The Multiplayer button is visible but disabled.
+- WebGL-safe title panorama rendered once into a 256x256 offscreen framebuffer, softened with two separable Gaussian shader iterations, cached at 30 FPS, and composited without the desktop feedback-copy UV rotation. It avoids the corner flicker, full-resolution 8x8 cost, and 90-degree WASM orientation error.
+- Single-player only. The Multiplayer button keeps the active language label but is visibly disabled.
+- Local browser imports: 64x32/64x64 PNG skins and classic texture-pack ZIPs are copied into IndexedDB-backed storage; one-folder-wrapped ZIPs are flattened and selected automatically.
+- WASM first-run graphics defaults are Fast, render distance 4, smooth lighting off, maximum brightness, and conservative quality options. Existing options are never overwritten on later runs.
 - Single-threaded cooperative game, world-generation, meshing, and save fallbacks.
 - Saves/options under `/persist`, backed by IndexedDB when the browser permits it.
 - No runtime HTTP, WebSocket, or UDP/TCP connection path; the page CSP uses `connect-src 'none'`.
@@ -60,7 +62,7 @@ Run the fast repository checks:
 python3 tools/check_wasm_target.py
 ```
 
-A release-grade validation still requires an Emscripten build and browser smoke test. Recommended checks are Chrome/Chromium and Firefox on desktop: open the title screen, resize the browser repeatedly, enter and leave fullscreen, confirm the panorama always fills the canvas without corner flicker, has the soft desktop-style blur, remains smooth on modest GPUs, confirm Multiplayer is disabled, create/load/save a world, reload the page, and confirm no network requests appear in developer tools while the client runs.
+A release-grade validation still requires an Emscripten build and browser smoke test. Recommended checks are Chrome/Chromium and Firefox on desktop: open the title screen, resize the browser repeatedly, enter and leave fullscreen, confirm the panorama always fills the canvas without corner flicker, has the soft desktop-style blur, remains smooth on modest GPUs, confirm Multiplayer is localized and disabled, import a skin PNG, import both root-layout and one-folder-wrapped classic texture-pack ZIPs, create/load/save a world, reload the page, and confirm no network requests appear in developer tools while the client runs.
 
 ## Notes
 

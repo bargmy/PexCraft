@@ -18,6 +18,8 @@ static void pex_renderer_resize(int w, int h);
 static void pex_renderer_shutdown(void);
 static void pex_gl_suppress_immediate(int on);
 static void save_world_state_for_exit(void);
+static int pex_wasm_choose_skin_file(void);
+static int pex_wasm_choose_texture_pack_file(void);
 
 #include "render/renderer_backend.h"
 

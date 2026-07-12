@@ -361,14 +361,14 @@ static int pex_lgwebos_panorama_present(int render_w, int render_h,
                                         GLfloat u0, GLfloat v0, GLfloat u1, GLfloat v1) {
     LgWebOSPanoramaFx *fx = &g_lgwebos_panorama_fx;
     if (!fx->output_tex || !fx->program) return 0;
-    /* Match GuiMainMenu's final 256x256 crop/rotation. The FBO texture is
-       sampled directly, avoiding default-framebuffer copies and preserving
-       the classic orientation. */
+    /* The shader blur never performs Java's repeated 90-degree feedback
+       rotations, so present the FBO in its native orientation. Reusing the
+       desktop final-copy UV swap rotated the WASM panorama by 90 degrees. */
     const GLfloat quad[16] = {
-        -1.0f, -1.0f, u0, v1,
-         1.0f, -1.0f, u0, v0,
-        -1.0f,  1.0f, u1, v1,
-         1.0f,  1.0f, u1, v0
+        -1.0f, -1.0f, u0, v0,
+         1.0f, -1.0f, u1, v0,
+        -1.0f,  1.0f, u0, v1,
+         1.0f,  1.0f, u1, v1
     };
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, render_w, render_h);

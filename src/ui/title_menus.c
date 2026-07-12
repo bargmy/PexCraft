@@ -1215,6 +1215,11 @@ static void draw_texpack(void) {
     draw_gradient(0, bottom - 4, g_gui_w, bottom, 0x00000000, 0xFF000000);
 
     draw_centered_text(tr_key_default("texturePack.title", "Select Texture Pack"), g_gui_w / 2, 16, 16777215);
+#if defined(PEX_PLATFORM_WASM)
+    draw_centered_text(tr_key_default("texturePack.importInfo", "Choose a classic texture pack ZIP to import"),
+                       g_gui_w / 2 - 77, g_gui_h - 26, 8421504);
+#else
     draw_centered_text(tr_key_default("texturePack.folderInfo", "(Place texture pack files here)"), g_gui_w / 2 - 77, g_gui_h - 26, 8421504);
+#endif
     draw_all_buttons();
 }
