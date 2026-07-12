@@ -6,6 +6,8 @@ The WASM target builds PexCraft as one self-contained `dist/PexCraft-WASM.html` 
 
 - WebAssembly through Emscripten, SDL2, SDL_image, and WebGL/OpenGL ES 2.
 - Browser-compatible frame callback instead of a blocking native loop.
+- Responsive canvas sizing: CSS viewport size, WebGL drawing-buffer size, DPI, and GUI projection stay synchronized on resize/fullscreen.
+- WebGL-safe full-screen panorama path with direct 8x8 accumulation blur; it does not use the flickering 256x256 default-framebuffer copy path.
 - Single-player only. The Multiplayer button is visible but disabled.
 - Single-threaded cooperative game, world-generation, meshing, and save fallbacks.
 - Saves/options under `/persist`, backed by IndexedDB when the browser permits it.
@@ -58,7 +60,7 @@ Run the fast repository checks:
 python3 tools/check_wasm_target.py
 ```
 
-A release-grade validation still requires an Emscripten build and browser smoke test. Recommended checks are Chrome/Chromium and Firefox on desktop: open the title screen, confirm Multiplayer is disabled, create/load/save a world, reload the page, and confirm no network requests appear in developer tools while the client runs.
+A release-grade validation still requires an Emscripten build and browser smoke test. Recommended checks are Chrome/Chromium and Firefox on desktop: open the title screen, resize the browser repeatedly, enter and leave fullscreen, confirm the panorama always fills the canvas without corner flicker and remains blurred, confirm Multiplayer is disabled, create/load/save a world, reload the page, and confirm no network requests appear in developer tools while the client runs.
 
 ## Notes
 

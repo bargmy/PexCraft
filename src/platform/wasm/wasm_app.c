@@ -9,6 +9,13 @@ static double g_wasm_last_idb_sync = 0.0;
 static int g_wasm_shutdown_done = 0;
 static int g_wasm_game_initialized = 0;
 
+/* Keep the CSS display size and the actual WebGL drawing buffer in sync.
+   A canvas has two independent sizes in browsers. CSS can stretch an
+   854x480 drawing buffer to the whole window without changing the pixels that
+   WebGL renders into, which breaks viewports and makes the title panorama look
+   like a flickering corner thumbnail. */
+#define PEX_WASM_MAX_DRAWABLE_DIM 4096
+
 static void wasm_sync_idbfs(void) {
     EM_ASM({
         if (typeof FS !== 'undefined' && !Module.pexIdbSyncBusy) {
@@ -65,16 +72,61 @@ static void apply_vsync_setting(void) {
     if (g_hwnd) SDL_GL_SetSwapInterval(1);
 }
 
-static void wasm_refresh_display_metrics(void) {
-    if (!g_hwnd) return;
-    SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
-    if (g_win_w < 1) g_win_w = 1;
-    if (g_win_h < 1) g_win_h = 1;
-    g_render_w = g_win_w;
-    g_render_h = g_win_h;
-    if (g_glrc) SDL_GL_GetDrawableSize(g_hwnd, &g_render_w, &g_render_h);
-    if (g_render_w < 1) g_render_w = g_win_w;
-    if (g_render_h < 1) g_render_h = g_win_h;
+static int wasm_refresh_display_metrics(void) {
+    double css_w = 0.0, css_h = 0.0;
+    int old_win_w = g_win_w, old_win_h = g_win_h;
+    int old_render_w = g_render_w, old_render_h = g_render_h;
+
+    /* Query the size actually occupied by the canvas in CSS pixels, then make
+       its WebGL drawing buffer match the physical display resolution. This is
+       deliberately owned by the WASM target instead of relying on CSS
+       stretching or SDL's initial 854x480 window size. */
+    if (emscripten_get_element_css_size("#canvas", &css_w, &css_h) == EMSCRIPTEN_RESULT_SUCCESS &&
+        css_w >= 1.0 && css_h >= 1.0) {
+        double scale = emscripten_get_device_pixel_ratio();
+        int canvas_w = 0, canvas_h = 0;
+        int logical_w = (int)floor(css_w + 0.5);
+        int logical_h = (int)floor(css_h + 0.5);
+
+        if (!(scale > 0.0)) scale = 1.0;
+        if (scale > 2.0) scale = 2.0;
+        if (scale < 1.0) scale = 1.0;
+        if (css_w * scale > (double)PEX_WASM_MAX_DRAWABLE_DIM)
+            scale = (double)PEX_WASM_MAX_DRAWABLE_DIM / css_w;
+        if (css_h * scale > (double)PEX_WASM_MAX_DRAWABLE_DIM)
+            scale = (double)PEX_WASM_MAX_DRAWABLE_DIM / css_h;
+
+        g_win_w = logical_w > 0 ? logical_w : 1;
+        g_win_h = logical_h > 0 ? logical_h : 1;
+        g_render_w = (int)floor(css_w * scale + 0.5);
+        g_render_h = (int)floor(css_h * scale + 0.5);
+        if (g_render_w < 1) g_render_w = 1;
+        if (g_render_h < 1) g_render_h = 1;
+
+        if (emscripten_get_canvas_element_size("#canvas", &canvas_w, &canvas_h) != EMSCRIPTEN_RESULT_SUCCESS ||
+            canvas_w != g_render_w || canvas_h != g_render_h) {
+            emscripten_set_canvas_element_size("#canvas", g_render_w, g_render_h);
+        }
+        /* Use the real size accepted by the browser in case WebGL clamps the
+           requested drawing buffer to the device's maximum viewport. */
+        if (emscripten_get_canvas_element_size("#canvas", &canvas_w, &canvas_h) == EMSCRIPTEN_RESULT_SUCCESS &&
+            canvas_w > 0 && canvas_h > 0) {
+            g_render_w = canvas_w;
+            g_render_h = canvas_h;
+        }
+    } else if (g_hwnd) {
+        SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
+        if (g_win_w < 1) g_win_w = 1;
+        if (g_win_h < 1) g_win_h = 1;
+        g_render_w = g_win_w;
+        g_render_h = g_win_h;
+        if (g_glrc) SDL_GL_GetDrawableSize(g_hwnd, &g_render_w, &g_render_h);
+        if (g_render_w < 1) g_render_w = g_win_w;
+        if (g_render_h < 1) g_render_h = g_win_h;
+    }
+
+    return old_win_w != g_win_w || old_win_h != g_win_h ||
+           old_render_w != g_render_w || old_render_h != g_render_h;
 }
 
 static void refresh_window_size_after_mode(void) {
@@ -279,6 +331,17 @@ static void wasm_frame(void) {
     }
 
     profile_begin_frame();
+
+    /* Browser viewport changes do not reliably arrive as SDL events for every
+       local-file/fullscreen/DPI transition. Poll the CSS canvas size once per
+       frame and rebuild projections only when its logical or drawable size
+       actually changed. */
+    if (wasm_refresh_display_metrics()) {
+        setup_scale();
+        pex_renderer_resize(g_render_w, g_render_h);
+        rebuild_screen();
+    }
+
     double prof_start = profile_begin();
     SDL_Event e;
     while (SDL_PollEvent(&e)) sdl2_handle_event(&e);

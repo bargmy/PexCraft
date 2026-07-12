@@ -361,13 +361,12 @@ static void draw_release_panorama_cube(float partial) {
 }
 
 
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-static void draw_release_panorama_cube_android_direct(float partial) {
-    /* Android GLES2 had trouble with the Java-style 256x256 feedback texture:
-       the copy/blur path could remain visible as a small corner square and
-       flicker.  Draw the panorama cube directly to the real framebuffer on
-       Android instead.  Blur is done by direct multi-sampling, not by copying
-       a 256x256 viewport texture, so it fills the screen without corner flicker. */
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_WASM)
+static void draw_release_panorama_cube_direct(float partial) {
+    /* GLES2/WebGL can expose the Java-style 256x256 feedback-copy path as a
+       small corner square and flicker while the default framebuffer is being
+       copied. Draw directly to the real framebuffer instead. The accumulated
+       sub-pixel samples provide the title blur without glCopyTexSubImage2D. */
     double aspect = (g_render_h > 0) ? (double)g_render_w / (double)g_render_h : 16.0 / 9.0;
     float timer = (float)g_release_panorama_timer + partial;
 
@@ -391,11 +390,14 @@ static void draw_release_panorama_cube_android_direct(float partial) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    /* Keep Android on the full-screen direct path, but restore the title-menu
-       blur look.  The old feedback-copy blur was the source of the 256x256
-       corner flicker; this uses the same sub-pixel multi-sample idea directly
-       in the real framebuffer instead of copying a tiny viewport texture. */
+    /* WebAssembly uses all 8x8 samples from the original panorama stage so
+       the result remains visibly soft even though the fragile feedback-copy
+       blur is bypassed. Android keeps the lighter 4x4 path for mobile GPUs. */
+#if defined(PEX_PLATFORM_WASM)
+    const int samples = 8;
+#else
     const int samples = 4;
+#endif
     for (int pass = 0; pass < samples * samples; ++pass) {
         glPushMatrix();
         float ox = (((float)(pass % samples) / (float)samples) - 0.5f) / 64.0f;
@@ -489,11 +491,11 @@ static void draw_release_skybox(float partial) {
     static int s_have_panorama_frame = 0;
     static int s_cached_panorama_size = 0;
 
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_WASM)
     (void)s_last_panorama_update;
     (void)s_have_panorama_frame;
     (void)s_cached_panorama_size;
-    draw_release_panorama_cube_android_direct(partial);
+    draw_release_panorama_cube_direct(partial);
     return;
 #endif
 
