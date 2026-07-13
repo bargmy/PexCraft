@@ -2423,6 +2423,14 @@ static void pex_chat_append_utf8_text(const char *text) {
 
 static void handle_text_input_utf8(const char *text) {
     if (!text || !*text) return;
+    if (g_screen == SCREEN_INGAME && text[0] == '/') {
+        g_chat_input[0] = '/';
+        g_chat_input[1] = 0;
+        g_suppress_next_chat_char = 0;
+        set_screen(SCREEN_CHAT);
+        if (text[1]) pex_chat_append_utf8_text(text + 1);
+        return;
+    }
     if (g_screen == SCREEN_CHAT) {
         pex_chat_append_utf8_text(text);
         return;
@@ -2436,6 +2444,13 @@ static void handle_text_input_utf8(const char *text) {
 }
 
 static void handle_char(WPARAM ch) {
+    if (g_screen == SCREEN_INGAME && ch == '/') {
+        g_chat_input[0] = '/';
+        g_chat_input[1] = 0;
+        g_suppress_next_chat_char = 0;
+        set_screen(SCREEN_CHAT);
+        return;
+    }
     if (g_screen == SCREEN_CHAT) {
         if (g_suppress_next_chat_char) { g_suppress_next_chat_char = 0; return; }
         if (ch == 13 || ch == 8 || ch == 27) return;

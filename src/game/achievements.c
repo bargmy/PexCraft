@@ -2,7 +2,7 @@
    Included after language.c and before gameplay modules in the unity build. */
 
 #define PEX_STAT_OBJECT_MAX 512
-#define PEX_ACHIEVEMENT_COUNT 27
+#define PEX_ACHIEVEMENT_COUNT 28
 #define PEX_ACHIEVEMENT_QUEUE_MAX 32
 
 typedef enum PexGeneralStat {
@@ -59,7 +59,8 @@ typedef enum PexAchievementId {
     PEX_ACH_THE_END_2,
     PEX_ACH_ENCHANTMENTS,
     PEX_ACH_OVERKILL,
-    PEX_ACH_BOOKCASE
+    PEX_ACH_BOOKCASE,
+    PEX_ACH_CRUELTY
 } PexAchievementId;
 
 typedef struct PexGeneralStatDef {
@@ -143,7 +144,8 @@ static const PexAchievementDef g_pex_achievement_defs[PEX_ACHIEVEMENT_COUNT] = {
     {"theEnd2", "The End.", "Defeat the Ender Dragon.", 22, 4, 13, BLOCK_DRAGON_EGG, 1},
     {"enchantments", "Enchanter", "Use a book, obsidian and diamonds to construct an enchantment table.", 17, -4, 4, BLOCK_ENCHANTMENT_TABLE, 0},
     {"overkill", "Overkill", "Deal nine hearts of damage in a single hit.", 24, -4, 1, ITEM_SWORD_DIAMOND, 1},
-    {"bookcase", "Librarian", "Build some bookshelves to improve your enchantment table.", 24, -3, 6, BLOCK_BOOKSHELF, 0}
+    {"bookcase", "Librarian", "Build some bookshelves to improve your enchantment table.", 24, -3, 6, BLOCK_BOOKSHELF, 0},
+    {"cruelty", "Cruelty", "How could you?", -1, -3, -1, ITEM_BOOK, 1}
 };
 
 static PexProfileStats g_pex_profile_stats;
@@ -373,6 +375,7 @@ static void pex_achievement_on_dragon_killed(void) { (void)pex_achievement_unloc
 static void pex_achievement_on_pig_fall(void) { (void)pex_achievement_unlock(PEX_ACH_FLY_PIG); }
 static void pex_achievement_on_ghast_reflect(void) { (void)pex_achievement_unlock(PEX_ACH_GHAST); }
 static void pex_achievement_on_skeleton_snipe(void) { (void)pex_achievement_unlock(PEX_ACH_SNIPE_SKELETON); }
+static void pex_achievement_on_dear_memories_destroyed(void) { (void)pex_achievement_unlock(PEX_ACH_CRUELTY); }
 
 static void pex_achievement_on_damage_dealt(int damage) {
     if (damage <= 0) return;

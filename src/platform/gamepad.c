@@ -618,12 +618,17 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;                  /* R = break/attack */
     if (p->lb) g_gamepad_vk_state[VK_RBUTTON] = 1;                        /* L = place/use */
 #else
-    if (p->ly < -PEX_GAMEPAD_DEADZONE || p->dpad_up) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1;
-    if (p->ly >  PEX_GAMEPAD_DEADZONE || p->dpad_down) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
-    if (p->lx < -PEX_GAMEPAD_DEADZONE || p->dpad_left) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
-    if (p->lx >  PEX_GAMEPAD_DEADZONE || p->dpad_right) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
-    if (p->a) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* jump */
-    if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
+    /* Minecraft controller movement belongs exclusively to the left stick.
+       The D-pad must never synthesize forward/back/strafe input.  On the
+       legacy-console control scheme it only doubles as fly up/down while the
+       player is already flying in Creative mode; menus and inventories keep
+       their separate D-pad navigation paths below. */
+    if (p->ly < -PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1;
+    if (p->ly >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
+    if (p->lx < -PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
+    if (p->lx >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
+    if (p->a || (g_creative_flying && p->dpad_up)) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1; /* jump/fly up */
+    if (p->b || p->ls || (g_creative_flying && p->dpad_down)) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1; /* sneak/fly down */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;         /* break/attack */
     if (p->lt_down) g_gamepad_vk_state[VK_RBUTTON] = 1;         /* place/use */
@@ -801,6 +806,18 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->rt_down && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lt_down && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
     if (!p->lt_down && p->prev_lt) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
+    /* Legacy-console in-game D-pad behavior:
+       Up/Down are reserved for vertical Creative-flight movement (handled in
+       pex_gamepad_rebuild_virtual_keys above), Left opens chat, and Right
+       cycles the third-person camera exactly like F5.  It never walks or
+       changes hotbar slots. */
+    if (p->dpad_left && !p->prev_dpad_left) {
+        g_chat_input[0] = 0;
+        g_suppress_next_chat_char = 0;
+        set_screen(SCREEN_CHAT);
+        return;
+    }
+    if (p->dpad_right && !p->prev_dpad_right) third_person_view_cycle();
     if (p->y && !p->prev_y) { set_screen(SCREEN_INVENTORY); return; }
     if (p->x && !p->prev_x) inventory_drop_selected_one();
     if (p->back && !p->prev_back) set_screen(SCREEN_PAUSE);

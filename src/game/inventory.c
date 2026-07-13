@@ -9469,6 +9469,28 @@ static int dropped_item_touches_player(const FlatDroppedItem *e) {
     return (dx * dx + dy * dy + dz * dz) <= (1.25f * 1.25f);
 }
 
+static int dropped_item_touches_fire_or_lava(const FlatDroppedItem *e) {
+    if (!e) return 0;
+    int bx = (int)floorf(e->x);
+    int bz = (int)floorf(e->z);
+    const float sample_y[3] = {e->y - 0.125f, e->y, e->y + 0.125f};
+    for (int i = 0; i < 3; ++i) {
+        int id = flat_get_block(bx, (int)floorf(sample_y[i]), bz);
+        if (id == BLOCK_FIRE || id == BLOCK_LAVA || id == BLOCK_STILL_LAVA) return 1;
+    }
+    return 0;
+}
+
+static int dear_memories_destroy_if_burning(FlatDroppedItem *e) {
+    if (!e || g_mp_connected || !stack_is_dear_memories_book(&e->stack)) return 0;
+    if (!dropped_item_touches_fire_or_lava(e)) return 0;
+    e->active = 0;
+    pex_sound_play_at("random.fizz", e->x, e->y, e->z, 0.5f, 1.8f + pex_rand_float01() * 0.4f);
+    pex_achievement_on_dear_memories_destroyed();
+    g_save_dirty = 1;
+    return 1;
+}
+
 static void update_dropped_items(void) {
     for (int i = 0; i < MAX_PICKUP_FX; ++i) {
         if (!g_pickup_fx[i].active) continue;
@@ -9487,6 +9509,7 @@ static void update_dropped_items(void) {
         int multiplayer_drop = g_mp_connected && e->net_id > 0;
         e->prev_x = e->x; e->prev_y = e->y; e->prev_z = e->z;
         if (e->pickup_delay > 0) e->pickup_delay--;
+        if (dear_memories_destroy_if_burning(e)) continue;
         (void)flat_entity_handle_water_025(e->x, e->y, e->z, &e->mx, &e->my, &e->mz);
         /* Deobf EntityItem has no magnetic pull; pickup happens on entity collision. */
         e->my -= 0.04f;
@@ -9504,6 +9527,7 @@ static void update_dropped_items(void) {
            bounding box, then zero collided motion components.  This removes the
            old PexCraft axis rewind/bounce that made dropped items jitter. */
         dropped_item_move_entity(e, e->mx, e->my, e->mz);
+        if (dear_memories_destroy_if_burning(e)) continue;
 
         float friction = 0.98f;
         if (e->on_ground) {
