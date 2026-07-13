@@ -6449,6 +6449,23 @@ static FlatRayHit flat_raycast(void) {
     return h;
 }
 
+static int ingame_has_context_use_target(void) {
+    if (g_screen != SCREEN_INGAME || g_player_dead) return 0;
+    if (passive_mobs_player_can_interact()) return 1;
+
+    FlatRayHit hit = flat_raycast();
+    if (!hit.hit) return 0;
+    if (key_down_vk(g_opts.keys[5])) return 0; /* Sneak deliberately bypasses block activation. */
+
+    int target_id = flat_get_block(hit.bx, hit.by, hit.bz);
+    if (target_id == BLOCK_CRAFTING_TABLE ||
+        target_id == BLOCK_FURNACE || target_id == BLOCK_FURNACE_LIT ||
+        target_id == BLOCK_CHEST || block_is_door_id(target_id) ||
+        target_id == BLOCK_STONE_BUTTON || target_id == BLOCK_LEVER) return 1;
+    if (target_id == BLOCK_JUKEBOX && flat_get_meta(hit.bx, hit.by, hit.bz) != 0) return 1;
+    return 0;
+}
+
 /* Ray that can land on a liquid SOURCE block (the normal raycast passes through
    liquids). Stops at the first solid block. Only level-0 sources are pickable. */
 static int flat_raycast_liquid_source(int *ox, int *oy, int *oz) {

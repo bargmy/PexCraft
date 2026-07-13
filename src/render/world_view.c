@@ -609,7 +609,7 @@ static void draw_chat_lines(int force_visible) {
             alpha = (int)(255.0 * fade);
         }
         if (alpha <= 0) continue;
-        int y = g_gui_h - 48 - i * 9;
+        int y = g_gui_h - 48 - pex_xinput_hud_bottom_offset() - i * 9;
         draw_rect(2, y - 1, 322, y + 8, (alpha / 2) << 24);
         draw_text_mcpe_colored(g_chat_lines[i].text, 2, y, (alpha << 24) | 0xFFFFFF);
     }

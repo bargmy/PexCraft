@@ -50,8 +50,8 @@ static void pex_gamepad_classify(PexGamepadState *pad, const char *name) {
     snprintf(pad->name, sizeof(pad->name), "%s", (name && *name) ? name : "Unknown controller");
     pad->is_xbox = pex_str_contains_i(pad->name, "xbox") ||
                    pex_str_contains_i(pad->name, "xinput") ||
-                   pex_str_contains_i(pad->name, "360") ||
-                   pex_str_contains_i(pad->name, "series");
+                   pex_str_contains_i(pad->name, "x-box") ||
+                   pex_str_contains_i(pad->name, "360 controller");
     pad->is_dualshock = pex_str_contains_i(pad->name, "dualshock") ||
                         pex_str_contains_i(pad->name, "dualsense") ||
                         pex_str_contains_i(pad->name, "playstation") ||
@@ -524,6 +524,18 @@ static PexGamepadState *pex_gamepad_primary_pad(void) {
     return NULL;
 }
 
+static int pex_xinput_hud_active(void) {
+    for (int i = 0; i < g_gamepad_count && i < PEX_GAMEPAD_MAX; ++i) {
+        if (g_gamepads[i].connected && g_gamepads[i].is_xbox) return 1;
+    }
+    return 0;
+}
+
+static int pex_xinput_hud_bottom_offset(void) {
+    if (g_screen != SCREEN_INGAME && g_screen != SCREEN_CHAT) return 0;
+    return (pex_xinput_hud_active() && tex_xinput.id) ? 54 : 0;
+}
+
 static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     memset(g_gamepad_vk_state, 0, sizeof(g_gamepad_vk_state));
     if (!p || g_screen != SCREEN_INGAME || g_player_dead) return;
@@ -545,7 +557,8 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->ly >  PEX_GAMEPAD_DEADZONE || p->dpad_down) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
     if (p->lx < -PEX_GAMEPAD_DEADZONE || p->dpad_left) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
     if (p->lx >  PEX_GAMEPAD_DEADZONE || p->dpad_right) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
-    if (p->a) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* jump */
+    if (p->a && !(p->is_xbox && ingame_has_context_use_target()))
+        g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;                    /* jump, unless A is the contextual Use action */
     if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
@@ -721,6 +734,11 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #else
+    if (p->is_xbox && p->a && !p->prev_a && ingame_has_context_use_target()) {
+        mouse_right_down(g_gui_w / 2, g_gui_h / 2);
+        mouse_right_up(g_gui_w / 2, g_gui_h / 2);
+        return;
+    }
     if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lt > 0.35f && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
     if (p->lt <= 0.35f && p->prev_lt > 0.35f) mouse_right_up(g_gui_w / 2, g_gui_h / 2);

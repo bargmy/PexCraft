@@ -1621,6 +1621,21 @@ static int try_release_texture(Texture *tex, const char *rel, int repeat) {
     return load_png_texture(tex, path, repeat);
 }
 
+static int load_xinput_hud_texture(void) {
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
+    return 0;
+#else
+    free_texture(&tex_xinput);
+    if (try_release_texture(&tex_xinput, "gui\\xinput.png", 0) ||
+        load_png_texture(&tex_xinput, "src/assets/XINPUT.png", 0) ||
+        load_png_texture(&tex_xinput, "assets/XINPUT.png", 0)) {
+        set_texture_filter_wrap(&tex_xinput, 0, 0);
+        return 1;
+    }
+    return 0;
+#endif
+}
+
 static int load_release_textures_from_pack(void) {
     if (!pack_is_installed()) return 0;
     int ok = 1;
@@ -1647,6 +1662,7 @@ static int load_release_textures_from_pack(void) {
         tex_unknown_pack = tmp;
     } else make_solid_texture(&tex_unknown_pack, 32, 32, 96, 96, 96, 255, 0);
     ok = try_release_texture(&tex_icons, "gui\\icons.png", 0) && ok;
+    load_xinput_hud_texture();
     ok = try_release_texture(&tex_achievement, "achievement\\bg.png", 0) && ok;
     try_release_texture(&tex_stat_slot, "gui\\slot.png", 0);
     ok = try_release_texture(&tex_inventory, "gui\\inventory.png", 0) && ok;
@@ -1893,6 +1909,7 @@ static int load_default_textures(void) {
     free_texture(&tex_swampfoliagecolor);
     stivufine_lilypad_color = -1;
     PEX_LOAD_OPT(&tex_particles, "particles.mcrw", 0, 128, 128);
+    load_xinput_hud_texture();
     if (missing_required) log_msg("Started with %d fallback required assets; showing resource download UI", missing_required);
 #undef PEX_LOAD_REQ
 #undef PEX_LOAD_OPT

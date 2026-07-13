@@ -43,7 +43,7 @@ static void get_app_memory_mb(unsigned long long *used_mb, unsigned long long *p
 
 static void draw_save_message(void) {
     if (g_save_message_ticks <= 0) return;
-    draw_text("Saving game...", 8, g_gui_h - 16, 16777215);
+    draw_text("Saving game...", 8, g_gui_h - 16 - pex_xinput_hud_bottom_offset(), 16777215);
 }
 
 typedef struct PexJavaRandom {
@@ -363,7 +363,7 @@ static void draw_record_playing_overlay(void) {
     if (g_record_is_playing) rgb = pex_hsb_to_rgb(up / 50.0f, 0.7f, 0.6f);
     int color = (alpha << 24) | rgb;
     int x = (g_gui_w - text_width(g_record_playing_text)) / 2;
-    int y = g_gui_h - 48 - 4;
+    int y = g_gui_h - 48 - 4 - pex_xinput_hud_bottom_offset();
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     draw_text_no_shadow(g_record_playing_text, x, y, color);
@@ -402,13 +402,55 @@ static void draw_held_map_overlay(void) {
     }
 }
 
+static void draw_xinput_hud_tile(int tile, int x, int y) {
+    if (!tex_xinput.id || tex_xinput.w <= 0 || tex_xinput.h <= 0) return;
+    int sx = (tile & 3) * 16;
+    int sy = (tile >> 2) * 16;
+    float u0 = (float)sx / (float)tex_xinput.w;
+    float v0 = (float)sy / (float)tex_xinput.h;
+    float u1 = (float)(sx + 16) / (float)tex_xinput.w;
+    float v1 = (float)(sy + 16) / (float)tex_xinput.h;
+    glBindTexture(GL_TEXTURE_2D, tex_xinput.id);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.1f);
+    glColor4f(1, 1, 1, 1);
+    if (g_loggy_enabled) g_loggy_gui_quads++;
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v1); glVertex3f((float)x, (float)(y + 16), 0.0f);
+    glTexCoord2f(u1, v1); glVertex3f((float)(x + 16), (float)(y + 16), 0.0f);
+    glTexCoord2f(u1, v0); glVertex3f((float)(x + 16), (float)y, 0.0f);
+    glTexCoord2f(u0, v0); glVertex3f((float)x, (float)y, 0.0f);
+    glEnd();
+}
+
+static void draw_xinput_hud_prompts(int hotbar_y) {
+    if (pex_xinput_hud_bottom_offset() <= 0) return;
+
+    /* Exact 640x480 reference anchors from the supplied layout, expressed
+       relative to screen center so the spacing remains stable at other widths. */
+    int y = hotbar_y + 27;
+    int inventory_x = g_gui_w / 2 - 111;
+    int optional_x = g_gui_w / 2 - 44;
+
+    draw_xinput_hud_tile(3, inventory_x, y); /* Y */
+    draw_text("Inventory", inventory_x + 18, y + 4, 0xFFFFFF);
+
+    if (ingame_has_context_use_target()) {
+        draw_xinput_hud_tile(0, optional_x, y); /* A */
+        draw_text("Use", optional_x + 18, y + 4, 0xFFFFFF);
+    }
+}
+
 static void draw_hud(void) {
     pex_sound_tick_record_stream();
     pex_game_music_tick();
     int w = g_gui_w;
     int h = g_gui_h;
+    int hud_bottom_offset = pex_xinput_hud_bottom_offset();
     int hotbar_x = w / 2 - 91;
-    int hotbar_y = h - 22;
+    int hotbar_y = h - 22 - hud_bottom_offset;
     draw_textured_rect_256(&tex_gui, hotbar_x, hotbar_y, 0, 0, 182, 22, 0xFFFFFF);
     draw_textured_rect_256(&tex_gui, hotbar_x - 1 + g_selected_hotbar_slot * 20, hotbar_y - 1, 0, 22, 24, 22, 0xFFFFFF);
 
@@ -439,7 +481,7 @@ static void draw_hud(void) {
 
     int left = w / 2 - 91;
     int right = w / 2 + 91;
-    int row_y = h - 39;
+    int row_y = h - 39 - hud_bottom_offset;
     int upper_y = row_y - 10;
 
     /* Java 1.2.5 GuiIngame gates health/armor/food/air/XP behind
@@ -518,7 +560,7 @@ static void draw_hud(void) {
             int fill = (int)(g_player_xp_progress * 183.0f);
             if (fill < 0) fill = 0;
             if (fill > 183) fill = 183;
-            int xp_y = h - 32 + 3;
+            int xp_y = h - 32 + 3 - hud_bottom_offset;
             draw_textured_rect_256(&tex_icons, left, xp_y, 0, 64, 182, 5, 0xFFFFFF);
             if (fill > 0) draw_textured_rect_256(&tex_icons, left, xp_y, 0, 69, fill, 5, 0xFFFFFF);
         }
@@ -526,7 +568,7 @@ static void draw_hud(void) {
             char lvl[16];
             snprintf(lvl, sizeof(lvl), "%d", g_player_xp_level);
             int lx = (w - text_width(lvl)) / 2;
-            int ly = h - 31 - 4;
+            int ly = h - 31 - 4 - hud_bottom_offset;
             draw_text_no_shadow(lvl, lx + 1, ly, 0);
             draw_text_no_shadow(lvl, lx - 1, ly, 0);
             draw_text_no_shadow(lvl, lx, ly + 1, 0);
@@ -539,6 +581,7 @@ static void draw_hud(void) {
     draw_record_playing_overlay();
 
     for (int i = 0; i < 9; i++) draw_item_stack_gui_animated(&g_inventory[i], hotbar_x + 3 + i * 20, hotbar_y + 3);
+    draw_xinput_hud_prompts(hotbar_y);
 
     draw_text(VERSION_TEXT, 2, 2, 16777215);
     if (g_debug_menu_shown && g_debug_task_info_shown) {

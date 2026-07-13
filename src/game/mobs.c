@@ -2612,6 +2612,38 @@ static void passive_mobs_dismount_player(void) {
     hud_add_chat("Dismounted.");
 }
 
+static int passive_mobs_player_can_interact(void) {
+    if (g_player_dead) return 0;
+    if (g_player_riding_passive_mob >= 0) return 1;
+
+    float mob_t = 0.0f;
+    float reach = player_is_creative() ? 5.0f : 4.0f;
+    PassiveMob *m = passive_mob_raycast(reach, &mob_t);
+    if (!m || !m->active || m->death_time > 0) return 0;
+
+    /* Network entities accept the normal interact packet.  The server decides
+       whether the target has a menu or another use action. */
+    if (g_mp_connected) return 1;
+
+    ItemStack *held = &g_inventory[g_selected_hotbar_slot];
+    int has_item = held && !stack_empty(held);
+    if (passive_mob_can_shear_sheep(m)) return 1;
+    if ((m->type == PASSIVE_MOB_COW || m->type == PASSIVE_MOB_MOOSHROOM) &&
+        has_item && held->id == ITEM_BUCKET_EMPTY) return 1;
+    if (m->type == PASSIVE_MOB_MOOSHROOM && m->baby_age >= 0 && has_item &&
+        (held->id == ITEM_BOWL_EMPTY || held->id == ITEM_SHEARS)) return 1;
+    if (m->type == PASSIVE_MOB_WOLF && has_item && held->id == ITEM_BONE &&
+        !passive_mob_is_owned_by_player(m)) return 1;
+    if (m->type == PASSIVE_MOB_OCELOT && has_item && held->id == ITEM_FISH_RAW &&
+        !passive_mob_is_owned_by_player(m) && mob_t < 3.0f) return 1;
+    if ((m->type == PASSIVE_MOB_WOLF || m->type == PASSIVE_MOB_OCELOT) &&
+        passive_mob_is_owned_by_player(m)) return 1;
+    if (has_item && passive_mob_breeding_item_for_type(m->type, held->id)) return 1;
+    if (m->type == PASSIVE_MOB_PIG &&
+        ((has_item && held->id == ITEM_SADDLE && !m->rideable) || m->rideable)) return 1;
+    return 0;
+}
+
 static int passive_mobs_player_interact(void) {
     if (g_player_dead) return 0;
     if (g_mp_connected) {

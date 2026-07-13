@@ -17,6 +17,8 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 JAR_SHA1 = "4a2fac7504182a97dcbcd7560c6392d7c8139928"
 JAR_URL = f"https://piston-data.mojang.com/v1/objects/{JAR_SHA1}/client.jar"
 JAR_NAME = "minecraft-1.2.5-client.jar"
@@ -148,6 +150,14 @@ def extract_resources(jar_path: Path, output_root: Path) -> list[dict[str, objec
     pack_text = release / "pack.txt"
     if not pack_text.exists():
         pack_text.write_text("Minecraft 1.2.5 Release\nEmbedded for PexCraft WASM\n", encoding="utf-8")
+
+    controller_source = PROJECT_ROOT / "src" / "assets" / "XINPUT.png"
+    controller_target = release / "gui" / "xinput.png"
+    if not controller_source.is_file():
+        raise RuntimeError(f"Missing controller HUD sprite sheet: {controller_source}")
+    controller_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(controller_source, controller_target)
+    manifest.append({"path": "gui/xinput.png", "bytes": controller_target.stat().st_size})
 
     missing = [name for name in REQUIRED if not (release / name).is_file()]
     if missing:
