@@ -1297,6 +1297,13 @@ static void pex_gamepad_update(void) {
     if (p) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
 #else
     if (gamepad_has_input(p)) pex_input_focus_set(PEX_INPUT_FOCUS_GAMEPAD);
+#if defined(PEX_PLATFORM_SDL2) || defined(_WIN32)
+    /* Input focus describes the device that is actually available, not only
+       the last device that produced an event.  Without this reset a removed
+       controller left gamepad prompts and virtual input latched forever. */
+    if (!p && g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD)
+        pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
+#endif
 #endif
 
     PexGamepadState *active_pad = (g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD) ? p : NULL;

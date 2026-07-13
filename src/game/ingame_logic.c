@@ -575,56 +575,6 @@ static int java47_aabb_offset_has_collision(const FlatAABB *box, float dx, float
 }
 
 
-/* Resolve only tiny float-derived overlaps after the vanilla clipping pass.
-   This is deliberately capped at 1/32 block: it fixes reconstruction drift but
-   will not teleport a player out of a genuinely enclosing server block. */
-static void java47_resolve_small_penetration(FlatAABB *box, float *fix_x, float *fix_y, float *fix_z) {
-    const float max_fix = 1.0f / 32.0f;
-    const float epsilon = 1.0e-5f;
-    float total_x = 0.0f, total_y = 0.0f, total_z = 0.0f;
-    if (!box) return;
-
-    for (int pass = 0; pass < 8; ++pass) {
-        FlatAABB query = {box->minx - 0.001f, box->miny - 0.001f, box->minz - 0.001f,
-                          box->maxx + 0.001f, box->maxy + 0.001f, box->maxz + 0.001f};
-        FlatAABB boxes[192];
-        int count = flat_get_collision_boxes(&query, boxes, (int)(sizeof(boxes) / sizeof(boxes[0])));
-        int moved = 0;
-        for (int i = 0; i < count; ++i) {
-            const FlatAABB *b = &boxes[i];
-            float ox = fminf(box->maxx, b->maxx) - fmaxf(box->minx, b->minx);
-            float oy = fminf(box->maxy, b->maxy) - fmaxf(box->miny, b->miny);
-            float oz = fminf(box->maxz, b->maxz) - fmaxf(box->minz, b->minz);
-            if (ox <= 0.0f || oy <= 0.0f || oz <= 0.0f) continue;
-
-            float candidates[6] = {
-                b->minx - box->maxx - epsilon, b->maxx - box->minx + epsilon,
-                b->miny - box->maxy - epsilon, b->maxy - box->miny + epsilon,
-                b->minz - box->maxz - epsilon, b->maxz - box->minz + epsilon
-            };
-            int best = -1;
-            float best_abs = 999.0f;
-            for (int c = 0; c < 6; ++c) {
-                float a = fabsf(candidates[c]);
-                if (a <= max_fix + epsilon && a < best_abs) { best_abs = a; best = c; }
-            }
-            if (best < 0) continue;
-            float dx = 0.0f, dy = 0.0f, dz = 0.0f;
-            if (best < 2) dx = candidates[best];
-            else if (best < 4) dy = candidates[best];
-            else dz = candidates[best];
-            aabb_offset(box, dx, dy, dz);
-            total_x += dx; total_y += dy; total_z += dz;
-            moved = 1;
-            break;
-        }
-        if (!moved) break;
-    }
-    if (fix_x) *fix_x = total_x;
-    if (fix_y) *fix_y = total_y;
-    if (fix_z) *fix_z = total_z;
-}
-
 static int java47_player_intersects_block(int block_id) {
     FlatAABB box = java47_player_box();
     int x0=(int)floorf(box.minx),x1=(int)floorf(box.maxx-1.0e-4f);
@@ -671,12 +621,12 @@ static void java47_player_move_entity(float move_x, float move_y, float move_z,
 
     for(int i=0;i<count;i++)y=aabb_clip_y(&boxes[i],&box,y);
     aabb_offset(&box,0.0f,y,0.0f);
-    /* Do not combine the 0.6 auto-step path with an upward jump impulse.
-       On full-block parkour/staircase jumps, tiny edge contacts could select
-       the step candidate and report a rise larger than the 0.42 jump motion.
-       The player can still jump naturally onto the next full block; ordinary
-       walking/downward stepping keeps vanilla's step solver. */
-    int may_step=(original_y<=0.0f)&&(was_on_ground||(original_y!=y&&original_y<0.0f));
+    /* Match Entity.moveEntity from Java 1.8.8 exactly.  onGround is sampled
+       before the jump impulse, so the step candidate is still considered on
+       the take-off tick.  Suppressing it for positive Y made the client clip a
+       different horizontal distance than the server when jumping into slabs,
+       stairs and block edges, which anti-cheat plugins report as invalid move. */
+    int may_step=was_on_ground||(original_y!=y&&original_y<0.0f);
     for(int i=0;i<count;i++)x=aabb_clip_x(&boxes[i],&box,x);
     aabb_offset(&box,x,0.0f,0.0f);
     for(int i=0;i<count;i++)z=aabb_clip_z(&boxes[i],&box,z);
@@ -723,27 +673,11 @@ static void java47_player_move_entity(float move_x, float move_y, float move_z,
         }
     }
 
-    {
-        float fix_x = 0.0f, fix_y = 0.0f, fix_z = 0.0f;
-        java47_resolve_small_penetration(&box, &fix_x, &fix_y, &fix_z);
-        x += fix_x; y += fix_y; z += fix_z;
-        if (fix_x != 0.0f) g_player_motion_x = 0.0f;
-        if (fix_y != 0.0f) g_player_motion_y = 0.0f;
-        if (fix_z != 0.0f) g_player_motion_z = 0.0f;
-
-        /* A vanilla clipping pass must never create a fresh solid overlap.
-           Translation fallbacks and float reconstruction can expose unusual
-           shapes, so keep the previous safe AABB rather than allowing the
-           player to become wedged and requiring them to walk backward. */
-        FlatAABB final_hits[64], start_hits[64];
-        int final_collision = flat_get_collision_boxes(&box, final_hits, 64) > 0;
-        int start_collision = flat_get_collision_boxes(&start_box, start_hits, 64) > 0;
-        if (final_collision && !start_collision) {
-            box = start_box;
-            x = y = z = 0.0f;
-            g_player_motion_x = g_player_motion_y = g_player_motion_z = 0.0f;
-        }
-    }
+    /* Do not push or roll the player back after the vanilla clipping pass.
+       Those local-only corrections changed the packet position by up to 1/32
+       block and were the other source of client/server movement disagreement.
+       The tiny 1/16-grid reconstruction snap in java47_player_box() remains,
+       but the resolved movement now comes solely from Entity-style clipping. */
 
     flat_world_map_leave();
 

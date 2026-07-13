@@ -155,6 +155,8 @@ static void sdl2_handle_event(SDL_Event *e) {
             }
             break;
         case SDL_MOUSEMOTION:
+            if (e->motion.xrel != 0 || e->motion.yrel != 0)
+                pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (g_mouse_grabbed && g_screen == SCREEN_INGAME) {
                 handle_grabbed_mouse_move(e->motion.xrel, e->motion.yrel);
                 g_mouse_x = g_gui_w / 2; g_mouse_y = g_gui_h / 2;
@@ -173,6 +175,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             }
             break;
         case SDL_MOUSEBUTTONDOWN:
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (e->button.button < ARRAY_COUNT(g_sdl2_mouse_buttons)) g_sdl2_mouse_buttons[e->button.button] = 1;
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);
@@ -180,6 +183,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             else if (e->button.button == SDL_BUTTON_RIGHT) mouse_right_down(g_mouse_x, g_mouse_y);
             break;
         case SDL_MOUSEBUTTONUP:
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (e->button.button < ARRAY_COUNT(g_sdl2_mouse_buttons)) g_sdl2_mouse_buttons[e->button.button] = 0;
             g_mouse_x = e->button.x * g_gui_w / (g_win_w ? g_win_w : 1);
             g_mouse_y = e->button.y * g_gui_h / (g_win_h ? g_win_h : 1);
@@ -187,6 +191,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             else if (e->button.button == SDL_BUTTON_RIGHT) mouse_right_up(g_mouse_x, g_mouse_y);
             break;
         case SDL_MOUSEWHEEL:
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             if (g_screen == SCREEN_CREATIVE) {
                 if (e->wheel.y > 0) creative_scroll_by(-1);
                 else if (e->wheel.y < 0) creative_scroll_by(1);
@@ -209,6 +214,7 @@ static void sdl2_handle_event(SDL_Event *e) {
             }
             break;
         case SDL_KEYDOWN: {
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             int vk = sdl2_vk_from_key(e->key.keysym.sym);
             if (vk) {
                 g_sdl2_key_state[sdl2_vk_index(vk)] = 1;
@@ -217,11 +223,13 @@ static void sdl2_handle_event(SDL_Event *e) {
             break;
         }
         case SDL_KEYUP: {
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             int vk = sdl2_vk_from_key(e->key.keysym.sym);
             if (vk) g_sdl2_key_state[sdl2_vk_index(vk)] = 0;
             break;
         }
         case SDL_TEXTINPUT:
+            pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
             sdl2_handle_text_input(&e->text);
             break;
     }

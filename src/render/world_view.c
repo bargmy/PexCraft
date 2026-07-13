@@ -1095,6 +1095,48 @@ static int pex_portal_clamp_u8(int v) {
     return v;
 }
 
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+/* Update only the portal cell (and its mip cells) instead of replacing and
+   regenerating the complete terrain atlas every animation tick.  On desktop
+   OpenGL the old full-atlas path was a large synchronous upload/CPU mipmap
+   spike, especially noticeable in portal-heavy server hubs. */
+static void pex_portal_upload_frame_subrect(int tx, int ty, const unsigned char *src) {
+    unsigned char level_pixels[16 * 16 * 4];
+    unsigned char next_pixels[16 * 16 * 4];
+    int w = 16, h = 16;
+    int x = tx, y = ty;
+    int max_levels = stivufine_texture_mipmap_level_for(&tex_terrain);
+
+    memcpy(level_pixels, src, sizeof(level_pixels));
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h,
+                    GL_RGBA, GL_UNSIGNED_BYTE, level_pixels);
+
+    for (int level = 1; level <= max_levels && (w > 1 || h > 1); ++level) {
+        int nw = w > 1 ? w >> 1 : 1;
+        int nh = h > 1 ? h >> 1 : 1;
+        for (int py = 0; py < nh; ++py) {
+            for (int px = 0; px < nw; ++px) {
+                int sx0 = px * 2, sy0 = py * 2;
+                int sx1 = sx0 + 1 < w ? sx0 + 1 : sx0;
+                int sy1 = sy0 + 1 < h ? sy0 + 1 : sy0;
+                const unsigned char *p0 = &level_pixels[(sy0 * w + sx0) * 4];
+                const unsigned char *p1 = &level_pixels[(sy0 * w + sx1) * 4];
+                const unsigned char *p2 = &level_pixels[(sy1 * w + sx1) * 4];
+                const unsigned char *p3 = &level_pixels[(sy1 * w + sx0) * 4];
+                unsigned char *dst = &next_pixels[(py * nw + px) * 4];
+                stivufine_alpha_blend_four(p0, p1, p2, p3, dst);
+            }
+        }
+        x >>= 1; y >>= 1;
+        glTexSubImage2D(GL_TEXTURE_2D, level, x, y, nw, nh,
+                        GL_RGBA, GL_UNSIGNED_BYTE, next_pixels);
+        memcpy(level_pixels, next_pixels, (size_t)nw * (size_t)nh * 4u);
+        w = nw; h = nh;
+    }
+}
+#endif
+
 static void pex_portal_build_frames(void) {
     if (g_portal_anim_ready) return;
     PexSkyJavaRandom rng;
@@ -1151,16 +1193,21 @@ static void update_portal_texture_animation(void) {
         unsigned char *dst = &tex_terrain.rgba[((ty + y) * tex_terrain.w + tx) * 4];
         memcpy(dst, src + y * 16 * 4, 16u * 4u);
     }
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    pex_portal_upload_frame_subrect(tx, ty, src);
+    /* Linux/SDL2 renders the atlas texture directly, so there is no separate
+       backend copy to invalidate. */
+#else
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
-    /* Portal may be the only enabled terrain animation. Rebuild immediately so
-       its level-0 upload cannot leave the atlas stuck on plain GL_NEAREST. */
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
     stivufine_rebuild_terrain_mipmaps();
-    g_portal_anim_terrain_dirty = 1; /* force direct backends to rebuild their terrain texture from the updated CPU atlas */
+    g_portal_anim_terrain_dirty = 1;
+#endif
     g_portal_uploaded_frame = frame;
     g_portal_uploaded_rgba = tex_terrain.rgba;
     g_portal_uploaded_w = tex_terrain.w;
@@ -6116,12 +6163,43 @@ static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_PORTAL) {
         float u0, v0, u1, v1;
         terrain_tile_uv(14, &u0, &v0, &u1, &v1);
-        flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 0.5f, flat_fullbright_packed_light());
-        int runs_along_x = 1;
-        if (flat_get_block(x, y, z - 1) == BLOCK_PORTAL || flat_get_block(x, y, z + 1) == BLOCK_PORTAL ||
-            flat_get_block(x, y, z - 1) == BLOCK_OBSIDIAN || flat_get_block(x, y, z + 1) == BLOCK_OBSIDIAN) {
-            runs_along_x = 0;
+        int portal_meta = flat_get_meta(x, y, z) & 3;
+        int runs_along_x;
+        /* Protocol 47 stores portal axis directly: 1 = X, 2 = Z.  Prefer that
+           authoritative state.  Only old/local worlds with metadata 0 fall
+           back to frame-neighbour inference. */
+        if (portal_meta == 1) runs_along_x = 1;
+        else if (portal_meta == 2) runs_along_x = 0;
+        else {
+            runs_along_x = 1;
+            if (flat_get_block(x, y, z - 1) == BLOCK_PORTAL || flat_get_block(x, y, z + 1) == BLOCK_PORTAL ||
+                flat_get_block(x, y, z - 1) == BLOCK_OBSIDIAN || flat_get_block(x, y, z + 1) == BLOCK_OBSIDIAN) {
+                runs_along_x = 0;
+            }
         }
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+        /* The desktop OpenGL terrain pass is explicitly two-sided.  Emitting
+           both sides of a 1/4-block slab therefore drew four blended layers
+           through each other (each quad is visible from both directions),
+           causing the dark/flickering portal seen on Linux.  A single centered
+           two-sided sheet has the same silhouette, halves portal overdraw, and
+           uses a compensated alpha to retain the intended opacity. */
+        flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 0.8f, flat_fullbright_packed_light());
+        glBegin(GL_QUADS);
+        if (runs_along_x) {
+            world_tex_vertex((float)x,   (float)y,        (float)z + 0.5f, u0, v1);
+            world_tex_vertex((float)x+1, (float)y,        (float)z + 0.5f, u1, v1);
+            world_tex_vertex((float)x+1, (float)y + 1.0f, (float)z + 0.5f, u1, v0);
+            world_tex_vertex((float)x,   (float)y + 1.0f, (float)z + 0.5f, u0, v0);
+        } else {
+            world_tex_vertex((float)x + 0.5f, (float)y,        (float)z,   u0, v1);
+            world_tex_vertex((float)x + 0.5f, (float)y,        (float)z+1, u1, v1);
+            world_tex_vertex((float)x + 0.5f, (float)y + 1.0f, (float)z+1, u1, v0);
+            world_tex_vertex((float)x + 0.5f, (float)y + 1.0f, (float)z,   u0, v0);
+        }
+        glEnd();
+#else
+        flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 0.5f, flat_fullbright_packed_light());
         glBegin(GL_QUADS);
         if (runs_along_x) {
             // South face
@@ -6147,6 +6225,7 @@ static void draw_special_block_model(int id, int x, int y, int z) {
             world_tex_vertex((float)x + 0.375f, (float)y,        (float)z+1, u0, v1);
         }
         glEnd();
+#endif
         flat_direct_set_color_light4f(1.0f, 1.0f, 1.0f, 1.0f, flat_fullbright_packed_light());
         return;
     }
@@ -8829,7 +8908,34 @@ static void draw_local_player_held_item_125(float x, float eye_y, float z,
                              arm_pitch, arm_yaw, arm_roll, player_is_blocking_125());
 }
 
-static void draw_multiplayer_remote_players(void) {
+static int multiplayer_remote_player_visible(const PexNetRenderPlayerState *r,
+                                             const FlatFrustum *fr,
+                                             float *out_dist2) {
+    if (!r) return 0;
+    float dx = r->x - g_player_render_frame.x;
+    float dy = r->y - g_player_render_frame.y;
+    float dz = r->z - g_player_render_frame.z;
+    float dist2 = dx * dx + dy * dy + dz * dz;
+    if (out_dist2) *out_dist2 = dist2;
+
+    /* Keep the entity radius bounded independently of the server's tracking
+       distance.  Hubs can keep many decorative players alive far outside the
+       camera; rendering those full biped models was pure OpenGL CPU overhead. */
+    float max_dist = (float)g_opts.render_distance * 16.0f + 16.0f;
+    if (max_dist < 48.0f) max_dist = 48.0f;
+    if (max_dist > 128.0f) max_dist = 128.0f;
+    if (dist2 > max_dist * max_dist) return 0;
+
+    if (fr) {
+        float feet_y = r->y - 1.62f;
+        if (!flat_aabb_in_frustum(fr,
+                                  r->x - 0.45f, feet_y - 0.10f, r->z - 0.45f,
+                                  r->x + 0.45f, feet_y + 2.15f, r->z + 0.45f)) return 0;
+    }
+    return 1;
+}
+
+static void draw_multiplayer_remote_players(const FlatFrustum *fr, int remote_player_count) {
     if (!g_mp_connected || !tex_steve.id) return;
 
     glPushMatrix();
@@ -8846,6 +8952,15 @@ static void draw_multiplayer_remote_players(void) {
         PexNetRenderPlayerState *r = &g_mp_render_players[i];
         if (!r->active || r->skin_only || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
         if (r->flags & PEX_PLAYER_FLAG_INVISIBLE) continue;
+        float player_dist2 = 0.0f;
+        if (!multiplayer_remote_player_visible(r, fr, &player_dist2)) continue;
+
+        /* Full armor, held-item and skin-overlay passes multiply the number of
+           immediate-mode draws per player.  Preserve full detail nearby, but
+           use the base biped farther away; in crowded hubs the transition is
+           pulled closer because those details are sub-pixel at that distance. */
+        float detail_dist = remote_player_count > 8 ? 22.0f : 40.0f;
+        int reduced_detail = player_dist2 > detail_dist * detail_dist;
 
         float rx = r->x;
         float ry = r->y;
@@ -8925,25 +9040,27 @@ static void draw_multiplayer_remote_players(void) {
         steve_part(0, 16, -2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.0f, 0, right_leg_pitch, 0, 0);
         steve_part(0, 16,  2, leg_pivot_y, leg_pivot_z, -2, 0, -2, 4, 12, 4, 0.0f, 1, left_leg_pitch, 0, 0);
         steve_part(0, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.0f, 0, pitch, 0, 0);
-        steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
-        /* Java equipment slots 1..4 are copied into the remote player's
-           boots..helmet array. Dye tinting is intentionally multiplayer-only
-           so the legacy single-player appearance remains unchanged. */
-        ItemStack remote_armor[4];
-        memset(remote_armor, 0, sizeof(remote_armor));
-        for (int armor_i = 0; armor_i < 4; ++armor_i) {
-            remote_armor[armor_i].id = r->armor[armor_i].id;
-            remote_armor[armor_i].count = r->armor[armor_i].count;
-            remote_armor[armor_i].damage = r->armor[armor_i].damage;
-            remote_armor[armor_i].has_custom_color = r->armor[armor_i].has_custom_color;
-            remote_armor[armor_i].custom_color = r->armor[armor_i].custom_color;
+        if (!reduced_detail)
+            steve_part(32, 0, 0, head_pivot_y, 0, -4, -8, -4, 8, 8, 8, 0.5f, 0, pitch, 0, 0);
+        if (!reduced_detail) {
+            /* Java equipment slots 1..4 are copied into the remote player's
+               boots..helmet array only when those layers will be drawn. */
+            ItemStack remote_armor[4];
+            memset(remote_armor, 0, sizeof(remote_armor));
+            for (int armor_i = 0; armor_i < 4; ++armor_i) {
+                remote_armor[armor_i].id = r->armor[armor_i].id;
+                remote_armor[armor_i].count = r->armor[armor_i].count;
+                remote_armor[armor_i].damage = r->armor[armor_i].damage;
+                remote_armor[armor_i].has_custom_color = r->armor[armor_i].has_custom_color;
+                remote_armor[armor_i].custom_color = r->armor[armor_i].custom_color;
+            }
+            draw_armor_model_for_slots(remote_armor, 1, head_pivot_y, leg_pivot_y, leg_pivot_z,
+                                       body_pitch, pitch, 0.0f,
+                                       right_arm_pitch, right_arm_yaw, right_arm_roll,
+                                       left_arm_pitch, left_arm_yaw, left_arm_roll,
+                                       right_leg_pitch, left_leg_pitch);
+            draw_remote_player_held_item(r, right_arm_pitch, right_arm_yaw, right_arm_roll);
         }
-        draw_armor_model_for_slots(remote_armor, 1, head_pivot_y, leg_pivot_y, leg_pivot_z,
-                                   body_pitch, pitch, 0.0f,
-                                   right_arm_pitch, right_arm_yaw, right_arm_roll,
-                                   left_arm_pitch, left_arm_yaw, left_arm_roll,
-                                   right_leg_pitch, left_leg_pitch);
-        draw_remote_player_held_item(r, right_arm_pitch, right_arm_yaw, right_arm_roll);
         glPopMatrix();
     }
 
@@ -8965,7 +9082,7 @@ static void multiplayer_name_tag_view_angles(float *out_yaw, float *out_pitch) {
     if (out_pitch) *out_pitch = pitch;
 }
 
-static void draw_multiplayer_name_tags(void) {
+static void draw_multiplayer_name_tags(const FlatFrustum *fr, int remote_player_count) {
     if (!g_mp_connected || !tex_font.id) return;
 
     float view_yaw = 0.0f;
@@ -8985,13 +9102,12 @@ static void draw_multiplayer_name_tags(void) {
         const char *name = r->name[0] ? r->name : "Player";
         if ((r->flags & PEX_PLAYER_FLAG_HIDE_NAMETAG) || !pex_java47_player_name_tag_visible(name)) continue;
 
-        float dx = r->x - g_player_render_frame.x;
-        float dy = r->y - g_player_render_frame.y;
-        float dz = r->z - g_player_render_frame.z;
-        float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+        float dist2 = 0.0f;
+        if (!multiplayer_remote_player_visible(r, fr, &dist2)) continue;
         int sneaking = (r->flags & PEX_PLAYER_FLAG_SNEAKING) != 0;
         float max_dist = sneaking ? 32.0f : 64.0f;
-        if (dist > max_dist) continue;
+        if (remote_player_count > 8 && max_dist > 36.0f) max_dist = 36.0f;
+        if (dist2 > max_dist * max_dist) continue;
 
         int tw = text_width(name);
         if (tw <= 0) continue;
@@ -9638,8 +9754,8 @@ static void draw_flat_test_world(void) {
     if (g_loggy_enabled) g_loggy_entity_remote_players = remote_player_count;
 
     entity_part = profile_begin();
-    draw_multiplayer_remote_players();
-    draw_multiplayer_name_tags();
+    draw_multiplayer_remote_players(&fr, remote_player_count);
+    draw_multiplayer_name_tags(&fr, remote_player_count);
     profile_add_time(PROF_ENTITY_REMOTE_PLAYERS, entity_part);
 
     /* Name tags are now rendered as world-space billboards, so multiplayer no
