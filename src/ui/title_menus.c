@@ -846,7 +846,7 @@ static void draw_controls_screen(void) {
     draw_default_bg();
     draw_centered_text(tr("Controls"), g_gui_w / 2, 20, 16777215);
     int x0 = g_gui_w / 2 - 155;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < PEX_KEY_BIND_COUNT; i++) {
         draw_text(key_action_names[i], x0 + (i % 2) * 160 + 70 + 6, g_gui_h / 6 + 24 * (i >> 1) + 7, -1);
     }
     draw_all_buttons();

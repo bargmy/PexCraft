@@ -54,7 +54,7 @@ static void set_default_options(void) {
     for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) g_opts.tv_remote_map[i] = 0;
     snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
     pex_set_language_code(g_opts.language);
-    for (int i = 0; i < 10; i++) g_opts.keys[i] = default_keys[i];
+    for (int i = 0; i < PEX_KEY_BIND_COUNT; i++) g_opts.keys[i] = default_keys[i];
     stivufine_set_defaults();
 }
 
@@ -976,9 +976,8 @@ static void load_options(void) {
         else if (!strcmp(k, "lang") || !strcmp(k, "language")) snprintf(g_opts.language, sizeof(g_opts.language), "%s", v);
         else if (!strncmp(k, "key_", 4)) {
             const char *name = k + 4;
-            for (int i = 0; i < 10; i++) {
-                const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};
-                if (!strcmp(name, orig[i])) g_opts.keys[i] = lwjgl_to_vk(atoi(v));
+            for (int i = 0; i < PEX_KEY_BIND_COUNT; i++) {
+                if (!strcmp(name, key_option_names[i])) g_opts.keys[i] = lwjgl_to_vk(atoi(v));
             }
         }
     }
@@ -1094,8 +1093,7 @@ static void save_options(void) {
     fprintf(f, "resourcePackCacheRevision:%d\n", g_resource_pack_cache_revision);
     for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) fprintf(f, "tvRemote.%s:%d\n", pex_tv_remote_action_key(i), g_opts.tv_remote_map[i]);
     fprintf(f, "lang:%s\n", g_opts.language[0] ? g_opts.language : pex_current_language_code());
-    const char *orig[10] = {"key.forward","key.left","key.back","key.right","key.jump","key.sneak","key.drop","key.inventory","key.chat","key.fog"};
-    for (int i = 0; i < 10; i++) fprintf(f, "key_%s:%d\n", orig[i], vk_to_lwjgl(g_opts.keys[i]));
+    for (int i = 0; i < PEX_KEY_BIND_COUNT; i++) fprintf(f, "key_%s:%d\n", key_option_names[i], vk_to_lwjgl(g_opts.keys[i]));
     fclose(f);
     }
     save_stivufine_options();
@@ -1231,6 +1229,7 @@ static int lwjgl_to_vk(int code) {
         case 32: return 'D';
         case 57: return VK_SPACE;
         case 42: return VK_SHIFT;
+        case 29: return VK_CONTROL;
         case 16: return 'Q';
         case 18: return 'E';
         case 23: return 'I';
@@ -1251,6 +1250,7 @@ static int vk_to_lwjgl(int vk) {
         case 'D': return 32;
         case VK_SPACE: return 57;
         case VK_SHIFT: return 42;
+        case VK_CONTROL: return 29;
         case 'Q': return 16;
         case 'E': return 18;
         case 'I': return 23;

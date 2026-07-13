@@ -1046,7 +1046,7 @@ static void rebuild_screen(void) {
         add_button_full(200, g_gui_w / 2 + 2, g_gui_h - 52, 98, 20, tr("Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_CONTROLS) {
         int x0 = g_gui_w / 2 - 155;
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < PEX_KEY_BIND_COUNT; i++) {
             char kn[64], label[96];
             snprintf(label, sizeof(label), "%s", key_name(g_opts.keys[i], kn, sizeof(kn)));
             add_button_full(i, x0 + (i % 2) * 160, g_gui_h / 6 + 24 * (i >> 1), 70, 20, label, BUTTON_NORMAL);
@@ -1407,7 +1407,7 @@ static void on_button(Button *b) {
         if (b->id == 200) { save_options(); set_screen(SCREEN_OPTIONS); }
         else {
             g_waiting_key = b->id;
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < PEX_KEY_BIND_COUNT; i++) {
                 char kn[64];
                 snprintf(g_buttons[i].label, sizeof(g_buttons[i].label), "%s", key_name(g_opts.keys[i], kn, sizeof(kn)));
             }
@@ -1818,7 +1818,7 @@ static void mouse_up(int mx, int my) {
 }
 
 static void key_to_control(int vk) {
-    if (g_screen == SCREEN_CONTROLS && g_waiting_key >= 0 && g_waiting_key < 10) {
+    if (g_screen == SCREEN_CONTROLS && g_waiting_key >= 0 && g_waiting_key < PEX_KEY_BIND_COUNT) {
         g_opts.keys[g_waiting_key] = vk;
         save_options();
         g_waiting_key = -1;

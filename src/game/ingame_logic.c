@@ -1159,6 +1159,7 @@ static void ingame_tick(void) {
     float raw_forward_input = 0.0f;
     int jumping = 0;
     int sneaking = 0;
+    int sprint_key_down = 0;
     int forward_for_sprint = 0;
     int using_item = player_is_using_item_125();
     if (input_active) {
@@ -1168,21 +1169,28 @@ static void ingame_tick(void) {
         if (key_down_vk(g_opts.keys[3])) strafe -= 1.0f;
         jumping = key_down_vk(g_opts.keys[4]);
         sneaking = key_down_vk(g_opts.keys[5]);
+        sprint_key_down = key_down_vk(g_opts.keys[PEX_KEY_SPRINT]);
         forward_for_sprint = (raw_forward_input >= 0.8f) ? 1 : 0;
 
-        /* Java 1.2.5 EntityPlayerSP double-tap sprint:
-           previous-tick forward must be false, current forward >= 0.8, on
-           ground, enough food, not sneaking/using/blind.  PexCraft has no item
-           use hold/blindness yet, so those gates are represented by available
-           systems only. */
+        /* Keep Java 1.2.5's double-tap-forward sprint, and also expose the
+           protocol-47-era sprint key in the same legacy controls screen.  The
+           bound key defaults to LWJGL key 29 (left Control), matching 1.8.8.
+           A held sprint key can start sprinting whenever forward input and the
+           normal food/item/sneak gates permit it; releasing the key does not
+           cancel an already-started sprint, matching EntityPlayerSP 1.8.8. */
         if (g_player_on_ground && !g_prev_sprint_forward && forward_for_sprint &&
             !g_player_sprinting && player_can_sprint_125() && !sneaking && !using_item) {
-            if (g_sprint_toggle_timer == 0) {
+            if (g_sprint_toggle_timer == 0 && !sprint_key_down) {
                 g_sprint_toggle_timer = 7;
             } else {
                 player_set_sprinting_125(1);
                 g_sprint_toggle_timer = 0;
             }
+        }
+        if (!g_player_sprinting && sprint_key_down && forward_for_sprint &&
+            player_can_sprint_125() && !sneaking && !using_item) {
+            player_set_sprinting_125(1);
+            g_sprint_toggle_timer = 0;
         }
         if (sneaking) {
             g_sprint_toggle_timer = 0;

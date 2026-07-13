@@ -9435,39 +9435,74 @@ static void ingame_right_release(void) {
 
 
 
-static int dropped_stack_can_merge(const FlatDroppedItem *a, const FlatDroppedItem *b) {
-    if (!a || !b || !a->active || !b->active) return 0;
-    if (!stack_same_item(&a->stack, &b->stack)) return 0;
-    if (a->stack.count >= stack_limit_for_id(a->stack.id)) return 0;
+/* EntityItem.combineItems from Java 1.8.8.  Item entities only combine when
+   the complete result fits in one legal stack; vanilla never partially moves
+   items between two entities.  The larger entity survives (equal-size ties
+   keep the candidate entity), preserving its position and motion. */
+static int dropped_stack_data_equal_188(const ItemStack *a, const ItemStack *b) {
+    if (!a || !b || stack_empty(a) || stack_empty(b)) return 0;
+    if (a->id != b->id || a->damage != b->damage) return 0;
+    if (a->has_custom_color != b->has_custom_color) return 0;
+    if (a->has_custom_color && a->custom_color != b->custom_color) return 0;
+    for (int i = 0; i < PEX_ITEMSTACK_ENCHANT_MAX; ++i) {
+        if (a->enchant_id[i] != b->enchant_id[i] ||
+            a->enchant_level[i] != b->enchant_level[i]) return 0;
+    }
     return 1;
 }
 
-static void merge_nearby_dropped_items(int idx) {
-    FlatDroppedItem *a = &g_drops[idx];
-    if (!a->active) return;
-    for (int j = 0; j < MAX_DROP_ENTITIES; j++) {
+static int dropped_items_are_merge_neighbors_188(const FlatDroppedItem *a, const FlatDroppedItem *b) {
+    if (!a || !b) return 0;
+    /* Each EntityItem is 0.25 blocks wide/high.  Java searches the current
+       bounding box expanded by 0.5 on X/Z and 0 on Y. */
+    return fabsf(a->x - b->x) < 0.75f &&
+           fabsf(a->y - b->y) < 0.25f &&
+           fabsf(a->z - b->z) < 0.75f;
+}
+
+static int dropped_items_can_merge_188(const FlatDroppedItem *a, const FlatDroppedItem *b) {
+    if (!a || !b || a == b || !a->active || !b->active) return 0;
+    if (a->pickup_delay == 32767 || b->pickup_delay == 32767) return 0;
+    if (a->age == -32768 || b->age == -32768) return 0;
+    if (!dropped_stack_data_equal_188(&a->stack, &b->stack)) return 0;
+    int limit = stack_limit_for_id(a->stack.id);
+    if (limit <= 1) return 0;
+    if (a->stack.count <= 0 || b->stack.count <= 0) return 0;
+    if (a->stack.count + b->stack.count > limit) return 0;
+    return dropped_items_are_merge_neighbors_188(a, b);
+}
+
+static int merge_nearby_dropped_items_188(int idx) {
+    if (idx < 0 || idx >= MAX_DROP_ENTITIES) return 0;
+    FlatDroppedItem *current = &g_drops[idx];
+    if (!current->active) return 0;
+
+    int merged_any = 0;
+    for (int j = 0; j < MAX_DROP_ENTITIES && current->active; ++j) {
         if (j == idx) continue;
-        FlatDroppedItem *b = &g_drops[j];
-        if (!dropped_stack_can_merge(a, b)) continue;
+        FlatDroppedItem *candidate = &g_drops[j];
+        if (!dropped_items_can_merge_188(current, candidate)) continue;
 
-        float dx = a->x - b->x;
-        float dy = a->y - b->y;
-        float dz = a->z - b->z;
-        if (dx*dx + dy*dy + dz*dz > 0.50f * 0.50f) continue;
+        FlatDroppedItem *survivor;
+        FlatDroppedItem *consumed;
+        if (candidate->stack.count < current->stack.count) {
+            survivor = current;
+            consumed = candidate;
+        } else {
+            survivor = candidate;
+            consumed = current;
+        }
 
-        int room = stack_limit_for_id(a->stack.id) - a->stack.count;
-        int move = b->stack.count < room ? b->stack.count : room;
-        if (move <= 0) continue;
-
-        a->stack.count += move;
-        b->stack.count -= move;
-        a->pickup_delay = (a->pickup_delay > b->pickup_delay) ? a->pickup_delay : b->pickup_delay;
-        a->age = (a->age < b->age) ? a->age : b->age;
-
-        if (b->stack.count <= 0) b->active = 0;
+        survivor->stack.count += consumed->stack.count;
+        if (consumed->pickup_delay > survivor->pickup_delay)
+            survivor->pickup_delay = consumed->pickup_delay;
+        if (consumed->age < survivor->age)
+            survivor->age = consumed->age;
+        consumed->active = 0;
+        merged_any = 1;
         g_save_dirty = 1;
-        if (a->stack.count >= stack_limit_for_id(a->stack.id)) return;
     }
+    return merged_any;
 }
 
 
@@ -9591,6 +9626,21 @@ static void update_dropped_items(void) {
         dropped_item_move_entity(e, e->mx, e->my, e->mz);
         if (dear_memories_destroy_if_burning(e)) continue;
 
+        /* Java 1.8.8 searches whenever the entity enters another block, plus
+           every 25 ticks while stationary.  Multiplayer remains authoritative:
+           protocol-47 servers merge entities and send metadata/destroy packets. */
+        if (!g_mp_connected) {
+            int changed_block = (int)e->prev_x != (int)e->x ||
+                                (int)e->prev_y != (int)e->y ||
+                                (int)e->prev_z != (int)e->z;
+            /* Entity.onUpdate increments ticksExisted before EntityItem runs;
+               age increments afterward, so age + 1 matches that cadence. */
+            if (changed_block || ((e->age + 1) % 25) == 0) {
+                (void)merge_nearby_dropped_items_188(i);
+                if (!e->active) continue;
+            }
+        }
+
         float friction = 0.98f;
         if (e->on_ground) {
             int below = flat_get_block((int)floorf(e->x), (int)floorf(e->y - 0.25f), (int)floorf(e->z));
@@ -9620,7 +9670,6 @@ static void update_dropped_items(void) {
                 }
             }
         }
-        /* Java EntityItem in this source does not merge nearby drops. */
     }
 }
 

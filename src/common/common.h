@@ -635,6 +635,9 @@ typedef struct Button {
 #define CLASSIC_AUDIO_GAME_MUSIC  0x10
 #define CLASSIC_AUDIO_ALL (CLASSIC_AUDIO_MOBS | CLASSIC_AUDIO_WORLD_UI | CLASSIC_AUDIO_RECORDS | CLASSIC_AUDIO_MENU_MUSIC | CLASSIC_AUDIO_GAME_MUSIC)
 
+#define PEX_KEY_BIND_COUNT 11
+#define PEX_KEY_SPRINT 10
+
 typedef struct Options {
     float music;
     float sound;
@@ -717,7 +720,7 @@ typedef struct Options {
     int tv_remote_mapped;
     int tv_remote_map[PEX_TV_REMOTE_ACTION_COUNT];
     char language[16];
-    int keys[10];
+    int keys[PEX_KEY_BIND_COUNT];
 } Options;
 
 #define PEX_GAMEPAD_MAX 8
@@ -2949,8 +2952,9 @@ static const char *renderer_backend_names[RENDERER_COUNT] = {"OpenGL", "Direct3D
 static const char *renderer_backend_keys[RENDERER_COUNT] = {"opengl", "d3d9", "d3d11"};
 static const char *render_distance_names[4] = {"Far", "Normal", "Short", "Tiny"};
 static const char *difficulty_names[4] = {"Peaceful", "Easy", "Normal", "Hard"};
-static const char *key_action_names[10] = {"Forward", "Left", "Back", "Right", "Jump", "Sneak", "Drop", "Inventory", "Chat", "Toggle Fog"};
-static const int default_keys[10] = {'W','A','S','D',VK_SPACE,VK_SHIFT,'Q','E','T','F'};
+static const char *key_action_names[PEX_KEY_BIND_COUNT] = {"Forward", "Left", "Back", "Right", "Jump", "Sneak", "Drop", "Inventory", "Chat", "Toggle Fog", "Sprint"};
+static const char *key_option_names[PEX_KEY_BIND_COUNT] = {"key.forward", "key.left", "key.back", "key.right", "key.jump", "key.sneak", "key.drop", "key.inventory", "key.chat", "key.fog", "key.sprint"};
+static const int default_keys[PEX_KEY_BIND_COUNT] = {'W','A','S','D',VK_SPACE,VK_SHIFT,'Q','E','T','F',VK_CONTROL};
 static int lwjgl_to_vk(int code);
 static int vk_to_lwjgl(int vk);
 static void init_font_widths(void);
