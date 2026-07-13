@@ -167,6 +167,7 @@ static void render(float partial) {
 #endif
     part_start = profile_begin();
     draw_gamepad_virtual_cursor();
+    draw_gamepad_ui_focus_and_hint();
     profile_add_time(PROF_GAMEPAD_CURSOR, part_start);
     part_start = profile_begin();
     draw_fps_counter();

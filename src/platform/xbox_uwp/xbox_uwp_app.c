@@ -52,6 +52,7 @@ int pex_xbox_uwp_engine_init(void *core_window, int width, int height) {
     init_dirs();
     srand((unsigned int)time(NULL));
     load_options();
+    if (!g_opts.tv_remote_mapped) pex_tv_remote_apply_defaults();
     pex_sound_rescan();
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_opts.last_server);
     snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username[0] ? g_opts.username : "Player");
@@ -96,6 +97,9 @@ void pex_xbox_uwp_engine_key_down(int vk) {
 }
 void pex_xbox_uwp_engine_key_up(int vk) { pex_xbox_uwp_set_key_state(vk, 0); }
 void pex_xbox_uwp_engine_char(uint32_t ch) { if (ch >= 32 && ch < 127) handle_char((WPARAM)ch); }
+void pex_xbox_uwp_engine_remote_key(int raw_key, int down) {
+    (void)pex_tv_remote_handle_raw_key(raw_key, down ? 1 : 0);
+}
 
 void pex_xbox_uwp_engine_shutdown(void) {
     /* Complete an in-flight progress teardown before the generic exit saver can

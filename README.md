@@ -60,3 +60,16 @@ Zero-time thread waits can now detect completed pthreads, and finite event waits
 actually time out. This prevents **Cancelling mesh builders** from waiting forever.
 See `docs/linux_opengl_mesh_shutdown_fix.md`.
 
+
+## Gamepad and TV-remote UI controls
+
+Menus now use spatial D-pad/left-stick focus, so two-column screens navigate by
+position rather than button creation order. A/OK activates, B/Back returns, and
+sliders use Left/Right (LB/RB for larger steps). Language and texture-pack lists,
+Statistics, Achievements, Creative inventory, multiplayer lists, and all text-entry
+screens have dedicated couch-friendly controls and on-screen hints. Controller-focused
+text fields open the built-in virtual keyboard on every controller platform.
+
+The Xbox UWP target polls physical controllers through `Windows.Gaming.Input` and
+keeps CoreWindow Gamepad virtual keys as a media-remote fallback when no physical
+controller is connected.

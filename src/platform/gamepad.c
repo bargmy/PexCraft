@@ -114,7 +114,7 @@ static void pex_gamepad_copy_edges(PexGamepadState *dst, const PexGamepadState *
     dst->prev_dpad_left = old->dpad_left; dst->prev_dpad_right = old->dpad_right;
 }
 
-#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
 static void pex_tv_remote_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
     if (!g_opts.tv_remote_mapped && !pex_tv_remote_any_action_down()) return;
     if (!g_tv_remote_seen && !pex_tv_remote_any_action_down()) return;
@@ -128,6 +128,8 @@ static void pex_tv_remote_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD_
     p->slot = slot;
 #if defined(PEX_PLATFORM_LGWEBOS)
     snprintf(p->name, sizeof(p->name), "LG webOS remote");
+#elif defined(PEX_PLATFORM_XBOX_UWP)
+    snprintf(p->name, sizeof(p->name), "Xbox media remote");
 #else
     snprintf(p->name, sizeof(p->name), "Android TV remote");
 #endif
@@ -382,11 +384,63 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
 }
 
 #elif defined(PEX_PLATFORM_XBOX_UWP)
+extern int pex_xbox_uwp_gamepad_count(void);
+extern int pex_xbox_uwp_gamepad_read(int index, float *lx, float *ly, float *rx, float *ry,
+                                     float *lt, float *rt, unsigned int *buttons);
+
+#define PEX_UWP_PAD_A          (1u << 0)
+#define PEX_UWP_PAD_B          (1u << 1)
+#define PEX_UWP_PAD_X          (1u << 2)
+#define PEX_UWP_PAD_Y          (1u << 3)
+#define PEX_UWP_PAD_LB         (1u << 4)
+#define PEX_UWP_PAD_RB         (1u << 5)
+#define PEX_UWP_PAD_BACK       (1u << 6)
+#define PEX_UWP_PAD_START      (1u << 7)
+#define PEX_UWP_PAD_LS         (1u << 8)
+#define PEX_UWP_PAD_RS         (1u << 9)
+#define PEX_UWP_PAD_DPAD_UP    (1u << 10)
+#define PEX_UWP_PAD_DPAD_DOWN  (1u << 11)
+#define PEX_UWP_PAD_DPAD_LEFT  (1u << 12)
+#define PEX_UWP_PAD_DPAD_RIGHT (1u << 13)
+
 static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) {
-    (void)oldpads;
     g_gamepad_count = 0;
     g_gamepad_primary = -1;
     memset(g_gamepads, 0, sizeof(g_gamepads));
+
+    int count = pex_xbox_uwp_gamepad_count();
+    if (count > PEX_GAMEPAD_MAX) count = PEX_GAMEPAD_MAX;
+    for (int i = 0; i < count; ++i) {
+        float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f, lt = 0.0f, rt = 0.0f;
+        unsigned int buttons = 0;
+        if (!pex_xbox_uwp_gamepad_read(i, &lx, &ly, &rx, &ry, &lt, &rt, &buttons)) continue;
+        int slot = g_gamepad_count;
+        PexGamepadState *p = &g_gamepads[slot];
+        pex_gamepad_copy_edges(p, &oldpads[slot]);
+        p->connected = 1;
+        p->slot = i;
+        pex_gamepad_classify(p, "Xbox UWP Gamepad");
+        p->lx = pex_deadzone(lx); p->ly = pex_deadzone(ly);
+        p->rx = pex_deadzone(rx); p->ry = pex_deadzone(ry);
+        p->lt = lt; p->rt = rt;
+        p->a = (buttons & PEX_UWP_PAD_A) != 0;
+        p->b = (buttons & PEX_UWP_PAD_B) != 0;
+        p->x = (buttons & PEX_UWP_PAD_X) != 0;
+        p->y = (buttons & PEX_UWP_PAD_Y) != 0;
+        p->lb = (buttons & PEX_UWP_PAD_LB) != 0;
+        p->rb = (buttons & PEX_UWP_PAD_RB) != 0;
+        p->back = (buttons & PEX_UWP_PAD_BACK) != 0;
+        p->start = (buttons & PEX_UWP_PAD_START) != 0;
+        p->ls = (buttons & PEX_UWP_PAD_LS) != 0;
+        p->rs = (buttons & PEX_UWP_PAD_RS) != 0;
+        p->dpad_up = (buttons & PEX_UWP_PAD_DPAD_UP) != 0;
+        p->dpad_down = (buttons & PEX_UWP_PAD_DPAD_DOWN) != 0;
+        p->dpad_left = (buttons & PEX_UWP_PAD_DPAD_LEFT) != 0;
+        p->dpad_right = (buttons & PEX_UWP_PAD_DPAD_RIGHT) != 0;
+        if (g_gamepad_primary < 0) g_gamepad_primary = slot;
+        g_gamepad_count++;
+    }
+    pex_tv_remote_append_remote_pad(oldpads);
 }
 #else
 /* Minimal dynamic XInput declarations: avoids an xinput import dependency. */
@@ -569,17 +623,53 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
 #endif
 
 static int pex_gamepad_menu_screen(void) {
-    return g_screen == SCREEN_TITLE || g_screen == SCREEN_OPTIONS || g_screen == SCREEN_OPTIONS_MORE ||
-           g_screen == SCREEN_SYSTEM_INFO || g_screen == SCREEN_SKINS || g_screen == SCREEN_CONTROLS || g_screen == SCREEN_TV_REMOTE_MAP ||
-           g_screen == SCREEN_WORLD_SELECT || g_screen == SCREEN_CREATE_WORLD || g_screen == SCREEN_WORLD_TYPE || g_screen == SCREEN_WORLD_DELETE || g_screen == SCREEN_RENAME_WORLD ||
-           g_screen == SCREEN_CONFIRM_DELETE || g_screen == SCREEN_MULTIPLAYER || g_screen == SCREEN_CONNECTING || g_screen == SCREEN_SAVING_QUIT ||
-           g_screen == SCREEN_TEXPACK || g_screen == SCREEN_PAUSE || g_screen == SCREEN_DEATH ||
-           g_screen == SCREEN_NOTICE || g_screen == SCREEN_RENDERER_RESTART_PROMPT ||
-           g_screen == SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT || g_screen == SCREEN_CLASSIC_PACK_WARNING;
+    switch (g_screen) {
+        case SCREEN_TITLE:
+        case SCREEN_OPTIONS:
+        case SCREEN_OPTIONS_MORE:
+        case SCREEN_STIVUFINE:
+        case SCREEN_STIVUFINE_DETAILS:
+        case SCREEN_STIVUFINE_QUALITY:
+        case SCREEN_STIVUFINE_ANIMATIONS:
+        case SCREEN_STIVUFINE_PERFORMANCE:
+        case SCREEN_STIVUFINE_OTHER:
+        case SCREEN_ASSETS:
+        case SCREEN_LANGUAGE:
+        case SCREEN_SET_NAME:
+        case SCREEN_TV_REMOTE_MAP:
+        case SCREEN_SYSTEM_INFO:
+        case SCREEN_SKINS:
+        case SCREEN_CONTROLS:
+        case SCREEN_WORLD_SELECT:
+        case SCREEN_CREATE_WORLD:
+        case SCREEN_WORLD_TYPE:
+        case SCREEN_WORLD_DELETE:
+        case SCREEN_RENAME_WORLD:
+        case SCREEN_CONFIRM_DELETE:
+        case SCREEN_MULTIPLAYER:
+        case SCREEN_CONNECTING:
+        case SCREEN_TEXPACK:
+        case SCREEN_TEXPACK_INSTALL:
+        case SCREEN_SAVING_QUIT:
+        case SCREEN_PAUSE:
+        case SCREEN_ACHIEVEMENTS:
+        case SCREEN_STATISTICS:
+        case SCREEN_DEATH:
+        case SCREEN_VIRTUAL_KEYBOARD:
+        case SCREEN_NOTICE:
+        case SCREEN_RENDERER_RESTART_PROMPT:
+        case SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT:
+        case SCREEN_CLASSIC_PACK_WARNING:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 static int pex_gamepad_inventory_screen(void) {
-    return g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST;
+    return g_screen == SCREEN_INVENTORY || g_screen == SCREEN_CREATIVE ||
+           g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE ||
+           g_screen == SCREEN_CHEST;
 }
 
 static PexGamepadState *pex_gamepad_primary_pad(void) {
@@ -635,6 +725,14 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
 #endif
 }
 
+static ScreenId g_gamepad_last_ui_screen = (ScreenId)-1;
+static int g_gamepad_language_index = -1;
+static int g_gamepad_texpack_index = -1;
+static int g_gamepad_creative_focus = 0; /* 0..71 catalog, 72..80 hotbar */
+static int g_gamepad_statistics_sort_focus = 0;
+
+static int pex_gamepad_pressed(int down, int prev) { return down && !prev; }
+
 static void pex_gamepad_back_action(void) {
     handle_keydown((WPARAM)VK_ESCAPE);
 }
@@ -647,13 +745,17 @@ static void pex_gamepad_click_button(Button *b) {
     mouse_up(g_mouse_x, g_mouse_y);
 }
 
+static int pex_gamepad_button_focusable(const Button *b) {
+    return b && b->visible && b->enabled;
+}
+
 static Button *pex_gamepad_selected_button(void) {
     if (g_button_count <= 0) return NULL;
-    if (g_gamepad_menu_index < 0) g_gamepad_menu_index = 0;
-    if (g_gamepad_menu_index >= g_button_count) g_gamepad_menu_index = g_button_count - 1;
+    if (g_gamepad_menu_index < 0 || g_gamepad_menu_index >= g_button_count)
+        g_gamepad_menu_index = 0;
     for (int pass = 0; pass < g_button_count; pass++) {
         int idx = (g_gamepad_menu_index + pass) % g_button_count;
-        if (g_buttons[idx].visible && g_buttons[idx].enabled) {
+        if (pex_gamepad_button_focusable(&g_buttons[idx])) {
             g_gamepad_menu_index = idx;
             return &g_buttons[idx];
         }
@@ -661,21 +763,74 @@ static Button *pex_gamepad_selected_button(void) {
     return NULL;
 }
 
-static void pex_gamepad_nav_move(int dir) {
-    if (g_button_count <= 0) return;
-    int start = g_gamepad_menu_index;
-    if (start < 0 || start >= g_button_count) start = 0;
-    for (int i = 0; i < g_button_count; i++) {
-        start += dir;
-        if (start < 0) start = g_button_count - 1;
-        if (start >= g_button_count) start = 0;
-        if (g_buttons[start].visible && g_buttons[start].enabled) {
-            g_gamepad_menu_index = start;
-            g_mouse_x = g_buttons[start].x + g_buttons[start].w / 2;
-            g_mouse_y = g_buttons[start].y + g_buttons[start].h / 2;
-            return;
+/* Spatial navigation is much friendlier than array-order navigation on the
+   many two-column legacy menus.  It also works for text-field hitboxes. */
+static void pex_gamepad_nav_spatial(int dx, int dy) {
+    Button *cur = pex_gamepad_selected_button();
+    if (!cur || (!dx && !dy)) return;
+    float cx = (float)cur->x + (float)cur->w * 0.5f;
+    float cy = (float)cur->y + (float)cur->h * 0.5f;
+    int best = -1;
+    double best_score = 1.0e30;
+
+    for (int i = 0; i < g_button_count; ++i) {
+        Button *b = &g_buttons[i];
+        if (b == cur || !pex_gamepad_button_focusable(b)) continue;
+        float bx = (float)b->x + (float)b->w * 0.5f;
+        float by = (float)b->y + (float)b->h * 0.5f;
+        float vx = bx - cx;
+        float vy = by - cy;
+        float forward = vx * (float)dx + vy * (float)dy;
+        if (forward <= 1.0f) continue;
+        float side = vx * (float)(-dy) + vy * (float)dx;
+        /* Strongly prefer same-row/same-column candidates, then distance. */
+        double score = (double)forward * (double)forward +
+                       (double)side * (double)side * 4.0;
+        if (score < best_score) { best_score = score; best = i; }
+    }
+
+    /* At an edge, wrap to the furthest control in the opposite direction. */
+    if (best < 0) {
+        double best_wrap = -1.0e30;
+        for (int i = 0; i < g_button_count; ++i) {
+            Button *b = &g_buttons[i];
+            if (!pex_gamepad_button_focusable(b)) continue;
+            float bx = (float)b->x + (float)b->w * 0.5f;
+            float by = (float)b->y + (float)b->h * 0.5f;
+            double projection = (double)bx * (double)dx + (double)by * (double)dy;
+            projection = -projection;
+            if (projection > best_wrap) { best_wrap = projection; best = i; }
         }
     }
+
+    if (best >= 0) {
+        g_gamepad_menu_index = best;
+        g_mouse_x = g_buttons[best].x + g_buttons[best].w / 2;
+        g_mouse_y = g_buttons[best].y + g_buttons[best].h / 2;
+        pex_sound_play("random.click", 0.35f, 1.8f);
+    }
+}
+
+static void pex_gamepad_adjust_slider(Button *b, float delta) {
+    if (!b || b->kind != BUTTON_SLIDER || !b->enabled) return;
+    float v = b->slider_value + delta;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    int mx = b->x + 4 + (int)(v * (float)(b->w - 8));
+    update_slider(b, mx);
+    g_mouse_x = mx;
+    g_mouse_y = b->y + b->h / 2;
+}
+
+static void pex_gamepad_reset_ui_state_if_needed(void) {
+    if (g_gamepad_last_ui_screen == g_screen) return;
+    g_gamepad_last_ui_screen = g_screen;
+    g_gamepad_menu_index = 0;
+    g_gamepad_virtual_cursor_active = 0;
+    if (g_screen == SCREEN_LANGUAGE) g_gamepad_language_index = pex_current_language_index();
+    if (g_screen == SCREEN_TEXPACK) g_gamepad_texpack_index = g_selected_texpack;
+    if (g_screen == SCREEN_CREATIVE) g_gamepad_creative_focus = 0;
+    if (g_screen == SCREEN_STATISTICS) g_gamepad_statistics_sort_focus = 0;
 }
 
 static int pex_gamepad_world_screen_update(PexGamepadState *p, double now) {
@@ -695,57 +850,392 @@ static int pex_gamepad_world_screen_update(PexGamepadState *p, double now) {
     }
 
     int cx, cy;
-    if (world_save_selected_row_center(&cx, &cy)) {
-        g_mouse_x = cx;
-        g_mouse_y = cy;
-    }
+    if (world_save_selected_row_center(&cx, &cy)) { g_mouse_x = cx; g_mouse_y = cy; }
 
-    if (p->a && !p->prev_a && now - g_gamepad_click_last_time > 0.10) {
+    if (pex_gamepad_pressed(p->a, p->prev_a) && now - g_gamepad_click_last_time > 0.10) {
         if (g_screen == SCREEN_WORLD_SELECT) start_selected_world_save();
         else confirm_delete_world_save();
         g_gamepad_click_last_time = now;
     }
-    if (p->x && !p->prev_x && g_screen == SCREEN_WORLD_SELECT) {
+    if (pex_gamepad_pressed(p->x, p->prev_x) && g_screen == SCREEN_WORLD_SELECT) {
         create_world_prepare_defaults();
         set_screen(SCREEN_CREATE_WORLD);
     }
-    if (p->y && !p->prev_y && g_screen == SCREEN_WORLD_SELECT && g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
+    if (pex_gamepad_pressed(p->y, p->prev_y) && g_screen == SCREEN_WORLD_SELECT &&
+        g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
         WorldSaveEntry *e = &g_world_saves[g_selected_world_index];
-        snprintf(g_rename_world_text, sizeof(g_rename_world_text), "%s", e->display_name[0] ? e->display_name : e->dir_name);
+        snprintf(g_rename_world_text, sizeof(g_rename_world_text), "%s",
+                 e->display_name[0] ? e->display_name : e->dir_name);
         set_screen(SCREEN_RENAME_WORLD);
     }
-    if ((p->b && !p->prev_b) || (p->back && !p->prev_back)) pex_gamepad_back_action();
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) world_save_select_relative(-5);
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) world_save_select_relative(5);
+    if (pex_gamepad_pressed(p->lt_down, p->prev_lt) && g_screen == SCREEN_WORLD_SELECT &&
+        g_selected_world_index >= 0 && g_selected_world_index < g_world_save_count) {
+        set_screen(SCREEN_CONFIRM_DELETE);
+    }
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back))
+        pex_gamepad_back_action();
+    return 1;
+}
+
+static void pex_gamepad_language_ensure_visible(int idx) {
+    int view = pex_language_view_height() - 4;
+    int y0 = idx * pex_language_slot_height();
+    int y1 = y0 + pex_language_slot_height();
+    if (y0 < g_language_scroll) g_language_scroll = y0;
+    if (y1 > g_language_scroll + view) g_language_scroll = y1 - view;
+    language_clamp_scroll();
+}
+
+static int pex_gamepad_language_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_LANGUAGE || !pex_language_runtime_files_available()) return 0;
+    int count = pex_language_count();
+    if (count <= 0) return 0;
+    if (g_gamepad_language_index < 0 || g_gamepad_language_index >= count)
+        g_gamepad_language_index = pex_current_language_index();
+
+    int delta = 0;
+    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = 1;
+    else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = -1;
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) delta = pex_language_visible_rows() - 1;
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) delta = -(pex_language_visible_rows() - 1);
+    if (delta) {
+        g_gamepad_language_index += delta;
+        if (g_gamepad_language_index < 0) g_gamepad_language_index = 0;
+        if (g_gamepad_language_index >= count) g_gamepad_language_index = count - 1;
+        pex_gamepad_language_ensure_visible(g_gamepad_language_index);
+        rebuild_screen();
+        g_gamepad_nav_last_time = now;
+    }
+
+    g_mouse_x = g_gui_w / 2;
+    g_mouse_y = pex_language_row_y(g_gamepad_language_index) + 7;
+    if (pex_gamepad_pressed(p->a, p->prev_a)) {
+        const char *code = pex_language_code_at(g_gamepad_language_index);
+        snprintf(g_opts.language, sizeof(g_opts.language), "%s", code);
+        pex_set_language_code(g_opts.language);
+        save_options();
+        rebuild_screen();
+    }
+    if (pex_gamepad_pressed(p->y, p->prev_y)) {
+        g_gamepad_language_index = pex_current_language_index();
+        pex_gamepad_language_ensure_visible(g_gamepad_language_index);
+        rebuild_screen();
+    }
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back)) {
+        save_options();
+        set_screen(g_language_return_screen);
+    }
+    return 1;
+}
+
+static void pex_gamepad_texpack_ensure_visible(int idx) {
+    int top = 32;
+    int bottom = g_gui_h - 58 + 4;
+    int y0 = idx * 36;
+    int y1 = y0 + 36;
+    int view = bottom - top - 4;
+    if (y0 < g_texpack_scroll) g_texpack_scroll = y0;
+    if (y1 > g_texpack_scroll + view) g_texpack_scroll = y1 - view;
+    clamp_texpack_scroll();
+}
+
+static int pex_gamepad_texpack_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_TEXPACK) return 0;
+    if (g_texpack_count <= 0) scan_texture_packs();
+    if (g_texpack_count <= 0) return 0;
+    if (g_gamepad_texpack_index < 0 || g_gamepad_texpack_index >= g_texpack_count)
+        g_gamepad_texpack_index = g_selected_texpack;
+
+    int delta = 0;
+    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = 1;
+    else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = -1;
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) delta = 5;
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) delta = -5;
+    if (delta) {
+        g_gamepad_texpack_index += delta;
+        if (g_gamepad_texpack_index < 0) g_gamepad_texpack_index = 0;
+        if (g_gamepad_texpack_index >= g_texpack_count) g_gamepad_texpack_index = g_texpack_count - 1;
+        pex_gamepad_texpack_ensure_visible(g_gamepad_texpack_index);
+        g_gamepad_nav_last_time = now;
+    }
+    g_mouse_x = g_gui_w / 2;
+    g_mouse_y = 36 + g_gamepad_texpack_index * 36 - g_texpack_scroll + 14;
+
+    if (pex_gamepad_pressed(p->a, p->prev_a)) {
+        texpack_mouse_down(g_mouse_x, g_mouse_y);
+        g_gamepad_texpack_index = g_selected_texpack;
+    }
+    if (pex_gamepad_pressed(p->x, p->prev_x)) {
+        for (int i = 0; i < g_button_count; ++i)
+            if (g_buttons[i].id == 5) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->start, p->prev_start) || pex_gamepad_pressed(p->y, p->prev_y))
+        set_screen(g_parent_screen);
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back))
+        set_screen(g_parent_screen);
+    return 1;
+}
+
+static int pex_gamepad_achievements_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_ACHIEVEMENTS) return 0;
+    int dx = 0, dy = 0;
+    if (p->dpad_left || p->lx < -0.45f) dx = -1;
+    else if (p->dpad_right || p->lx > 0.45f) dx = 1;
+    if (p->dpad_up || p->ly < -0.45f) dy = -1;
+    else if (p->dpad_down || p->ly > 0.45f) dy = 1;
+    if ((dx || dy) && now - g_gamepad_nav_last_time > 0.045) {
+        int step = (p->lb || p->rb) ? 24 : 8;
+        g_pex_achievement_map_x += dx * step;
+        g_pex_achievement_map_y += dy * step;
+        pex_achievement_map_clamp();
+        g_gamepad_nav_last_time = now;
+    }
+    if (pex_gamepad_pressed(p->y, p->prev_y)) {
+        g_pex_achievement_map_x = -82;
+        g_pex_achievement_map_y = -70;
+        pex_achievement_map_clamp();
+    }
+    if (pex_gamepad_pressed(p->a, p->prev_a) || pex_gamepad_pressed(p->b, p->prev_b) ||
+        pex_gamepad_pressed(p->back, p->prev_back)) set_screen(SCREEN_INGAME);
+    return 1;
+}
+
+static int pex_gamepad_statistics_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_STATISTICS) return 0;
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) pex_statistics_set_tab((g_pex_statistics_tab + 2) % 3);
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) pex_statistics_set_tab((g_pex_statistics_tab + 1) % 3);
+
+    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.12) {
+        pex_statistics_scroll_by(1); g_gamepad_nav_last_time = now;
+    } else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.12) {
+        pex_statistics_scroll_by(-1); g_gamepad_nav_last_time = now;
+    }
+    if (g_pex_statistics_tab != 0) {
+        if (pex_gamepad_pressed(p->dpad_left, p->prev_dpad_left))
+            g_gamepad_statistics_sort_focus = (g_gamepad_statistics_sort_focus + 2) % 3;
+        if (pex_gamepad_pressed(p->dpad_right, p->prev_dpad_right))
+            g_gamepad_statistics_sort_focus = (g_gamepad_statistics_sort_focus + 1) % 3;
+        int base_x = g_gui_w / 2 - 108;
+        int offsets[3] = {106, 156, 206};
+        g_mouse_x = base_x + offsets[g_gamepad_statistics_sort_focus];
+        g_mouse_y = 42;
+        if (pex_gamepad_pressed(p->a, p->prev_a)) pex_statistics_mouse_down(g_mouse_x, g_mouse_y);
+    }
+    if (pex_gamepad_pressed(p->y, p->prev_y)) { g_pex_statistics_scroll = 0; }
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back) ||
+        pex_gamepad_pressed(p->start, p->prev_start)) set_screen(SCREEN_PAUSE);
+    return 1;
+}
+
+static int pex_gamepad_virtual_keyboard_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_VIRTUAL_KEYBOARD) return 0;
+    int dx = 0, dy = 0;
+    if (p->dpad_left || p->lx < -0.55f) dx = -1;
+    else if (p->dpad_right || p->lx > 0.55f) dx = 1;
+    if (p->dpad_up || p->ly < -0.55f) dy = -1;
+    else if (p->dpad_down || p->ly > 0.55f) dy = 1;
+    if ((dx || dy) && now - g_gamepad_nav_last_time > 0.14) {
+        pex_virtual_keyboard_move(dx, dy);
+        g_gamepad_nav_last_time = now;
+    }
+    if (pex_gamepad_pressed(p->a, p->prev_a)) pex_virtual_keyboard_select();
+    if (pex_gamepad_pressed(p->x, p->prev_x)) pex_virtual_keyboard_backspace();
+    if (pex_gamepad_pressed(p->y, p->prev_y)) pex_virtual_keyboard_append(' ');
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) { g_virtual_keyboard_caps = !g_virtual_keyboard_caps; }
+    if (pex_gamepad_pressed(p->start, p->prev_start) || pex_gamepad_pressed(p->rb, p->prev_rb)) pex_virtual_keyboard_done();
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back)) pex_virtual_keyboard_cancel();
+    return 1;
+}
+
+static void pex_gamepad_creative_focus_mouse(void) {
+    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
+    if (g_gamepad_creative_focus < CREATIVE_COLS * CREATIVE_ROWS) {
+        int row = g_gamepad_creative_focus / CREATIVE_COLS;
+        int col = g_gamepad_creative_focus % CREATIVE_COLS;
+        int idx = (g_creative_scroll_row + row) * CREATIVE_COLS + col;
+        if (idx >= creative_catalog_count()) {
+            int last = creative_catalog_count() - g_creative_scroll_row * CREATIVE_COLS - 1;
+            if (last < 0) last = 0;
+            if (last >= CREATIVE_COLS * CREATIVE_ROWS) last = CREATIVE_COLS * CREATIVE_ROWS - 1;
+            g_gamepad_creative_focus = last;
+            row = g_gamepad_creative_focus / CREATIVE_COLS;
+            col = g_gamepad_creative_focus % CREATIVE_COLS;
+        }
+        g_mouse_x = x + 8 + col * 18 + 8;
+        g_mouse_y = y + 18 + row * 18 + 8;
+    } else {
+        int slot = g_gamepad_creative_focus - CREATIVE_COLS * CREATIVE_ROWS;
+        if (slot < 0) slot = 0;
+        if (slot > 8) slot = 8;
+        g_gamepad_creative_focus = CREATIVE_COLS * CREATIVE_ROWS + slot;
+        g_mouse_x = x + 8 + slot * 18 + 8;
+        g_mouse_y = y + 184 + 8;
+    }
+}
+
+static int pex_gamepad_creative_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_CREATIVE) return 0;
+    g_gamepad_virtual_cursor_active = 0;
+    int dx = 0, dy = 0;
+    if (p->dpad_left || p->lx < -0.55f) dx = -1;
+    else if (p->dpad_right || p->lx > 0.55f) dx = 1;
+    if (p->dpad_up || p->ly < -0.55f) dy = -1;
+    else if (p->dpad_down || p->ly > 0.55f) dy = 1;
+    if ((dx || dy) && now - g_gamepad_nav_last_time > 0.14) {
+        if (g_gamepad_creative_focus < 72) {
+            int row = g_gamepad_creative_focus / 8;
+            int col = g_gamepad_creative_focus % 8;
+            if (dx) col = (col + dx + 8) % 8;
+            if (dy < 0) {
+                if (row > 0) row--;
+                else creative_scroll_by(-1);
+            } else if (dy > 0) {
+                if (row < 8) row++;
+                else { g_gamepad_creative_focus = 72 + (col > 8 ? 8 : col); row = -1; }
+            }
+            if (row >= 0) g_gamepad_creative_focus = row * 8 + col;
+        } else {
+            int slot = g_gamepad_creative_focus - 72;
+            if (dx) slot = (slot + dx + 9) % 9;
+            if (dy < 0) g_gamepad_creative_focus = 64 + (slot > 7 ? 7 : slot);
+            else g_gamepad_creative_focus = 72 + slot;
+        }
+        pex_gamepad_creative_focus_mouse();
+        g_gamepad_nav_last_time = now;
+    } else pex_gamepad_creative_focus_mouse();
+
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) { creative_scroll_page(-1); pex_gamepad_creative_focus_mouse(); }
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) { creative_scroll_page(1); pex_gamepad_creative_focus_mouse(); }
+    if (pex_gamepad_pressed(p->a, p->prev_a) || pex_gamepad_pressed(p->rt_down, p->prev_rt))
+        creative_mouse_click(g_mouse_x, g_mouse_y, 0);
+    if (pex_gamepad_pressed(p->x, p->prev_x) || pex_gamepad_pressed(p->lt_down, p->prev_lt))
+        creative_mouse_click(g_mouse_x, g_mouse_y, 1);
+    if (pex_gamepad_pressed(p->y, p->prev_y) && g_gamepad_creative_focus < 72) {
+        int idx = creative_item_index_at(g_mouse_x, g_mouse_y);
+        if (idx >= 0) {
+            ItemStack clicked = creative_stack_for_index(idx);
+            if (!stack_empty(&clicked)) {
+                g_carried_stack = clicked;
+                g_carried_stack.count = stack_limit_for_id(g_carried_stack.id);
+            }
+        }
+    }
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back) ||
+        pex_gamepad_pressed(p->start, p->prev_start)) set_screen(SCREEN_INGAME);
+    return 1;
+}
+
+static int pex_gamepad_multiplayer_list_update(PexGamepadState *p, double now) {
+    if (g_screen != SCREEN_MULTIPLAYER || pex_mp_server_mode_get() != 0) return 0;
+    pex_mp_server_list_ensure();
+    int count = pex_mp_server_count_get();
+    if (count <= 0) return 0;
+    if (pex_mp_server_selected_get() < 0) { pex_mp_server_select(0); rebuild_screen(); }
+    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.15) {
+        pex_mp_server_select(pex_mp_server_selected_get() + 1); rebuild_screen(); g_gamepad_nav_last_time = now;
+    } else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.15) {
+        pex_mp_server_select(pex_mp_server_selected_get() - 1); rebuild_screen(); g_gamepad_nav_last_time = now;
+    }
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) { pex_mp_server_select(pex_mp_server_selected_get() - 5); rebuild_screen(); }
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) { pex_mp_server_select(pex_mp_server_selected_get() + 5); rebuild_screen(); }
+    if (pex_gamepad_pressed(p->a, p->prev_a)) {
+        for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 10) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->x, p->prev_x)) {
+        for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 3) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->y, p->prev_y)) {
+        for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 7 && g_buttons[i].enabled) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->rt_down, p->prev_rt)) {
+        for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 4) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->lt_down, p->prev_lt)) {
+        for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 2 && g_buttons[i].enabled) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->start, p->prev_start)) {
+        for (int i = 0; i < g_button_count; ++i) if (g_buttons[i].id == 8) { pex_gamepad_click_button(&g_buttons[i]); break; }
+    }
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back)) pex_gamepad_back_action();
     return 1;
 }
 
 static void pex_gamepad_menu_update(PexGamepadState *p) {
     if (!p || !pex_gamepad_menu_screen()) return;
     double now = now_seconds();
+    pex_gamepad_reset_ui_state_if_needed();
+    if (pex_gamepad_virtual_keyboard_update(p, now)) return;
     if (pex_gamepad_world_screen_update(p, now)) return;
+    if (pex_gamepad_language_update(p, now)) return;
+    if (pex_gamepad_texpack_update(p, now)) return;
+    if (pex_gamepad_achievements_update(p, now)) return;
+    if (pex_gamepad_statistics_update(p, now)) return;
+    if (pex_gamepad_multiplayer_list_update(p, now)) return;
+
+    /* Key bindings are keyboard settings.  A controller must never trap the
+       user in the "press a key" state; B cleanly cancels it. */
+    if (g_screen == SCREEN_CONTROLS && g_waiting_key >= 0) {
+        if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back) ||
+            pex_gamepad_pressed(p->a, p->prev_a)) {
+            g_waiting_key = -1;
+            rebuild_screen();
+        }
+        return;
+    }
+
     Button *sel = pex_gamepad_selected_button();
     if (sel) { g_mouse_x = sel->x + sel->w / 2; g_mouse_y = sel->y + sel->h / 2; }
-    int nav_down = p->dpad_down || p->ly > 0.55f;
-    int nav_up = p->dpad_up || p->ly < -0.55f;
-    if ((nav_down || nav_up) && now - g_gamepad_nav_last_time > 0.18) {
-        pex_gamepad_nav_move(nav_down ? 1 : -1);
+
+    int dx = 0, dy = 0;
+    if (p->dpad_left || p->lx < -0.60f) dx = -1;
+    else if (p->dpad_right || p->lx > 0.60f) dx = 1;
+    if (p->dpad_up || p->ly < -0.60f) dy = -1;
+    else if (p->dpad_down || p->ly > 0.60f) dy = 1;
+
+    sel = pex_gamepad_selected_button();
+    if (sel && sel->kind == BUTTON_SLIDER) {
+        float delta = 0.0f;
+        if (dx && now - g_gamepad_slider_last_time > 0.08) delta = dx * 0.025f;
+        if (pex_gamepad_pressed(p->lb, p->prev_lb)) delta = -0.10f;
+        if (pex_gamepad_pressed(p->rb, p->prev_rb)) delta = 0.10f;
+        if (fabsf(p->rx) > 0.35f && now - g_gamepad_slider_last_time > 0.04)
+            delta = p->rx * 0.035f;
+        if (delta != 0.0f) {
+            pex_gamepad_adjust_slider(sel, delta);
+            g_gamepad_slider_last_time = now;
+            dx = 0;
+        }
+    }
+
+    if ((dx || dy) && now - g_gamepad_nav_last_time > 0.16) {
+        pex_gamepad_nav_spatial(dx, dy);
         g_gamepad_nav_last_time = now;
     }
+
     sel = pex_gamepad_selected_button();
-    if (sel && sel->kind == BUTTON_SLIDER && fabsf(p->rx) > 0.35f && now - g_gamepad_slider_last_time > 0.04) {
-        float v = sel->slider_value + p->rx * 0.035f;
-        int mx = sel->x + 4 + (int)(v * (float)(sel->w - 8));
-        update_slider(sel, mx);
-        g_gamepad_slider_last_time = now;
-    }
-    if (p->a && !p->prev_a && now - g_gamepad_click_last_time > 0.10) {
-        pex_gamepad_click_button(sel);
+    if (pex_gamepad_pressed(p->a, p->prev_a) && now - g_gamepad_click_last_time > 0.10) {
+        /* Controller mappings are fixed and separate from keyboard bindings;
+           do not open an unusable keyboard-capture prompt from the couch. */
+        if (sel && sel->kind == BUTTON_SLIDER) {
+            /* A slider is adjusted with left/right or the right stick.  Clicking
+               its centre with A would unexpectedly reset it to roughly 50%. */
+        } else if (!(g_screen == SCREEN_CONTROLS && sel && sel->id >= 0 && sel->id < PEX_KEY_BIND_COUNT)) {
+            pex_gamepad_click_button(sel);
+        }
         g_gamepad_click_last_time = now;
     }
-    if ((p->b && !p->prev_b) || (p->back && !p->prev_back)) pex_gamepad_back_action();
+    if (pex_gamepad_pressed(p->start, p->prev_start) && g_screen == SCREEN_PAUSE) set_screen(SCREEN_INGAME);
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back)) pex_gamepad_back_action();
 }
 
 static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
     if (!p || !pex_gamepad_inventory_screen()) { g_gamepad_virtual_cursor_active = 0; return; }
+    pex_gamepad_reset_ui_state_if_needed();
+    if (pex_gamepad_creative_update(p, now_seconds())) return;
+
     g_gamepad_virtual_cursor_active = 1;
     if (!g_gamepad_virtual_cursor_x || !g_gamepad_virtual_cursor_y) {
         g_gamepad_virtual_cursor_x = (float)g_gui_w * 0.5f;
@@ -765,9 +1255,14 @@ static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
     if (g_gamepad_virtual_cursor_y > g_gui_h - 3) g_gamepad_virtual_cursor_y = (float)g_gui_h - 3;
     g_mouse_x = (int)g_gamepad_virtual_cursor_x;
     g_mouse_y = (int)g_gamepad_virtual_cursor_y;
-    if (p->a && !p->prev_a) { mouse_down(g_mouse_x, g_mouse_y); mouse_up(g_mouse_x, g_mouse_y); }
-    if ((p->x && !p->prev_x) || (p->lt_down && !p->prev_lt)) mouse_right_down(g_mouse_x, g_mouse_y);
-    if (p->b && !p->prev_b) pex_gamepad_back_action();
+    if (pex_gamepad_pressed(p->a, p->prev_a) || pex_gamepad_pressed(p->rt_down, p->prev_rt)) {
+        mouse_down(g_mouse_x, g_mouse_y); mouse_up(g_mouse_x, g_mouse_y);
+    }
+    if (pex_gamepad_pressed(p->x, p->prev_x) || pex_gamepad_pressed(p->lt_down, p->prev_lt))
+        mouse_right_down(g_mouse_x, g_mouse_y);
+    if (pex_gamepad_pressed(p->y, p->prev_y)) inventory_drop_selected_one();
+    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back) ||
+        pex_gamepad_pressed(p->start, p->prev_start)) pex_gamepad_back_action();
 }
 
 static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
@@ -891,6 +1386,74 @@ static void draw_gamepad_virtual_cursor(void) {
     draw_rect(x - 2, y - 8, x + 3, y + 9, (int)0xD0FFFFFFu);
     draw_rect(x - 6, y - 1, x + 7, y + 2, (int)0xFF000000u);
     draw_rect(x - 1, y - 6, x + 2, y + 7, (int)0xFF000000u);
+}
+
+
+static void pex_gamepad_draw_focus_box(int x, int y, int w, int h) {
+    int c = (int)0xFFFFFF55u;
+    draw_rect(x - 2, y - 2, x + w + 2, y, c);
+    draw_rect(x - 2, y + h, x + w + 2, y + h + 2, c);
+    draw_rect(x - 2, y, x, y + h, c);
+    draw_rect(x + w, y, x + w + 2, y + h, c);
+}
+
+static void pex_gamepad_draw_hint(const char *text) {
+    if (!text || !*text) return;
+    int w = text_width(text) + 12;
+    int x = (g_gui_w - w) / 2;
+    int y = g_gui_h - 13;
+    draw_rect(x, y - 2, x + w, y + 10, (int)0xB0000000u);
+    draw_centered_text(text, g_gui_w / 2, y, 0xFFFFFF);
+}
+
+/* Draw focus for controls that intentionally have no normal Button rendering,
+   plus concise couch-control hints.  Normal buttons already highlight because
+   the gamepad keeps g_mouse_x/g_mouse_y on the focused control. */
+static void draw_gamepad_ui_focus_and_hint(void) {
+    if (g_input_focus_mode != PEX_INPUT_FOCUS_GAMEPAD) return;
+
+    if (g_screen == SCREEN_LANGUAGE && pex_language_runtime_files_available() &&
+        g_gamepad_language_index >= 0 && g_gamepad_language_index < pex_language_count()) {
+        int y = pex_language_row_y(g_gamepad_language_index) - 2;
+        pex_gamepad_draw_focus_box(g_gui_w / 2 - 110, y, 220, 18);
+        pex_gamepad_draw_hint("D-pad select   A apply   LB/RB page   B back");
+    } else if (g_screen == SCREEN_TEXPACK && g_gamepad_texpack_index >= 0 &&
+               g_gamepad_texpack_index < g_texpack_count) {
+        int y = 36 + g_gamepad_texpack_index * 36 - g_texpack_scroll;
+        pex_gamepad_draw_focus_box(g_gui_w / 2 - 110, y, 220, 32);
+        pex_gamepad_draw_hint("D-pad select   A apply   LB/RB page   X import   B back");
+    } else if (g_screen == SCREEN_CREATIVE) {
+        int x = (g_gui_w - CREATIVE_XSIZE) / 2;
+        int y = (g_gui_h - CREATIVE_YSIZE) / 2;
+        if (g_gamepad_creative_focus < 72) {
+            int row = g_gamepad_creative_focus / 8;
+            int col = g_gamepad_creative_focus % 8;
+            pex_gamepad_draw_focus_box(x + 8 + col * 18, y + 18 + row * 18, 16, 16);
+        } else {
+            int slot = g_gamepad_creative_focus - 72;
+            pex_gamepad_draw_focus_box(x + 8 + slot * 18, y + 184, 16, 16);
+        }
+        pex_gamepad_draw_hint("A/RT take   X/LT split   Y full stack   LB/RB page   B close");
+    } else if (g_screen == SCREEN_STATISTICS) {
+        if (g_pex_statistics_tab != 0) {
+            int base_x = g_gui_w / 2 - 108;
+            int offsets[3] = {97, 147, 197};
+            pex_gamepad_draw_focus_box(base_x + offsets[g_gamepad_statistics_sort_focus], 33, 18, 18);
+        }
+        pex_gamepad_draw_hint("LB/RB tabs   Up/Down scroll   Left/Right sort   A cycle   B back");
+    } else if (g_screen == SCREEN_ACHIEVEMENTS) {
+        pex_gamepad_draw_hint("D-pad/left stick pan   LB/RB faster   Y reset   A/B close");
+    } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) {
+        pex_gamepad_draw_hint("A join  X add  Y edit  RT direct  LT delete  Menu refresh  B back");
+    } else if (g_screen == SCREEN_CONTROLS) {
+        pex_gamepad_draw_hint("Controller layout is fixed   D-pad navigate   B back");
+    } else {
+        Button *b = pex_gamepad_selected_button();
+        if (b && b->kind == BUTTON_HITBOX && b->id >= 9000 && b->id <= 9005) {
+            pex_gamepad_draw_focus_box(b->x, b->y, b->w, b->h);
+            pex_gamepad_draw_hint("A/OK edit text   B back");
+        }
+    }
 }
 
 static int pex_network_available(void) {

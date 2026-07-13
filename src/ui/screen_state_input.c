@@ -116,13 +116,13 @@ static void set_screen(ScreenId s) {
         pex_menu_music_start_once();
     }
     if (s == SCREEN_CHAT) {
-#if defined(PEX_PLATFORM_XBOX_UWP)
-        pex_virtual_keyboard_prepare(SCREEN_CHAT);
-        g_screen = SCREEN_VIRTUAL_KEYBOARD;
-        rebuild_screen();
-#else
-        pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
-#endif
+        if (pex_virtual_keyboard_enabled()) {
+            pex_virtual_keyboard_prepare(SCREEN_CHAT);
+            g_screen = SCREEN_VIRTUAL_KEYBOARD;
+            rebuild_screen();
+        } else {
+            pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
+        }
     }
 }
 
@@ -206,10 +206,12 @@ static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h) {
 }
 
 static int pex_virtual_keyboard_enabled(void) {
-#if defined(PEX_PLATFORM_XBOX_UWP)
+#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
     return 1;
 #else
-    return 0;
+    /* Desktop players keep native keyboard entry while using mouse/keyboard,
+       but controller-focused text fields open the same couch-friendly keyboard. */
+    return g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD;
 #endif
 }
 
@@ -380,6 +382,23 @@ static void pex_tv_remote_apply_defaults(void) {
     g_opts.tv_remote_map[PEX_TV_REMOTE_DROP] = 'q';
     g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_PREV] = SDLK_PAGEUP;
     g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_NEXT] = SDLK_PAGEDOWN;
+#elif defined(PEX_PLATFORM_XBOX_UWP)
+    /* Windows.System.VirtualKey Gamepad* values.  The UWP shell only routes
+       these through the remote path when no Windows.Gaming.Input gamepad is
+       connected, avoiding duplicate input from a normal Xbox controller. */
+    g_opts.tv_remote_map[PEX_TV_REMOTE_UP] = 203;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_DOWN] = 204;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_LEFT] = 205;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_RIGHT] = 206;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_OK] = 195;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_BACK] = 196;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_BREAK] = 197;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_PLACE] = 198;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_INVENTORY] = 208;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_SNEAK] = 200;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_DROP] = 199;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_PREV] = 209;
+    g_opts.tv_remote_map[PEX_TV_REMOTE_HOTBAR_NEXT] = 210;
 #else
     for (int i = 0; i < PEX_TV_REMOTE_ACTION_COUNT; ++i) g_opts.tv_remote_map[i] = 0;
 #endif
@@ -1034,6 +1053,7 @@ static void rebuild_screen(void) {
         }
         add_button_full(200, g_gui_w / 2 - 75, g_gui_h - 38, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
     } else if (g_screen == SCREEN_SET_NAME) {
+        add_button_full(9000, g_gui_w / 2 - 101, g_gui_h / 2 - 9, 202, 22, "", BUTTON_HITBOX);
         Button *done = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 2 + 50, 200, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
         done->enabled = pex_nickname_valid(g_name_edit_text);
         if (!g_name_screen_first_run) add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 2 + 74, 200, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
@@ -1053,6 +1073,7 @@ static void rebuild_screen(void) {
         }
         add_button(200, g_gui_w / 2 - 100, g_gui_h / 6 + 168, tr("Done"));
     } else if (g_screen == SCREEN_CREATE_WORLD) {
+        add_button_full(9001, g_gui_w / 2 - 101, 59, 202, 22, "", BUTTON_HITBOX);
         add_button_full(0, g_gui_w / 2 - 155, g_gui_h - 28, 150, 20, tr_key_default("selectWorld.create", "Create New World"), BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h - 28, 150, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         Button *create = &g_buttons[g_button_count - 2];
@@ -1072,6 +1093,7 @@ static void rebuild_screen(void) {
             add_button_full(3, g_gui_w / 2 - 75, 172, 150, 20, tr_key_default("gui.done", "Done"), BUTTON_NORMAL);
         }
     } else if (g_screen == SCREEN_RENAME_WORLD) {
+        add_button_full(9002, g_gui_w / 2 - 101, 59, 202, 22, "", BUTTON_HITBOX);
         Button *rename = add_button_full(0, g_gui_w / 2 - 155, g_gui_h / 6 + 96, 150, 20, tr_key2_default("selectWorld.rename", "selectWorld.renameButton", "Rename"), BUTTON_NORMAL);
         add_button_full(1, g_gui_w / 2 + 5, g_gui_h / 6 + 96, 150, 20, tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         rename->enabled = g_rename_world_text[0] != 0;
@@ -1140,12 +1162,15 @@ static void rebuild_screen(void) {
             add_button_full(21, g_gui_w / 2 + 5, g_gui_h / 6 + 96, 150, 20,
                             tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         } else if (pex_mp_server_mode_get() == 1) {
+            add_button_full(9003, g_gui_w / 2 - 101, 115, 202, 22, "", BUTTON_HITBOX);
             Button *select = add_button_full(10, g_gui_w / 2 - 100, g_gui_h / 4 + 108, 200, 20,
                                              tr_key_default("selectServer.select", "Join Server"), BUTTON_NORMAL);
             select->enabled = pex_mp_server_edit_address_get()[0] != 0;
             add_button_full(1, g_gui_w / 2 - 100, g_gui_h / 4 + 132, 200, 20,
                             tr_key_default("gui.cancel", "Cancel"), BUTTON_NORMAL);
         } else {
+            add_button_full(9004, g_gui_w / 2 - 101, 65, 202, 22, "", BUTTON_HITBOX);
+            add_button_full(9005, g_gui_w / 2 - 101, 105, 202, 22, "", BUTTON_HITBOX);
             /* Deliberately omit the server-resource-pack selector. PexCraft's
                compatibility client does not download/apply server packs, so a
                dead control only makes the 1.8-style server editor misleading. */

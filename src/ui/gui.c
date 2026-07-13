@@ -1429,7 +1429,8 @@ static void draw_virtual_keyboard_screen(void) {
         draw_centered_text(actions[i], x + widths[i] / 2, y + 5, selected ? 0xFFFF55 : 0xFFFFFF);
         x += widths[i] + 4;
     }
-    draw_centered_text("D-pad: move  A/OK: select  B/Back: erase  Menu: cancel", g_gui_w / 2, g_gui_h - 24, 10526880);
+    draw_centered_text("D-pad: move  A/OK: select  X: erase  Y: space", g_gui_w / 2, g_gui_h - 30, 10526880);
+    draw_centered_text("LB: caps  Menu/RB: done  B/Back: cancel", g_gui_w / 2, g_gui_h - 18, 10526880);
 }
 
 static void draw_world_type_screen(void) {

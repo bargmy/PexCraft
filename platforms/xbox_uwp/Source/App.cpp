@@ -7,6 +7,7 @@
 #include <winrt/Windows.ApplicationModel.Activation.h>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Gaming.Input.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Web.Http.h>
@@ -23,6 +24,7 @@ namespace coreapp = winrt::Windows::ApplicationModel::Core;
 namespace storage = winrt::Windows::Storage;
 namespace streams = winrt::Windows::Storage::Streams;
 namespace webhttp = winrt::Windows::Web::Http;
+namespace gaminginput = winrt::Windows::Gaming::Input;
 namespace win_system = winrt::Windows::System;
 namespace coreui = winrt::Windows::UI::Core;
 
@@ -35,6 +37,7 @@ extern "C" {
     void pex_xbox_uwp_engine_key_down(int vk);
     void pex_xbox_uwp_engine_key_up(int vk);
     void pex_xbox_uwp_engine_char(uint32_t ch);
+    void pex_xbox_uwp_engine_remote_key(int raw_key, int down);
     void pex_xbox_uwp_engine_shutdown(void);
 }
 
@@ -178,6 +181,65 @@ extern "C" const char *pex_xbox_uwp_get_local_folder(void) {
     return cached.c_str();
 }
 
+extern "C" int pex_xbox_uwp_gamepad_count(void) {
+    try {
+        auto pads = gaminginput::Gamepad::Gamepads();
+        uint32_t count = pads.Size();
+        return (int)(count > 8 ? 8 : count);
+    } catch (...) {
+        return 0;
+    }
+}
+
+extern "C" int pex_xbox_uwp_gamepad_read(int index, float *lx, float *ly, float *rx, float *ry,
+                                           float *lt, float *rt, unsigned int *buttons) {
+    if (!lx || !ly || !rx || !ry || !lt || !rt || !buttons || index < 0) return 0;
+    *lx = *ly = *rx = *ry = *lt = *rt = 0.0f;
+    *buttons = 0;
+    try {
+        auto pads = gaminginput::Gamepad::Gamepads();
+        if ((uint32_t)index >= pads.Size()) return 0;
+        auto reading = pads.GetAt((uint32_t)index).GetCurrentReading();
+        *lx = (float)reading.LeftThumbstickX;
+        *ly = (float)-reading.LeftThumbstickY;
+        *rx = (float)reading.RightThumbstickX;
+        *ry = (float)-reading.RightThumbstickY;
+        *lt = (float)reading.LeftTrigger;
+        *rt = (float)reading.RightTrigger;
+
+        uint32_t raw = (uint32_t)reading.Buttons;
+        auto has = [raw](gaminginput::GamepadButtons button) {
+            return (raw & (uint32_t)button) != 0;
+        };
+        unsigned int out = 0;
+        if (has(gaminginput::GamepadButtons::A)) out |= 1u << 0;
+        if (has(gaminginput::GamepadButtons::B)) out |= 1u << 1;
+        if (has(gaminginput::GamepadButtons::X)) out |= 1u << 2;
+        if (has(gaminginput::GamepadButtons::Y)) out |= 1u << 3;
+        if (has(gaminginput::GamepadButtons::LeftShoulder)) out |= 1u << 4;
+        if (has(gaminginput::GamepadButtons::RightShoulder)) out |= 1u << 5;
+        if (has(gaminginput::GamepadButtons::View)) out |= 1u << 6;
+        if (has(gaminginput::GamepadButtons::Menu)) out |= 1u << 7;
+        if (has(gaminginput::GamepadButtons::LeftThumbstick)) out |= 1u << 8;
+        if (has(gaminginput::GamepadButtons::RightThumbstick)) out |= 1u << 9;
+        if (has(gaminginput::GamepadButtons::DPadUp)) out |= 1u << 10;
+        if (has(gaminginput::GamepadButtons::DPadDown)) out |= 1u << 11;
+        if (has(gaminginput::GamepadButtons::DPadLeft)) out |= 1u << 12;
+        if (has(gaminginput::GamepadButtons::DPadRight)) out |= 1u << 13;
+        *buttons = out;
+        return 1;
+    } catch (...) {
+        return 0;
+    }
+}
+
+static bool pex_is_gamepad_virtual_key(win_system::VirtualKey key) {
+    uint32_t value = (uint32_t)key;
+    /* Windows reserves 195..218 for the complete Gamepad virtual-key range.
+       Numeric bounds avoid SDK-version enum gaps while preserving the exact ABI. */
+    return value >= 195u && value <= 218u;
+}
+
 static int pex_vk_from_virtual_key(win_system::VirtualKey key) {
     using win_system::VirtualKey;
     uint32_t k = (uint32_t)key;
@@ -294,11 +356,28 @@ struct App : winrt::implements<App, coreapp::IFrameworkViewSource, coreapp::IFra
         if (m_engineReady) pex_xbox_uwp_engine_resize(w, h);
     }
     void OnKeyDown(coreui::CoreWindow const&, coreui::KeyEventArgs const& args) {
-        int vk = pex_vk_from_virtual_key(args.VirtualKey());
+        auto key = args.VirtualKey();
+        if (pex_is_gamepad_virtual_key(key)) {
+            /* A physical Xbox controller is read through Windows.Gaming.Input.
+               CoreWindow's duplicate Gamepad* key events are reserved as a
+               digital media-remote fallback only when no gamepad is present. */
+            if (m_engineReady && gaminginput::Gamepad::Gamepads().Size() == 0)
+                pex_xbox_uwp_engine_remote_key((int)(uint32_t)key, 1);
+            args.Handled(true);
+            return;
+        }
+        int vk = pex_vk_from_virtual_key(key);
         if (vk && m_engineReady) { pex_xbox_uwp_engine_key_down(vk); args.Handled(true); }
     }
     void OnKeyUp(coreui::CoreWindow const&, coreui::KeyEventArgs const& args) {
-        int vk = pex_vk_from_virtual_key(args.VirtualKey());
+        auto key = args.VirtualKey();
+        if (pex_is_gamepad_virtual_key(key)) {
+            if (m_engineReady && gaminginput::Gamepad::Gamepads().Size() == 0)
+                pex_xbox_uwp_engine_remote_key((int)(uint32_t)key, 0);
+            args.Handled(true);
+            return;
+        }
+        int vk = pex_vk_from_virtual_key(key);
         if (vk && m_engineReady) { pex_xbox_uwp_engine_key_up(vk); args.Handled(true); }
     }
     void OnCharacterReceived(coreui::CoreWindow const&, coreui::CharacterReceivedEventArgs const& args) {
