@@ -308,6 +308,9 @@ static const char *pex_damage_source_death_reason(const PexDamageSource *source)
 
 static void player_die(const char *reason) {
     if (g_player_dead) return;
+    cancel_bow_use();
+    cancel_sword_item_use();
+    g_right_use_button_down = 0;
     g_player_dead = 1;
     pex_stats_add_general(PEX_STAT_DEATHS, 1);
     g_player_death_time = 0;
@@ -375,6 +378,10 @@ static int player_attack_entity_from(PexDamageSource source, int amount) {
         g_player_prev_health = player_health_clamp(g_player_health);
         g_hearts_life = PEX_HEARTS_HALVES_LIFE;
     }
+
+    /* EntityPlayer.damageEntity in 1.2.5 halves all blockable damage before
+       armor and potion calculations, rounding odd values upward. */
+    if (!source.unblockable && player_is_blocking_125()) incoming = (incoming + 1) >> 1;
 
     int raw_amount = incoming;
     if (!g_mp_connected && !source.unblockable) incoming = armor_apply_damage_reduction(incoming);
@@ -471,6 +478,9 @@ static void update_equipped_item(void) {
 }
 
 static void player_respawn(void) {
+    cancel_bow_use();
+    cancel_sword_item_use();
+    g_right_use_button_down = 0;
     if (g_mp_connected) {
         g_chat_input[0] = 0;
         g_mp_pending_respawn_sync = 1;
@@ -1067,6 +1077,7 @@ static void ingame_tick(void) {
     player_potion_update_tick();
     update_held_map_item_tick();
     update_bow_item_use_tick();
+    update_sword_item_use_tick();
 
     g_player_prev_x = g_player_x;
     g_player_prev_y = g_player_y;
@@ -1149,6 +1160,7 @@ static void ingame_tick(void) {
     int jumping = 0;
     int sneaking = 0;
     int forward_for_sprint = 0;
+    int using_item = player_is_using_item_125();
     if (input_active) {
         if (key_down_vk(g_opts.keys[0])) { forward += 1.0f; raw_forward_input += 1.0f; }
         if (key_down_vk(g_opts.keys[2])) { forward -= 1.0f; raw_forward_input -= 1.0f; }
@@ -1164,7 +1176,7 @@ static void ingame_tick(void) {
            use hold/blindness yet, so those gates are represented by available
            systems only. */
         if (g_player_on_ground && !g_prev_sprint_forward && forward_for_sprint &&
-            !g_player_sprinting && player_can_sprint_125() && !sneaking) {
+            !g_player_sprinting && player_can_sprint_125() && !sneaking && !using_item) {
             if (g_sprint_toggle_timer == 0) {
                 g_sprint_toggle_timer = 7;
             } else {
@@ -1177,7 +1189,15 @@ static void ingame_tick(void) {
             strafe *= 0.3f;
             forward *= 0.3f;
         }
-        if (g_player_sprinting && (sneaking || !forward_for_sprint || g_player_collided_horiz || !player_can_sprint_125())) {
+        /* EntityPlayerSP applies the same 20% movement multiplier to every
+           active item use, including a blocking sword, and clears sprint
+           activation while the item remains in use. */
+        if (using_item) {
+            g_sprint_toggle_timer = 0;
+            strafe *= 0.2f;
+            forward *= 0.2f;
+        }
+        if (g_player_sprinting && (sneaking || using_item || !forward_for_sprint || g_player_collided_horiz || !player_can_sprint_125())) {
             player_set_sprinting_125(0);
         }
     } else {
@@ -1634,7 +1654,7 @@ static void ingame_tick(void) {
         pex_stats_track_player_position(in_water, in_ladder, g_creative_flying, riding_pig, 0, 0);
     }
 
-    g_prev_sprint_forward = (input_active && !sneaking && forward_for_sprint) ? 1 : 0;
+    g_prev_sprint_forward = (input_active && !sneaking && !using_item && forward_for_sprint) ? 1 : 0;
 
     if (!g_player_dead && !g_mp_connected && !player_is_creative()) player_foodstats_update();
 

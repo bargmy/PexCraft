@@ -8652,6 +8652,54 @@ static void cancel_bow_use(void) {
     g_bow_use_damage = 0;
 }
 
+static void cancel_sword_item_use(void) {
+    g_sword_item_in_use = 0;
+    g_sword_use_ticks = 0;
+    g_sword_use_slot = -1;
+    g_sword_use_id = 0;
+    g_sword_use_damage = 0;
+}
+
+static int player_is_blocking_125(void) {
+    if (!g_sword_item_in_use) return 0;
+    if (g_sword_use_slot < 0 || g_sword_use_slot >= 36) return 0;
+    if (g_selected_hotbar_slot != g_sword_use_slot) return 0;
+    const ItemStack *held = &g_inventory[g_sword_use_slot];
+    return !stack_empty(held) && held_is_sword(held->id) &&
+           held->id == g_sword_use_id && held->damage == g_sword_use_damage;
+}
+
+static int player_is_using_item_125(void) {
+    return g_bow_item_in_use || player_is_blocking_125();
+}
+
+static int try_start_sword_item_use(ItemStack *held) {
+    if (!held || stack_empty(held) || !held_is_sword(held->id)) return 0;
+    g_sword_item_in_use = 1;
+    g_sword_use_ticks = 0;
+    g_sword_use_slot = (int)(held - g_inventory);
+    g_sword_use_id = held->id;
+    g_sword_use_damage = held->damage;
+    return 1;
+}
+
+static void stop_sword_item_use(int send_release_packet) {
+    if (!g_sword_item_in_use) return;
+    cancel_sword_item_use();
+    if (send_release_packet && g_mp_connected) pex_net_send_release_use_item();
+}
+
+static void update_sword_item_use_tick(void) {
+    if (!g_sword_item_in_use) return;
+    if (g_screen != SCREEN_INGAME || g_player_dead || !g_right_use_button_down ||
+        !player_is_blocking_125()) {
+        stop_sword_item_use(1);
+        return;
+    }
+    if (g_sword_use_ticks < 72000) g_sword_use_ticks++;
+    if (g_sword_use_ticks >= 72000) stop_sword_item_use(1);
+}
+
 static int try_start_bow_item_use(ItemStack *held) {
     if (!held || stack_empty(held) || held->id != ITEM_BOW) return 0;
     if (!inventory_has_item_id(ITEM_ARROW)) return 0;
@@ -9177,6 +9225,7 @@ static void ingame_right_click_impl(void) {
     if (!hit.hit) {
         if (g_mp_connected) pex_net_send_use_item_air();
         if (dear_memories_use_book(held)) return;
+        if (try_start_sword_item_use(held)) return;
         if (try_start_bow_item_use(held)) return;
         if (try_use_potion_item(held)) return;
         if (try_use_xp_bottle_item(held)) return;
@@ -9233,6 +9282,17 @@ static void ingame_right_click_impl(void) {
         return;
     }
     { int used_id = held->id; if (try_use_nonblock_item(held, &hit, target_id)) { pex_stats_add_used(used_id, 1); return; } }
+    if (held_is_sword(held->id)) {
+        /* Vanilla 1.8.8 first sends the clicked-block C08 from
+           onPlayerRightClick(), then the air-use C08 from sendUseItem() when
+           ItemSword.onItemUse returned false.  The latter starts blocking. */
+        if (g_mp_connected) {
+            pex_net_send_block_interact(hit.bx, hit.by, hit.bz, hit.face);
+            pex_net_send_use_item_air();
+        }
+        (void)try_start_sword_item_use(held);
+        return;
+    }
     if (!item_is_placeable_block_id(held->id)) {
         /* A translated server-side menu item is commonly paper, a star, a
            head, etc. It is not locally placeable, but vanilla still sends the
@@ -9367,8 +9427,10 @@ static void ingame_right_click(void) {
 
 static void ingame_right_release(void) {
     int was_using_bow = g_bow_item_in_use;
+    int was_using_sword = g_sword_item_in_use;
     (void)release_bow_item_use();
-    if (was_using_bow && g_mp_connected) pex_net_send_release_use_item();
+    cancel_sword_item_use();
+    if ((was_using_bow || was_using_sword) && g_mp_connected) pex_net_send_release_use_item();
 }
 
 

@@ -8614,6 +8614,10 @@ static void draw_third_person_player(void) {
     float leg_pivot_y = 12.0f;
     float leg_pivot_z = 0.0f;
 
+    /* ModelBiped.heldItemRight = 3 while blocking. */
+    if (player_is_blocking_125())
+        right_arm_pitch = right_arm_pitch * 0.5f - (float)M_PI * 0.3f * 57.29578f;
+
     float right_arm_roll = (cosf(idle * 0.09f) * 0.05f + 0.05f) * 57.29578f;
     float left_arm_roll = -right_arm_roll;
     right_arm_pitch += sinf(idle * 0.067f) * 0.05f * 57.29578f;
@@ -8743,7 +8747,7 @@ static void multiplayer_apply_right_arm_postrender_125(float arm_pitch, float ar
 }
 
 static void draw_biped_held_item_125(int id, int count, float light_x, float light_y, float light_z,
-                                       float arm_pitch, float arm_yaw, float arm_roll) {
+                                       float arm_pitch, float arm_yaw, float arm_roll, int blocking) {
     if (id <= 0 || count <= 0) return;
 
     entity_item_light_prepare(light_x, light_y, light_z);
@@ -8773,6 +8777,13 @@ static void draw_biped_held_item_125(int id, int count, float light_x, float lig
         if (pex_item_rotates_around_when_rendering_125(id)) {
             glRotatef(180.0f, 0.0f, 0.0f, 1.0f);
             glTranslatef(0.0f, -(2.0f / 16.0f), 0.0f);
+        }
+        if (blocking && held_is_sword(id)) {
+            /* RenderPlayer 1.2.5 blocking transform. */
+            glTranslatef(0.05f, 0.0f, -0.1f);
+            glRotatef(-50.0f, 0.0f, 1.0f, 0.0f);
+            glRotatef(-10.0f, 1.0f, 0.0f, 0.0f);
+            glRotatef(-60.0f, 0.0f, 0.0f, 1.0f);
         }
         glTranslatef(0.0f, 3.0f / 16.0f, 0.0f);
         glScalef(s, -s, s);
@@ -8807,7 +8818,7 @@ static void draw_biped_held_item_125(int id, int count, float light_x, float lig
 static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float arm_pitch, float arm_yaw, float arm_roll) {
     if (!r || r->held_item_id <= 0 || r->held_item_count <= 0) return;
     draw_biped_held_item_125(r->held_item_id, r->held_item_count, r->x, r->y, r->z,
-                             arm_pitch, arm_yaw, arm_roll);
+                             arm_pitch, arm_yaw, arm_roll, 0);
 }
 
 static void draw_local_player_held_item_125(float x, float eye_y, float z,
@@ -8815,7 +8826,7 @@ static void draw_local_player_held_item_125(float x, float eye_y, float z,
     const ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (stack_empty(held)) return;
     draw_biped_held_item_125(held->id, held->count, x, eye_y, z,
-                             arm_pitch, arm_yaw, arm_roll);
+                             arm_pitch, arm_yaw, arm_roll, player_is_blocking_125());
 }
 
 static void draw_multiplayer_remote_players(void) {
@@ -9876,6 +9887,13 @@ static void draw_first_person_hand(void) {
         glRotatef(-swing_sqrt_sin * 20.0f, 0.0f, 0.0f, 1.0f);
         glRotatef(-swing_sqrt_sin * 80.0f, 1.0f, 0.0f, 0.0f);
         glScalef(0.40f, 0.40f, 0.40f);
+        if (player_is_blocking_125() && held_is_sword(held->id)) {
+            /* ItemRenderer 1.2.5 EnumAction.block transform. */
+            glTranslatef(-0.5f, 0.2f, 0.0f);
+            glRotatef(30.0f, 0.0f, 1.0f, 0.0f);
+            glRotatef(-80.0f, 1.0f, 0.0f, 0.0f);
+            glRotatef(60.0f, 0.0f, 1.0f, 0.0f);
+        }
         draw_item3d_from_atlas(tile);
         glPopMatrix();
     } else {

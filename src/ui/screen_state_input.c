@@ -48,6 +48,11 @@ static int pex_screen_is_world_loading(ScreenId s) {
 static void set_screen(ScreenId s) {
     ScreenId old_screen = g_screen;
     if (old_screen != s) pex_logf("screen change %d -> %d", (int)old_screen, (int)s);
+    if (s == SCREEN_TITLE || s == SCREEN_CONNECTING || s == SCREEN_GENERATING || s == SCREEN_DEATH) {
+        cancel_bow_use();
+        cancel_sword_item_use();
+        g_right_use_button_down = 0;
+    }
     if (g_mp_connected && (old_screen == SCREEN_WORKBENCH || old_screen == SCREEN_FURNACE || old_screen == SCREEN_CHEST) && old_screen != s)
         pex_net_send_container_close();
     if (old_screen == SCREEN_FURNACE && s != SCREEN_FURNACE) furnace_close_open_inventory();

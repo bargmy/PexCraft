@@ -1330,6 +1330,13 @@ static int g_bow_item_in_use = 0;
 static int g_bow_use_ticks = 0;
 static int g_bow_use_slot = -1;
 static int g_bow_use_damage = 0;
+/* Java 1.2.5 ItemSword use state.  Protocol-47 multiplayer still starts and
+   stops this state with the vanilla 1.8.8 C08/C07 packet pair. */
+static int g_sword_item_in_use = 0;
+static int g_sword_use_ticks = 0;
+static int g_sword_use_slot = -1;
+static int g_sword_use_id = 0;
+static int g_sword_use_damage = 0;
 static int g_creative_fly_toggle_timer = 0;
 static int g_prev_jump_down = 0;
 static int g_player_sprinting = 0;
