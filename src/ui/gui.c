@@ -406,13 +406,18 @@ static void draw_xinput_hud_tile(int tile, int x, int y) {
     if (!tex_xinput.id || tex_xinput.w < 64 || tex_xinput.h < 64) {
         /* Last-resort visibility fallback. Normal WASM builds upload the exact
            RGBA pixels compiled from XINPUT.png into the executable. */
-        static const char labels[4] = {'A', 'B', 'X', 'Y'};
-        static const int colors[4] = {0x55FF55, 0xFF5555, 0x5555FF, 0xFFFF55};
+        const char *label = "?";
+        int color = 0xFFFFFF;
+        if (tile == 0) { label = "A"; color = 0x55FF55; }
+        else if (tile == 1) { label = "B"; color = 0xFF5555; }
+        else if (tile == 2) { label = "X"; color = 0x5555FF; }
+        else if (tile == 3) { label = "Y"; color = 0xFFFF55; }
+        else if (tile == 4) label = "LB";
+        else if (tile == 5) label = "RB";
+        else if (tile == 6) label = "RT";
+        else if (tile == 7) label = "LT";
         draw_rect(x + 2, y + 2, x + 14, y + 14, 0xE0000000);
-        if (tile >= 0 && tile < 4) {
-            char label[2] = {labels[tile], 0};
-            draw_text_no_shadow(label, x + 5, y + 4, colors[tile]);
-        }
+        draw_text_no_shadow(label, x + (16 - text_width(label)) / 2, y + 4, color);
         return;
     }
     int sx = (tile & 3) * 16;
@@ -439,18 +444,31 @@ static void draw_xinput_hud_tile(int tile, int x, int y) {
 static void draw_xinput_hud_prompts(int hotbar_y) {
     if (!pex_xinput_hud_active()) return;
 
-    /* 640x480 anchors: Inventory x=209/y=455 and Optional x=276/y=455.
-       Center-relative X values keep the same gap at other screen widths. */
+    /* The supplied 640x480 layout anchors Inventory at x=209/y=455.  The
+       optional prompt is placed from the localized Inventory label width so
+       translated text never collapses the gap between the two prompts. */
+    const char *inventory_label = tr_key_default("key.inventory", "Inventory");
+    const char *use_label = tr_key_default("key.use", "Use Item");
     int y = hotbar_y + 27;
     int inventory_x = g_gui_w / 2 - 111;
-    int optional_x = g_gui_w / 2 - 44;
+    int optional_x = inventory_x + 18 + text_width(inventory_label) + 16;
+    int show_optional = ingame_has_context_use_target();
+
+    if (show_optional) {
+        int right_edge = optional_x + 18 + text_width(use_label);
+        int overflow = right_edge - (g_gui_w - 4);
+        if (overflow > 0) {
+            inventory_x -= overflow;
+            optional_x -= overflow;
+        }
+    }
 
     draw_xinput_hud_tile(3, inventory_x, y); /* Y */
-    draw_text("Inventory", inventory_x + 18, y + 4, 0xFFFFFF);
+    draw_text(inventory_label, inventory_x + 18, y + 4, 0xFFFFFF);
 
-    if (ingame_has_context_use_target()) {
-        draw_xinput_hud_tile(0, optional_x, y); /* A */
-        draw_text("Use", optional_x + 18, y + 4, 0xFFFFFF);
+    if (show_optional) {
+        draw_xinput_hud_tile(7, optional_x, y); /* LT */
+        draw_text(use_label, optional_x + 18, y + 4, 0xFFFFFF);
     }
 }
 

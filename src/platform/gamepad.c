@@ -559,8 +559,7 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->ly >  PEX_GAMEPAD_DEADZONE || p->dpad_down) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
     if (p->lx < -PEX_GAMEPAD_DEADZONE || p->dpad_left) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
     if (p->lx >  PEX_GAMEPAD_DEADZONE || p->dpad_right) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
-    if (p->a && !(p->is_xbox && ingame_has_context_use_target()))
-        g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;                    /* jump, unless A is the contextual Use action */
+    if (p->a) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* jump */
     if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
@@ -736,11 +735,6 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #else
-    if (p->is_xbox && p->a && !p->prev_a && ingame_has_context_use_target()) {
-        mouse_right_down(g_gui_w / 2, g_gui_h / 2);
-        mouse_right_up(g_gui_w / 2, g_gui_h / 2);
-        return;
-    }
     if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lt > 0.35f && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
     if (p->lt <= 0.35f && p->prev_lt > 0.35f) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
