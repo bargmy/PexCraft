@@ -100,6 +100,12 @@ def main() -> int:
     reject(textures, r"(?:try_release_texture|load_png_texture)\([^\n]*xinput", "textures.c")
     require(gamepad, "return pex_xinput_hud_active() ? 30 : 0;", "gamepad.c")
     require(gamepad, "if (p->a) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;", "gamepad.c")
+    require(gamepad, "SDL_GameControllerGetAttached", "gamepad.c")
+    require(gamepad, "if (attached && total == g_sdl2_last_device_count) return;", "gamepad.c")
+    require(gamepad, "PEX_TRIGGER_RELEASE_GRACE_FRAMES 3", "gamepad.c")
+    require(gamepad, "pex_gamepad_update_trigger_buttons(&g_gamepads[i], &oldpads[i]);", "gamepad.c")
+    require(gamepad, "if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;", "gamepad.c")
+    require(gamepad, "if (p->lt_down) g_gamepad_vk_state[VK_RBUTTON] = 1;", "gamepad.c")
     reject(gamepad, r"p->is_xbox\s*&&\s*p->a\s*&&[^\n]*ingame_has_context_use_target", "gamepad.c")
     require(gui, "if (!pex_xinput_hud_active()) return;", "gui.c")
     require(gui, "int y = hotbar_y + 27;", "gui.c")
@@ -185,7 +191,15 @@ def main() -> int:
     require(workflow, "telegram_upload_file.py", "build.yml")
     if (ROOT / ".github/workflows/build-wasm.yml").exists():
         raise AssertionError("separate .github/workflows/build-wasm.yml must not exist")
-    extra_md = [path for path in ROOT.rglob("*.md") if path.relative_to(ROOT).as_posix() != "README.md"]
+    ignored_generated_roots = {".git", ".cache", "build", "dist"}
+    extra_md = []
+    for path in ROOT.rglob("*.md"):
+        rel = path.relative_to(ROOT)
+        if rel.as_posix() == "README.md":
+            continue
+        if rel.parts and rel.parts[0] in ignored_generated_roots:
+            continue
+        extra_md.append(path)
     if extra_md:
         raise AssertionError(f"unexpected extra markdown files: {extra_md}")
 

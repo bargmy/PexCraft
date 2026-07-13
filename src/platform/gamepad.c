@@ -27,6 +27,47 @@ static float pex_deadzone(float v) {
     return v;
 }
 
+#define PEX_TRIGGER_PRESS_THRESHOLD 0.35f
+#define PEX_TRIGGER_RELEASE_THRESHOLD 0.18f
+#define PEX_TRIGGER_RELEASE_GRACE_FRAMES 3
+
+/* Browser/SDL gamepad trigger axes can occasionally report one or two zero
+   samples while the physical trigger is still held.  Keep a small hysteresis
+   and release grace so mining/using does not get cancelled by a transient
+   Gamepad API sample.  A real release still takes effect within roughly 50 ms
+   at 60 fps. */
+static void pex_gamepad_filter_trigger(float value, int old_down, int old_release_frames,
+                                       int *down, int *release_frames) {
+    if (!down || !release_frames) return;
+    if (!old_down) {
+        *down = value >= PEX_TRIGGER_PRESS_THRESHOLD;
+        *release_frames = 0;
+        return;
+    }
+    if (value > PEX_TRIGGER_RELEASE_THRESHOLD) {
+        *down = 1;
+        *release_frames = 0;
+        return;
+    }
+
+    int frames = old_release_frames + 1;
+    if (frames >= PEX_TRIGGER_RELEASE_GRACE_FRAMES) {
+        *down = 0;
+        *release_frames = 0;
+    } else {
+        *down = 1;
+        *release_frames = frames;
+    }
+}
+
+static void pex_gamepad_update_trigger_buttons(PexGamepadState *pad, const PexGamepadState *old) {
+    if (!pad || !old) return;
+    pex_gamepad_filter_trigger(pad->lt, old->lt_down, old->lt_release_frames,
+                               &pad->lt_down, &pad->lt_release_frames);
+    pex_gamepad_filter_trigger(pad->rt, old->rt_down, old->rt_release_frames,
+                               &pad->rt_down, &pad->rt_release_frames);
+}
+
 static void pex_input_focus_set(PexInputFocusMode mode) {
     if (g_input_focus_mode == mode) return;
     g_input_focus_mode = mode;
@@ -40,7 +81,7 @@ static int gamepad_has_input(const PexGamepadState *p) {
     if (!p || !p->connected) return 0;
     if (fabsf(p->lx) > 0.35f || fabsf(p->ly) > 0.35f ||
         fabsf(p->rx) > 0.35f || fabsf(p->ry) > 0.35f ||
-        p->lt > 0.35f || p->rt > 0.35f) return 1;
+        p->lt_down || p->rt_down) return 1;
     return p->a || p->b || p->x || p->y || p->lb || p->rb ||
            p->back || p->start || p->guide || p->ls || p->rs ||
            p->dpad_up || p->dpad_down || p->dpad_left || p->dpad_right;
@@ -68,7 +109,7 @@ static void pex_gamepad_classify(PexGamepadState *pad, const char *name) {
 static void pex_gamepad_copy_edges(PexGamepadState *dst, const PexGamepadState *old) {
     dst->prev_a = old->a; dst->prev_b = old->b; dst->prev_x = old->x; dst->prev_y = old->y;
     dst->prev_lb = old->lb; dst->prev_rb = old->rb; dst->prev_back = old->back; dst->prev_start = old->start;
-    dst->prev_lt = old->lt > 0.35f; dst->prev_rt = old->rt > 0.35f;
+    dst->prev_lt = old->lt_down; dst->prev_rt = old->rt_down;
     dst->prev_dpad_up = old->dpad_up; dst->prev_dpad_down = old->dpad_down;
     dst->prev_dpad_left = old->dpad_left; dst->prev_dpad_right = old->dpad_right;
 }
@@ -117,6 +158,7 @@ static SDL_Joystick *g_sdl2_joys[PEX_GAMEPAD_MAX];
 static int g_sdl2_pad_is_controller[PEX_GAMEPAD_MAX];
 static int g_sdl2_pad_device_index[PEX_GAMEPAD_MAX];
 static int g_sdl2_pad_open_count = 0;
+static int g_sdl2_last_device_count = -1;
 
 static float sdl_axis_norm(Sint16 v) {
     float f = v < 0 ? (float)v / 32768.0f : (float)v / 32767.0f;
@@ -145,12 +187,33 @@ static void gamepad_sdl2_close_all(void) {
     g_sdl2_pad_open_count = 0;
 }
 
+static int gamepad_sdl2_all_attached(void) {
+    for (int i = 0; i < g_sdl2_pad_open_count; i++) {
+        if (g_sdl2_pad_is_controller[i]) {
+            if (!g_sdl2_pads[i] || !SDL_GameControllerGetAttached(g_sdl2_pads[i])) return 0;
+        } else {
+            if (!g_sdl2_joys[i] || !SDL_JoystickGetAttached(g_sdl2_joys[i])) return 0;
+        }
+    }
+    return 1;
+}
+
 static void pex_gamepad_scan_devices(void) {
     double now = now_seconds();
-    if (now - g_gamepad_probe_last_time < 1.0) return;
-    g_gamepad_probe_last_time = now;
-    gamepad_sdl2_close_all();
+    int attached = gamepad_sdl2_all_attached();
+
+    /* Do not close and reopen live controllers on every one-second probe.
+       That old behavior caused SDL/Emscripten to emit a zero trigger sample,
+       which looked like an LT/RT release and cancelled held actions. */
+    if (attached && g_sdl2_last_device_count >= 0 &&
+        now - g_gamepad_probe_last_time < 1.0) return;
+
     int total = SDL_NumJoysticks();
+    g_gamepad_probe_last_time = now;
+    if (attached && total == g_sdl2_last_device_count) return;
+
+    gamepad_sdl2_close_all();
+    g_sdl2_last_device_count = total;
     for (int i = 0; i < total && g_sdl2_pad_open_count < PEX_GAMEPAD_MAX; i++) {
         if (gamepad_sdl2_should_ignore_device(i)) continue;
         int slot = g_sdl2_pad_open_count;
@@ -552,7 +615,7 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->lx >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1; /* analog right */
     if (p->back) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* Select = jump */
     if (p->dpad_down) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;        /* D-pad Down = sneak */
-    if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;                /* R = break/attack */
+    if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;                  /* R = break/attack */
     if (p->lb) g_gamepad_vk_state[VK_RBUTTON] = 1;                        /* L = place/use */
 #else
     if (p->ly < -PEX_GAMEPAD_DEADZONE || p->dpad_up) g_gamepad_vk_state[g_opts.keys[0] & 511] = 1;
@@ -562,8 +625,8 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->a) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1;             /* jump */
     if (p->b || p->ls) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1;     /* sneak */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
-    if (p->rt > 0.35f) g_gamepad_vk_state[VK_LBUTTON] = 1;      /* break/attack */
-    if (p->lt > 0.35f) g_gamepad_vk_state[VK_RBUTTON] = 1;      /* place/use */
+    if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;         /* break/attack */
+    if (p->lt_down) g_gamepad_vk_state[VK_RBUTTON] = 1;         /* place/use */
 #endif
 }
 
@@ -688,7 +751,7 @@ static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
     if (p->dpad_left) dx = -1.0f; else if (p->dpad_right) dx = 1.0f;
     if (p->dpad_up) dy = -1.0f; else if (p->dpad_down) dy = 1.0f;
     float speed = 240.0f;
-    if (p->rb || p->rt > 0.35f) speed = 420.0f;
+    if (p->rb || p->rt_down) speed = 420.0f;
     g_gamepad_virtual_cursor_x += dx * speed * (float)dt;
     g_gamepad_virtual_cursor_y += dy * speed * (float)dt;
     if (g_gamepad_virtual_cursor_x < 2) g_gamepad_virtual_cursor_x = 2;
@@ -698,7 +761,7 @@ static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
     g_mouse_x = (int)g_gamepad_virtual_cursor_x;
     g_mouse_y = (int)g_gamepad_virtual_cursor_y;
     if (p->a && !p->prev_a) { mouse_down(g_mouse_x, g_mouse_y); mouse_up(g_mouse_x, g_mouse_y); }
-    if ((p->x && !p->prev_x) || (p->lt > 0.35f && !p->prev_lt)) mouse_right_down(g_mouse_x, g_mouse_y);
+    if ((p->x && !p->prev_x) || (p->lt_down && !p->prev_lt)) mouse_right_down(g_mouse_x, g_mouse_y);
     if (p->b && !p->prev_b) pex_gamepad_back_action();
 }
 
@@ -713,7 +776,7 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
         player_turn_from_mouse((int)(p->rx * look), (int)(-p->ry * look));
     }
 #ifdef PEX_PLATFORM_PSP
-    if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
+    if (p->rt_down && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
     if (p->lb && !p->prev_lb) mouse_right_down(g_gui_w / 2, g_gui_h / 2); /* L = place/use */
     if (!p->lb && p->prev_lb) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
     if (p->dpad_up && !p->prev_dpad_up) { set_screen(SCREEN_INVENTORY); return; }
@@ -735,9 +798,9 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #else
-    if (p->rt > 0.35f && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
-    if (p->lt > 0.35f && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
-    if (p->lt <= 0.35f && p->prev_lt > 0.35f) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
+    if (p->rt_down && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
+    if (p->lt_down && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
+    if (!p->lt_down && p->prev_lt) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
     if (p->y && !p->prev_y) { set_screen(SCREEN_INVENTORY); return; }
     if (p->x && !p->prev_x) inventory_drop_selected_one();
     if (p->back && !p->prev_back) set_screen(SCREEN_PAUSE);
@@ -756,6 +819,9 @@ static void pex_gamepad_update(void) {
     PexGamepadState oldpads[PEX_GAMEPAD_MAX];
     memcpy(oldpads, g_gamepads, sizeof(oldpads));
     pex_gamepad_platform_poll(oldpads);
+    for (int i = 0; i < g_gamepad_count && i < PEX_GAMEPAD_MAX; i++) {
+        pex_gamepad_update_trigger_buttons(&g_gamepads[i], &oldpads[i]);
+    }
     PexGamepadState *p = pex_gamepad_primary_pad();
 #if defined(PEX_PLATFORM_WII)
     /* Wii has no keyboard/mouse gameplay path.  Keep the controller path active

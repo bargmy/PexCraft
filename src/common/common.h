@@ -738,6 +738,8 @@ typedef struct PexGamepadState {
     int prev_a, prev_b, prev_x, prev_y;
     int prev_lb, prev_rb, prev_back, prev_start;
     int prev_lt, prev_rt;
+    int lt_down, rt_down;
+    int lt_release_frames, rt_release_frames;
     int prev_dpad_up, prev_dpad_down, prev_dpad_left, prev_dpad_right;
 } PexGamepadState;
 
