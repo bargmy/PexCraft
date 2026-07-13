@@ -1659,6 +1659,7 @@ jobs:
   wasm:
     needs: notify_build_start
     name: WebAssembly standalone HTML - ${{ github.event.head_commit.message || github.ref_name }}
+    # WASM is part of this main workflow. It intentionally has no separate workflow file.
     runs-on: ubuntu-latest
 
     steps:
