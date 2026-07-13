@@ -1543,6 +1543,21 @@ static double g_gamepad_nav_last_time = 0.0;
 static double g_gamepad_slider_last_time = 0.0;
 static double g_gamepad_click_last_time = 0.0;
 static double g_gamepad_probe_last_time = -10.0;
+
+/* 16x16 cells in src/assets/XINPUT.png.  The updated sheet keeps the face
+   buttons on row zero, adds left/right-stick glyphs on row one, and moves the
+   bumpers to row two.  Keep these names centralized so UI hints never depend
+   on fragile numeric tile IDs. */
+#define PEX_XINPUT_TILE_A   0
+#define PEX_XINPUT_TILE_B   1
+#define PEX_XINPUT_TILE_X   2
+#define PEX_XINPUT_TILE_Y   3
+#define PEX_XINPUT_TILE_LS  4
+#define PEX_XINPUT_TILE_RS  5
+#define PEX_XINPUT_TILE_RT  6
+#define PEX_XINPUT_TILE_LT  7
+#define PEX_XINPUT_TILE_LB  8
+#define PEX_XINPUT_TILE_RB  9
 static PexInputFocusMode g_input_focus_mode = PEX_INPUT_FOCUS_MOUSE;
 static PexSystemInfo g_system_info;
 static double g_system_info_last_time = -10.0;

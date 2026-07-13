@@ -728,8 +728,8 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
 static ScreenId g_gamepad_last_ui_screen = (ScreenId)-1;
 static int g_gamepad_language_index = -1;
 static int g_gamepad_texpack_index = -1;
-static int g_gamepad_creative_focus = 0; /* 0..71 catalog, 72..80 hotbar */
 static int g_gamepad_statistics_sort_focus = 0;
+static double g_gamepad_ui_scroll_last_time = 0.0;
 
 static int pex_gamepad_pressed(int down, int prev) { return down && !prev; }
 
@@ -763,8 +763,16 @@ static Button *pex_gamepad_selected_button(void) {
     return NULL;
 }
 
-/* Spatial navigation is much friendlier than array-order navigation on the
-   many two-column legacy menus.  It also works for text-field hitboxes. */
+static float pex_gamepad_interval_gap(float a0, float a1, float b0, float b1) {
+    if (a1 < b0) return b0 - a1;
+    if (b1 < a0) return a0 - b1;
+    return 0.0f;
+}
+
+/* Navigate by actual screen geometry, not button IDs or construction order.
+   Controls whose horizontal/vertical spans overlap are strongly preferred,
+   so Down selects the button visually underneath instead of a closer diagonal
+   control.  Edges intentionally do not wrap. */
 static void pex_gamepad_nav_spatial(int dx, int dy) {
     Button *cur = pex_gamepad_selected_button();
     if (!cur || (!dx && !dy)) return;
@@ -778,29 +786,34 @@ static void pex_gamepad_nav_spatial(int dx, int dy) {
         if (b == cur || !pex_gamepad_button_focusable(b)) continue;
         float bx = (float)b->x + (float)b->w * 0.5f;
         float by = (float)b->y + (float)b->h * 0.5f;
-        float vx = bx - cx;
-        float vy = by - cy;
-        float forward = vx * (float)dx + vy * (float)dy;
-        if (forward <= 1.0f) continue;
-        float side = vx * (float)(-dy) + vy * (float)dx;
-        /* Strongly prefer same-row/same-column candidates, then distance. */
-        double score = (double)forward * (double)forward +
-                       (double)side * (double)side * 4.0;
-        if (score < best_score) { best_score = score; best = i; }
-    }
-
-    /* At an edge, wrap to the furthest control in the opposite direction. */
-    if (best < 0) {
-        double best_wrap = -1.0e30;
-        for (int i = 0; i < g_button_count; ++i) {
-            Button *b = &g_buttons[i];
-            if (!pex_gamepad_button_focusable(b)) continue;
-            float bx = (float)b->x + (float)b->w * 0.5f;
-            float by = (float)b->y + (float)b->h * 0.5f;
-            double projection = (double)bx * (double)dx + (double)by * (double)dy;
-            projection = -projection;
-            if (projection > best_wrap) { best_wrap = projection; best = i; }
+        float forward;
+        float cross_gap;
+        float cross_center;
+        if (dy != 0) {
+            if ((dy > 0 && by <= cy + 1.0f) || (dy < 0 && by >= cy - 1.0f)) continue;
+            forward = dy > 0
+                ? (float)b->y - (float)(cur->y + cur->h)
+                : (float)cur->y - (float)(b->y + b->h);
+            if (forward < 0.0f) forward = 0.0f;
+            cross_gap = pex_gamepad_interval_gap((float)cur->x, (float)(cur->x + cur->w),
+                                                 (float)b->x, (float)(b->x + b->w));
+            cross_center = fabsf(bx - cx);
+        } else {
+            if ((dx > 0 && bx <= cx + 1.0f) || (dx < 0 && bx >= cx - 1.0f)) continue;
+            forward = dx > 0
+                ? (float)b->x - (float)(cur->x + cur->w)
+                : (float)cur->x - (float)(b->x + b->w);
+            if (forward < 0.0f) forward = 0.0f;
+            cross_gap = pex_gamepad_interval_gap((float)cur->y, (float)(cur->y + cur->h),
+                                                 (float)b->y, (float)(b->y + b->h));
+            cross_center = fabsf(by - cy);
         }
+        /* Crossing out of the current row/column costs far more than moving
+           farther along it; center distance breaks ties between overlaps. */
+        double score = (double)cross_gap * 100000.0 +
+                       (double)forward * 100.0 +
+                       (double)cross_center;
+        if (score < best_score) { best_score = score; best = i; }
     }
 
     if (best >= 0) {
@@ -829,7 +842,6 @@ static void pex_gamepad_reset_ui_state_if_needed(void) {
     g_gamepad_virtual_cursor_active = 0;
     if (g_screen == SCREEN_LANGUAGE) g_gamepad_language_index = pex_current_language_index();
     if (g_screen == SCREEN_TEXPACK) g_gamepad_texpack_index = g_selected_texpack;
-    if (g_screen == SCREEN_CREATIVE) g_gamepad_creative_focus = 0;
     if (g_screen == SCREEN_STATISTICS) g_gamepad_statistics_sort_focus = 0;
 }
 
@@ -842,8 +854,8 @@ static int pex_gamepad_world_screen_update(PexGamepadState *p, double now) {
         rebuild_screen();
     }
 
-    int nav_down = p->dpad_down || p->ly > 0.55f;
-    int nav_up = p->dpad_up || p->ly < -0.55f;
+    int nav_down = p->dpad_down || p->ly > 0.55f || p->ry > 0.55f;
+    int nav_up = p->dpad_up || p->ly < -0.55f || p->ry < -0.55f;
     if ((nav_down || nav_up) && now - g_gamepad_nav_last_time > 0.16) {
         world_save_select_relative(nav_down ? 1 : -1);
         g_gamepad_nav_last_time = now;
@@ -896,8 +908,8 @@ static int pex_gamepad_language_update(PexGamepadState *p, double now) {
         g_gamepad_language_index = pex_current_language_index();
 
     int delta = 0;
-    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = 1;
-    else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = -1;
+    if ((p->dpad_down || p->ly > 0.55f || p->ry > 0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = 1;
+    else if ((p->dpad_up || p->ly < -0.55f || p->ry < -0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = -1;
     if (pex_gamepad_pressed(p->rb, p->prev_rb)) delta = pex_language_visible_rows() - 1;
     if (pex_gamepad_pressed(p->lb, p->prev_lb)) delta = -(pex_language_visible_rows() - 1);
     if (delta) {
@@ -949,8 +961,8 @@ static int pex_gamepad_texpack_update(PexGamepadState *p, double now) {
         g_gamepad_texpack_index = g_selected_texpack;
 
     int delta = 0;
-    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = 1;
-    else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = -1;
+    if ((p->dpad_down || p->ly > 0.55f || p->ry > 0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = 1;
+    else if ((p->dpad_up || p->ly < -0.55f || p->ry < -0.55f) && now - g_gamepad_nav_last_time > 0.15) delta = -1;
     if (pex_gamepad_pressed(p->rb, p->prev_rb)) delta = 5;
     if (pex_gamepad_pressed(p->lb, p->prev_lb)) delta = -5;
     if (delta) {
@@ -1007,9 +1019,9 @@ static int pex_gamepad_statistics_update(PexGamepadState *p, double now) {
     if (pex_gamepad_pressed(p->lb, p->prev_lb)) pex_statistics_set_tab((g_pex_statistics_tab + 2) % 3);
     if (pex_gamepad_pressed(p->rb, p->prev_rb)) pex_statistics_set_tab((g_pex_statistics_tab + 1) % 3);
 
-    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.12) {
+    if ((p->dpad_down || p->ly > 0.55f || p->ry > 0.55f) && now - g_gamepad_nav_last_time > 0.12) {
         pex_statistics_scroll_by(1); g_gamepad_nav_last_time = now;
-    } else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.12) {
+    } else if ((p->dpad_up || p->ly < -0.55f || p->ry < -0.55f) && now - g_gamepad_nav_last_time > 0.12) {
         pex_statistics_scroll_by(-1); g_gamepad_nav_last_time = now;
     }
     if (g_pex_statistics_tab != 0) {
@@ -1049,83 +1061,16 @@ static int pex_gamepad_virtual_keyboard_update(PexGamepadState *p, double now) {
     return 1;
 }
 
-static void pex_gamepad_creative_focus_mouse(void) {
-    int x = (g_gui_w - CREATIVE_XSIZE) / 2;
-    int y = (g_gui_h - CREATIVE_YSIZE) / 2;
-    if (g_gamepad_creative_focus < CREATIVE_COLS * CREATIVE_ROWS) {
-        int row = g_gamepad_creative_focus / CREATIVE_COLS;
-        int col = g_gamepad_creative_focus % CREATIVE_COLS;
-        int idx = (g_creative_scroll_row + row) * CREATIVE_COLS + col;
-        if (idx >= creative_catalog_count()) {
-            int last = creative_catalog_count() - g_creative_scroll_row * CREATIVE_COLS - 1;
-            if (last < 0) last = 0;
-            if (last >= CREATIVE_COLS * CREATIVE_ROWS) last = CREATIVE_COLS * CREATIVE_ROWS - 1;
-            g_gamepad_creative_focus = last;
-            row = g_gamepad_creative_focus / CREATIVE_COLS;
-            col = g_gamepad_creative_focus % CREATIVE_COLS;
-        }
-        g_mouse_x = x + 8 + col * 18 + 8;
-        g_mouse_y = y + 18 + row * 18 + 8;
-    } else {
-        int slot = g_gamepad_creative_focus - CREATIVE_COLS * CREATIVE_ROWS;
-        if (slot < 0) slot = 0;
-        if (slot > 8) slot = 8;
-        g_gamepad_creative_focus = CREATIVE_COLS * CREATIVE_ROWS + slot;
-        g_mouse_x = x + 8 + slot * 18 + 8;
-        g_mouse_y = y + 184 + 8;
+static void pex_gamepad_creative_scroll_update(PexGamepadState *p, double now) {
+    if (!p || g_screen != SCREEN_CREATIVE) return;
+    if (fabsf(p->ry) > 0.45f && now - g_gamepad_ui_scroll_last_time > 0.09) {
+        int rows = p->ry > 0.0f ? 1 : -1;
+        if (fabsf(p->ry) > 0.85f) rows *= 2;
+        creative_scroll_by(rows);
+        g_gamepad_ui_scroll_last_time = now;
     }
-}
-
-static int pex_gamepad_creative_update(PexGamepadState *p, double now) {
-    if (g_screen != SCREEN_CREATIVE) return 0;
-    g_gamepad_virtual_cursor_active = 0;
-    int dx = 0, dy = 0;
-    if (p->dpad_left || p->lx < -0.55f) dx = -1;
-    else if (p->dpad_right || p->lx > 0.55f) dx = 1;
-    if (p->dpad_up || p->ly < -0.55f) dy = -1;
-    else if (p->dpad_down || p->ly > 0.55f) dy = 1;
-    if ((dx || dy) && now - g_gamepad_nav_last_time > 0.14) {
-        if (g_gamepad_creative_focus < 72) {
-            int row = g_gamepad_creative_focus / 8;
-            int col = g_gamepad_creative_focus % 8;
-            if (dx) col = (col + dx + 8) % 8;
-            if (dy < 0) {
-                if (row > 0) row--;
-                else creative_scroll_by(-1);
-            } else if (dy > 0) {
-                if (row < 8) row++;
-                else { g_gamepad_creative_focus = 72 + (col > 8 ? 8 : col); row = -1; }
-            }
-            if (row >= 0) g_gamepad_creative_focus = row * 8 + col;
-        } else {
-            int slot = g_gamepad_creative_focus - 72;
-            if (dx) slot = (slot + dx + 9) % 9;
-            if (dy < 0) g_gamepad_creative_focus = 64 + (slot > 7 ? 7 : slot);
-            else g_gamepad_creative_focus = 72 + slot;
-        }
-        pex_gamepad_creative_focus_mouse();
-        g_gamepad_nav_last_time = now;
-    } else pex_gamepad_creative_focus_mouse();
-
-    if (pex_gamepad_pressed(p->lb, p->prev_lb)) { creative_scroll_page(-1); pex_gamepad_creative_focus_mouse(); }
-    if (pex_gamepad_pressed(p->rb, p->prev_rb)) { creative_scroll_page(1); pex_gamepad_creative_focus_mouse(); }
-    if (pex_gamepad_pressed(p->a, p->prev_a) || pex_gamepad_pressed(p->rt_down, p->prev_rt))
-        creative_mouse_click(g_mouse_x, g_mouse_y, 0);
-    if (pex_gamepad_pressed(p->x, p->prev_x) || pex_gamepad_pressed(p->lt_down, p->prev_lt))
-        creative_mouse_click(g_mouse_x, g_mouse_y, 1);
-    if (pex_gamepad_pressed(p->y, p->prev_y) && g_gamepad_creative_focus < 72) {
-        int idx = creative_item_index_at(g_mouse_x, g_mouse_y);
-        if (idx >= 0) {
-            ItemStack clicked = creative_stack_for_index(idx);
-            if (!stack_empty(&clicked)) {
-                g_carried_stack = clicked;
-                g_carried_stack.count = stack_limit_for_id(g_carried_stack.id);
-            }
-        }
-    }
-    if (pex_gamepad_pressed(p->b, p->prev_b) || pex_gamepad_pressed(p->back, p->prev_back) ||
-        pex_gamepad_pressed(p->start, p->prev_start)) set_screen(SCREEN_INGAME);
-    return 1;
+    if (pex_gamepad_pressed(p->lb, p->prev_lb)) creative_scroll_page(-1);
+    if (pex_gamepad_pressed(p->rb, p->prev_rb)) creative_scroll_page(1);
 }
 
 static int pex_gamepad_multiplayer_list_update(PexGamepadState *p, double now) {
@@ -1134,9 +1079,9 @@ static int pex_gamepad_multiplayer_list_update(PexGamepadState *p, double now) {
     int count = pex_mp_server_count_get();
     if (count <= 0) return 0;
     if (pex_mp_server_selected_get() < 0) { pex_mp_server_select(0); rebuild_screen(); }
-    if ((p->dpad_down || p->ly > 0.55f) && now - g_gamepad_nav_last_time > 0.15) {
+    if ((p->dpad_down || p->ly > 0.55f || p->ry > 0.55f) && now - g_gamepad_nav_last_time > 0.15) {
         pex_mp_server_select(pex_mp_server_selected_get() + 1); rebuild_screen(); g_gamepad_nav_last_time = now;
-    } else if ((p->dpad_up || p->ly < -0.55f) && now - g_gamepad_nav_last_time > 0.15) {
+    } else if ((p->dpad_up || p->ly < -0.55f || p->ry < -0.55f) && now - g_gamepad_nav_last_time > 0.15) {
         pex_mp_server_select(pex_mp_server_selected_get() - 1); rebuild_screen(); g_gamepad_nav_last_time = now;
     }
     if (pex_gamepad_pressed(p->lb, p->prev_lb)) { pex_mp_server_select(pex_mp_server_selected_get() - 5); rebuild_screen(); }
@@ -1195,6 +1140,14 @@ static void pex_gamepad_menu_update(PexGamepadState *p) {
     if (p->dpad_up || p->ly < -0.60f) dy = -1;
     else if (p->dpad_down || p->ly > 0.60f) dy = 1;
 
+    /* Resolve diagonal stick/D-pad input to one dominant axis before spatial
+       navigation.  This prevents a slightly diagonal press from skipping to
+       a control in the neighbouring column. */
+    if (dx && dy) {
+        if (fabsf(p->lx) > fabsf(p->ly)) dy = 0;
+        else dx = 0;
+    }
+
     sel = pex_gamepad_selected_button();
     if (sel && sel->kind == BUTTON_SLIDER) {
         float delta = 0.0f;
@@ -1234,7 +1187,7 @@ static void pex_gamepad_menu_update(PexGamepadState *p) {
 static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
     if (!p || !pex_gamepad_inventory_screen()) { g_gamepad_virtual_cursor_active = 0; return; }
     pex_gamepad_reset_ui_state_if_needed();
-    if (pex_gamepad_creative_update(p, now_seconds())) return;
+    pex_gamepad_creative_scroll_update(p, now_seconds());
 
     g_gamepad_virtual_cursor_active = 1;
     if (!g_gamepad_virtual_cursor_x || !g_gamepad_virtual_cursor_y) {
@@ -1246,7 +1199,7 @@ static void pex_gamepad_inventory_update(PexGamepadState *p, double dt) {
     if (p->dpad_left) dx = -1.0f; else if (p->dpad_right) dx = 1.0f;
     if (p->dpad_up) dy = -1.0f; else if (p->dpad_down) dy = 1.0f;
     float speed = 240.0f;
-    if (p->rb || p->rt_down) speed = 420.0f;
+    if (p->rb) speed = 420.0f;
     g_gamepad_virtual_cursor_x += dx * speed * (float)dt;
     g_gamepad_virtual_cursor_y += dy * speed * (float)dt;
     if (g_gamepad_virtual_cursor_x < 2) g_gamepad_virtual_cursor_x = 2;
@@ -1313,7 +1266,10 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
         return;
     }
     if (p->dpad_right && !p->prev_dpad_right) third_person_view_cycle();
-    if (p->y && !p->prev_y) { set_screen(SCREEN_INVENTORY); return; }
+    if (p->y && !p->prev_y) {
+        set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY);
+        return;
+    }
     if (p->x && !p->prev_x) inventory_drop_selected_one();
     if (p->back && !p->prev_back) set_screen(SCREEN_PAUSE);
     if (p->lb && !p->prev_lb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
@@ -1381,11 +1337,12 @@ static void draw_gamepad_virtual_cursor(void) {
     if (!g_gamepad_virtual_cursor_active || !pex_gamepad_inventory_screen()) return;
     int x = (int)g_gamepad_virtual_cursor_x;
     int y = (int)g_gamepad_virtual_cursor_y;
-    /* Compact virtual cursor: still a thick +, but no longer covers slots/items. */
-    draw_rect(x - 8, y - 2, x + 9, y + 3, (int)0xD0FFFFFFu);
-    draw_rect(x - 2, y - 8, x + 3, y + 9, (int)0xD0FFFFFFu);
-    draw_rect(x - 6, y - 1, x + 7, y + 2, (int)0xFF000000u);
-    draw_rect(x - 1, y - 6, x + 2, y + 7, (int)0xFF000000u);
+    /* One-pixel white core with a one-pixel dark outline.  This remains clear
+       over bright slots without hiding the item beneath it. */
+    draw_rect(x - 7, y - 1, x + 8, y + 2, (int)0xD0000000u);
+    draw_rect(x - 1, y - 7, x + 2, y + 8, (int)0xD0000000u);
+    draw_rect(x - 6, y, x + 7, y + 1, (int)0xFFFFFFFFu);
+    draw_rect(x, y - 6, x + 1, y + 7, (int)0xFFFFFFFFu);
 }
 
 
@@ -1399,11 +1356,7 @@ static void pex_gamepad_draw_focus_box(int x, int y, int w, int h) {
 
 static void pex_gamepad_draw_hint(const char *text) {
     if (!text || !*text) return;
-    int w = text_width(text) + 12;
-    int x = (g_gui_w - w) / 2;
-    int y = g_gui_h - 13;
-    draw_rect(x, y - 2, x + w, y + 10, (int)0xB0000000u);
-    draw_centered_text(text, g_gui_w / 2, y, 0xFFFFFF);
+    draw_xinput_hint_row(text, g_gui_h - 20, 0xFFFFFF, 1);
 }
 
 /* Draw focus for controls that intentionally have no normal Button rendering,
@@ -1416,42 +1369,34 @@ static void draw_gamepad_ui_focus_and_hint(void) {
         g_gamepad_language_index >= 0 && g_gamepad_language_index < pex_language_count()) {
         int y = pex_language_row_y(g_gamepad_language_index) - 2;
         pex_gamepad_draw_focus_box(g_gui_w / 2 - 110, y, 220, 18);
-        pex_gamepad_draw_hint("D-pad select   A apply   LB/RB page   B back");
+        pex_gamepad_draw_hint("{LS}/D-pad Select  {A} Apply  {LB}/{RB} Page  {B} Back");
     } else if (g_screen == SCREEN_TEXPACK && g_gamepad_texpack_index >= 0 &&
                g_gamepad_texpack_index < g_texpack_count) {
         int y = 36 + g_gamepad_texpack_index * 36 - g_texpack_scroll;
         pex_gamepad_draw_focus_box(g_gui_w / 2 - 110, y, 220, 32);
-        pex_gamepad_draw_hint("D-pad select   A apply   LB/RB page   X import   B back");
+        pex_gamepad_draw_hint("{LS}/D-pad Select  {A} Apply  {LB}/{RB} Page  {X} Import  {B} Back");
     } else if (g_screen == SCREEN_CREATIVE) {
-        int x = (g_gui_w - CREATIVE_XSIZE) / 2;
-        int y = (g_gui_h - CREATIVE_YSIZE) / 2;
-        if (g_gamepad_creative_focus < 72) {
-            int row = g_gamepad_creative_focus / 8;
-            int col = g_gamepad_creative_focus % 8;
-            pex_gamepad_draw_focus_box(x + 8 + col * 18, y + 18 + row * 18, 16, 16);
-        } else {
-            int slot = g_gamepad_creative_focus - 72;
-            pex_gamepad_draw_focus_box(x + 8 + slot * 18, y + 184, 16, 16);
-        }
-        pex_gamepad_draw_hint("A/RT take   X/LT split   Y full stack   LB/RB page   B close");
+        pex_gamepad_draw_hint("{LS} Cursor  {A}/{RT} Take  {X}/{LT} Split  {RS} Scroll  {B} Close");
+    } else if (pex_gamepad_inventory_screen()) {
+        pex_gamepad_draw_hint("{LS} Cursor  {A}/{RT} Take  {X}/{LT} Split  {Y} Drop  {B} Close");
     } else if (g_screen == SCREEN_STATISTICS) {
         if (g_pex_statistics_tab != 0) {
             int base_x = g_gui_w / 2 - 108;
             int offsets[3] = {97, 147, 197};
             pex_gamepad_draw_focus_box(base_x + offsets[g_gamepad_statistics_sort_focus], 33, 18, 18);
         }
-        pex_gamepad_draw_hint("LB/RB tabs   Up/Down scroll   Left/Right sort   A cycle   B back");
+        pex_gamepad_draw_hint("{LB}/{RB} Tabs  {RS}/D-pad Scroll  Left/Right Sort  {A} Cycle  {B} Back");
     } else if (g_screen == SCREEN_ACHIEVEMENTS) {
-        pex_gamepad_draw_hint("D-pad/left stick pan   LB/RB faster   Y reset   A/B close");
+        pex_gamepad_draw_hint("{LS}/D-pad Pan  {LB}/{RB} Faster  {Y} Reset  {A}/{B} Close");
     } else if (g_screen == SCREEN_MULTIPLAYER && pex_mp_server_mode_get() == 0) {
-        pex_gamepad_draw_hint("A join  X add  Y edit  RT direct  LT delete  Menu refresh  B back");
+        pex_gamepad_draw_hint("{A} Join  {X} Add  {Y} Edit  {RT} Direct  {LT} Delete  {B} Back");
     } else if (g_screen == SCREEN_CONTROLS) {
-        pex_gamepad_draw_hint("Controller layout is fixed   D-pad navigate   B back");
+        pex_gamepad_draw_hint("Controller layout fixed  {LS}/D-pad Navigate  {B} Back");
     } else {
         Button *b = pex_gamepad_selected_button();
         if (b && b->kind == BUTTON_HITBOX && b->id >= 9000 && b->id <= 9005) {
             pex_gamepad_draw_focus_box(b->x, b->y, b->w, b->h);
-            pex_gamepad_draw_hint("A/OK edit text   B back");
+            pex_gamepad_draw_hint("{A}/OK Edit text  {B} Back");
         }
     }
 }
@@ -1600,8 +1545,10 @@ static void draw_system_info_screen(void) {
     draw_text("TV remote: D-pad moves menus/game, OK selects/jumps, Back pauses.", x, g_gui_h - 44, 10526880);
     draw_text("Colors: Red break, Green place, Yellow inventory, Blue sneak/back. 1-9 hotbar, 0 camera.", x, g_gui_h - 34, 10526880);
 #else
-    draw_text("Menu: D-pad/left stick moves, A selects, B goes back. Sliders: right stick.", x, g_gui_h - 44, 10526880);
-    draw_text("Gameplay: left stick move, right stick look, RT break, LT place, LB/RB hotbar.", x, g_gui_h - 34, 10526880);
+    draw_xinput_hint_row("Menu: {LS}/D-pad Move  {A} Select  {B} Back  {RS} Sliders",
+                         g_gui_h - 45, 0xFFFFFF, 0);
+    draw_xinput_hint_row("Game: {LS} Move  {RS} Look  {RT} Break  {LT} Use  {LB}/{RB} Hotbar",
+                         g_gui_h - 25, 0xFFFFFF, 0);
 #endif
     draw_all_buttons();
 }

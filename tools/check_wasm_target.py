@@ -116,7 +116,7 @@ def main() -> int:
     require(gui, 'tr_key_default("key.use", "Use Item")', "gui.c")
     require(gui, "int optional_x = inventory_x + 18 + text_width(inventory_label) + 16;", "gui.c")
     require(gui, "int show_optional = ingame_has_context_use_target();", "gui.c")
-    require(gui, "draw_xinput_hud_tile(7, optional_x, y);", "gui.c")
+    require(gui, "draw_xinput_hud_tile(PEX_XINPUT_TILE_LT, optional_x, y);", "gui.c")
     require(gui, "if (show_optional)", "gui.c")
     require(gui, 'snprintf(field, sizeof(field), "%s%s", g_chat_input', "gui.c")
     reject(gui, r'snprintf\(field[^\n]*"> %s%s"', "gui.c")

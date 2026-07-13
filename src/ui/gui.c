@@ -408,14 +408,16 @@ static void draw_xinput_hud_tile(int tile, int x, int y) {
            RGBA pixels compiled from XINPUT.png into the executable. */
         const char *label = "?";
         int color = 0xFFFFFF;
-        if (tile == 0) { label = "A"; color = 0x55FF55; }
-        else if (tile == 1) { label = "B"; color = 0xFF5555; }
-        else if (tile == 2) { label = "X"; color = 0x5555FF; }
-        else if (tile == 3) { label = "Y"; color = 0xFFFF55; }
-        else if (tile == 4) label = "LB";
-        else if (tile == 5) label = "RB";
-        else if (tile == 6) label = "RT";
-        else if (tile == 7) label = "LT";
+        if (tile == PEX_XINPUT_TILE_A) { label = "A"; color = 0x55FF55; }
+        else if (tile == PEX_XINPUT_TILE_B) { label = "B"; color = 0xFF5555; }
+        else if (tile == PEX_XINPUT_TILE_X) { label = "X"; color = 0x5555FF; }
+        else if (tile == PEX_XINPUT_TILE_Y) { label = "Y"; color = 0xFFFF55; }
+        else if (tile == PEX_XINPUT_TILE_LS) label = "LS";
+        else if (tile == PEX_XINPUT_TILE_RS) label = "RS";
+        else if (tile == PEX_XINPUT_TILE_LB) label = "LB";
+        else if (tile == PEX_XINPUT_TILE_RB) label = "RB";
+        else if (tile == PEX_XINPUT_TILE_RT) label = "RT";
+        else if (tile == PEX_XINPUT_TILE_LT) label = "LT";
         draw_rect(x + 2, y + 2, x + 14, y + 14, 0xE0000000);
         draw_text_no_shadow(label, x + (16 - text_width(label)) / 2, y + 4, color);
         return;
@@ -441,6 +443,96 @@ static void draw_xinput_hud_tile(int tile, int x, int y) {
     glEnd();
 }
 
+static int pex_xinput_hint_token_tile(const char *token, int len) {
+    if (!token || len <= 0) return -1;
+    if (len == 1 && token[0] == 'A') return PEX_XINPUT_TILE_A;
+    if (len == 1 && token[0] == 'B') return PEX_XINPUT_TILE_B;
+    if (len == 1 && token[0] == 'X') return PEX_XINPUT_TILE_X;
+    if (len == 1 && token[0] == 'Y') return PEX_XINPUT_TILE_Y;
+    if (len == 2 && token[0] == 'L' && token[1] == 'S') return PEX_XINPUT_TILE_LS;
+    if (len == 2 && token[0] == 'R' && token[1] == 'S') return PEX_XINPUT_TILE_RS;
+    if (len == 2 && token[0] == 'L' && token[1] == 'B') return PEX_XINPUT_TILE_LB;
+    if (len == 2 && token[0] == 'R' && token[1] == 'B') return PEX_XINPUT_TILE_RB;
+    if (len == 2 && token[0] == 'L' && token[1] == 'T') return PEX_XINPUT_TILE_LT;
+    if (len == 2 && token[0] == 'R' && token[1] == 'T') return PEX_XINPUT_TILE_RT;
+    return -1;
+}
+
+static int pex_xinput_hint_text_span_width(const char *start, int len) {
+    char buf[256];
+    if (!start || len <= 0) return 0;
+    if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
+    memcpy(buf, start, (size_t)len);
+    buf[len] = 0;
+    return text_width(buf);
+}
+
+/* Markup uses compact controller tokens such as {A}, {B}, {LS}, {RS},
+   {LT}, {RT}, {LB}, and {RB}.  Literal text remains Minecraft-font text. */
+static int pex_xinput_hint_markup_width(const char *markup) {
+    const char *p = markup;
+    int width = 0;
+    if (!markup) return 0;
+    while (*p) {
+        if (*p == '{') {
+            const char *end = strchr(p + 1, '}');
+            if (end && end - p <= 4) {
+                int tile = pex_xinput_hint_token_tile(p + 1, (int)(end - p - 1));
+                if (tile >= 0) { width += 18; p = end + 1; continue; }
+            }
+            width += pex_xinput_hint_text_span_width(p, 1);
+            ++p;
+            continue;
+        }
+        {
+            const char *start = p;
+            while (*p && *p != '{') ++p;
+            width += pex_xinput_hint_text_span_width(start, (int)(p - start));
+        }
+    }
+    return width;
+}
+
+static void draw_xinput_hint_row(const char *markup, int y, int color, int background) {
+    const char *p = markup;
+    int width = pex_xinput_hint_markup_width(markup);
+    int x = (g_gui_w - width) / 2;
+    if (!markup || !*markup) return;
+    if (background) draw_rect(x - 6, y - 2, x + width + 6, y + 18, (int)0xB0000000u);
+    while (*p) {
+        if (*p == '{') {
+            const char *end = strchr(p + 1, '}');
+            if (end && end - p <= 4) {
+                int tile = pex_xinput_hint_token_tile(p + 1, (int)(end - p - 1));
+                if (tile >= 0) {
+                    draw_xinput_hud_tile(tile, x, y);
+                    x += 18;
+                    p = end + 1;
+                    continue;
+                }
+            }
+            draw_text("{", x, y + 4, color);
+            x += text_width("{");
+            ++p;
+            continue;
+        }
+        {
+            const char *start = p;
+            char buf[256];
+            int len;
+            while (*p && *p != '{') ++p;
+            len = (int)(p - start);
+            if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
+            if (len > 0) {
+                memcpy(buf, start, (size_t)len);
+                buf[len] = 0;
+                draw_text(buf, x, y + 4, color);
+                x += text_width(buf);
+            }
+        }
+    }
+}
+
 static void draw_xinput_hud_prompts(int hotbar_y) {
     if (!pex_xinput_hud_active()) return;
 
@@ -463,11 +555,11 @@ static void draw_xinput_hud_prompts(int hotbar_y) {
         }
     }
 
-    draw_xinput_hud_tile(3, inventory_x, y); /* Y */
+    draw_xinput_hud_tile(PEX_XINPUT_TILE_Y, inventory_x, y);
     draw_text(inventory_label, inventory_x + 18, y + 4, 0xFFFFFF);
 
     if (show_optional) {
-        draw_xinput_hud_tile(7, optional_x, y); /* LT */
+        draw_xinput_hud_tile(PEX_XINPUT_TILE_LT, optional_x, y);
         draw_text(use_label, optional_x + 18, y + 4, 0xFFFFFF);
     }
 }
@@ -1400,10 +1492,9 @@ static void draw_virtual_keyboard_screen(void) {
     (void)cap;
     draw_text_field_box(dst ? dst : "", g_gui_w / 2 - 130, 48, 260, 20, 1);
 
-    static const char *rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm_-."};
     int y = 84;
     for (int r = 0; r < 4; ++r) {
-        const char *row = rows[r];
+        const char *row = pex_virtual_keyboard_row_text(r);
         int n = (int)strlen(row);
         int total = n * 20;
         int x = g_gui_w / 2 - total / 2;
@@ -1429,8 +1520,10 @@ static void draw_virtual_keyboard_screen(void) {
         draw_centered_text(actions[i], x + widths[i] / 2, y + 5, selected ? 0xFFFF55 : 0xFFFFFF);
         x += widths[i] + 4;
     }
-    draw_centered_text("D-pad: move  A/OK: select  X: erase  Y: space", g_gui_w / 2, g_gui_h - 30, 10526880);
-    draw_centered_text("LB: caps  Menu/RB: done  B/Back: cancel", g_gui_w / 2, g_gui_h - 18, 10526880);
+    draw_xinput_hint_row("{LS}/D-pad Move  {A}/OK Select  {X} Erase  {Y} Space",
+                         g_gui_h - 42, 0xFFFFFF, 1);
+    draw_xinput_hint_row("{LB} Caps  Menu/{RB} Done  {B}/Back Cancel",
+                         g_gui_h - 21, 0xFFFFFF, 1);
 }
 
 static void draw_world_type_screen(void) {

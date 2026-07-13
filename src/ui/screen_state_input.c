@@ -109,6 +109,9 @@ static void set_screen(ScreenId s) {
     pex_ui_text_input_end();
     clear_buttons();
     rebuild_screen();
+    if (s == SCREEN_VIRTUAL_KEYBOARD) {
+        pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 130, 48, 260, 20);
+    }
     /* The old title-music start lived only inside the one-time Mojang boot
        sequence.  Returning from a world therefore reset the flag but never
        requested another menu track. */
@@ -120,6 +123,7 @@ static void set_screen(ScreenId s) {
             pex_virtual_keyboard_prepare(SCREEN_CHAT);
             g_screen = SCREEN_VIRTUAL_KEYBOARD;
             rebuild_screen();
+            pex_ui_text_input_begin_gui_rect(g_gui_w / 2 - 130, 48, 260, 20);
         } else {
             pex_ui_text_input_begin_gui_rect(4, g_gui_h - 16, g_gui_w - 8, 14);
         }
@@ -220,7 +224,24 @@ static void pex_virtual_keyboard_prepare(ScreenId return_screen) {
     g_virtual_keyboard_row = 0;
     g_virtual_keyboard_col = 0;
     g_virtual_keyboard_caps = 0;
-    g_ui_text_input_active = 1;
+    /* set_screen() starts platform text input after it has rebuilt the couch
+       keyboard.  Chat uses the same start call in its direct transition path. */
+}
+
+static const char *pex_virtual_keyboard_row_text(int row) {
+    static const char *rows[] = {
+        "1234567890",
+        "qwertyuiop",
+        "asdfghjkl",
+        "zxcvbnm_-./"
+    };
+    if (row < 0 || row >= (int)ARRAY_COUNT(rows)) return "";
+    return rows[row];
+}
+
+static int pex_virtual_keyboard_row_length(int row) {
+    if (row == 4) return 5;
+    return (int)strlen(pex_virtual_keyboard_row_text(row));
 }
 
 static char *pex_virtual_keyboard_target(size_t *cap) {
@@ -267,7 +288,7 @@ static void pex_virtual_keyboard_backspace(void) {
 
 static void pex_virtual_keyboard_done(void) {
     ScreenId ret = g_virtual_keyboard_return_screen;
-    g_ui_text_input_active = 0;
+    pex_ui_text_input_end();
     set_screen(ret);
     if (ret == SCREEN_CHAT) {
         if (strlen(g_chat_input) > 0) {
@@ -281,14 +302,13 @@ static void pex_virtual_keyboard_done(void) {
 
 static void pex_virtual_keyboard_cancel(void) {
     ScreenId ret = g_virtual_keyboard_return_screen;
-    g_ui_text_input_active = 0;
+    pex_ui_text_input_end();
     set_screen(ret == SCREEN_CHAT ? SCREEN_INGAME : ret);
 }
 
 static void pex_virtual_keyboard_select(void) {
-    static const char *rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm_-."};
     if (g_virtual_keyboard_row >= 0 && g_virtual_keyboard_row < 4) {
-        const char *row = rows[g_virtual_keyboard_row];
+        const char *row = pex_virtual_keyboard_row_text(g_virtual_keyboard_row);
         int n = (int)strlen(row);
         if (g_virtual_keyboard_col < 0) g_virtual_keyboard_col = 0;
         if (g_virtual_keyboard_col >= n) g_virtual_keyboard_col = n - 1;
@@ -307,12 +327,11 @@ static void pex_virtual_keyboard_select(void) {
 }
 
 static void pex_virtual_keyboard_move(int dx, int dy) {
-    static const int row_lens[] = {10,10,9,10,5};
     g_virtual_keyboard_row += dy;
     if (g_virtual_keyboard_row < 0) g_virtual_keyboard_row = 0;
     if (g_virtual_keyboard_row > 4) g_virtual_keyboard_row = 4;
     g_virtual_keyboard_col += dx;
-    int maxc = row_lens[g_virtual_keyboard_row] - 1;
+    int maxc = pex_virtual_keyboard_row_length(g_virtual_keyboard_row) - 1;
     if (g_virtual_keyboard_col < 0) g_virtual_keyboard_col = maxc;
     if (g_virtual_keyboard_col > maxc) g_virtual_keyboard_col = 0;
 }
@@ -2221,7 +2240,9 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_DOWN) { pex_virtual_keyboard_move(0, 1); return; }
         if (vk == VK_BACK) { pex_virtual_keyboard_backspace(); return; }
         if (vk == VK_ESCAPE) { pex_virtual_keyboard_cancel(); return; }
-        if (vk == VK_RETURN || vk == ' ') { pex_virtual_keyboard_select(); return; }
+        if (vk == VK_RETURN) { pex_virtual_keyboard_done(); return; }
+        /* Printable keys, including Space and '/', arrive through WM_CHAR or
+           SDL_TEXTINPUT and are appended directly below. */
         return;
     }
     if (vk == VK_F11) { toggle_fullscreen(); return; }
@@ -2483,6 +2504,11 @@ static void handle_text_input_utf8(const char *text) {
 }
 
 static void handle_char(WPARAM ch) {
+    if (g_screen == SCREEN_VIRTUAL_KEYBOARD) {
+        if (ch == 13 || ch == 8 || ch == 9 || ch == 27) return;
+        if (ch >= 32 && ch <= 126) pex_virtual_keyboard_append((char)ch);
+        return;
+    }
     if (g_screen == SCREEN_INGAME && ch == '/') {
         g_chat_input[0] = '/';
         g_chat_input[1] = 0;
