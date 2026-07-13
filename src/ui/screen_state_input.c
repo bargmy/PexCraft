@@ -2222,6 +2222,15 @@ static void handle_keydown(WPARAM vk) {
 
     if (g_screen == SCREEN_INGAME) {
         if (vk == VK_ESCAPE) { set_screen(SCREEN_PAUSE); return; }
+        if (vk == '/') {
+            g_chat_input[0] = '/';
+            g_chat_input[1] = 0;
+            /* SDL may emit a TEXTINPUT '/' after this KEYDOWN.  Suppress only
+               that duplicate while keeping the slash already seeded here. */
+            g_suppress_next_chat_char = 1;
+            set_screen(SCREEN_CHAT);
+            return;
+        }
         if (vk == 'V' && key_down_vk(VK_F3)) {
             g_debug_menu_shown = 1;
             g_debug_task_info_shown = 0;

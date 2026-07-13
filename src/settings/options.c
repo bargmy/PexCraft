@@ -1232,6 +1232,7 @@ static int lwjgl_to_vk(int code) {
         case 57: return VK_SPACE;
         case 42: return VK_SHIFT;
         case 16: return 'Q';
+        case 18: return 'E';
         case 23: return 'I';
         case 20: return 'T';
         case 33: return 'F';
@@ -1251,6 +1252,7 @@ static int vk_to_lwjgl(int vk) {
         case VK_SPACE: return 57;
         case VK_SHIFT: return 42;
         case 'Q': return 16;
+        case 'E': return 18;
         case 'I': return 23;
         case 'T': return 20;
         case 'F': return 33;

@@ -78,6 +78,7 @@ static int sdl2_vk_from_key(SDL_Keycode key) {
         case SDLK_AC_BACK: case SDLK_ESCAPE: return VK_ESCAPE;
         case SDLK_BACKSPACE: return VK_BACK;
         case SDLK_TAB: return VK_TAB;
+        case SDLK_SLASH: case SDLK_KP_DIVIDE: return '/';
         case SDLK_LEFT: return VK_LEFT;
         case SDLK_RIGHT: return VK_RIGHT;
         case SDLK_UP: return VK_UP;

@@ -2943,7 +2943,7 @@ static const char *renderer_backend_keys[RENDERER_COUNT] = {"opengl", "d3d9", "d
 static const char *render_distance_names[4] = {"Far", "Normal", "Short", "Tiny"};
 static const char *difficulty_names[4] = {"Peaceful", "Easy", "Normal", "Hard"};
 static const char *key_action_names[10] = {"Forward", "Left", "Back", "Right", "Jump", "Sneak", "Drop", "Inventory", "Chat", "Toggle Fog"};
-static const int default_keys[10] = {'W','A','S','D',VK_SPACE,VK_SHIFT,'Q','I','T','F'};
+static const int default_keys[10] = {'W','A','S','D',VK_SPACE,VK_SHIFT,'Q','E','T','F'};
 static int lwjgl_to_vk(int code);
 static int vk_to_lwjgl(int vk);
 static void init_font_widths(void);
