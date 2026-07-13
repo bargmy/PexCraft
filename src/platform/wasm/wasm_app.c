@@ -6,6 +6,7 @@
 
 static double g_wasm_tick_accum = 0.0;
 static double g_wasm_last_idb_sync = 0.0;
+static double g_wasm_last_world_snapshot = 0.0;
 static int g_wasm_shutdown_done = 0;
 static int g_wasm_game_initialized = 0;
 
@@ -18,13 +19,16 @@ static int g_wasm_game_initialized = 0;
 
 static void wasm_sync_idbfs(void) {
     EM_ASM({
-        if (typeof FS !== 'undefined' && !Module.pexIdbSyncBusy) {
-            Module.pexIdbSyncBusy = true;
-            FS.syncfs(false, function(err) {
-                Module.pexIdbSyncBusy = false;
-                if (err) console.error('PexCraft IDBFS sync failed:', err);
-            });
-        }
+        if (Module.pexSyncPersistentStorage) Module.pexSyncPersistentStorage();
+    });
+}
+
+static void pex_wasm_open_github(void) {
+    EM_ASM({
+        var url = 'https://github.com/bargmy/PexCraft';
+        var opened = window.open(url, '_blank');
+        if (opened) opened.opener = null;
+        else window.location.href = url;
     });
 }
 
@@ -409,7 +413,8 @@ static void sdl2_handle_event(SDL_Event *e) {
                 pex_renderer_resize(g_render_w, g_render_h);
                 rebuild_screen();
             } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-                set_mouse_grabbed(0);
+                if (g_screen == SCREEN_INGAME) set_screen(SCREEN_PAUSE);
+                else set_mouse_grabbed(0);
             } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_GAINED && g_screen == SCREEN_INGAME) {
                 set_mouse_grabbed(1);
             }
@@ -505,6 +510,11 @@ EMSCRIPTEN_KEEPALIVE void pex_wasm_visibility_flush(void) {
     if (g_wasm_game_initialized && !g_wasm_shutdown_done) save_world_state_for_exit();
 }
 
+EMSCRIPTEN_KEEPALIVE void pex_wasm_pointer_lock_lost(void) {
+    if (g_wasm_game_initialized && !g_wasm_shutdown_done && g_screen == SCREEN_INGAME)
+        set_screen(SCREEN_PAUSE);
+}
+
 static void wasm_shutdown(void) {
     if (g_wasm_shutdown_done) return;
     g_wasm_shutdown_done = 1;
@@ -534,10 +544,6 @@ static void wasm_shutdown(void) {
     pex_logf("app main exit");
     pex_log_shutdown();
     wasm_sync_idbfs();
-    EM_ASM({
-        var el = document.getElementById('status');
-        if (el) { el.textContent = 'PexCraft stopped'; el.style.display = 'block'; }
-    });
 }
 
 static void wasm_frame(void) {
@@ -600,10 +606,16 @@ static void wasm_frame(void) {
     render(partial);
     profile_end_frame();
 
-    /* IDBFS is local browser storage, not a network operation. */
-    if (frame_start_time - g_wasm_last_idb_sync >= 15.0) {
+    /* Browser unload handlers cannot wait for an asynchronous IndexedDB flush.
+       Keep the on-disk snapshot fresh during play so a reload loses at most a
+       few seconds even when the user never presses Save and Quit. */
+    if (!g_mp_connected && g_loaded_world_dir[0] &&
+        frame_start_time - g_wasm_last_world_snapshot >= 3.0) {
+        g_wasm_last_world_snapshot = frame_start_time;
+        save_world_state_sync();
+        wasm_sync_idbfs();
+    } else if (frame_start_time - g_wasm_last_idb_sync >= 5.0) {
         g_wasm_last_idb_sync = frame_start_time;
-        if (g_save_dirty) save_world_state_sync();
         wasm_sync_idbfs();
     }
 }
@@ -683,10 +695,7 @@ int main(int argc, char **argv) {
     set_screen(pex_startup_screen());
     g_last_time = now_seconds();
     g_wasm_last_idb_sync = g_last_time;
-    EM_ASM({
-        var el = document.getElementById('status');
-        if (el) el.style.display = 'none';
-    });
+    g_wasm_last_world_snapshot = g_last_time;
     emscripten_set_main_loop(wasm_frame, 0, 0);
     return 0;
 }

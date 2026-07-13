@@ -6,37 +6,47 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; connect-src 'none'; worker-src blob:">
   <title>{{{ TITLE }}}</title>
   <style>
-    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#111;color:#ddd;font:14px system-ui,sans-serif}
-    #wrap{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;display:block;background:#111}
-    canvas.emscripten{width:100%;height:100%;display:block;border:0;outline:0;image-rendering:auto}
-    #status{position:fixed;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);max-width:80vw;padding:12px 16px;background:#202020;border:1px solid #555;text-align:center;white-space:pre-line}
-    #progress{width:min(420px,70vw);margin-top:10px}
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#000}
+    body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+    #wrap{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;display:block;background:#000;overflow:hidden}
+    canvas.emscripten{width:100%;height:100%;display:block;border:0;outline:0;image-rendering:auto;touch-action:none;-webkit-user-drag:none;user-select:none}
   </style>
 </head>
 <body>
   <div id="wrap">
-    <canvas id="canvas" class="emscripten" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+    <canvas id="canvas" class="emscripten" tabindex="-1" draggable="false"></canvas>
   </div>
-  <div id="status">Loading PexCraft WebAssembly…<br><progress id="progress" value="0" max="100"></progress></div>
   <script>
-    const statusElement = document.getElementById('status');
-    const progressElement = document.getElementById('progress');
+    const canvas = document.getElementById('canvas');
+    const blockCanvasGesture = event => event.preventDefault();
+    canvas.addEventListener('contextmenu', blockCanvasGesture);
+    canvas.addEventListener('dragstart', blockCanvasGesture);
+    canvas.addEventListener('selectstart', blockCanvasGesture);
+    canvas.addEventListener('touchmove', blockCanvasGesture, {passive:false});
+
     var Module = {
-      canvas: document.getElementById('canvas'),
+      canvas,
       noInitialRun: false,
       pexIdbSyncBusy: false,
+      pexIdbSyncAgain: false,
       print: (...args) => console.log(...args),
       printErr: (...args) => console.error(...args),
-      setStatus(text) {
-        const match = String(text || '').match(/^(.*)\((\d+)\/(\d+)\)$/);
-        if (match) {
-          statusElement.childNodes[0].textContent = match[1].trim() + ' ';
-          progressElement.value = Number(match[2]) * 100 / Number(match[3]);
-          progressElement.style.display = 'inline-block';
-        } else {
-          statusElement.childNodes[0].textContent = String(text || '');
-          progressElement.style.display = text ? 'inline-block' : 'none';
+      setStatus() {},
+      pexSyncPersistentStorage() {
+        if (typeof FS === 'undefined') return;
+        if (Module.pexIdbSyncBusy) {
+          Module.pexIdbSyncAgain = true;
+          return;
         }
+        Module.pexIdbSyncBusy = true;
+        FS.syncfs(false, function (error) {
+          Module.pexIdbSyncBusy = false;
+          if (error) console.error('PexCraft persistent-storage sync failed:', error);
+          if (Module.pexIdbSyncAgain) {
+            Module.pexIdbSyncAgain = false;
+            Module.pexSyncPersistentStorage();
+          }
+        });
       },
       pexPickLocalFile({accept, maxBytes, dataPath, namePath, callback}) {
         const input = document.createElement('input');
@@ -87,7 +97,7 @@
       },
       preRun: [function () {
         try { FS.mkdir('/persist'); } catch (_) {}
-        try { FS.mount(IDBFS, {}, '/persist'); } catch (error) {
+        try { FS.mount(IDBFS, {autoPersist: true}, '/persist'); } catch (error) {
           console.warn('Persistent storage unavailable; using temporary storage.', error);
           return;
         }
@@ -98,19 +108,25 @@
         });
       }]
     };
-    window.addEventListener('error', event => {
-      Module.setStatus('PexCraft failed to start:\n' + (event.message || 'Unknown browser error'));
+
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement && typeof Module._pex_wasm_pointer_lock_lost === 'function') {
+        try { Module._pex_wasm_pointer_lock_lost(); } catch (error) { console.error(error); }
+      }
     });
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && Module._pex_wasm_visibility_flush) {
+
+    const flushBeforeSuspend = () => {
+      if (typeof Module._pex_wasm_visibility_flush === 'function') {
         try { Module._pex_wasm_visibility_flush(); } catch (error) { console.error(error); }
       }
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushBeforeSuspend();
     });
-    window.addEventListener('pagehide', () => {
-      if (Module._pex_wasm_visibility_flush) {
-        try { Module._pex_wasm_visibility_flush(); } catch (_) {}
-      }
-    });
+    window.addEventListener('pagehide', flushBeforeSuspend);
+    window.addEventListener('beforeunload', flushBeforeSuspend);
+    document.addEventListener('freeze', flushBeforeSuspend);
+    window.addEventListener('error', event => console.error('PexCraft failed to start:', event.message || event.error));
   </script>
   {{{ SCRIPT }}}
 </body>

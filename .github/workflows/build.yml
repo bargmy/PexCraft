@@ -1655,3 +1655,51 @@ jobs:
           echo "### Xbox One UWP Dev Mode failed" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "No Telegram upload produced for this builder." >> "$GITHUB_STEP_SUMMARY"
+
+  wasm:
+    needs: notify_build_start
+    name: WebAssembly standalone HTML - ${{ github.event.head_commit.message || github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Emscripten SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/emsdk
+          key: emsdk-6.0.2-${{ runner.os }}
+
+      - name: Build one standalone WASM HTML
+        shell: bash
+        run: ./build_wasm.sh
+
+      - name: Verify Telegram-only WASM output
+        shell: bash
+        run: |
+          test -s dist/PexCraft-WASM.html
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "1"
+          echo "The WASM job produced only dist/PexCraft-WASM.html and does not publish a GitHub artifact or release."
+
+      - name: Upload standalone HTML directly to Telegram
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          FILE_PATH: dist/PexCraft-WASM.html
+          COMMIT_NAME: ${{ steps.commit.outputs.name }}
+          BUILDER: WebAssembly single-file HTML
+        shell: bash
+        run: python3 .github/scripts/telegram_upload_file.py

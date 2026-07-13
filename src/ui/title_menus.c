@@ -472,12 +472,21 @@ static void draw_release_panorama_wasm(float partial) {
     }
 
     if (g_release_wasm_panorama_valid) {
-        float scale = g_gui_w > g_gui_h ? 120.0f / (float)g_gui_w : 120.0f / (float)g_gui_h;
-        float u = (float)g_gui_h * scale / 256.0f;
-        float v = (float)g_gui_w * scale / 256.0f;
-        if (pex_lgwebos_panorama_present(g_render_w, g_render_h,
-                                         0.5f - u, 0.5f - v,
-                                         0.5f + u, 0.5f + v)) {
+        /* Preserve the square panorama texture's aspect ratio while filling
+           the browser canvas. Wide screens crop the top/bottom; portrait
+           screens crop the sides. Never stretch the blurred texture. */
+        float aspect = g_render_h > 0 ? (float)g_render_w / (float)g_render_h : 1.0f;
+        float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+        if (aspect >= 1.0f) {
+            float half_v = 0.5f / aspect;
+            v0 = 0.5f - half_v;
+            v1 = 0.5f + half_v;
+        } else {
+            float half_u = 0.5f * aspect;
+            u0 = 0.5f - half_u;
+            u1 = 0.5f + half_u;
+        }
+        if (pex_lgwebos_panorama_present(g_render_w, g_render_h, u0, v0, u1, v1)) {
             panorama_reset_gl_state();
             glViewport(0, 0, g_render_w, g_render_h);
             setup_gui_projection();

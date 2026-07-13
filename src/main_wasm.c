@@ -20,6 +20,7 @@ static void pex_gl_suppress_immediate(int on);
 static void save_world_state_for_exit(void);
 static int pex_wasm_choose_skin_file(void);
 static int pex_wasm_choose_texture_pack_file(void);
+static void pex_wasm_open_github(void);
 
 #include "render/renderer_backend.h"
 

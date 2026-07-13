@@ -858,7 +858,11 @@ static void rebuild_screen(void) {
 #endif
         add_button(3, g_gui_w / 2 - 100, y0 + 48, "Texture Packs");
         add_button_full(0, g_gui_w / 2 - 100, y0 + 72 + 12, 98, 20, "Options...", BUTTON_NORMAL);
+#if defined(PEX_PLATFORM_WASM)
+        add_button_full(4, g_gui_w / 2 + 2, y0 + 72 + 12, 98, 20, "Github", BUTTON_NORMAL);
+#else
         add_button_full(4, g_gui_w / 2 + 2, y0 + 72 + 12, 98, 20, "Quit Game", BUTTON_NORMAL);
+#endif
         add_button_full(5, g_gui_w / 2 - 124, y0 + 72 + 12, 20, 20, "", BUTTON_LANGUAGE);
     } else if (g_screen == SCREEN_OPTIONS) {
         const OptionId main_options[] = {
@@ -1278,7 +1282,9 @@ static void on_button(Button *b) {
         else if (b->id == 3) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_TEXPACK); }
         else if (b->id == 5) { g_language_return_screen = SCREEN_TITLE; set_screen(SCREEN_LANGUAGE); }
         else if (b->id == 4) {
-#ifdef PEX_PLATFORM_PSP
+#if defined(PEX_PLATFORM_WASM)
+            pex_wasm_open_github();
+#elif defined(PEX_PLATFORM_PSP)
             g_running = 0;
 #else
             PostQuitMessage(0);
