@@ -404,8 +404,8 @@ static void draw_held_map_overlay(void) {
 
 static void draw_xinput_hud_tile(int tile, int x, int y) {
     if (!tex_xinput.id || tex_xinput.w < 64 || tex_xinput.h < 64) {
-        /* Last-resort visibility fallback.  Normal WASM builds use the exact
-           compiled-in XINPUT.png above; this only appears if PNG decoding fails. */
+        /* Last-resort visibility fallback. Normal WASM builds upload the exact
+           RGBA pixels compiled from XINPUT.png into the executable. */
         static const char labels[4] = {'A', 'B', 'X', 'Y'};
         static const int colors[4] = {0x55FF55, 0xFF5555, 0x5555FF, 0xFFFF55};
         draw_rect(x + 2, y + 2, x + 14, y + 14, 0xE0000000);
@@ -437,10 +437,10 @@ static void draw_xinput_hud_tile(int tile, int x, int y) {
 }
 
 static void draw_xinput_hud_prompts(int hotbar_y) {
-    if (pex_xinput_hud_bottom_offset() <= 0) return;
+    if (!pex_xinput_hud_active()) return;
 
-    /* Exact 640x480 reference anchors from the supplied layout, expressed
-       relative to screen center so the spacing remains stable at other widths. */
+    /* 640x480 anchors: Inventory x=209/y=455 and Optional x=276/y=455.
+       Center-relative X values keep the same gap at other screen widths. */
     int y = hotbar_y + 27;
     int inventory_x = g_gui_w / 2 - 111;
     int optional_x = g_gui_w / 2 - 44;

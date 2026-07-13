@@ -49,12 +49,12 @@ static void stivufine_apply_anisotropy_bound(void);
 static int load_png_texture(Texture *t, const char *path, int repeat);
 static char *stivufine_trim_ascii(char *s);
 
-#if defined(PEX_PLATFORM_WASM)
-/* Keep the exact controller HUD PNG compiled into the browser build as a
-   fallback.  This avoids depending on the texture-pack filesystem being ready
-   before the first in-game frame, while the original PNG also remains in src. */
-static const unsigned char pex_xinput_hud_png[] = {
-#include "xinput_hud_png.inc"
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+/* Generated directly from src/assets/XINPUT.png before the build.
+   These RGBA bytes are referenced by code, so they live inside the executable
+   rather than in a loose file or Emscripten's virtual filesystem. */
+static const unsigned char pex_xinput_hud_rgba[64 * 64 * 4] = {
+#include "xinput_hud_rgba.inc"
 };
 #endif
 
@@ -1631,26 +1631,13 @@ static int try_release_texture(Texture *tex, const char *rel, int repeat) {
 }
 
 static int load_embedded_xinput_hud_texture(Texture *t) {
-#if defined(PEX_PLATFORM_WASM)
-    SDL_RWops *rw = SDL_RWFromConstMem(pex_xinput_hud_png, (int)sizeof(pex_xinput_hud_png));
-    if (!rw) return 0;
-    SDL_Surface *surf = IMG_Load_RW(rw, 1);
-    if (!surf) return 0;
-    SDL_Surface *rgba_surf = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_RGBA32, 0);
-    SDL_FreeSurface(surf);
-    if (!rgba_surf) return 0;
-    int w = rgba_surf->w;
-    int h = rgba_surf->h;
-    if (w != 64 || h != 64) { SDL_FreeSurface(rgba_surf); return 0; }
-    size_t bytes = (size_t)w * (size_t)h * 4u;
+#if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII)
+    const int w = 64;
+    const int h = 64;
+    const size_t bytes = sizeof(pex_xinput_hud_rgba);
     unsigned char *rgba = (unsigned char*)malloc(bytes);
-    if (!rgba) { SDL_FreeSurface(rgba_surf); return 0; }
-    unsigned char *pixels = (unsigned char*)rgba_surf->pixels;
-    for (int y = 0; y < h; ++y)
-        memcpy(rgba + (size_t)y * (size_t)w * 4u,
-               pixels + (size_t)y * (size_t)rgba_surf->pitch,
-               (size_t)w * 4u);
-    SDL_FreeSurface(rgba_surf);
+    if (!rgba) return 0;
+    memcpy(rgba, pex_xinput_hud_rgba, bytes);
     return upload_rgba_texture(t, w, h, rgba, 0);
 #else
     (void)t;
@@ -1663,14 +1650,13 @@ static int load_xinput_hud_texture(void) {
     return 0;
 #else
     free_texture(&tex_xinput);
-    if (load_embedded_xinput_hud_texture(&tex_xinput) ||
-        try_release_texture(&tex_xinput, "gui\\xinput.png", 0) ||
-        load_png_texture(&tex_xinput, "src/assets/XINPUT.png", 0) ||
-        load_png_texture(&tex_xinput, "assets/XINPUT.png", 0)) {
+    /* Never depend on a loose PNG or an embedded filesystem asset. The exact
+       generated RGBA array above is linked into the executable itself. */
+    if (load_embedded_xinput_hud_texture(&tex_xinput)) {
         set_texture_filter_wrap(&tex_xinput, 0, 0);
         return 1;
     }
-    log_msg("XInput HUD texture failed to load; using text fallback");
+    log_msg("Bundled XInput HUD texture failed to upload; using text fallback");
     return 0;
 #endif
 }

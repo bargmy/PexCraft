@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+python3 tools/embed_xinput_hud.py
 python3 tools/check_wasm_target.py
 
 EMSDK_VERSION="${EMSDK_VERSION:-6.0.2}"

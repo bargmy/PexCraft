@@ -533,10 +533,9 @@ static int pex_xinput_hud_active(void) {
 
 static int pex_xinput_hud_bottom_offset(void) {
     if (g_screen != SCREEN_INGAME && g_screen != SCREEN_CHAT) return 0;
-    /* Controller detection, not texture loading, decides whether the layout is
-       active.  The sprite has a compiled-in WASM fallback, and gui.c also has
-       a tiny text fallback so a failed image decode can never hide the HUD. */
-    return pex_xinput_hud_active() ? 54 : 0;
+    /* At 640x480 this places the hotbar at y=428 and leaves the y=455 prompt
+       row below it, exactly matching the supplied controller HUD layout. */
+    return pex_xinput_hud_active() ? 30 : 0;
 }
 
 static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {

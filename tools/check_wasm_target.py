@@ -44,6 +44,10 @@ def main() -> int:
     title = read("src/ui/title_menus.c")
     textures = read("src/assets/textures.c")
     wasm_fs = read("src/platform/wasm/wasm_filesystem.c")
+    gamepad = read("src/platform/gamepad.c")
+    gui = read("src/ui/gui.c")
+    xinput_embed = read("tools/embed_xinput_hud.py")
+    xinput_rgba = read("src/assets/xinput_hud_rgba.inc")
 
     require(root_entry, '#include "src/main_wasm.c"', "main_wasm.c")
     for define in ("PEX_PLATFORM_WASM", "PEX_WASM_NO_MULTIPLAYER", "PEX_SINGLE_THREADED"):
@@ -88,6 +92,18 @@ def main() -> int:
     require(ui, "pex_wasm_open_github();", "screen_state_input.c")
     require(textures, "return pex_wasm_choose_skin_file();", "textures.c")
     require(textures, 'snprintf(out, cap, "/bundle/%s", CLASSIC_PACK_NAME)', "textures.c")
+    require(textures, "static const unsigned char pex_xinput_hud_rgba[64 * 64 * 4]", "textures.c")
+    require(textures, '#include "xinput_hud_rgba.inc"', "textures.c")
+    require(textures, "memcpy(rgba, pex_xinput_hud_rgba, bytes);", "textures.c")
+    require(textures, "Never depend on a loose PNG", "textures.c")
+    reject(textures, r"xinput_hud_png\.inc|pex_xinput_hud_png", "textures.c")
+    reject(textures, r"(?:try_release_texture|load_png_texture)\([^\n]*xinput", "textures.c")
+    require(gamepad, "return pex_xinput_hud_active() ? 30 : 0;", "gamepad.c")
+    require(gui, "if (!pex_xinput_hud_active()) return;", "gui.c")
+    require(gui, "int y = hotbar_y + 27;", "gui.c")
+    require(gui, "int inventory_x = g_gui_w / 2 - 111;", "gui.c")
+    require(gui, "int optional_x = g_gui_w / 2 - 44;", "gui.c")
+    require(gui, "if (ingame_has_context_use_target())", "gui.c")
     require(wasm_fs, '"/persist/texturepacks"', "wasm_filesystem.c")
     require(inventory, "if (stream_generation_active()) process_stream_generation_queue();", "inventory.c")
     require(inventory, "stream async disabled on WASM", "inventory.c")
@@ -113,6 +129,7 @@ def main() -> int:
     reject(title, r"WebAssembly uses all 8x8 samples", "title_menus.c")
 
     require(build, "-std=gnu99", "build_wasm.sh")
+    require(build, "python3 tools/embed_xinput_hud.py", "build_wasm.sh")
     reject(build, r"-std=c(?:89|90|99|11|17|23)\b", "build_wasm.sh")
     require(build, 'EMSDK_VERSION="${EMSDK_VERSION:-6.0.2}"', "build_wasm.sh")
     require(build, "-sGL_ENABLE_GET_PROC_ADDRESS=1", "build_wasm.sh")
@@ -147,6 +164,14 @@ def main() -> int:
     require(assets, "4a2fac7504182a97dcbcd7560c6392d7c8139928", "prepare_wasm_assets.py")
     require(assets, "sha1_file", "prepare_wasm_assets.py")
     require(assets, "extract_resources", "prepare_wasm_assets.py")
+    reject(assets, r"XINPUT\.png|gui/xinput\.png", "prepare_wasm_assets.py")
+    require(xinput_embed, "decode_rgba_png", "embed_xinput_hud.py")
+    require(xinput_embed, "xinput_hud_rgba.inc", "embed_xinput_hud.py")
+    require(xinput_rgba, "dimensions: 64x64 RGBA8; bytes: 16384", "xinput_hud_rgba.inc")
+    if not (ROOT / "src/assets/XINPUT.png").is_file():
+        raise AssertionError("missing source controller sprite: src/assets/XINPUT.png")
+    if (ROOT / "src/assets/xinput_hud_png.inc").exists():
+        raise AssertionError("obsolete compressed PNG include must not exist")
 
     require(workflow, "  wasm:", "build.yml")
     require(workflow, "./build_wasm.sh", "build.yml")
@@ -159,7 +184,9 @@ def main() -> int:
         raise AssertionError(f"unexpected extra markdown files: {extra_md}")
 
     subprocess.run(["bash", "-n", str(ROOT / "build_wasm.sh")], check=True)
+    subprocess.run([sys.executable, str(ROOT / "tools/embed_xinput_hud.py"), "--check"], check=True)
     py_compile.compile(str(ROOT / "tools/prepare_wasm_assets.py"), doraise=True)
+    py_compile.compile(str(ROOT / "tools/embed_xinput_hud.py"), doraise=True)
     py_compile.compile(str(ROOT / ".github/scripts/telegram_upload_file.py"), doraise=True)
 
     print("WASM target structural checks passed")
