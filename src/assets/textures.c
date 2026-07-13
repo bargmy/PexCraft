@@ -49,6 +49,15 @@ static void stivufine_apply_anisotropy_bound(void);
 static int load_png_texture(Texture *t, const char *path, int repeat);
 static char *stivufine_trim_ascii(char *s);
 
+#if defined(PEX_PLATFORM_WASM)
+/* Keep the exact controller HUD PNG compiled into the browser build as a
+   fallback.  This avoids depending on the texture-pack filesystem being ready
+   before the first in-game frame, while the original PNG also remains in src. */
+static const unsigned char pex_xinput_hud_png[] = {
+#include "xinput_hud_png.inc"
+};
+#endif
+
 static int stivufine_texture_is_font(const Texture *t) {
     if (!t) return 0;
     if (t == &tex_font) return 1;
@@ -64,7 +73,7 @@ static int stivufine_texture_is_font(const Texture *t) {
    producing the distinctly non-Minecraft-looking soft/stretchy UI. */
 static int stivufine_texture_is_gui(const Texture *t) {
     if (!t) return 0;
-    return t == &tex_bg || t == &tex_gui || t == &tex_icons ||
+    return t == &tex_bg || t == &tex_gui || t == &tex_icons || t == &tex_xinput ||
            t == &tex_inventory || t == &tex_allitems ||
            t == &tex_workbench || t == &tex_furnace_gui ||
            t == &tex_chest_gui || t == &tex_items ||
@@ -1621,17 +1630,47 @@ static int try_release_texture(Texture *tex, const char *rel, int repeat) {
     return load_png_texture(tex, path, repeat);
 }
 
+static int load_embedded_xinput_hud_texture(Texture *t) {
+#if defined(PEX_PLATFORM_WASM)
+    SDL_RWops *rw = SDL_RWFromConstMem(pex_xinput_hud_png, (int)sizeof(pex_xinput_hud_png));
+    if (!rw) return 0;
+    SDL_Surface *surf = IMG_Load_RW(rw, 1);
+    if (!surf) return 0;
+    SDL_Surface *rgba_surf = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_FreeSurface(surf);
+    if (!rgba_surf) return 0;
+    int w = rgba_surf->w;
+    int h = rgba_surf->h;
+    if (w != 64 || h != 64) { SDL_FreeSurface(rgba_surf); return 0; }
+    size_t bytes = (size_t)w * (size_t)h * 4u;
+    unsigned char *rgba = (unsigned char*)malloc(bytes);
+    if (!rgba) { SDL_FreeSurface(rgba_surf); return 0; }
+    unsigned char *pixels = (unsigned char*)rgba_surf->pixels;
+    for (int y = 0; y < h; ++y)
+        memcpy(rgba + (size_t)y * (size_t)w * 4u,
+               pixels + (size_t)y * (size_t)rgba_surf->pitch,
+               (size_t)w * 4u);
+    SDL_FreeSurface(rgba_surf);
+    return upload_rgba_texture(t, w, h, rgba, 0);
+#else
+    (void)t;
+    return 0;
+#endif
+}
+
 static int load_xinput_hud_texture(void) {
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
     return 0;
 #else
     free_texture(&tex_xinput);
-    if (try_release_texture(&tex_xinput, "gui\\xinput.png", 0) ||
+    if (load_embedded_xinput_hud_texture(&tex_xinput) ||
+        try_release_texture(&tex_xinput, "gui\\xinput.png", 0) ||
         load_png_texture(&tex_xinput, "src/assets/XINPUT.png", 0) ||
         load_png_texture(&tex_xinput, "assets/XINPUT.png", 0)) {
         set_texture_filter_wrap(&tex_xinput, 0, 0);
         return 1;
     }
+    log_msg("XInput HUD texture failed to load; using text fallback");
     return 0;
 #endif
 }

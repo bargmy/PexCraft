@@ -403,7 +403,18 @@ static void draw_held_map_overlay(void) {
 }
 
 static void draw_xinput_hud_tile(int tile, int x, int y) {
-    if (!tex_xinput.id || tex_xinput.w <= 0 || tex_xinput.h <= 0) return;
+    if (!tex_xinput.id || tex_xinput.w < 64 || tex_xinput.h < 64) {
+        /* Last-resort visibility fallback.  Normal WASM builds use the exact
+           compiled-in XINPUT.png above; this only appears if PNG decoding fails. */
+        static const char labels[4] = {'A', 'B', 'X', 'Y'};
+        static const int colors[4] = {0x55FF55, 0xFF5555, 0x5555FF, 0xFFFF55};
+        draw_rect(x + 2, y + 2, x + 14, y + 14, 0xE0000000);
+        if (tile >= 0 && tile < 4) {
+            char label[2] = {labels[tile], 0};
+            draw_text_no_shadow(label, x + 5, y + 4, colors[tile]);
+        }
+        return;
+    }
     int sx = (tile & 3) * 16;
     int sy = (tile >> 2) * 16;
     float u0 = (float)sx / (float)tex_xinput.w;

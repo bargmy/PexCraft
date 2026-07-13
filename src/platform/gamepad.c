@@ -533,7 +533,10 @@ static int pex_xinput_hud_active(void) {
 
 static int pex_xinput_hud_bottom_offset(void) {
     if (g_screen != SCREEN_INGAME && g_screen != SCREEN_CHAT) return 0;
-    return (pex_xinput_hud_active() && tex_xinput.id) ? 54 : 0;
+    /* Controller detection, not texture loading, decides whether the layout is
+       active.  The sprite has a compiled-in WASM fallback, and gui.c also has
+       a tiny text fallback so a failed image decode can never hide the HUD. */
+    return pex_xinput_hud_active() ? 54 : 0;
 }
 
 static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
