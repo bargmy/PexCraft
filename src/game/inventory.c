@@ -7250,7 +7250,7 @@ static void update_breaking(void) {
     }
 }
 
-static void world_left_mouse_released(void) { reset_breaking_state(); g_block_hit_delay = 0; g_break_swing_consumed = 0; g_break_swing_holding = 0; }
+static void world_left_mouse_released(void) { reset_breaking_state(); g_block_hit_delay = 0; g_left_click_counter = 0; g_left_click_counter_just_set = 0; g_break_swing_consumed = 0; g_break_swing_holding = 0; }
 
 static int item_is_placeable_block_id(int id) {
     if (id <= 0 || (id == BLOCK_BEDROCK && !player_is_creative())) return 0;
@@ -9212,6 +9212,7 @@ static void ingame_right_click_impl(void) {
     if (g_screen != SCREEN_INGAME) return;
     if (g_right_click_delay_timer > 0) return;
     g_right_click_delay_timer = 4;
+    g_right_click_delay_just_set = 1;
 
     /* Route every input device through the same entity-first objectMouseOver
        order used by the Java client. Previously only the desktop mouse-down
@@ -9345,6 +9346,7 @@ static void ingame_right_click_impl(void) {
     }
 
     int placed_item_id = held->id;
+    int placed_item_damage = held->damage;
     int place_id = held->id;
     if (place_id == ITEM_REED) place_id = BLOCK_REEDS;
     if (place_id == ITEM_REDSTONE) place_id = BLOCK_REDSTONE_WIRE;
@@ -9385,6 +9387,7 @@ static void ingame_right_click_impl(void) {
     if (place_id == BLOCK_STONE_BUTTON) flat_set_meta_raw(px, py, pz, side_meta_from_placement_face(hit.face));
     if (place_id == BLOCK_LEVER) flat_set_meta_raw(px, py, pz, lever_meta_from_placement_face(hit.face));
     if (place_id == BLOCK_SIGN_POST) flat_set_meta_raw(px, py, pz, door_direction_from_yaw() & 3);
+    if (place_id == BLOCK_WOOL) flat_set_meta_raw(px, py, pz, placed_item_damage & 15);
     if (place_id == BLOCK_WOOD_STAIRS || place_id == BLOCK_COBBLE_STAIRS) flat_set_meta_raw(px, py, pz, stair_direction_from_yaw());
     if (!g_mp_connected) flat_end_persistent_edit();
     if (place_id == BLOCK_REDSTONE_WIRE || place_id == BLOCK_STONE_BUTTON || place_id == BLOCK_LEVER ||

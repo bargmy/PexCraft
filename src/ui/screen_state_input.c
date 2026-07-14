@@ -1768,14 +1768,26 @@ static void mouse_down(int mx, int my) {
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 0); return; }
     if (g_screen == SCREEN_INGAME) {
         set_mouse_grabbed(1);
+        /* Minecraft.clickMouse(): attacks and click-block actions only happen
+           when leftClickCounter has expired.  A survival miss sets the exact
+           ten-tick delay used by 1.8.8; releasing attack clears it through
+           sendClickBlockToController(false). */
+        if (g_left_click_counter > 0 || player_is_using_item_125()) return;
         if (pex_net_try_attack_player()) return;
         if (passive_mobs_attack_from_player()) return;
         FlatRayHit hit = flat_raycast();
-        if (hit.hit) restart_hand_swing();
-        else start_air_swing_once();
-        /* Java clickMouse() calls PlayerControllerCreative.clickBlock() immediately
-           on the click edge, then holding uses the 5-tick creative repeat delay. */
-        if (player_is_creative()) update_breaking();
+        if (hit.hit) {
+            restart_hand_swing();
+            /* PlayerControllerCreative.clickBlock() runs immediately on the
+               click edge.  Survival continues through update_breaking(). */
+            update_breaking();
+        } else {
+            start_air_swing_once();
+            if (!player_is_creative()) {
+                g_left_click_counter = 10;
+                g_left_click_counter_just_set = 1;
+            }
+        }
         return;
     }
     if (g_screen == SCREEN_LANGUAGE) language_mouse_down(mx, my);
@@ -1847,6 +1859,8 @@ static void mouse_up(int mx, int my) {
     (void)mx; (void)my;
     if (g_screen == SCREEN_INGAME) {
         world_left_mouse_released();
+        g_left_click_counter = 0;
+        g_left_click_counter_just_set = 0;
         g_air_swing_consumed = 0;
     }
     g_mouse_down = 0;
@@ -2278,7 +2292,7 @@ static void handle_keydown(WPARAM vk) {
             g_chat_input[1] = 0;
             /* SDL may emit a TEXTINPUT '/' after this KEYDOWN.  Suppress only
                that duplicate while keeping the slash already seeded here. */
-            g_suppress_next_chat_char = 1;
+            g_suppress_next_chat_char = '/';
             set_screen(SCREEN_CHAT);
             return;
         }
@@ -2299,7 +2313,7 @@ static void handle_keydown(WPARAM vk) {
         if (vk == VK_F5) { third_person_view_cycle(); return; }
         if ((int)vk == g_opts.keys[6]) { inventory_drop_selected_one(); return; }
         if ((int)vk == g_opts.keys[7]) { pex_achievement_on_inventory_open(); set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY); return; }
-        if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 1; set_screen(SCREEN_CHAT); return; }
+        if ((int)vk == g_opts.keys[8]) { g_chat_input[0] = 0; g_suppress_next_chat_char = 0; set_screen(SCREEN_CHAT); return; }
         if (vk >= '1' && vk <= '9') { g_selected_hotbar_slot = (int)(vk - '1'); return; }
         return;
     }
@@ -2463,7 +2477,11 @@ static void pex_chat_append_utf8_text(const char *text) {
     if (!text || !*text) return;
     p = (const unsigned char *)text;
     if (g_suppress_next_chat_char) {
-        p = pex_utf8_next_ptr(p);
+        /* Suppress only the opening key's duplicate TEXTINPUT event.  A plain
+           boolean used to discard the first real character when SDL did not
+           emit that duplicate (the same failure users saw after pressing T). */
+        if (pex_utf8_peek_cp(p) == (unsigned int)g_suppress_next_chat_char)
+            p = pex_utf8_next_ptr(p);
         g_suppress_next_chat_char = 0;
     }
     len = strlen(g_chat_input);
@@ -2517,7 +2535,11 @@ static void handle_char(WPARAM ch) {
         return;
     }
     if (g_screen == SCREEN_CHAT) {
-        if (g_suppress_next_chat_char) { g_suppress_next_chat_char = 0; return; }
+        if (g_suppress_next_chat_char) {
+            int suppress = ((unsigned int)ch == (unsigned int)g_suppress_next_chat_char);
+            g_suppress_next_chat_char = 0;
+            if (suppress) return;
+        }
         if (ch == 13 || ch == 8 || ch == 27) return;
         const char *allowed = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~";
         if (strchr(allowed, (char)ch) && strlen(g_chat_input) < 100) {

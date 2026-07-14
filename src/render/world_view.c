@@ -3725,6 +3725,7 @@ static int world_block_item_tile(int id) {
 }
 
 static void draw_block_item_model(int id, float x, float y, float z);
+static void draw_block_item_model_with_meta(int id, int meta, float x, float y, float z);
 
 
 static void item_tile_uv(int tile, float *u0, float *v0, float *u1, float *v1) {
@@ -4139,7 +4140,7 @@ static void draw_dropped_items(void) {
                 float ox,oy,oz; dropped_item_copy_offset(c,0.20f,block_scale,&ox,&oy,&oz);
                 glTranslatef(ox,oy,oz);
                 glBindTexture(GL_TEXTURE_2D,tex_terrain.id);
-                draw_block_item_model(e->stack.id,-0.5f,-0.5f,-0.5f);
+                draw_block_item_model_with_meta(e->stack.id, e->stack.damage, -0.5f,-0.5f,-0.5f);
                 glPopMatrix();
             }
         } else {
@@ -4182,7 +4183,7 @@ static void draw_pickup_fx_items(void) {
         if (render_item_as_block_id(fx->stack.id) && tex_terrain.id) {
             glScalef(0.25f, 0.25f, 0.25f);
             glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-            draw_block_item_model(fx->stack.id, -0.5f, -0.5f, -0.5f);
+            draw_block_item_model_with_meta(fx->stack.id, fx->stack.damage, -0.5f, -0.5f, -0.5f);
         } else if (world_item_is_block_id(fx->stack.id) && tex_terrain.id) {
             glRotatef(180.0f - yaw, 0.0f, 1.0f, 0.0f);
             glScalef(0.5f, 0.5f, 0.5f);
@@ -4604,8 +4605,9 @@ static int block_texture_resolve(int block_id, int meta, int face) {
         case BLOCK_MELON_STEM:
             return cross_plant_tile_for_block_meta(block_id, meta);
         case BLOCK_WOOL: {
-            int wm = (meta & 15);
-            if (wm != 0) wm = (~wm) & 15;
+            /* Java block/item metadata is 0=white ... 15=black, while the
+               classic terrain atlas stores cloth tiles in inverted dye order. */
+            int wm = (~meta) & 15;
             return 113 + ((wm & 8) >> 3) + ((wm & 7) * 16);
         }
         case BLOCK_GOLD_BLOCK: return 23;
@@ -5469,6 +5471,24 @@ static void draw_cuboid_model_for_block(int id, float x, float y, float z, float
     glEnd();
 }
 
+static void draw_cuboid_model_for_block_meta(int id, int meta, float x, float y, float z,
+                                              float x0, float y0, float z0,
+                                              float x1, float y1, float z1) {
+    glBegin(GL_QUADS);
+    for (int face = 0; face < 6; ++face) {
+        int tile = block_texture_resolve(id, meta, face);
+        if (tile < 0) {
+            world_face_style(id, face, &tile);
+        } else {
+            world_set_shade(world_face_base_shade(face));
+        }
+        emit_cuboid_face_tile(x + x0, y + y0, z + z0,
+                              x + x1, y + y1, z + z1,
+                              x0, y0, z0, x1, y1, z1, face, tile);
+    }
+    glEnd();
+}
+
 static void emit_cuboid_model_faces_tile(float x, float y, float z,
                                          float x0, float y0, float z0, float x1, float y1, float z1,
                                          int tile) {
@@ -5485,7 +5505,7 @@ static void draw_cuboid_model_tile(float x, float y, float z,
     glEnd();
 }
 
-static void draw_block_item_model(int id, float x, float y, float z) {
+static void draw_block_item_model_with_meta(int id, int meta, float x, float y, float z) {
     int pushed_fullbright = 0;
     GLint old_shade_model = pex_gl_save_shade_model();
     if (g_force_fullbright_item_model <= 0) { g_force_fullbright_item_model++; pushed_fullbright = 1; }
@@ -5498,8 +5518,19 @@ static void draw_block_item_model(int id, float x, float y, float z) {
        held/dropped block items, and OpenGL culling makes their faces disappear
        or appear inverted while D3D looks fine. */
     glDisable(GL_CULL_FACE);
+    /* Wool is a damageable block item: its ItemStack damage is the color
+       metadata.  Rendering it as metadata zero made every held stack use the
+       port's default black wool texture. */
+    if (id == BLOCK_WOOL) {
+        draw_cuboid_model_for_block_meta(id, meta & 15, x, y, z, 0, 0, 0, 1, 1, 1);
+        goto done;
+    }
     /* RenderItem/ItemRenderer must not turn non-full block items into solid cubes.
        This path is used for dropped block entities and first-person held blocks. */
+    if (id == BLOCK_BED) {
+        draw_cuboid_model_for_block_meta(id, meta, x, y, z, 0, 0, 0, 1, 9.0f / 16.0f, 1);
+        goto done;
+    }
     if (id == BLOCK_SLAB) {
         draw_cuboid_model_for_block(id, x, y, z, 0, 0, 0, 1, 0.5f, 1);
         goto done;
@@ -5550,6 +5581,9 @@ done:
     glColor4f(1,1,1,1);
 }
 
+static void draw_block_item_model(int id, float x, float y, float z) {
+    draw_block_item_model_with_meta(id, 0, x, y, z);
+}
 
 
 static void entity_texture_uv(Texture *tex, int px, int py, float *u, float *v) {
@@ -6047,7 +6081,7 @@ static void draw_fence_block_model(int id, int x, int y, int z) {
 }
 
 static int block_uses_special_model(int id) {
-    return id == BLOCK_CHEST || id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT || block_is_door_id(id) || id == BLOCK_LADDER || id == BLOCK_SNOW_LAYER ||
+    return id == BLOCK_CHEST || id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT || block_is_door_id(id) || id == BLOCK_LADDER || id == BLOCK_BED || id == BLOCK_SNOW_LAYER ||
            id == BLOCK_SLAB || id == BLOCK_WOOD_STAIRS || id == BLOCK_COBBLE_STAIRS ||
            id == BLOCK_BRICK_STAIRS || id == BLOCK_STONE_BRICK_STAIRS || id == BLOCK_NETHER_BRICK_STAIRS ||
            id == BLOCK_FENCE || id == BLOCK_NETHER_BRICK_FENCE || id == BLOCK_GLASS_PANE || id == BLOCK_IRON_BARS ||
@@ -6141,6 +6175,15 @@ static void draw_vine_block_model(int x, int y, int z) {
 
 static void draw_special_block_model(int id, int x, int y, int z) {
     if (id == BLOCK_CHEST) { draw_connected_chest_block(x, y, z); return; }
+    if (id == BLOCK_BED) {
+        /* BlockBed.setBedBounds(): both head and foot are 9/16 block high.
+           Keep all six faces (including the bottom) so the model has no gaps
+           when viewed from below or from an unloaded neighbouring section. */
+        draw_cuboid_model_for_block_meta(id, flat_get_meta(x, y, z),
+                                         (float)x, (float)y, (float)z,
+                                         0.0f, 0.0f, 0.0f, 1.0f, 9.0f / 16.0f, 1.0f);
+        return;
+    }
     if (id == BLOCK_FURNACE || id == BLOCK_FURNACE_LIT) { draw_furnace_block_model(id, x, y, z); return; }
     if (id == BLOCK_SNOW_LAYER) { glBegin(GL_QUADS); emit_snow_layer_block(x, y, z); glEnd(); glColor4f(1,1,1,1); return; }
     if (block_is_door_id(id)) { draw_door_block_model(id, x, y, z); return; }
@@ -8825,7 +8868,7 @@ static void multiplayer_apply_right_arm_postrender_125(float arm_pitch, float ar
     if (arm_pitch != 0.0f) glRotatef(arm_pitch, 1.0f, 0.0f, 0.0f);
 }
 
-static void draw_biped_held_item_125(int id, int count, float light_x, float light_y, float light_z,
+static void draw_biped_held_item_125(int id, int count, int damage, float light_x, float light_y, float light_z,
                                        float arm_pitch, float arm_yaw, float arm_roll, int blocking) {
     if (id <= 0 || count <= 0) return;
 
@@ -8842,7 +8885,7 @@ static void draw_biped_held_item_125(int id, int count, float light_x, float lig
         glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
         glScalef(s, -s, s);
         glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-        draw_block_item_model(id, -0.5f, -0.5f, -0.5f);
+        draw_block_item_model_with_meta(id, damage, -0.5f, -0.5f, -0.5f);
     } else if (id == ITEM_BOW && tex_items.id) {
         float s = 10.0f / 16.0f;
         glTranslatef(0.0f, 2.0f / 16.0f, 5.0f / 16.0f);
@@ -8896,7 +8939,7 @@ static void draw_biped_held_item_125(int id, int count, float light_x, float lig
 
 static void draw_remote_player_held_item(const PexNetRenderPlayerState *r, float arm_pitch, float arm_yaw, float arm_roll) {
     if (!r || r->held_item_id <= 0 || r->held_item_count <= 0) return;
-    draw_biped_held_item_125(r->held_item_id, r->held_item_count, r->x, r->y, r->z,
+    draw_biped_held_item_125(r->held_item_id, r->held_item_count, r->held_item_damage, r->x, r->y, r->z,
                              arm_pitch, arm_yaw, arm_roll, 0);
 }
 
@@ -8904,7 +8947,7 @@ static void draw_local_player_held_item_125(float x, float eye_y, float z,
                                             float arm_pitch, float arm_yaw, float arm_roll) {
     const ItemStack *held = &g_inventory[g_selected_hotbar_slot];
     if (stack_empty(held)) return;
-    draw_biped_held_item_125(held->id, held->count, x, eye_y, z,
+    draw_biped_held_item_125(held->id, held->count, held->damage, x, eye_y, z,
                              arm_pitch, arm_yaw, arm_roll, player_is_blocking_125());
 }
 
@@ -9967,7 +10010,7 @@ static void draw_first_person_hand(void) {
         glRotatef(-swing_sqrt_sin * 80.0f, 1.0f, 0.0f, 0.0f);
         glScalef(0.40f, 0.40f, 0.40f);
         glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
-        draw_block_item_model(held->id, -0.5f, -0.5f, -0.5f);
+        draw_block_item_model_with_meta(held->id, held->damage, -0.5f, -0.5f, -0.5f);
         glPopMatrix();
     } else if (!stack_empty(held) && world_item_is_block_id(held->id) && tex_terrain.id) {
         int tile = world_block_item_tile(held->id);

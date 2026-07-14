@@ -524,32 +524,17 @@ static int flat_player_try_step_move(float nx, float base_y, float nz) {
 
 static int g_java47_jump_ticks = 0;
 
-static float java47_snap_collision_edge(float value) {
-    /* The gameplay globals are floats and store eye Y, while vanilla keeps a
-       double-precision feet position/AABB.  Reconstructing 2.62f - 1.62f can
-       produce 0.99999988, leaving the box microscopically inside the floor.
-       Vanilla collision bounds are on a 1/16 grid, so only repair values that
-       are already within a tiny float-error distance of such an edge. */
-    float snapped = roundf(value * 16.0f) * (1.0f / 16.0f);
-    return fabsf(value - snapped) <= 0.00010f ? snapped : value;
-}
-
 static FlatAABB java47_player_box(void) {
-    float minx = g_player_x - 0.30f, maxx = g_player_x + 0.30f;
+    /* Java 1.8.8 keeps the player AABB at its exact double position.  PexCraft
+       stores gameplay coordinates as floats, but snapping those floats to a
+       1/16 grid creates visible packet jumps and can move the client to a
+       position the server never simulated.  Preserve the exact float value
+       here; collision clipping itself keeps the box outside solid bounds. */
     float feet = g_player_y - 1.62f;
-    float minz = g_player_z - 0.30f, maxz = g_player_z + 0.30f;
-
-    float sx0 = java47_snap_collision_edge(minx);
-    float sx1 = java47_snap_collision_edge(maxx);
-    if (sx0 != minx) { minx = sx0; maxx = minx + 0.60f; }
-    else if (sx1 != maxx) { maxx = sx1; minx = maxx - 0.60f; }
-    float sz0 = java47_snap_collision_edge(minz);
-    float sz1 = java47_snap_collision_edge(maxz);
-    if (sz0 != minz) { minz = sz0; maxz = minz + 0.60f; }
-    else if (sz1 != maxz) { maxz = sz1; minz = maxz - 0.60f; }
-    feet = java47_snap_collision_edge(feet);
-
-    FlatAABB box = {minx, feet, minz, maxx, feet + 1.80f, maxz};
+    FlatAABB box = {
+        g_player_x - 0.30f, feet, g_player_z - 0.30f,
+        g_player_x + 0.30f, feet + 1.80f, g_player_z + 0.30f
+    };
     return box;
 }
 
@@ -673,11 +658,10 @@ static void java47_player_move_entity(float move_x, float move_y, float move_z,
         }
     }
 
-    /* Do not push or roll the player back after the vanilla clipping pass.
-       Those local-only corrections changed the packet position by up to 1/32
-       block and were the other source of client/server movement disagreement.
-       The tiny 1/16-grid reconstruction snap in java47_player_box() remains,
-       but the resolved movement now comes solely from Entity-style clipping. */
+    /* Do not push, roll back, or quantize the player after the vanilla
+       clipping pass.  Those local-only corrections changed the packet position
+       by up to 1/32 block or snapped it to a 1/16 grid, producing coordinates
+       that the server's Entity.moveEntity simulation never generated. */
 
     flat_world_map_leave();
 
@@ -934,12 +918,28 @@ static void ingame_tick(void) {
     }
 #endif
 
-    if (g_right_click_delay_timer > 0) g_right_click_delay_timer--;
+    if (g_right_click_delay_timer > 0) {
+        if (g_right_click_delay_just_set) g_right_click_delay_just_set = 0;
+        else g_right_click_delay_timer--;
+    }
+    if (g_left_click_counter > 0) {
+        if (g_left_click_counter_just_set) g_left_click_counter_just_set = 0;
+        else g_left_click_counter--;
+    }
     g_break_swing_holding = 0;
     g_prev_hand_swing = g_hand_swing;
     if (input_active) {
         g_right_use_button_down = key_down_vk(VK_RBUTTON);
-        update_breaking();
+        /* Minecraft.runTick repeats use every four ticks while the key is
+           held, but not while eating, drawing a bow, or blocking. */
+        if (g_right_use_button_down && g_right_click_delay_timer == 0 && !player_is_using_item_125())
+            ingame_right_click();
+        if (g_left_click_counter <= 0 && !player_is_using_item_125()) update_breaking();
+        else reset_breaking_state();
+        /* A held-use repeat can set the timer from inside this tick.  Its four
+           full following ticks begin on the next tick, so do not carry the
+           event-edge protection flag forward. */
+        g_right_click_delay_just_set = 0;
     } else {
         g_right_use_button_down = 0;
         reset_breaking_state();

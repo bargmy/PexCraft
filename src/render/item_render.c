@@ -207,7 +207,6 @@ static void item_world_face_style(int id, int meta, int face, int *tile) {
 }
 
 static int block_item_tile_for_id(int id);
-static int java125_wool_texture_meta(int meta);
 static int java125_block_render_type(int id);
 static int java125_render_item_in_3d(int render_type);
 static int java125_inventory_model_meta(int id, int damage);
@@ -217,7 +216,7 @@ static int item_block_tile_for_stack(const ItemStack *st) {
     /* Java flat ItemBlock icon path uses Item.getIconFromDamage(), not the GUI
        block-model top face.  Plain ItemBlock uses side 2; metadata item
        subclasses override this through getBlockTextureFromSideAndMetadata. */
-    if (st->id == BLOCK_WOOL) return block_texture_resolve(st->id, java125_wool_texture_meta(st->damage), 2);
+    if (st->id == BLOCK_WOOL) return block_texture_resolve(st->id, st->damage, 2);
     if (st->id == BLOCK_LEAVES || st->id == BLOCK_VINE || st->id == BLOCK_TALL_GRASS) return block_texture_resolve(st->id, st->damage, 0);
     if (st->id == BLOCK_LILY_PAD) return block_texture_resolve(st->id, st->damage, 0);
     if (st->id == BLOCK_SLAB || st->id == BLOCK_DOUBLE_SLAB || st->id == BLOCK_PLANKS || st->id == BLOCK_LOG ||
@@ -356,13 +355,6 @@ static int pex_item_gui_scale_rgb_125(int rgb) {
     g = (int)((float)((rgb >> 8) & 255) * brightness + 0.5f);
     b = (int)((float)(rgb & 255) * brightness + 0.5f);
     return (r << 16) | (g << 8) | b;
-}
-
-static int java125_wool_texture_meta(int meta) {
-    /* ItemCloth.getIconFromDamage calls BlockCloth.getBlockFromDye(damage).
-       Damage 0 is still White Wool, but the item icon is resolved through
-       cloth metadata 15 before BlockCloth inverts it for the terrain tile. */
-    return (~meta) & 15;
 }
 
 static void draw_item_icon_tile_gui(int tile, int x, int y, int rgb) {

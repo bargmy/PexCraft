@@ -111,6 +111,7 @@ typedef struct J47Entity {
     float armor_pose[6][3]; /* head, body, left arm, right arm, left leg, right leg */
     double x, y, z;
     float yaw, pitch, head_yaw;
+    int last_hurt_feedback_tick;
 } J47Entity;
 
 typedef struct J47Window {
@@ -203,6 +204,7 @@ typedef struct PexJava47Session {
     int movement_ticks;
     int last_movement_game_tick;
     int last_on_ground;
+    int last_local_hurt_feedback_tick;
     int pending_respawn_dimension;
     int pending_respawn_from;
     int pending_respawn_to;
@@ -3481,6 +3483,45 @@ static void j47_handle_entity_properties(J47Reader *r) {
     }
 }
 
+static void j47_local_hurt_feedback(void) {
+    g_player_hurt_time = g_player_max_hurt_time;
+    g_player_attacked_at_yaw = 0.0f;
+    int stamp = g_ingame_ticks + 1;
+    if (g_j47.last_local_hurt_feedback_tick != stamp) {
+        pex_sound_play("damage.hurtflesh", 1.0f, pex_living_sound_pitch_125());
+        g_j47.last_local_hurt_feedback_tick = stamp;
+    }
+}
+
+static void j47_remote_player_hurt_feedback(int entity_id, int play_sound) {
+    J47Entity *e = j47_entity_find(entity_id);
+    PexNetRenderPlayerState *rp = pex_net_find_render_player(entity_id);
+    if (rp) rp->hurt_time = 0.50f;
+    int stamp = g_ingame_ticks + 1;
+    if (play_sound && (!e || e->last_hurt_feedback_tick != stamp)) {
+        float x = rp ? rp->x : (e ? (float)e->x : g_player_x);
+        float y = rp ? rp->y : (e ? (float)e->y + 1.0f : g_player_y);
+        float z = rp ? rp->z : (e ? (float)e->z : g_player_z);
+        pex_sound_play_at("damage.hurtflesh", x, y, z, 1.0f, pex_living_sound_pitch_125());
+        if (e) e->last_hurt_feedback_tick = stamp;
+    }
+}
+
+static void j47_player_crit_particles(int entity_id) {
+    J47Entity *e = j47_entity_find(entity_id);
+    PexNetRenderPlayerState *rp = pex_net_find_render_player(entity_id);
+    float x = rp ? rp->x : (e ? (float)e->x : 0.0f);
+    float y = rp ? rp->y : (e ? (float)e->y + 1.62f : 0.0f);
+    float z = rp ? rp->z : (e ? (float)e->z : 0.0f);
+    if (!rp && !e) return;
+    for (int i = 0; i < 15; ++i) {
+        float ox = (pex_rand_float01() - 0.5f) * 0.8f;
+        float oy = pex_rand_float01() * 1.6f - 1.2f;
+        float oz = (pex_rand_float01() - 0.5f) * 0.8f;
+        add_crit_particle(x + ox, y + oy, z + oz, ox * 0.05f, 0.02f, oz * 0.05f);
+    }
+}
+
 static void j47_handle_play_packet(int packet_id, J47Reader *r) {
     switch(packet_id){
         case 0x00:{int32_t id;if(j47_r_varint(r,&id)){J47Writer w;j47_writer_init(&w,8);j47_w_varint(&w,id);j47_send_packet(0x00,w.data,w.len);j47_writer_free(&w);}break;}
@@ -3508,7 +3549,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
             break;
         }
         case 0x05:{int x,y,z;j47_read_block_pos(r,&x,&y,&z);break;}
-        case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
+        case 0x06:{float hp=j47_r_float(r);int32_t food=20;j47_r_varint(r,&food);float sat=j47_r_float(r);int old_health=g_player_health;g_player_health=(int)ceilf(hp);g_player_food_level=food;g_player_food_saturation=sat;if(g_player_health<old_health&&g_player_health>0)j47_local_hurt_feedback();if(g_player_health<=0&&!g_player_dead)player_die("was slain");else if(g_player_health>0&&g_player_dead){g_player_dead=0;g_player_death_time=0;}break;}
         case 0x07:{
             /* Vanilla 1.8.8 treats S07 as authoritative. Same-dimension
                respawns recreate the local player while preserving the world;
@@ -3580,7 +3621,7 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
             break;
         }
         case 0x09:g_selected_hotbar_slot=(int)j47_r_u8(r);if(g_selected_hotbar_slot<0||g_selected_hotbar_slot>8)g_selected_hotbar_slot=0;break;
-        case 0x0B:{int32_t id;if(j47_r_varint(r,&id)){int anim=j47_r_u8(r);PexNetRenderPlayerState*rp=pex_net_find_render_player(id);if(rp&&anim==0){rp->swing_active=1;rp->swing_ticks=0;}}break;}
+        case 0x0B:{int32_t id;if(j47_r_varint(r,&id)){int anim=j47_r_u8(r);PexNetRenderPlayerState*rp=pex_net_find_render_player(id);if(rp&&anim==0){rp->swing_active=1;rp->swing_ticks=0;}else if(anim==1){if(id==g_j47.local_entity_id)j47_local_hurt_feedback();else j47_remote_player_hurt_feedback(id,0);}else if(anim==4||anim==5){j47_player_crit_particles(id);}}break;}
         case 0x0C:j47_spawn_player(r);break;
         case 0x0D:{int32_t collected,collector;j47_r_varint(r,&collected);j47_r_varint(r,&collector);j47_entity_remove(collected);break;}
         case 0x0E:j47_spawn_object(r);break;
@@ -3590,7 +3631,30 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x14:case 0x15:case 0x16:case 0x17:{int32_t id;if(!j47_r_varint(r,&id))break;J47Entity*e=j47_entity_find(id);double x=e?e->x:0,y=e?e->y:0,z=e?e->z:0;float yaw=e?e->yaw:0,pitch=e?e->pitch:0;int rot=packet_id==0x16||packet_id==0x17;if(packet_id==0x15||packet_id==0x17){x+=(int8_t)j47_r_u8(r)/32.0;y+=(int8_t)j47_r_u8(r)/32.0;z+=(int8_t)j47_r_u8(r)/32.0;}if(rot){yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f;pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;}(void)j47_r_u8(r);j47_apply_entity_position(e,x,y,z,yaw,pitch,rot);break;}
         case 0x18:{int32_t id;if(j47_r_varint(r,&id)){double x=j47_r_be32(r)/32.0,y=j47_r_be32(r)/32.0,z=j47_r_be32(r)/32.0;float yaw=(int8_t)j47_r_u8(r)*360.0f/256.0f,pitch=(int8_t)j47_r_u8(r)*360.0f/256.0f;(void)j47_r_u8(r);j47_apply_entity_position(j47_entity_find(id),x,y,z,yaw,pitch,1);}break;}
         case 0x19:{int32_t id;if(j47_r_varint(r,&id)){float head=(int8_t)j47_r_u8(r)*360.0f/256.0f;J47Entity*e=j47_entity_find(id);if(e){e->head_yaw=head;if(e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){g_passive_mobs[e->mob_slot].prev_head_yaw=g_passive_mobs[e->mob_slot].head_yaw;g_passive_mobs[e->mob_slot].head_yaw=head;}}}break;}
-        case 0x1A:{int32_t id;if(j47_r_varint(r,&id)){int status=(int8_t)j47_r_u8(r);J47Entity*e=j47_entity_find(id);if(e&&e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){PassiveMob*m=&g_passive_mobs[e->mob_slot];if(status==2)m->hurt_time=10;if(status==3)m->death_time=1;}}break;}
+        case 0x1A:{
+            /* S19 Entity Status uses a fixed big-endian int entity ID in
+               protocol 47. Reading this as a VarInt shifts the status byte and
+               drops the player hurt/death feedback on most real servers. */
+            int32_t id=j47_r_be32(r);
+            if(!r->failed){
+                int status=(int8_t)j47_r_u8(r);
+                J47Entity*e=j47_entity_find(id);
+                if(id==g_j47.local_entity_id&&status==2){
+                    j47_local_hurt_feedback();
+                }else if(e&&e->kind==J47_ENTITY_PLAYER){
+                    if(status==2)j47_remote_player_hurt_feedback(id,1);
+                    if(status==3){
+                        PexNetRenderPlayerState*rp=pex_net_find_render_player(id);
+                        if(rp){rp->health=0;rp->death_time=0.05f;}
+                    }
+                }else if(e&&e->kind==J47_ENTITY_MOB&&e->mob_slot>=0){
+                    PassiveMob*m=&g_passive_mobs[e->mob_slot];
+                    if(status==2)m->hurt_time=10;
+                    if(status==3)m->death_time=1;
+                }
+            }
+            break;
+        }
         case 0x1B:{
             /* S1B Entity Attach uses fixed big-endian ints, not VarInts. NPC
                plugins frequently stack an invisible click target on a visible
