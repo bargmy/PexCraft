@@ -1525,11 +1525,60 @@ typedef struct FlatGLCpuMesh {
     uint32_t *i;
     uint32_t vcount, icount;
     GLuint list;
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    GLuint vbo, ibo;
+    unsigned int vbo_lightmap_version;
+    int vbo_uploaded;
+    int ibo_uploaded;
+#endif
     unsigned int version;
     unsigned int lit_lightmap_version;
     int origin_x, origin_z;
     int valid;
 } FlatGLCpuMesh;
+
+
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+#ifndef GL_ARRAY_BUFFER
+#define GL_ARRAY_BUFFER 0x8892
+#endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#endif
+#ifndef GL_STATIC_DRAW
+#define GL_STATIC_DRAW 0x88E4
+#endif
+typedef ptrdiff_t PexGLsizeiptr;
+typedef void (*PexGLGenBuffersProc)(GLsizei, GLuint*);
+typedef void (*PexGLDeleteBuffersProc)(GLsizei, const GLuint*);
+typedef void (*PexGLBindBufferProc)(GLenum, GLuint);
+typedef void (*PexGLBufferDataProc)(GLenum, PexGLsizeiptr, const GLvoid*, GLenum);
+static PexGLGenBuffersProc g_flat_glGenBuffers = NULL;
+static PexGLDeleteBuffersProc g_flat_glDeleteBuffers = NULL;
+static PexGLBindBufferProc g_flat_glBindBuffer = NULL;
+static PexGLBufferDataProc g_flat_glBufferData = NULL;
+static int g_flat_gl_vbo_checked = 0;
+static int g_flat_gl_vbo_available = 0;
+
+static int flat_gl_vbo_supported(void) {
+    if (!g_flat_gl_vbo_checked) {
+        /* Do not permanently cache a negative result before SDL has created the
+           OpenGL context; world reset/free paths can run during startup. */
+        if (!SDL_GL_GetCurrentContext()) return 0;
+        g_flat_gl_vbo_checked = 1;
+        g_flat_glGenBuffers = (PexGLGenBuffersProc)SDL_GL_GetProcAddress("glGenBuffers");
+        g_flat_glDeleteBuffers = (PexGLDeleteBuffersProc)SDL_GL_GetProcAddress("glDeleteBuffers");
+        g_flat_glBindBuffer = (PexGLBindBufferProc)SDL_GL_GetProcAddress("glBindBuffer");
+        g_flat_glBufferData = (PexGLBufferDataProc)SDL_GL_GetProcAddress("glBufferData");
+        if (!g_flat_glGenBuffers) g_flat_glGenBuffers = (PexGLGenBuffersProc)SDL_GL_GetProcAddress("glGenBuffersARB");
+        if (!g_flat_glDeleteBuffers) g_flat_glDeleteBuffers = (PexGLDeleteBuffersProc)SDL_GL_GetProcAddress("glDeleteBuffersARB");
+        if (!g_flat_glBindBuffer) g_flat_glBindBuffer = (PexGLBindBufferProc)SDL_GL_GetProcAddress("glBindBufferARB");
+        if (!g_flat_glBufferData) g_flat_glBufferData = (PexGLBufferDataProc)SDL_GL_GetProcAddress("glBufferDataARB");
+        g_flat_gl_vbo_available = g_flat_glGenBuffers && g_flat_glDeleteBuffers && g_flat_glBindBuffer && g_flat_glBufferData;
+    }
+    return g_flat_gl_vbo_available;
+}
+#endif
 
 static FlatGLCpuMesh g_flat_section_gl_cpu_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
 static int g_flat_gl_cpu_mesh_origin_x = 0x7fffffff;
@@ -2121,6 +2170,12 @@ static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
 #if !defined(PEX_PLATFORM_PSP) && !defined(PEX_PLATFORM_WII) && !defined(PEX_PLATFORM_ANDROID) && !defined(PEX_PLATFORM_ANDROID_TV) && !defined(PEX_PLATFORM_LGWEBOS)
     if (m->list && flat_display_lists_supported()) glDeleteLists(m->list, 1);
 #endif
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    if (flat_gl_vbo_supported()) {
+        if (m->vbo) g_flat_glDeleteBuffers(1, &m->vbo);
+        if (m->ibo) g_flat_glDeleteBuffers(1, &m->ibo);
+    }
+#endif
     free(m->v);
     free(m->lit_v);
     free(m->i);
@@ -2395,6 +2450,30 @@ static void flat_gl_cpu_mesh_refresh_lightmap(FlatGLCpuMesh *m) {
     m->lit_lightmap_version = version;
 }
 
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m) {
+    if (!m || !m->valid || !m->v || !m->i || !flat_gl_vbo_supported()) return 0;
+    flat_gl_cpu_mesh_refresh_lightmap(m);
+    const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
+    unsigned int light_version = m->lit_v ? m->lit_lightmap_version : 0;
+    if (!m->vbo) g_flat_glGenBuffers(1, &m->vbo);
+    if (!m->ibo) g_flat_glGenBuffers(1, &m->ibo);
+    if (!m->vbo || !m->ibo) return 0;
+    if (!m->vbo_uploaded || m->vbo_lightmap_version != light_version) {
+        g_flat_glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+        g_flat_glBufferData(GL_ARRAY_BUFFER, (PexGLsizeiptr)((size_t)m->vcount * sizeof(PexVertex)), draw_v, GL_STATIC_DRAW);
+        m->vbo_lightmap_version = light_version;
+        m->vbo_uploaded = 1;
+    }
+    g_flat_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
+    if (!m->ibo_uploaded) {
+        g_flat_glBufferData(GL_ELEMENT_ARRAY_BUFFER, (PexGLsizeiptr)((size_t)m->icount * sizeof(uint32_t)), m->i, GL_STATIC_DRAW);
+        m->ibo_uploaded = 1;
+    }
+    return 1;
+}
+#endif
+
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
 static GLushort *g_flat_android_index16_tmp = NULL;
 static uint32_t g_flat_android_index16_cap = 0;
@@ -2464,17 +2543,30 @@ static void flat_gl_draw_cpu_mesh_android16(FlatGLCpuMesh *m) {
 static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
 #if defined(PEX_PLATFORM_PSP)
     (void)m;
-    /* PSP uses the direct PexRendererBackend mesh path.  The OpenGL client-array
-       fallback is desktop-only and pspsdk does not define GL client-array APIs. */
 #else
     if (!m || !m->valid || m->icount < 3) return;
     if (m->list && flat_display_lists_supported()) { glCallList(m->list); return; }
     if (!m->v || !m->i) return;
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    if (flat_gl_cpu_mesh_upload_vbo(m)) {
+        g_flat_glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+        g_flat_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
+        glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)offsetof(PexVertex, x));
+        glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)offsetof(PexVertex, u));
+        glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)offsetof(PexVertex, color));
+        glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)0);
+        return;
+    }
+    /* A per-mesh allocation failure must not leave the previous mesh's buffers
+       bound, or the CPU fallback pointers below would be interpreted as VBO
+       byte offsets. */
+    if (flat_gl_vbo_supported()) {
+        g_flat_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        g_flat_glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+#endif
     flat_gl_cpu_mesh_refresh_lightmap(m);
     const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glEnableClientState(GL_COLOR_ARRAY);
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
     flat_gl_draw_cpu_mesh_android16(m);
 #else
@@ -2483,9 +2575,6 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
     glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&draw_v[0].color);
     glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)m->i);
 #endif
-    glDisableClientState(GL_COLOR_ARRAY);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glDisableClientState(GL_VERTEX_ARRAY);
 #endif
 }
 
@@ -7127,6 +7216,10 @@ static void rebuild_flat_section_list(int sy, int cx, int cz) {
 #define ASYNC_SECTION_MESH_D (FLAT_RENDER_CHUNK + 2)
 #define ASYNC_SECTION_MESH_BYTES (ASYNC_SECTION_MESH_W * ASYNC_SECTION_MESH_H * ASYNC_SECTION_MESH_D)
 
+static uint64_t flat_compute_snapshot_visibility(const unsigned char *blocks);
+static void flat_store_section_visibility(int cx, int cz, int sy, unsigned int version,
+                                          int world_cx, int world_cz, uint64_t mask);
+
 typedef struct AsyncSectionMeshJob {
     int cx, cz, sy;
     int world_cx, world_cz;
@@ -7149,6 +7242,7 @@ typedef struct AsyncSectionMeshResult {
     unsigned int version;
     unsigned int light_version;
     int priority;
+    uint64_t visibility_mask;
     FlatDirectMeshBuilder mb0, mb1;
     int skip0, skip1;
     /* Legacy prebuilt-buffer fields are retained for queue compatibility.
@@ -7469,6 +7563,7 @@ static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
             r.version = job.version;
             r.light_version = job.light_version;
             r.priority = job.priority;
+            r.visibility_mask = flat_compute_snapshot_visibility(job.blocks);
             r.skip0 = skip0;
             r.skip1 = skip1;
             r.mb0 = mb0;
@@ -7769,6 +7864,8 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 /* Mark this section settled for the exact light revision baked
                    into the worker snapshot. */
                 g_flat_section_mesh_light_version[r.sy][install_cz][install_cx] = r.light_version;
+                flat_store_section_visibility(install_cx, install_cz, r.sy, r.version,
+                                              r.world_cx, r.world_cz, r.visibility_mask);
                 pex_logf_trace("chunk mesh installed sy=%d world=%d,%d local=%d,%d skip=%d,%d version=%u", r.sy, r.world_cx, r.world_cz, install_cx, install_cz, r.skip0, r.skip1, r.version);
             } else {
                 g_flat_section_dirty[r.sy][install_cz][install_cx] = 1;
@@ -7916,6 +8013,148 @@ static void async_section_mesh_shutdown(void) {
     memset(g_flat_section_building_light_version, 0, sizeof(g_flat_section_building_light_version));
 }
 
+
+/* Java 1.8.8-style section visibility graph.  Each 16^3 section caches which
+   boundary faces are connected through non-opaque cells.  Rendering walks this
+   graph from the camera instead of submitting every section whose AABB touches
+   the frustum, so solid hills/walls stop hidden underground and interior work. */
+enum {
+    FLAT_VIS_NEG_X = 0, FLAT_VIS_POS_X = 1,
+    FLAT_VIS_NEG_Y = 2, FLAT_VIS_POS_Y = 3,
+    FLAT_VIS_NEG_Z = 4, FLAT_VIS_POS_Z = 5,
+    FLAT_VIS_START = 6
+};
+#define FLAT_VIS_ALL ((uint64_t)((1ULL << 36) - 1ULL))
+static uint64_t g_flat_section_visibility[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned int g_flat_section_visibility_version[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned char g_flat_section_visibility_valid[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static int g_flat_section_visibility_world_cx[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static int g_flat_section_visibility_world_cz[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+static unsigned int g_flat_visibility_list_hash = 0;
+
+static int flat_visibility_opposite(int face) {
+    static const int opposite[6] = { 1, 0, 3, 2, 5, 4 };
+    return (face >= 0 && face < 6) ? opposite[face] : FLAT_VIS_START;
+}
+
+static int flat_visibility_connected(uint64_t mask, int from, int to) {
+    if (from == FLAT_VIS_START) return 1;
+    if (from < 0 || from >= 6 || to < 0 || to >= 6) return 0;
+    return (mask & (1ULL << (from * 6 + to))) != 0;
+}
+
+static int flat_visibility_cell_opaque(int id) {
+    return id != 0 && flat_light_opacity_for_id(id) >= 255 && flat_block_is_solid(id);
+}
+
+static uint64_t flat_compute_visibility_from_opaque(const unsigned char *opaque, int opaque_count) {
+    unsigned char visited[4096];
+    unsigned short queue[4096];
+    memset(visited, 0, sizeof(visited));
+    if (opaque_count <= 0) return FLAT_VIS_ALL;
+    if (opaque_count >= 4096) return 0;
+
+    uint64_t result = 0;
+    for (int seed = 0; seed < 4096; ++seed) {
+        if (opaque[seed] || visited[seed]) continue;
+        int head = 0, tail = 0;
+        unsigned int touched = 0;
+        queue[tail++] = (unsigned short)seed;
+        visited[seed] = 1;
+        while (head < tail) {
+            int idx = queue[head++];
+            int x = idx & 15;
+            int z = (idx >> 4) & 15;
+            int y = (idx >> 8) & 15;
+            if (x == 0) touched |= 1u << FLAT_VIS_NEG_X;
+            if (x == 15) touched |= 1u << FLAT_VIS_POS_X;
+            if (y == 0) touched |= 1u << FLAT_VIS_NEG_Y;
+            if (y == 15) touched |= 1u << FLAT_VIS_POS_Y;
+            if (z == 0) touched |= 1u << FLAT_VIS_NEG_Z;
+            if (z == 15) touched |= 1u << FLAT_VIS_POS_Z;
+
+#define FLAT_VIS_PUSH(nidx) do { int _n = (nidx); if (!opaque[_n] && !visited[_n]) { visited[_n] = 1; queue[tail++] = (unsigned short)_n; } } while (0)
+            if (x > 0) FLAT_VIS_PUSH(idx - 1);
+            if (x < 15) FLAT_VIS_PUSH(idx + 1);
+            if (z > 0) FLAT_VIS_PUSH(idx - 16);
+            if (z < 15) FLAT_VIS_PUSH(idx + 16);
+            if (y > 0) FLAT_VIS_PUSH(idx - 256);
+            if (y < 15) FLAT_VIS_PUSH(idx + 256);
+#undef FLAT_VIS_PUSH
+        }
+        for (int a = 0; a < 6; ++a) if (touched & (1u << a)) {
+            for (int b = 0; b < 6; ++b) if (touched & (1u << b)) {
+                result |= 1ULL << (a * 6 + b);
+            }
+        }
+    }
+    return result;
+}
+
+/* Compute connectivity from the exact 18^3 snapshot already copied for the
+   async mesh worker.  This keeps the 4096-cell flood fill off the render thread
+   and makes the culling data match the geometry revision being installed. */
+static uint64_t flat_compute_snapshot_visibility(const unsigned char *blocks) {
+    unsigned char opaque[4096];
+    int opaque_count = 0;
+    if (!blocks) return FLAT_VIS_ALL;
+    for (int y = 0; y < 16; ++y) {
+        for (int z = 0; z < 16; ++z) {
+            for (int x = 0; x < 16; ++x) {
+                int dst = (y << 8) | (z << 4) | x;
+                int src = (((y + 1) * ASYNC_SECTION_MESH_D) + (z + 1)) * ASYNC_SECTION_MESH_W + (x + 1);
+                int is_opaque = flat_visibility_cell_opaque(blocks[src]);
+                opaque[dst] = (unsigned char)is_opaque;
+                opaque_count += is_opaque;
+            }
+        }
+    }
+    return flat_compute_visibility_from_opaque(opaque, opaque_count);
+}
+
+static void flat_store_section_visibility(int cx, int cz, int sy, unsigned int version,
+                                          int world_cx, int world_cz, uint64_t mask) {
+    if (sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y ||
+        cz < 0 || cz >= FLAT_RENDER_CHUNKS || cx < 0 || cx >= FLAT_RENDER_CHUNKS) return;
+    g_flat_section_visibility[sy][cz][cx] = mask;
+    g_flat_section_visibility_version[sy][cz][cx] = version;
+    g_flat_section_visibility_world_cx[sy][cz][cx] = world_cx;
+    g_flat_section_visibility_world_cz[sy][cz][cx] = world_cz;
+    g_flat_section_visibility_valid[sy][cz][cx] = 1;
+}
+
+static uint64_t flat_section_visibility_mask(int cx, int cz, int sy) {
+    int world_cx = floor_div16(g_flat_world_origin_x) + cx;
+    int world_cz = floor_div16(g_flat_world_origin_z) + cz;
+    unsigned int version = g_flat_section_mesh_version[sy][cz][cx];
+    if (!g_flat_section_visibility_valid[sy][cz][cx] ||
+        g_flat_section_visibility_version[sy][cz][cx] != version ||
+        g_flat_section_visibility_world_cx[sy][cz][cx] != world_cx ||
+        g_flat_section_visibility_world_cz[sy][cz][cx] != world_cz) {
+        /* Until the matching worker result arrives, treat every face as
+           connected.  This is conservative (never hides terrain) and avoids a
+           large first-frame visibility scan on the render thread. */
+        return FLAT_VIS_ALL;
+    }
+    return g_flat_section_visibility[sy][cz][cx];
+}
+
+typedef struct FlatVisibilityQueueNode {
+    short cx, cz, sy;
+    signed char entry_face;
+} FlatVisibilityQueueNode;
+
+static int flat_section_aabb_visible(const FlatFrustum *fr, int cx, int cz, int sy) {
+    float x0 = (float)(g_flat_world_origin_x + cx * FLAT_RENDER_CHUNK) - 2.0f;
+    float z0 = (float)(g_flat_world_origin_z + cz * FLAT_RENDER_CHUNK) - 2.0f;
+    float x1 = x0 + (float)FLAT_RENDER_CHUNK + 4.0f;
+    float z1 = z0 + (float)FLAT_RENDER_CHUNK + 4.0f;
+    float y0 = (float)(FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION) - 2.0f;
+    float y1 = y0 + (float)FLAT_RENDER_SECTION + 4.0f;
+    if (y1 > (float)FLAT_WORLD_Y_MAX + 3.0f) y1 = (float)FLAT_WORLD_Y_MAX + 3.0f;
+    return flat_aabb_in_frustum(fr, x0, y0, z0, x1, y1, z1);
+}
+
 static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionRef *out, int cap) {
     int count = 0;
     const PexPlayerRenderState *pr = &g_player_render_frame;
@@ -7925,44 +8164,78 @@ static int build_flat_visible_sections(const FlatFrustum *fr, FlatRenderSectionR
 
     int pcx = flat_index((int)floorf(px)) / FLAT_RENDER_CHUNK;
     int pcz = flat_z_index((int)floorf(pz)) / FLAT_RENDER_CHUNK;
+    int psy = ((int)floorf(py) - FLAT_WORLD_Y_MIN) / FLAT_RENDER_SECTION;
     if (pcx < 0) pcx = 0; if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
     if (pcz < 0) pcz = 0; if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
+    if (psy < 0) psy = 0; if (psy >= FLAT_RENDER_SECTIONS_Y) psy = FLAT_RENDER_SECTIONS_Y - 1;
 
-    int view_chunk_radius = generated_render_radius();
-    int cz0 = pcz - view_chunk_radius, cz1 = pcz + view_chunk_radius;
-    int cx0 = pcx - view_chunk_radius, cx1 = pcx + view_chunk_radius;
-    if (cz0 < 0) cz0 = 0; if (cx0 < 0) cx0 = 0;
-    if (cz1 >= FLAT_RENDER_CHUNKS) cz1 = FLAT_RENDER_CHUNKS - 1;
-    if (cx1 >= FLAT_RENDER_CHUNKS) cx1 = FLAT_RENDER_CHUNKS - 1;
+    int radius = generated_render_radius();
+    static unsigned char visited[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static unsigned char emitted[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static FlatVisibilityQueueNode queue[FLAT_MAX_VISIBLE_SECTIONS * 7];
+    int qhead = 0, qtail = 0;
+    memset(visited, 0, sizeof(visited));
+    memset(emitted, 0, sizeof(emitted));
 
-    for (int cz = cz0; cz <= cz1; cz++) {
-        for (int cx = cx0; cx <= cx1; cx++) {
-            if (!g_flat_world_chunk_generated[cz][cx]) continue;
-            if (!flat_chunk_light_ready(cx, cz)) continue;
-            float x0 = (float)(g_flat_world_origin_x + cx * FLAT_RENDER_CHUNK) - 2.0f;
-            float z0 = (float)(g_flat_world_origin_z + cz * FLAT_RENDER_CHUNK) - 2.0f;
-            float x1 = x0 + (float)FLAT_RENDER_CHUNK + 4.0f;
-            float z1 = z0 + (float)FLAT_RENDER_CHUNK + 4.0f;
-            for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
-                if (!flat_section_has_blocks(cx, cz, sy) &&
-                    g_flat_section_valid[sy][cz][cx] &&
-                    g_flat_section_skip_pass[sy][cz][cx][0] &&
-                    g_flat_section_skip_pass[sy][cz][cx][1]) {
-                    continue;
-                }
-                float y0 = (float)(FLAT_WORLD_Y_MIN + sy * FLAT_RENDER_SECTION) - 2.0f;
-                float y1 = y0 + (float)FLAT_RENDER_SECTION + 4.0f;
-                if (y1 > (float)FLAT_WORLD_Y_MAX + 3.0f) y1 = (float)FLAT_WORLD_Y_MAX + 3.0f;
-                if (!flat_aabb_in_frustum(fr, x0, y0, z0, x1, y1, z1)) continue;
-                if (count >= cap) return count;
-                float mx = (x0 + x1) * 0.5f - px;
-                float my = (y0 + y1) * 0.5f - py;
-                float mz = (z0 + z1) * 0.5f - pz;
+    if (g_flat_world_chunk_generated[pcz][pcx] && flat_chunk_light_ready(pcx, pcz)) {
+        queue[qtail++] = (FlatVisibilityQueueNode){ (short)pcx, (short)pcz, (short)psy, (signed char)FLAT_VIS_START };
+        visited[psy][pcz][pcx] = (unsigned char)(1u << FLAT_VIS_START);
+    }
+
+    static const int dx[6] = { -1, 1, 0, 0, 0, 0 };
+    static const int dy[6] = { 0, 0, -1, 1, 0, 0 };
+    static const int dz[6] = { 0, 0, 0, 0, -1, 1 };
+    unsigned int list_hash = 2166136261u;
+
+    while (qhead < qtail) {
+        FlatVisibilityQueueNode node = queue[qhead++];
+        int cx = node.cx, cz = node.cz, sy = node.sy;
+        if (cx < 0 || cx >= FLAT_RENDER_CHUNKS || cz < 0 || cz >= FLAT_RENDER_CHUNKS || sy < 0 || sy >= FLAT_RENDER_SECTIONS_Y) continue;
+        if (abs(cx - pcx) > radius || abs(cz - pcz) > radius) continue;
+        if (!g_flat_world_chunk_generated[cz][cx] || !flat_chunk_light_ready(cx, cz)) continue;
+        if (!flat_section_aabb_visible(fr, cx, cz, sy) && !(cx == pcx && cz == pcz && sy == psy)) continue;
+
+        if (!emitted[sy][cz][cx]) {
+            emitted[sy][cz][cx] = 1;
+            if (!(!flat_section_has_blocks(cx, cz, sy) &&
+                  g_flat_section_valid[sy][cz][cx] &&
+                  g_flat_section_skip_pass[sy][cz][cx][0] &&
+                  g_flat_section_skip_pass[sy][cz][cx][1])) {
+                if (count >= cap) break;
+                float mx = (float)(g_flat_world_origin_x + cx * 16 + 8) - px;
+                float my = (float)(FLAT_WORLD_Y_MIN + sy * 16 + 8) - py;
+                float mz = (float)(g_flat_world_origin_z + cz * 16 + 8) - pz;
                 out[count].cx = cx; out[count].cz = cz; out[count].sy = sy;
                 out[count].dist2 = mx*mx + my*my + mz*mz;
+                list_hash ^= (unsigned int)(cx + cz * 37 + sy * 1369);
+                list_hash *= 16777619u;
                 count++;
             }
         }
+
+        uint64_t connections = flat_section_visibility_mask(cx, cz, sy);
+        for (int exit_face = 0; exit_face < 6; ++exit_face) {
+            if (!flat_visibility_connected(connections, node.entry_face, exit_face)) continue;
+            int ncx = cx + dx[exit_face];
+            int ncz = cz + dz[exit_face];
+            int nsy = sy + dy[exit_face];
+            if (ncx < 0 || ncx >= FLAT_RENDER_CHUNKS || ncz < 0 || ncz >= FLAT_RENDER_CHUNKS || nsy < 0 || nsy >= FLAT_RENDER_SECTIONS_Y) continue;
+            if (abs(ncx - pcx) > radius || abs(ncz - pcz) > radius) continue;
+            if (!g_flat_world_chunk_generated[ncz][ncx] || !flat_chunk_light_ready(ncx, ncz)) continue;
+            int entry = flat_visibility_opposite(exit_face);
+            unsigned char bit = (unsigned char)(1u << entry);
+            if (visited[nsy][ncz][ncx] & bit) continue;
+            if (!flat_section_aabb_visible(fr, ncx, ncz, nsy)) continue;
+            visited[nsy][ncz][ncx] |= bit;
+            if (qtail < (int)ARRAY_COUNT(queue)) {
+                queue[qtail++] = (FlatVisibilityQueueNode){ (short)ncx, (short)ncz, (short)nsy, (signed char)entry };
+            }
+        }
+    }
+
+    if (list_hash != g_flat_visibility_list_hash) {
+        g_flat_visibility_list_hash = list_hash;
+        g_flat_renderer_sort_dirty = 1;
     }
     if (flat_renderer_sort_needed(px, py, pz, count) || g_flat_visible_sorted_count != count) {
         qsort(out, (size_t)count, sizeof(out[0]), flat_section_ref_cmp_near);
@@ -8508,6 +8781,19 @@ static void draw_flat_section_passes_direct(const FlatRenderSectionRef *refs, in
     if (!rb) return;
     PexRenderState st;
     flat_direct_make_state(&st, 0);
+#if defined(_WIN32) || defined(PEX_PLATFORM_XBOX_UWP)
+    if (pex_using_d3d11()) {
+        static PexMeshHandle handles[FLAT_MAX_VISIBLE_SECTIONS];
+        int handle_count = 0;
+        for (int i = 0; i < count && handle_count < FLAT_MAX_VISIBLE_SECTIONS; i++) {
+            int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+            PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][0];
+            if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] && h) handles[handle_count++] = h;
+        }
+        d3d11_draw_mesh_batch(handles, handle_count, &st);
+        return;
+    }
+#endif
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][0];
@@ -8520,6 +8806,19 @@ static void draw_translucent_sections_direct(const FlatRenderSectionRef *refs, i
     if (!rb || !flat_separate_liquid_pass_enabled()) return;
     PexRenderState st;
     flat_direct_make_state(&st, 1);
+#if defined(_WIN32) || defined(PEX_PLATFORM_XBOX_UWP)
+    if (pex_using_d3d11()) {
+        static PexMeshHandle handles[FLAT_MAX_VISIBLE_SECTIONS];
+        int handle_count = 0;
+        for (int i = count - 1; i >= 0 && handle_count < FLAT_MAX_VISIBLE_SECTIONS; i--) {
+            int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
+            PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][1];
+            if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] && h) handles[handle_count++] = h;
+        }
+        d3d11_draw_mesh_batch(handles, handle_count, &st);
+        return;
+    }
+#endif
     for (int i = count - 1; i >= 0; i--) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         PexMeshHandle h = g_flat_section_direct_mesh[sy][cz][cx][1];
@@ -8549,6 +8848,9 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, 0.5f);
     glDepthMask(GL_TRUE);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
     for (int i = 0; i < count; i++) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][0] &&
@@ -8556,6 +8858,12 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][0]);
         }
     }
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    if (flat_gl_vbo_supported()) { g_flat_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); g_flat_glBindBuffer(GL_ARRAY_BUFFER, 0); }
+#endif
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
     pex_gl_restore_shade_model(old_shade_model);
     glDisable(GL_ALPHA_TEST);
     glColor4f(1,1,1,1);
@@ -8574,6 +8882,9 @@ static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, i
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
     for (int i = count - 1; i >= 0; i--) {
         int cx = refs[i].cx, cz = refs[i].cz, sy = refs[i].sy;
         if (flat_chunk_light_ready(cx, cz) && g_flat_section_valid[sy][cz][cx] && !g_flat_section_skip_pass[sy][cz][cx][1] &&
@@ -8581,6 +8892,12 @@ static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, i
             flat_gl_draw_cpu_mesh(&g_flat_section_gl_cpu_mesh[sy][cz][cx][1]);
         }
     }
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    if (flat_gl_vbo_supported()) { g_flat_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); g_flat_glBindBuffer(GL_ARRAY_BUFFER, 0); }
+#endif
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
     pex_gl_restore_shade_model(old_shade_model);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);

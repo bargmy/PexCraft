@@ -101,6 +101,10 @@ typedef struct PexD3D11Native {
     int last_depth;
     int last_depth_write;
     int last_alpha_test;
+    ID3D11ShaderResourceView *last_srv;
+    ID3D11SamplerState *last_sampler;
+    PexRenderState last_constant_state;
+    int constant_state_valid;
     int cache_valid;
 } PexD3D11Native;
 
@@ -531,6 +535,10 @@ static int d3d11_begin_frame(float r, float g, float b, float a) {
     g_pxr_d3d11.stats.draw_calls = 0;
     g_pxr_d3d11.stats.triangles = 0;
     g_pxr_d3d11.stats.buffer_uploads = 0;
+    g_pxr_d3d11.cache_valid = 0;
+    g_pxr_d3d11.constant_state_valid = 0;
+    g_pxr_d3d11.last_srv = NULL;
+    g_pxr_d3d11.last_sampler = NULL;
     float clear[4] = { r, g, b, a };
     ID3D11DeviceContext_OMSetRenderTargets(g_pxr_d3d11.ctx, 1, &g_pxr_d3d11.rtv, g_pxr_d3d11.dsv);
     ID3D11DeviceContext_ClearRenderTargetView(g_pxr_d3d11.ctx, g_pxr_d3d11.rtv, clear);
@@ -540,9 +548,8 @@ static int d3d11_begin_frame(float r, float g, float b, float a) {
     ID3D11DeviceContext_PSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.ps, NULL, 0);
     ID3D11DeviceContext_RSSetState(g_pxr_d3d11.ctx, g_pxr_d3d11.rast_nocull);
     ID3D11DeviceContext_IASetPrimitiveTopology(g_pxr_d3d11.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ID3D11DeviceContext_VSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.vs, NULL, 0);
-    ID3D11DeviceContext_PSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.ps, NULL, 0);
-    ID3D11DeviceContext_RSSetState(g_pxr_d3d11.ctx, g_pxr_d3d11.rast_nocull);
+    ID3D11DeviceContext_VSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
+    ID3D11DeviceContext_PSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
     return 1;
 }
 
@@ -664,59 +671,123 @@ static void d3d11_destroy_mesh(PexMeshHandle handle) {
     pxr_d3d11_release_mesh(&g_pxr_d3d11.meshes[handle]);
 }
 
+static int pxr_d3d11_constant_state_equal(const PexRenderState *a, const PexRenderState *b) {
+    if (!a || !b) return 0;
+    if (a->alpha_test_enabled != b->alpha_test_enabled ||
+        a->fog_enabled != b->fog_enabled ||
+        a->fog_start != b->fog_start || a->fog_end != b->fog_end ||
+        a->fog_color != b->fog_color) return 0;
+    if (memcmp(a->modelview, b->modelview, sizeof(a->modelview)) != 0) return 0;
+    if (memcmp(a->projection, b->projection, sizeof(a->projection)) != 0) return 0;
+    return 1;
+}
+
 static void pxr_d3d11_apply_state(const PexRenderState *s) {
     if (!g_pxr_d3d11.ctx || !s) return;
     float blend_factor[4] = {0,0,0,0};
-    ID3D11BlendState *bs = s->blend_enabled ? g_pxr_d3d11.blend_alpha : g_pxr_d3d11.blend_off;
-    ID3D11DepthStencilState *ds = s->depth_enabled ? (s->depth_write ? g_pxr_d3d11.depth_on_write : g_pxr_d3d11.depth_on_nowrite) : g_pxr_d3d11.depth_off;
-    ID3D11DeviceContext_OMSetBlendState(g_pxr_d3d11.ctx, bs, blend_factor, 0xffffffffu);
-    ID3D11DeviceContext_OMSetDepthStencilState(g_pxr_d3d11.ctx, ds, 0);
+    if (!g_pxr_d3d11.cache_valid || g_pxr_d3d11.last_blend != s->blend_enabled) {
+        ID3D11BlendState *bs = s->blend_enabled ? g_pxr_d3d11.blend_alpha : g_pxr_d3d11.blend_off;
+        ID3D11DeviceContext_OMSetBlendState(g_pxr_d3d11.ctx, bs, blend_factor, 0xffffffffu);
+        g_pxr_d3d11.last_blend = s->blend_enabled;
+    }
+    if (!g_pxr_d3d11.cache_valid || g_pxr_d3d11.last_depth != s->depth_enabled ||
+        g_pxr_d3d11.last_depth_write != s->depth_write) {
+        ID3D11DepthStencilState *ds = s->depth_enabled ?
+            (s->depth_write ? g_pxr_d3d11.depth_on_write : g_pxr_d3d11.depth_on_nowrite) :
+            g_pxr_d3d11.depth_off;
+        ID3D11DeviceContext_OMSetDepthStencilState(g_pxr_d3d11.ctx, ds, 0);
+        g_pxr_d3d11.last_depth = s->depth_enabled;
+        g_pxr_d3d11.last_depth_write = s->depth_write;
+    }
+
     ID3D11ShaderResourceView *srv = NULL;
     ID3D11SamplerState *samp = g_pxr_d3d11.sampler_wrap;
     if (s->texture_enabled && s->texture > 0 && s->texture < PEX_RENDERER_MAX_TEXTURES) {
         srv = g_pxr_d3d11.textures[s->texture].srv;
         samp = g_pxr_d3d11.textures[s->texture].repeat ? g_pxr_d3d11.sampler_wrap : g_pxr_d3d11.sampler_clamp;
     }
-    ID3D11DeviceContext_PSSetShaderResources(g_pxr_d3d11.ctx, 0, 1, &srv);
-    ID3D11DeviceContext_PSSetSamplers(g_pxr_d3d11.ctx, 0, 1, &samp);
-    D3D11_MAPPED_SUBRESOURCE map;
-    if (SUCCEEDED(ID3D11DeviceContext_Map(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
-        PexD3D11CBNative *cb = (PexD3D11CBNative*)map.pData;
-        float proj_d3d[16];
-        memcpy(proj_d3d, s->projection, sizeof(proj_d3d));
-        d3d11_depth_remap_gl_to_d3d(proj_d3d);
-        d3d11_matrix_from_gl(cb->modelview, s->modelview);
-        d3d11_matrix_from_gl(cb->projection, proj_d3d);
-        cb->fog_color[0] = ((s->fog_color >> 16) & 255) / 255.0f;
-        cb->fog_color[1] = ((s->fog_color >> 8) & 255) / 255.0f;
-        cb->fog_color[2] = (s->fog_color & 255) / 255.0f;
-        cb->fog_color[3] = 1.0f;
-        cb->fog_params[0] = s->fog_start;
-        cb->fog_params[1] = s->fog_end;
-        cb->fog_params[2] = s->fog_enabled ? 1.0f : 0.0f;
-        cb->fog_params[3] = s->alpha_test_enabled ? 1.0f : 0.0f;
-        ID3D11DeviceContext_Unmap(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.constant_buffer, 0);
+    if (!g_pxr_d3d11.cache_valid || g_pxr_d3d11.last_srv != srv) {
+        ID3D11DeviceContext_PSSetShaderResources(g_pxr_d3d11.ctx, 0, 1, &srv);
+        g_pxr_d3d11.last_srv = srv;
     }
-    ID3D11DeviceContext_VSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
-    ID3D11DeviceContext_PSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
+    if (!g_pxr_d3d11.cache_valid || g_pxr_d3d11.last_sampler != samp) {
+        ID3D11DeviceContext_PSSetSamplers(g_pxr_d3d11.ctx, 0, 1, &samp);
+        g_pxr_d3d11.last_sampler = samp;
+    }
+
+    if (!g_pxr_d3d11.constant_state_valid ||
+        !pxr_d3d11_constant_state_equal(&g_pxr_d3d11.last_constant_state, s)) {
+        D3D11_MAPPED_SUBRESOURCE map;
+        if (SUCCEEDED(ID3D11DeviceContext_Map(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
+            PexD3D11CBNative *cb = (PexD3D11CBNative*)map.pData;
+            float proj_d3d[16];
+            memcpy(proj_d3d, s->projection, sizeof(proj_d3d));
+            d3d11_depth_remap_gl_to_d3d(proj_d3d);
+            d3d11_matrix_from_gl(cb->modelview, s->modelview);
+            d3d11_matrix_from_gl(cb->projection, proj_d3d);
+            cb->fog_color[0] = ((s->fog_color >> 16) & 255) / 255.0f;
+            cb->fog_color[1] = ((s->fog_color >> 8) & 255) / 255.0f;
+            cb->fog_color[2] = (s->fog_color & 255) / 255.0f;
+            cb->fog_color[3] = 1.0f;
+            cb->fog_params[0] = s->fog_start;
+            cb->fog_params[1] = s->fog_end;
+            cb->fog_params[2] = s->fog_enabled ? 1.0f : 0.0f;
+            cb->fog_params[3] = s->alpha_test_enabled ? 1.0f : 0.0f;
+            ID3D11DeviceContext_Unmap(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.constant_buffer, 0);
+            g_pxr_d3d11.last_constant_state = *s;
+            g_pxr_d3d11.constant_state_valid = 1;
+        }
+    }
+    g_pxr_d3d11.cache_valid = 1;
 }
 
-static void d3d11_draw_mesh(PexMeshHandle handle, const PexRenderState *state) {
-    if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES || !g_pxr_d3d11.ctx) return;
-    PexD3D11Mesh *m = &g_pxr_d3d11.meshes[handle];
-    if (!m->vb || !m->ib || m->index_count < 3) return;
-    pxr_d3d11_apply_state(state);
-    UINT stride = sizeof(PexVertex), offset = 0;
+/* Compatibility GUI/entity rendering uses a separate D3D11 pipeline on the
+   same immediate context.  Rebind the native terrain pipeline once per native
+   batch, then let the state cache eliminate the per-section churn. */
+static void pxr_d3d11_bind_native_pipeline(void) {
+    if (!g_pxr_d3d11.ctx) return;
     ID3D11DeviceContext_IASetInputLayout(g_pxr_d3d11.ctx, g_pxr_d3d11.input_layout);
     ID3D11DeviceContext_VSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.vs, NULL, 0);
     ID3D11DeviceContext_PSSetShader(g_pxr_d3d11.ctx, g_pxr_d3d11.ps, NULL, 0);
     ID3D11DeviceContext_RSSetState(g_pxr_d3d11.ctx, g_pxr_d3d11.rast_nocull);
     ID3D11DeviceContext_IASetPrimitiveTopology(g_pxr_d3d11.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_VSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
+    ID3D11DeviceContext_PSSetConstantBuffers(g_pxr_d3d11.ctx, 0, 1, &g_pxr_d3d11.constant_buffer);
+    /* OM state and texture bindings may have been replaced by the compatibility
+       renderer.  Force one refresh for this batch, not one refresh per mesh. */
+    g_pxr_d3d11.cache_valid = 0;
+    g_pxr_d3d11.last_srv = NULL;
+    g_pxr_d3d11.last_sampler = NULL;
+}
+
+static void d3d11_bind_mesh_and_draw(PexD3D11Mesh *m) {
+    if (!m || !m->vb || !m->ib || m->index_count < 3) return;
+    UINT stride = sizeof(PexVertex), offset = 0;
     ID3D11DeviceContext_IASetVertexBuffers(g_pxr_d3d11.ctx, 0, 1, &m->vb, &stride, &offset);
     ID3D11DeviceContext_IASetIndexBuffer(g_pxr_d3d11.ctx, m->ib, DXGI_FORMAT_R32_UINT, 0);
     ID3D11DeviceContext_DrawIndexed(g_pxr_d3d11.ctx, m->index_count, 0, 0);
     g_pxr_d3d11.stats.draw_calls++;
     g_pxr_d3d11.stats.triangles += m->index_count / 3;
+}
+
+static void d3d11_draw_mesh(PexMeshHandle handle, const PexRenderState *state) {
+    if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES || !g_pxr_d3d11.ctx) return;
+    pxr_d3d11_bind_native_pipeline();
+    pxr_d3d11_apply_state(state);
+    d3d11_bind_mesh_and_draw(&g_pxr_d3d11.meshes[handle]);
+}
+
+/* Terrain uses one immutable state for hundreds of section buffers.  Apply that
+   state once, then only switch vertex/index buffers between DrawIndexed calls. */
+static void d3d11_draw_mesh_batch(const PexMeshHandle *handles, int count, const PexRenderState *state) {
+    if (!handles || count <= 0 || !g_pxr_d3d11.ctx) return;
+    pxr_d3d11_bind_native_pipeline();
+    pxr_d3d11_apply_state(state);
+    for (int i = 0; i < count; ++i) {
+        PexMeshHandle handle = handles[i];
+        if (handle == 0 || handle >= PEX_RENDERER_MAX_MESHES) continue;
+        d3d11_bind_mesh_and_draw(&g_pxr_d3d11.meshes[handle]);
+    }
 }
 
 static int pxr_d3d11_ensure_dynamic(uint32_t vcount, uint32_t icount) {
@@ -752,6 +823,7 @@ static void d3d11_draw_dynamic(const PexMesh *mesh, const PexRenderState *state)
     if (FAILED(ID3D11DeviceContext_Map(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.dynamic_ib, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return;
     memcpy(map.pData, mesh->indices, mesh->index_count * sizeof(uint32_t));
     ID3D11DeviceContext_Unmap(g_pxr_d3d11.ctx, (ID3D11Resource*)g_pxr_d3d11.dynamic_ib, 0);
+    pxr_d3d11_bind_native_pipeline();
     pxr_d3d11_apply_state(state);
     UINT stride = sizeof(PexVertex), offset = 0;
     ID3D11DeviceContext_IASetPrimitiveTopology(g_pxr_d3d11.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
