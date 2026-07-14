@@ -218,6 +218,9 @@ static int g_release_panorama_boot_reset_done = 0;
 #if defined(PEX_PLATFORM_WASM)
 static double g_release_wasm_panorama_last_update = -1000.0;
 static int g_release_wasm_panorama_valid = 0;
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static double g_release_android_panorama_last_update = -1000.0;
+static int g_release_android_panorama_valid = 0;
 #endif
 #define RELEASE_PANORAMA_TEX_SIZE 256
 
@@ -235,6 +238,9 @@ static void release_title_state_enter(void) {
 #if defined(PEX_PLATFORM_WASM)
     g_release_wasm_panorama_last_update = -1000.0;
     g_release_wasm_panorama_valid = 0;
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    g_release_android_panorama_last_update = -1000.0;
+    g_release_android_panorama_valid = 0;
 #endif
 }
 static int release_panorama_target_size(void) {
@@ -499,6 +505,53 @@ static void draw_release_panorama_wasm(float partial) {
     draw_release_panorama_cube_direct(partial);
 }
 #endif
+
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static void draw_release_panorama_android(float partial) {
+    const int target_size = RELEASE_PANORAMA_TEX_SIZE;
+    double now = now_seconds();
+    int rebuild = !g_release_android_panorama_valid ||
+                  (now - g_release_android_panorama_last_update) >= (1.0 / 30.0);
+
+    if (rebuild) panorama_reset_gl_state();
+    if (rebuild && pex_android_tv_panorama_begin(target_size)) {
+        glViewport(0, 0, target_size, target_size);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        /* The separable blur replaces the old 16 jittered full-screen cube
+           passes. One 256x256 sample preserves the desktop look at a fraction
+           of the fill-rate cost on TV GPUs. */
+        draw_release_panorama_cube_samples(partial, 1);
+        if (pex_android_tv_panorama_blur(2)) {
+            g_release_android_panorama_valid = 1;
+            g_release_android_panorama_last_update = now;
+        }
+    }
+
+    if (g_release_android_panorama_valid) {
+        /* Fill the screen without stretching: crop the square blur target to
+           the drawable aspect, exactly like the browser implementation. */
+        float aspect = g_render_h > 0 ? (float)g_render_w / (float)g_render_h : 1.0f;
+        float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+        if (aspect >= 1.0f) {
+            float half_v = 0.5f / aspect;
+            v0 = 0.5f - half_v;
+            v1 = 0.5f + half_v;
+        } else {
+            float half_u = 0.5f * aspect;
+            u0 = 0.5f - half_u;
+            u1 = 0.5f + half_u;
+        }
+        if (pex_android_tv_panorama_present(g_render_w, g_render_h, u0, v0, u1, v1)) {
+            panorama_reset_gl_state();
+            glViewport(0, 0, g_render_w, g_render_h);
+            setup_gui_projection();
+            return;
+        }
+    }
+    draw_release_panorama_cube_direct(partial);
+}
+#endif
 #endif
 
 static void release_panorama_blur_pass(void) {
@@ -560,7 +613,7 @@ static void draw_release_skybox(float partial) {
     (void)s_last_panorama_update;
     (void)s_have_panorama_frame;
     (void)s_cached_panorama_size;
-    draw_release_panorama_cube_direct(partial);
+    draw_release_panorama_android(partial);
     return;
 #endif
 

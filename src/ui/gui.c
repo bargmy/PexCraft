@@ -1131,6 +1131,39 @@ static void draw_active_potion_effects_panel(int inv_x, int inv_y) {
     }
 }
 
+typedef struct GuiItemBatchEntry {
+    ItemStack stack;
+    int x, y;
+} GuiItemBatchEntry;
+
+static void gui_item_batch_add(GuiItemBatchEntry *entries, int *count, int capacity,
+                               const ItemStack *stack, int x, int y) {
+    if (!entries || !count || !stack || stack_empty(stack) || *count >= capacity) return;
+    entries[*count].stack = *stack;
+    entries[*count].x = x;
+    entries[*count].y = y;
+    (*count)++;
+}
+
+static void gui_item_batch_draw(GuiItemBatchEntry *entries, int count) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* Container slots do not overlap. Group block-atlas icons and item-atlas
+       icons so the GLES compatibility batch does not bounce between terrain,
+       items and font textures for every slot. Draw counts/durability afterward. */
+    for (int block_pass = 1; block_pass >= 0; --block_pass) {
+        for (int i = 0; i < count; ++i) {
+            if ((item_is_block_id(entries[i].stack.id) ? 1 : 0) != block_pass) continue;
+            draw_item_stack_gui_icon_base(&entries[i].stack, entries[i].x, entries[i].y, 0);
+        }
+    }
+    for (int i = 0; i < count; ++i)
+        draw_item_stack_gui_overlay_only(&entries[i].stack, entries[i].x, entries[i].y);
+#else
+    for (int i = 0; i < count; ++i)
+        draw_item_stack_gui(&entries[i].stack, entries[i].x, entries[i].y);
+#endif
+}
+
 static void draw_inventory_screen(void) {
     draw_ingame_world_view(0);
     draw_gradient(0, 0, g_gui_w, g_gui_h, -1072689136, -804253680);
@@ -1138,24 +1171,26 @@ static void draw_inventory_screen(void) {
     int y = (g_gui_h - 166) / 2;
     draw_textured_rect_tex(&tex_inventory, x, y, 0, 0, 176, 166, 0xFFFFFF);
     draw_inventory_steve(x, y);
-    for (int row = 0; row < 4; row++) {
-        draw_item_stack_gui(&g_armor_inventory[3 - row], x + 8, y + 8 + row * 18);
-    }
+
+    GuiItemBatchEntry items[48];
+    int item_count = 0;
+    for (int row = 0; row < 4; row++)
+        gui_item_batch_add(items, &item_count, 48, &g_armor_inventory[3 - row], x + 8, y + 8 + row * 18);
     for (int row = 0; row < 3; row++) for (int col = 0; col < 9; col++) {
         int slot = 9 + col + row * 9;
-        draw_item_stack_gui(&g_inventory[slot], x + 8 + col * 18, y + 84 + row * 18);
+        gui_item_batch_add(items, &item_count, 48, &g_inventory[slot], x + 8 + col * 18, y + 84 + row * 18);
     }
-    for (int col = 0; col < 9; col++) draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 142);
+    for (int col = 0; col < 9; col++)
+        gui_item_batch_add(items, &item_count, 48, &g_inventory[col], x + 8 + col * 18, y + 142);
 
-    /* Container labels are drawn without the HUD-style shadow, matching the
-       original GUI text color and avoiding the dark/white muddy look. */
     draw_text_no_shadow(tr_key_default("container.crafting", "Crafting"), x + 86, y + 6, 0x404040);
     for (int row = 0; row < 2; row++) for (int col = 0; col < 2; col++) {
         int slot = col + row * 2;
-        draw_item_stack_gui(&g_craft_grid[slot], x + 88 + col * 18, y + 26 + row * 18);
+        gui_item_batch_add(items, &item_count, 48, &g_craft_grid[slot], x + 88 + col * 18, y + 26 + row * 18);
     }
     ItemStack craft_out = inventory_crafting_output();
-    draw_item_stack_gui(&craft_out, x + 144, y + 36);
+    gui_item_batch_add(items, &item_count, 48, &craft_out, x + 144, y + 36);
+    gui_item_batch_draw(items, item_count);
 
     draw_active_potion_effects_panel(x, y);
     draw_hovered_item_tooltip();
@@ -1207,9 +1242,6 @@ static void draw_creative_screen(void) {
     int x = (g_gui_w - CREATIVE_XSIZE) / 2;
     int y = (g_gui_h - CREATIVE_YSIZE) / 2;
 
-    /* Java 1.2.5 GuiContainerCreative uses /gui/allitems.png, 176x208.
-       If that exact texture exists in the selected pack, draw it.  The code-drawn
-       fallback keeps creative usable with older beta packs that do not ship it. */
     int textured_bg = tex_allitems.id && tex_allitems.w >= 176 && tex_allitems.h >= 224;
     if (textured_bg) {
         draw_textured_rect_tex(&tex_allitems, x, y, 0, 0, CREATIVE_XSIZE, CREATIVE_YSIZE, 0xFFFFFF);
@@ -1222,22 +1254,23 @@ static void draw_creative_screen(void) {
     }
 
     draw_text_no_shadow(tr_key_default("container.creative", "Item Selection"), x + 8, y + 6, 0x404040);
-
-    int start = g_creative_scroll_row * CREATIVE_COLS;
+    GuiItemBatchEntry items[CREATIVE_ROWS * CREATIVE_COLS + 9];
+    int item_count = 0;
+    int start_item = g_creative_scroll_row * CREATIVE_COLS;
+    int catalog_count = creative_catalog_count();
     for (int row = 0; row < CREATIVE_ROWS; row++) {
         for (int col = 0; col < CREATIVE_COLS; col++) {
             int sx = x + 8 + col * 18;
             int sy = y + 18 + row * 18;
             if (!textured_bg) draw_creative_slot_bg(sx, sy);
-            int idx = start + row * CREATIVE_COLS + col;
-            if (idx < creative_catalog_count()) {
+            int idx = start_item + row * CREATIVE_COLS + col;
+            if (idx < catalog_count) {
                 ItemStack st = creative_stack_for_index(idx);
-                draw_item_stack_gui(&st, sx, sy);
+                gui_item_batch_add(items, &item_count, (int)ARRAY_COUNT(items), &st, sx, sy);
             }
         }
     }
 
-    /* Scrollbar track and thumb placement copied from GuiContainerCreative. */
     int track_x = x + 155;
     int track_y = y + 17;
     int track_h = 160 + 2;
@@ -1255,9 +1288,11 @@ static void draw_creative_screen(void) {
     }
 
     for (int col = 0; col < 9; col++) {
-        if (!textured_bg) draw_creative_slot_bg(x + 8 + col * 18, y + 184);
-        draw_item_stack_gui(&g_inventory[col], x + 8 + col * 18, y + 184);
+        int sx = x + 8 + col * 18, sy = y + 184;
+        if (!textured_bg) draw_creative_slot_bg(sx, sy);
+        gui_item_batch_add(items, &item_count, (int)ARRAY_COUNT(items), &g_inventory[col], sx, sy);
     }
+    gui_item_batch_draw(items, item_count);
 
     draw_creative_tooltip(g_mouse_x, g_mouse_y);
     draw_carried_stack();

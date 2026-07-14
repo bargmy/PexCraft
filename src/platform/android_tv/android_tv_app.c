@@ -48,8 +48,15 @@ static void refresh_window_size_after_mode(void) {
     SDL_GetWindowSize(g_hwnd, &g_win_w, &g_win_h);
     if (g_win_w < 1) g_win_w = 1;
     if (g_win_h < 1) g_win_h = 1;
-    g_render_w = g_win_w;
-    g_render_h = g_win_h;
+    /* SDL window coordinates and the GLES drawable are not always the same on
+       high-density Android displays.  The world-resolution percentage is based
+       on the real framebuffer, while input remains based on logical window
+       coordinates.  Storing only the percentage makes the setting portable
+       between 720p, 1080p and 4K displays. */
+    if (g_glrc) SDL_GL_GetDrawableSize(g_hwnd, &g_render_w, &g_render_h);
+    else { g_render_w = g_win_w; g_render_h = g_win_h; }
+    if (g_render_w < 1) g_render_w = g_win_w;
+    if (g_render_h < 1) g_render_h = g_win_h;
     setup_scale();
     rebuild_screen();
     if (g_screen == SCREEN_INGAME) set_mouse_grabbed(1);
@@ -116,9 +123,12 @@ static void sdl2_handle_event(SDL_Event *e) {
                 g_win_w = e->window.data1; g_win_h = e->window.data2;
                 if (g_win_w < 1) g_win_w = 1;
                 if (g_win_h < 1) g_win_h = 1;
-                g_render_w = g_win_w; g_render_h = g_win_h;
+                if (g_glrc) SDL_GL_GetDrawableSize(g_hwnd, &g_render_w, &g_render_h);
+                else { g_render_w = g_win_w; g_render_h = g_win_h; }
+                if (g_render_w < 1) g_render_w = g_win_w;
+                if (g_render_h < 1) g_render_h = g_win_h;
                 setup_scale();
-                pex_renderer_resize(g_win_w, g_win_h);
+                pex_renderer_resize(g_render_w, g_render_h);
                 rebuild_screen();
             } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                 set_mouse_grabbed(0);
@@ -324,12 +334,19 @@ int main(int argc, char **argv) {
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_opts.last_server);
     snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username[0] ? g_opts.username : "Player");
 
-    /* Android TV requests a 1920x1080 surface. ALLOW_HIGHDPI can silently
-       turn that into a 4K backbuffer on UHD televisions, quadrupling fragment
-       work without changing the logical UI. Keep the TV render surface at the
-       requested 1080p size; phones retain their native-density path. */
+    /* Ask SDL for the display's current native mode.  The 3D world may then be
+       rendered at 10..100 percent of this drawable and scaled back to fill it;
+       GUI/text remain native-resolution. */
+    int requested_w = 1920, requested_h = 1080;
+    SDL_DisplayMode display_mode;
+    memset(&display_mode, 0, sizeof(display_mode));
+    if (SDL_GetCurrentDisplayMode(0, &display_mode) == 0 && display_mode.w > 0 && display_mode.h > 0) {
+        requested_w = display_mode.w;
+        requested_h = display_mode.h;
+    }
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
-    g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, flags);
+    g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                              requested_w, requested_h, flags);
     if (!g_hwnd) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();
@@ -343,6 +360,13 @@ int main(int argc, char **argv) {
         SDL_DestroyWindow(g_hwnd); SDL_Quit();
         return 3;
     }
+    /* Context creation reveals the actual GLES drawable size (which can differ
+       from SDL's logical window size on phones and UHD televisions). Do not
+       rebuild a screen until the startup screen has actually been selected. */
+    SDL_GL_GetDrawableSize(g_hwnd, &g_render_w, &g_render_h);
+    if (g_render_w < 1) g_render_w = g_win_w;
+    if (g_render_h < 1) g_render_h = g_win_h;
+    setup_scale();
     if (g_opts.fullscreen) set_fullscreen_enabled(1);
     if (should_show_pack_download_prompt()) set_screen(SCREEN_CLASSIC_PACK_DOWNLOAD_PROMPT);
     else if (!strcmp(g_opts.skin, CLASSIC_PACK_NAME) && classic_resources_need_update()) set_screen(SCREEN_CLASSIC_PACK_WARNING);

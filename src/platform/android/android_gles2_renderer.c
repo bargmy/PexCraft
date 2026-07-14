@@ -94,6 +94,27 @@ static unsigned int g_android_tv_lightmap_version = 0;
 static int g_android_tv_static_pass_active = 0;
 static AndroidTVDeferredBatch g_android_tv_deferred;
 
+typedef struct AndroidTVWorldTarget {
+    GLuint fbo, color_tex, depth_rb;
+    GLuint program, vbo;
+    GLint a_pos, a_uv, u_tex;
+    int width, height;
+    int valid;
+    int active;
+    Uint32 last_update_ms;
+} AndroidTVWorldTarget;
+
+typedef struct AndroidTVPanoramaFx {
+    GLuint fbo, tex[2];
+    GLuint program, vbo;
+    GLint a_pos, a_uv, u_tex, u_step;
+    int size;
+    GLuint output_tex;
+} AndroidTVPanoramaFx;
+
+static AndroidTVWorldTarget g_android_tv_world_target;
+static AndroidTVPanoramaFx g_android_tv_panorama_fx;
+
 /* Small GL-state cache.  The compatibility layer used to redundantly submit the
    complete pipeline for every chunk section and every glyph. */
 static int g_android_tv_applied_valid = 0;
@@ -478,6 +499,340 @@ static void pex_android_tv_flush(void) {
     android_tv_draw_raw_mvp(d->v, (GLsizei)d->count, d->mode, &state, &d->projection);
     d->count = 0;
     d->valid = 0;
+}
+
+
+/* Low-resolution 3D target and title-panorama filter. These are deliberately
+   outside the compatibility batching path: the world is rendered into an FBO,
+   stretched once with linear sampling, and the GUI is then drawn at native
+   resolution. The stored option is a percentage, so changing displays keeps
+   the same quality/performance ratio instead of restoring stale pixel sizes. */
+static void android_tv_fx_restore_compat(int viewport_w, int viewport_h) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glUseProgram(g_android_tv_program);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_android_tv_bound_tex);
+    g_android_tv_viewport[0] = 0;
+    g_android_tv_viewport[1] = 0;
+    g_android_tv_viewport[2] = viewport_w;
+    g_android_tv_viewport[3] = viewport_h;
+    glViewport(0, 0, viewport_w, viewport_h);
+    if (g_android_tv_blend_enabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (g_android_tv_depth_enabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (g_android_tv_cull_enabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    g_android_tv_applied_valid = 0;
+    g_android_tv_applied_mvp_valid = 0;
+    g_android_tv_applied_tex = (GLuint)~0u;
+}
+
+static void android_tv_world_target_destroy(void) {
+    AndroidTVWorldTarget *fx = &g_android_tv_world_target;
+    if (fx->vbo) glDeleteBuffers(1, &fx->vbo);
+    if (fx->program) glDeleteProgram(fx->program);
+    if (fx->depth_rb) glDeleteRenderbuffers(1, &fx->depth_rb);
+    if (fx->color_tex) glDeleteTextures(1, &fx->color_tex);
+    if (fx->fbo) glDeleteFramebuffers(1, &fx->fbo);
+    memset(fx, 0, sizeof(*fx));
+}
+
+static int android_tv_world_target_ensure(int width, int height) {
+    AndroidTVWorldTarget *fx = &g_android_tv_world_target;
+    if (width < 16) width = 16;
+    if (height < 16) height = 16;
+    if (fx->fbo && fx->color_tex && fx->depth_rb && fx->program &&
+        fx->width == width && fx->height == height) return 1;
+
+    android_tv_world_target_destroy();
+    const char *vs =
+        "attribute vec2 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){ gl_Position=vec4(a_pos,0.0,1.0); v_uv=a_uv; }\n";
+    const char *fs =
+        "precision mediump float;\n"
+        "uniform sampler2D u_tex;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){ gl_FragColor=texture2D(u_tex,v_uv); }\n";
+    fx->program = android_tv_link_program(vs, fs, "scaled world");
+    if (!fx->program) return 0;
+    fx->a_pos = glGetAttribLocation(fx->program, "a_pos");
+    fx->a_uv = glGetAttribLocation(fx->program, "a_uv");
+    fx->u_tex = glGetUniformLocation(fx->program, "u_tex");
+    glGenBuffers(1, &fx->vbo);
+    glGenFramebuffers(1, &fx->fbo);
+    glGenTextures(1, &fx->color_tex);
+    glGenRenderbuffers(1, &fx->depth_rb);
+    if (!fx->vbo || !fx->fbo || !fx->color_tex || !fx->depth_rb) {
+        android_tv_world_target_destroy();
+        return 0;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, fx->color_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+    glBindRenderbuffer(GL_RENDERBUFFER, fx->depth_rb);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width, height);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->color_tex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fx->depth_rb);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, g_android_tv_bound_tex);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "Android GLES scaled-world framebuffer incomplete: 0x%x\n", (unsigned)status);
+        android_tv_world_target_destroy();
+        return 0;
+    }
+    fx->width = width;
+    fx->height = height;
+    fx->valid = 0;
+    return 1;
+}
+
+static void android_tv_world_target_present(int full_w, int full_h) {
+    AndroidTVWorldTarget *fx = &g_android_tv_world_target;
+    static const GLfloat quad[16] = {
+        -1.0f,-1.0f, 0.0f,0.0f,
+         1.0f,-1.0f, 1.0f,0.0f,
+        -1.0f, 1.0f, 0.0f,1.0f,
+         1.0f, 1.0f, 1.0f,1.0f
+    };
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, full_w, full_h);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glUseProgram(fx->program);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->color_tex);
+    if (fx->u_tex >= 0) glUniform1i(fx->u_tex, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, fx->vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(quad), quad, GL_DYNAMIC_DRAW);
+    if (fx->a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)fx->a_pos);
+        glVertexAttribPointer((GLuint)fx->a_pos, 2, GL_FLOAT, GL_FALSE, 4 * (GLsizei)sizeof(GLfloat), (const GLvoid*)0);
+    }
+    if (fx->a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)fx->a_uv);
+        glVertexAttribPointer((GLuint)fx->a_uv, 2, GL_FLOAT, GL_FALSE, 4 * (GLsizei)sizeof(GLfloat), (const GLvoid*)(2 * sizeof(GLfloat)));
+    }
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    android_tv_fx_restore_compat(full_w, full_h);
+}
+
+/* Returns 0 for native direct rendering, 1 when the caller should render into
+   the scaled target, or 2 when a cached container-screen world was presented. */
+static int pex_android_tv_world_target_width(void) {
+    return g_android_tv_world_target.active ? g_android_tv_world_target.width : 0;
+}
+
+static int pex_android_tv_world_target_height(void) {
+    return g_android_tv_world_target.active ? g_android_tv_world_target.height : 0;
+}
+
+static int pex_android_tv_world_target_begin(int percent, int full_w, int full_h, int allow_cache) {
+    if (percent < 10) percent = 10;
+    if (percent > 100) percent = 100;
+    if (percent >= 100 && !allow_cache) return 0;
+    int width = (full_w * percent + 50) / 100;
+    int height = (full_h * percent + 50) / 100;
+    if (width < 16) width = 16;
+    if (height < 16) height = 16;
+
+    pex_android_tv_flush();
+    if (!android_tv_world_target_ensure(width, height)) return 0;
+    AndroidTVWorldTarget *fx = &g_android_tv_world_target;
+    Uint32 now = SDL_GetTicks();
+    if (allow_cache && fx->valid && (Uint32)(now - fx->last_update_ms) < 50u) {
+        android_tv_world_target_present(full_w, full_h);
+        return 2;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    fx->active = 1;
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->color_tex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fx->depth_rb);
+    glViewport(0, 0, fx->width, fx->height);
+    g_android_tv_viewport[0] = 0;
+    g_android_tv_viewport[1] = 0;
+    g_android_tv_viewport[2] = fx->width;
+    g_android_tv_viewport[3] = fx->height;
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    g_android_tv_applied_valid = 0;
+    g_android_tv_applied_mvp_valid = 0;
+    return 1;
+}
+
+static void pex_android_tv_world_target_end(int full_w, int full_h) {
+    pex_android_tv_flush();
+    g_android_tv_world_target.active = 0;
+    g_android_tv_world_target.valid = 1;
+    g_android_tv_world_target.last_update_ms = SDL_GetTicks();
+    android_tv_world_target_present(full_w, full_h);
+}
+
+static void android_tv_panorama_fx_destroy(void) {
+    AndroidTVPanoramaFx *fx = &g_android_tv_panorama_fx;
+    if (fx->vbo) glDeleteBuffers(1, &fx->vbo);
+    if (fx->program) glDeleteProgram(fx->program);
+    if (fx->tex[0] || fx->tex[1]) glDeleteTextures(2, fx->tex);
+    if (fx->fbo) glDeleteFramebuffers(1, &fx->fbo);
+    memset(fx, 0, sizeof(*fx));
+}
+
+static int android_tv_panorama_fx_ensure(int size) {
+    AndroidTVPanoramaFx *fx = &g_android_tv_panorama_fx;
+    if (size < 64) size = 64;
+    if (size > 512) size = 512;
+    if (fx->program && fx->fbo && fx->tex[0] && fx->tex[1] && fx->size == size) return 1;
+    android_tv_panorama_fx_destroy();
+    const char *vs =
+        "attribute vec2 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){ gl_Position=vec4(a_pos,0.0,1.0); v_uv=a_uv; }\n";
+    const char *fs =
+        "precision mediump float;\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform vec2 u_step;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){\n"
+        " vec4 c=texture2D(u_tex,v_uv)*0.2270270270;\n"
+        " c+=texture2D(u_tex,v_uv+u_step*1.3846153846)*0.3162162162;\n"
+        " c+=texture2D(u_tex,v_uv-u_step*1.3846153846)*0.3162162162;\n"
+        " c+=texture2D(u_tex,v_uv+u_step*3.2307692308)*0.0702702703;\n"
+        " c+=texture2D(u_tex,v_uv-u_step*3.2307692308)*0.0702702703;\n"
+        " gl_FragColor=c;\n"
+        "}\n";
+    fx->program = android_tv_link_program(vs, fs, "panorama blur");
+    if (!fx->program) return 0;
+    fx->a_pos = glGetAttribLocation(fx->program, "a_pos");
+    fx->a_uv = glGetAttribLocation(fx->program, "a_uv");
+    fx->u_tex = glGetUniformLocation(fx->program, "u_tex");
+    fx->u_step = glGetUniformLocation(fx->program, "u_step");
+    glGenBuffers(1, &fx->vbo);
+    glGenFramebuffers(1, &fx->fbo);
+    glGenTextures(2, fx->tex);
+    for (int i = 0; i < 2; ++i) {
+        glBindTexture(GL_TEXTURE_2D, fx->tex[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    }
+    fx->size = size;
+    fx->output_tex = fx->tex[0];
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->tex[0], 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, g_android_tv_bound_tex);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        android_tv_panorama_fx_destroy();
+        return 0;
+    }
+    return 1;
+}
+
+static void android_tv_panorama_fx_draw(GLuint tex, GLfloat step_x, GLfloat step_y, const GLfloat vertices[16]) {
+    AndroidTVPanoramaFx *fx = &g_android_tv_panorama_fx;
+    glUseProgram(fx->program);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    if (fx->u_tex >= 0) glUniform1i(fx->u_tex, 0);
+    if (fx->u_step >= 0) glUniform2f(fx->u_step, step_x, step_y);
+    glBindBuffer(GL_ARRAY_BUFFER, fx->vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(16 * sizeof(GLfloat)), vertices, GL_DYNAMIC_DRAW);
+    if (fx->a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)fx->a_pos);
+        glVertexAttribPointer((GLuint)fx->a_pos, 2, GL_FLOAT, GL_FALSE, 4 * (GLsizei)sizeof(GLfloat), (const GLvoid*)0);
+    }
+    if (fx->a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)fx->a_uv);
+        glVertexAttribPointer((GLuint)fx->a_uv, 2, GL_FLOAT, GL_FALSE, 4 * (GLsizei)sizeof(GLfloat), (const GLvoid*)(2 * sizeof(GLfloat)));
+    }
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+static int pex_android_tv_panorama_begin(int size) {
+    pex_android_tv_flush();
+    if (!android_tv_panorama_fx_ensure(size)) return 0;
+    AndroidTVPanoramaFx *fx = &g_android_tv_panorama_fx;
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->tex[0], 0);
+    glViewport(0, 0, fx->size, fx->size);
+    g_android_tv_viewport[0]=0; g_android_tv_viewport[1]=0;
+    g_android_tv_viewport[2]=fx->size; g_android_tv_viewport[3]=fx->size;
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    fx->output_tex = fx->tex[0];
+    return 1;
+}
+
+static int pex_android_tv_panorama_blur(int iterations) {
+    pex_android_tv_flush();
+    AndroidTVPanoramaFx *fx = &g_android_tv_panorama_fx;
+    if (!fx->fbo || !fx->program || !fx->tex[0] || !fx->tex[1]) return 0;
+    if (iterations < 1) iterations = 1;
+    if (iterations > 4) iterations = 4;
+    static const GLfloat quad[16] = {
+        -1.0f,-1.0f,0.0f,0.0f, 1.0f,-1.0f,1.0f,0.0f,
+        -1.0f, 1.0f,0.0f,1.0f, 1.0f, 1.0f,1.0f,1.0f
+    };
+    GLuint src = fx->tex[0], dst = fx->tex[1];
+    GLfloat inv = 1.0f / (GLfloat)fx->size;
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
+    glViewport(0,0,fx->size,fx->size);
+    glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE); glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    for (int i=0;i<iterations;++i) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,dst,0);
+        android_tv_panorama_fx_draw(src,inv,0.0f,quad);
+        GLuint swap=src; src=dst; dst=swap;
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,dst,0);
+        android_tv_panorama_fx_draw(src,0.0f,inv,quad);
+        swap=src; src=dst; dst=swap;
+    }
+    fx->output_tex=src;
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    return 1;
+}
+
+static int pex_android_tv_panorama_present(int render_w, int render_h,
+                                           GLfloat u0, GLfloat v0, GLfloat u1, GLfloat v1) {
+    pex_android_tv_flush();
+    AndroidTVPanoramaFx *fx = &g_android_tv_panorama_fx;
+    if (!fx->output_tex || !fx->program) return 0;
+    const GLfloat quad[16] = {
+        -1.0f,-1.0f,u0,v0, 1.0f,-1.0f,u1,v0,
+        -1.0f, 1.0f,u0,v1, 1.0f, 1.0f,u1,v1
+    };
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    glViewport(0,0,render_w,render_h);
+    glDisable(GL_SCISSOR_TEST); glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE); glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    android_tv_panorama_fx_draw(fx->output_tex,0.0f,0.0f,quad);
+    android_tv_fx_restore_compat(render_w,render_h);
+    return 1;
 }
 
 static void android_tv_deferred_begin(GLenum mode) {
@@ -1062,6 +1417,8 @@ static int pex_android_tv_gluProject(GLdouble objx, GLdouble objy, GLdouble objz
 
 static void gles2_renderer_shutdown(void) {
     pex_android_tv_flush();
+    android_tv_world_target_destroy();
+    android_tv_panorama_fx_destroy();
     for (GLuint i = 1; i < PEX_ANDROID_TV_MAX_LISTS; ++i) android_tv_list_free(i);
     free(g_android_tv_imm); g_android_tv_imm = NULL; g_android_tv_imm_cap = 0;
     free(g_android_tv_deferred.v); memset(&g_android_tv_deferred, 0, sizeof(g_android_tv_deferred));

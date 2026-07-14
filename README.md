@@ -103,8 +103,7 @@ textures.
 The Android active world window is 320 blocks wide. This preserves the normal
 8-chunk view distance plus its streaming border while reducing the five dense world
 arrays from about 405 MiB to about 125 MiB. Mesh worker counts and queues scale down
-on low-core shared-memory devices. Android TV requests a true 1080p surface instead
-of allowing SDL to silently allocate a 4K high-density backbuffer.
+on low-core shared-memory devices.
 
 ## Android GLES title-screen regression repair (v10)
 
@@ -119,3 +118,29 @@ start of every frame.  Deferred compatibility batches perform one exact-size
 stream upload when flushed, while retained terrain meshes continue to stay in
 persistent GPU buffers.  Android V-Sync now follows the same V-Sync and FPS-limit
 condition as the desktop SDL path.
+
+## Android frame-pacing, UI and renderer-resolution controls (v12)
+
+Android mesh generation is deliberately throttled behind the render thread: low
+priority workers yield while scanning section layers, queue depths are small, and
+only a bounded number of snapshots/results are submitted or installed per frame.
+Cancellation is checked throughout block, face and visibility loops, allowing Save
+& Quit to abandon active builders promptly instead of remaining on **Cancelling mesh
+builders**.
+
+Inventory and Creative screens group item icons by atlas and defer durability/count
+text until after icon drawing. Container screens may reuse the low-resolution world
+backdrop for a short interval, preventing the complete world from being redrawn for
+every UI frame while preserving the normal native-resolution interface.
+
+Android title panoramas are rendered into a 256x256 target at 30 Hz, blurred with a
+separable five-tap filter, then aspect-cropped and scaled to fill the full display.
+The panorama is never stretched and the menu remains native-resolution.
+
+Video Settings now includes **Renderer Resolution** on Android and Android TV. It is
+saved as a percentage in ten-percent increments from 10 to 100. The maximum is shown
+as **Native** and the minimum as **VHS**. PexCraft queries the actual GLES drawable,
+calculates both dimensions from the same percentage, renders the 3D world to that
+size, and linearly scales it to fill the screen. GUI and text stay at native
+resolution. Because only the percentage is stored, moving the same options file
+between 720p, 1080p and 4K displays remains valid.

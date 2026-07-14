@@ -945,7 +945,7 @@ static void rebuild_screen(void) {
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         const OptionId video_options[] = {
             OPT_GRAPHICS, OPT_RENDER_DISTANCE, OPT_VIEW_BOBBING, OPT_LIMIT_FRAMERATE,
-            OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDERER
+            OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDER_RESOLUTION, OPT_RENDERER
         };
         const StivuFineOptionId sf_video_options[] = {
             SF_AO_LEVEL, SF_GUI_SCALE
@@ -964,10 +964,16 @@ static void rebuild_screen(void) {
 #ifdef PEX_PLATFORM_PSP
             if (opt == OPT_RENDERER) b->enabled = 0;
 #endif
+#if !defined(PEX_PLATFORM_ANDROID) && !defined(PEX_PLATFORM_ANDROID_TV)
+            if (opt == OPT_RENDER_RESOLUTION) b->enabled = 0;
+#endif
         }
         for (int i = 0; i < ARRAY_COUNT(sf_video_options); i++) {
             StivuFineOptionId opt = sf_video_options[i];
-            int row = (ARRAY_COUNT(video_options) + i) >> 1;
+            /* The vanilla list has an odd count after Renderer Resolution was
+               added. Start StivuFine on the next complete row so Smooth
+               Lighting cannot overlap the Renderer button. */
+            int row = (ARRAY_COUNT(video_options) + 1) / 2 + (i >> 1);
             int x = g_gui_w / 2 - 155 + (i % 2) * 160;
             int y = y0 + 22 * row;
             char label[MAX_LABEL];

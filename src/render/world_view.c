@@ -897,10 +897,23 @@ static void draw_source_clouds(void) {
 
 
 static void setup_world_projection(void) {
-    glViewport(0, 0, g_render_w, g_render_h);
+    int viewport_w = g_render_w;
+    int viewport_h = g_render_h;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* When render scaling is active, the world projection must use the FBO
+       dimensions. Using the native drawable viewport here would map NDC into
+       only a corner of the smaller target and defeat both scaling and aspect
+       preservation. The GUI switches back to the native drawable afterward. */
+    int scaled_w = pex_android_tv_world_target_width();
+    int scaled_h = pex_android_tv_world_target_height();
+    if (scaled_w > 0 && scaled_h > 0) { viewport_w = scaled_w; viewport_h = scaled_h; }
+#endif
+    if (viewport_w < 1) viewport_w = 1;
+    if (viewport_h < 1) viewport_h = 1;
+    glViewport(0, 0, viewport_w, viewport_h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    float aspect = (g_render_h > 0) ? ((float)g_render_w / (float)g_render_h) : 1.0f;
+    float aspect = (float)viewport_w / (float)viewport_h;
     {
         float far_plane = current_render_distance_blocks() + 64.0f;
         if (far_plane < 1024.0f) far_plane = 1024.0f; /* clouds are independent from terrain distance */
@@ -7059,6 +7072,17 @@ static void ensure_flat_section_lists(int sy, int cz, int cx) {
 }
 
 
+static void async_mesh_android_cooperate(int layer_y) {
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    (void)layer_y;
+    if (g_flat_direct_capture_only) SDL_Delay(1);
+#elif defined(PEX_PLATFORM_ANDROID)
+    if (g_flat_direct_capture_only && (layer_y & 1)) SDL_Delay(1);
+#else
+    (void)layer_y;
+#endif
+}
+
 static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     PexRendererBackend *rb = flat_direct_backend();
     if (!tex_terrain.rgba) return;
@@ -7094,6 +7118,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
         for (int z = z0; z <= z1; z++) {
             if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
             for (int x = x0; x <= x1; x++) {
+                if (((x - x0) & 3) == 0 && async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
                 if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) { has1 = 1; continue; }
@@ -7112,6 +7137,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 }
             }
         }
+        async_mesh_android_cooperate(y);
     }
     mb0.opaque_icount_end = mb0.icount;
 
@@ -7124,6 +7150,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             for (int z = z0; z <= z1; z++) {
                 if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                 for (int x = x0; x <= x1; x++) {
+                    if (((x - x0) & 3) == 0 && async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
                     if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
@@ -7145,6 +7172,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                     }
                 }
             }
+            async_mesh_android_cooperate(y);
         }
         glDisable(GL_ALPHA_TEST);
     }
@@ -7160,6 +7188,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             for (int z = z0; z <= z1; z++) {
                 if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                 for (int x = x0; x <= x1; x++) {
+                    if (((x - x0) & 3) == 0 && async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
                     if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) {
@@ -7172,6 +7201,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                     }
                 }
             }
+            async_mesh_android_cooperate(y);
         }
         glDisable(GL_ALPHA_TEST);
     }
@@ -7194,6 +7224,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             for (int z = z0; z <= z1; z++) {
                 if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                 for (int x = x0; x <= x1; x++) {
+                    if (((x - x0) & 3) == 0 && async_section_mesh_cancel_requested()) { cancelled = 1; break; }
                     int id = flat_get_block(x, y, z);
                     if (block_is_liquid(id)) {
                         if (flat_separate_liquid_pass_enabled()) emit_liquid_block_faces(id, x, y, z);
@@ -7202,6 +7233,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                     }
                 }
             }
+            async_mesh_android_cooperate(y);
         }
     }
     mb1.two_sided = 1;
@@ -7482,14 +7514,14 @@ static int async_mesh_worker_gpu_prebuild_enabled(void) { return 0; }
 /* TV boxes often expose four slow cores that share thermal and memory bandwidth
    with the GPU. One low-priority mesher and short queues keep the renderer fed
    without evicting terrain buffers or starving the GL thread. */
-#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 24
-#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
-#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 4
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 6
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 2
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 2
 #define ASYNC_SECTION_MESH_WORKER_COUNT 1
 #elif defined(PEX_PLATFORM_ANDROID)
-#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 48
-#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 8
-#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 8
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 12
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 4
 #define ASYNC_SECTION_MESH_WORKER_COUNT 2
 #else
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 192
@@ -7551,7 +7583,11 @@ static int async_mesh_push_upload_job(AsyncSectionMeshResult *r) {
             return 1;
         }
         LeaveCriticalSection(&g_async_section_mesh_cs);
+        #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+        Sleep(1);
+#else
         Sleep(0);
+#endif
     }
 }
 
@@ -7577,7 +7613,11 @@ static int async_mesh_push_result(AsyncSectionMeshResult *r) {
             return 1;
         }
         LeaveCriticalSection(&g_async_section_mesh_cs);
+        #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+        Sleep(1);
+#else
         Sleep(0);
+#endif
     }
 }
 
@@ -7664,6 +7704,11 @@ static DWORD WINAPI async_mesh_upload_worker(LPVOID unused) {
 }
 
 static DWORD WINAPI async_section_mesh_worker_proc(LPVOID unused) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* Set priority from inside the SDL thread. The Win32 compatibility HANDLE
+       cannot change another Android thread's scheduler priority. */
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+#endif
     int worker_index = (int)(intptr_t)unused - 1;
     if (worker_index < 0 || worker_index >= (int)ARRAY_COUNT(g_async_section_mesh_worker_state)) worker_index = 0;
     g_pex_profile_thread_role = PEX_PROFILE_ROLE_ASYNC_MESH;
@@ -7864,7 +7909,18 @@ static int async_mesh_submit(int sy, int cx, int cz, int priority) {
 
     int can_submit = 0;
     EnterCriticalSection(&g_async_section_mesh_cs);
-    if (!g_async_section_mesh_stop && (g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX || priority)) can_submit = 1;
+    int pipeline_load = g_async_section_mesh_job_count + g_async_section_mesh_busy +
+                        g_async_section_mesh_upload_count + g_async_section_mesh_upload_busy +
+                        g_async_section_mesh_result_count;
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    int pipeline_limit = priority ? 3 : 2;
+#elif defined(PEX_PLATFORM_ANDROID)
+    int pipeline_limit = priority ? 5 : 4;
+#else
+    int pipeline_limit = ASYNC_SECTION_MESH_JOB_QUEUE_MAX;
+#endif
+    if (!g_async_section_mesh_stop && pipeline_load < pipeline_limit &&
+        (g_async_section_mesh_job_count < ASYNC_SECTION_MESH_JOB_QUEUE_MAX || priority)) can_submit = 1;
     LeaveCriticalSection(&g_async_section_mesh_cs);
     if (!can_submit) return 2;
 
@@ -8175,7 +8231,14 @@ static void async_section_mesh_join_workers(void) {
             last_remaining = remaining;
             last_log_ms = now_ms;
         }
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+        /* Cancellation is checked inside the block/face loops; poll quickly so
+           Save & Quit does not sit on "Cancelling mesh builders" for another
+           coarse 10 ms interval after the worker has already stopped. */
+        Sleep(1);
+#else
         Sleep(10);
+#endif
     }
 }
 
@@ -8298,6 +8361,7 @@ static uint64_t flat_compute_snapshot_visibility(const unsigned char *blocks) {
     int opaque_count = 0;
     if (!blocks) return FLAT_VIS_ALL;
     for (int y = 0; y < 16; ++y) {
+        if (InterlockedCompareExchange(&g_async_section_mesh_stop, 0, 0) != 0) return FLAT_VIS_ALL;
         for (int z = 0; z < 16; ++z) {
             for (int x = 0; x < 16; ++x) {
                 int dst = (y << 8) | (z << 4) | x;
@@ -8576,8 +8640,16 @@ static void drain_edit_priority_meshes(int streaming, int recent_edit) {
        let the already-rendered old mesh stay alive until a completed replacement
        is adopted.  Placement feedback is handled by the tiny visual edit overlay;
        breaking/removal feedback comes from priority mesh completion, not sync work. */
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    int max_edits = 1;
+    double deadline = now_seconds() + 0.00035;
+#elif defined(PEX_PLATFORM_ANDROID)
+    int max_edits = recent_edit ? 2 : 1;
+    double deadline = now_seconds() + (recent_edit ? 0.00065 : 0.00030);
+#else
     int max_edits = recent_edit ? 12 : 2;
     double deadline = now_seconds() + (recent_edit ? 0.0010 : 0.00025);
+#endif
     while (max_edits-- > 0 && now_seconds() < deadline) {
         int sy = 0, cx = 0, cz = 0;
         if (!flat_take_edit_priority_section(&sy, &cx, &cz)) break;
@@ -8634,7 +8706,15 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
         if (g_prof_mesh_results_last > 24) stream_budget = 3;
         if (rebuilds_left < stream_budget) rebuilds_left = stream_budget;
     }
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    if (rebuilds_left > 1) rebuilds_left = 1;
+    double deadline = now_seconds() + 0.00045;
+#elif defined(PEX_PLATFORM_ANDROID)
+    if (rebuilds_left > 2) rebuilds_left = 2;
+    double deadline = now_seconds() + 0.00080;
+#else
     double deadline = now_seconds() + (recent_edit ? 0.0060 : ((streaming || lighting_repaint) ? 0.0015 : 0.0030));
+#endif
 
 #if defined(PEX_PLATFORM_PSP)
     if (async_mesh) async_section_mesh_install_ready(streaming ? 1 : 1);
@@ -8644,8 +8724,14 @@ static void rebuild_visible_flat_sections(const FlatRenderSectionRef *refs, int 
        already-finished priority edit meshes before background stream results.
        Keep the normal budget low to avoid frame hitches. */
     if (async_mesh) {
+#if defined(PEX_PLATFORM_ANDROID_TV)
+        int install_budget = 1;
+#elif defined(PEX_PLATFORM_ANDROID)
+        int install_budget = (recent_edit || streaming || lighting_repaint) ? 2 : 1;
+#else
         int install_budget = recent_edit ? 8 : ((streaming || lighting_repaint) ? 4 : 2);
         if (!recent_edit && g_prof_mesh_results_last > 12) install_budget = (streaming || lighting_repaint) ? 8 : 4;
+#endif
         async_section_mesh_install_ready(install_budget);
     }
 #endif
@@ -10702,14 +10788,36 @@ static void draw_first_person_hand(void) {
 }
 
 
+static int android_world_backdrop_can_cache(void) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    return g_screen == SCREEN_PAUSE || g_screen == SCREEN_ACHIEVEMENTS ||
+           g_screen == SCREEN_STATISTICS || g_screen == SCREEN_INVENTORY ||
+           g_screen == SCREEN_CREATIVE || g_screen == SCREEN_WORKBENCH ||
+           g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST;
+#else
+    return 0;
+#endif
+}
+
 static void draw_ingame_world_view(int with_hand) {
-    draw_sky_only();
-    draw_flat_test_world();
-    if (with_hand && !g_third_person_view) draw_first_person_hand();
-    if (!g_third_person_view) {
-        draw_player_fire_overlay_125();
-        draw_in_block_overlay();
+    int target_mode = 0;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    target_mode = pex_android_tv_world_target_begin(g_opts.render_scale_percent,
+                                                     g_render_w, g_render_h,
+                                                     android_world_backdrop_can_cache());
+#endif
+    if (target_mode != 2) {
+        draw_sky_only();
+        draw_flat_test_world();
+        if (with_hand && !g_third_person_view) draw_first_person_hand();
+        if (!g_third_person_view) {
+            draw_player_fire_overlay_125();
+            draw_in_block_overlay();
+        }
+        draw_portal_overlay();
     }
-    draw_portal_overlay();
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    if (target_mode == 1) pex_android_tv_world_target_end(g_render_w, g_render_h);
+#endif
     setup_gui_projection();
 }

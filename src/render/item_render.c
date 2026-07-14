@@ -1500,7 +1500,7 @@ static const char *item_stack_display_name(const ItemStack *st) {
     }
 }
 
-static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int animate_pop) {
+static void draw_item_stack_gui_icon_base(const ItemStack *st, int x, int y, int animate_pop) {
     if (stack_empty(st)) return;
     int pushed = 0;
     float var6 = animate_pop ? ((float)st->pop_time - g_frame_partial) : 0.0f;
@@ -1519,12 +1519,14 @@ static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int anim
         if (block_item_is_3d(st->id)) draw_block_item_gui_3d(st, x, y);
         else draw_block_item_icon_gui(st, x, y);
     } else draw_item_icon_gui_2d(st, x, y);
-
     if (pushed) glPopMatrix();
+}
 
-    /* Java renders the stack-size/damage overlay after popping the hotbar pickup
-       scale matrix.  Scaling the count together with the item is what made the
-       pickup UI look wrong. */
+static void draw_item_stack_gui_overlay_only(const ItemStack *st, int x, int y) {
+    if (stack_empty(st)) return;
+    /* Keep text/durability separate from icon drawing. Android container screens
+       use this to batch all terrain/item icons before switching to the font and
+       untextured overlay states, avoiding dozens of driver flushes per frame. */
     if (st->count > 1) {
         char num[16];
         snprintf(num, sizeof(num), "%d", st->count);
@@ -1553,6 +1555,11 @@ static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int anim
         glEnable(GL_TEXTURE_2D);
         glColor4f(1,1,1,1);
     }
+}
+
+static void draw_item_stack_gui_base(const ItemStack *st, int x, int y, int animate_pop) {
+    draw_item_stack_gui_icon_base(st, x, y, animate_pop);
+    draw_item_stack_gui_overlay_only(st, x, y);
 }
 
 static void draw_item_stack_gui(const ItemStack *st, int x, int y) {

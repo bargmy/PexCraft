@@ -623,6 +623,7 @@ typedef enum OptionId {
     OPT_GRAPHICS,
     OPT_FULLSCREEN,
     OPT_SHOW_FPS,
+    OPT_RENDER_RESOLUTION,
     OPT_RENDERER,
     OPT_COUNT
 } OptionId;
@@ -665,6 +666,7 @@ typedef struct Options {
     int fancy_graphics;
     int fullscreen;
     int show_fps;
+    int render_scale_percent; /* 10..100, stored as a percentage of the current drawable size */
     int renderer_backend; /* RendererBackend saved to options.txt; restart required after changing */
     /* StivuFine (StivuFine graphics) graphics settings.  Unsupported
        features stay present in the UI as disabled/gray entries, but the stored
@@ -2987,10 +2989,10 @@ static const char *FONT_CHARS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLM
 static const char *opt_names[OPT_COUNT] = {
     "Music", "Sound", "Invert Mouse", "Sensitivity", "Render Distance",
     "View Bobbing", "V-Sync", "Max FPS", "FOV", "Difficulty", "Graphics",
-    "Enable Fullscreen", "Show FPS Counter", "Renderer"
+    "Enable Fullscreen", "Show FPS Counter", "Renderer Resolution", "Renderer"
 };
-static const int opt_is_slider[OPT_COUNT] = {1,1,0,1,1,0,0,1,1,0,0,0,0,0};
-static const int opt_is_boolean[OPT_COUNT] = {0,0,1,0,0,1,1,0,0,0,0,1,1,0};
+static const int opt_is_slider[OPT_COUNT] = {1,1,0,1,1,0,0,1,1,0,0,0,0,1,0};
+static const int opt_is_boolean[OPT_COUNT] = {0,0,1,0,0,1,1,0,0,0,0,1,1,0,0};
 #ifdef PEX_PLATFORM_SDL2
 static const char *renderer_backend_names[RENDERER_COUNT] = {"SDL2/OpenGL", "Direct3D 9", "Direct3D 11"};
 #else

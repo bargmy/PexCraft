@@ -26,6 +26,7 @@ static void set_default_options(void) {
     g_opts.fancy_graphics = 1;
     g_opts.fullscreen = 0;
     g_opts.show_fps = 0;
+    g_opts.render_scale_percent = 100;
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = g_opts.renderer_backend;
 #ifdef PEX_PLATFORM_PSP
@@ -947,6 +948,7 @@ static void load_options(void) {
         else if (!strcmp(k, "fancyGraphics")) g_opts.fancy_graphics = !strcmp(v, "true");
         else if (!strcmp(k, "fullscreen") || !strcmp(k, "enableFullscreen")) g_opts.fullscreen = !strcmp(v, "true");
         else if (!strcmp(k, "showFps") || !strcmp(k, "showFPSCounter")) g_opts.show_fps = !strcmp(v, "true");
+        else if (!strcmp(k, "renderScalePercent") || !strcmp(k, "rendererResolutionPercent")) g_opts.render_scale_percent = atoi(v);
         else if (!strcmp(k, "renderer") || !strcmp(k, "rendererBackend")) g_opts.renderer_backend = parse_renderer_backend(v);
         else if (!strcmp(k, "ignoreClassicResourcesWarning") || !strcmp(k, "ignoreClassicPackWarning")) g_opts.ignore_classic_resources_warning = !strcmp(v, "true");
         else if (!strcmp(k, "downloadClassicTextures")) g_opts.download_classic_textures = !strcmp(v, "true");
@@ -1006,6 +1008,10 @@ static void load_options(void) {
     if (g_opts.fov <= 1.0f) g_opts.fov = 70.0f + g_opts.fov * 40.0f;
     if (g_opts.fov < 70.0f) g_opts.fov = 70.0f;
     if (g_opts.fov > 110.0f) g_opts.fov = 110.0f;
+    if (g_opts.render_scale_percent < 10) g_opts.render_scale_percent = 10;
+    if (g_opts.render_scale_percent > 100) g_opts.render_scale_percent = 100;
+    g_opts.render_scale_percent = 10 + ((g_opts.render_scale_percent - 10 + 5) / 10) * 10;
+    if (g_opts.render_scale_percent > 100) g_opts.render_scale_percent = 100;
     if (g_opts.renderer_backend < 0 || g_opts.renderer_backend >= RENDERER_COUNT) g_opts.renderer_backend = RENDERER_OPENGL;
     g_opts.classic_audio_mask &= CLASSIC_AUDIO_ALL;
     /* Old options.txt files may request startup audio downloads.  That path moved
@@ -1078,6 +1084,7 @@ static void save_options(void) {
     fprintf(f, "fancyGraphics:%s\n", g_opts.fancy_graphics ? "true" : "false");
     fprintf(f, "fullscreen:%s\n", g_opts.fullscreen ? "true" : "false");
     fprintf(f, "showFps:%s\n", g_opts.show_fps ? "true" : "false");
+    fprintf(f, "renderScalePercent:%d\n", g_opts.render_scale_percent);
     fprintf(f, "renderer:%s\n", renderer_backend_keys[(g_opts.renderer_backend >= 0 && g_opts.renderer_backend < RENDERER_COUNT) ? g_opts.renderer_backend : RENDERER_OPENGL]);
     fprintf(f, "ignoreClassicResourcesWarning:%s\n", g_opts.ignore_classic_resources_warning ? "true" : "false");
     fprintf(f, "downloadClassicTextures:%s\n", g_opts.download_classic_textures ? "true" : "false");
@@ -1109,6 +1116,12 @@ static float get_option_float(OptionId opt) {
         if (c > 32) c = 32;
         return (float)(c - 2) / 30.0f;
     }
+    if (opt == OPT_RENDER_RESOLUTION) {
+        int pct = g_opts.render_scale_percent;
+        if (pct < 10) pct = 10;
+        if (pct > 100) pct = 100;
+        return (float)(pct - 10) / 90.0f;
+    }
     if (opt == OPT_FOV) {
         float fov = g_opts.fov;
         if (fov < 70.0f) fov = 70.0f;
@@ -1138,6 +1151,12 @@ static void set_option_float(OptionId opt, float v) {
     else if (opt == OPT_SENSITIVITY) g_opts.sensitivity = v;
     else if (opt == OPT_RENDER_DISTANCE) g_opts.render_distance = 2 + (int)(v * 30.0f + 0.5f);
     else if (opt == OPT_FOV) g_opts.fov = 70.0f + v * 40.0f;
+    else if (opt == OPT_RENDER_RESOLUTION) {
+        int step = (int)(v * 9.0f + 0.5f);
+        if (step < 0) step = 0;
+        if (step > 9) step = 9;
+        g_opts.render_scale_percent = 10 + step * 10;
+    }
     else if (opt == OPT_LIMIT_FRAMERATE) {
         if (v >= FPS_UNLIMITED_SLIDER_VALUE) {
             g_opts.max_fps = 0; /* hard-right slider stop = truly uncapped */
@@ -1168,6 +1187,17 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
         } else if (opt == OPT_LIMIT_FRAMERATE) {
             if (g_opts.max_fps <= 0) snprintf(out, cap, "%s: %s", name, tr("Unlimited"));
             else snprintf(out, cap, "%s: %d", name, g_opts.max_fps);
+        } else if (opt == OPT_RENDER_RESOLUTION) {
+            int pct = g_opts.render_scale_percent;
+            if (pct < 10) pct = 10;
+            if (pct > 100) pct = 100;
+            int rw = (g_render_w * pct + 50) / 100;
+            int rh = (g_render_h * pct + 50) / 100;
+            if (rw < 16) rw = 16;
+            if (rh < 16) rh = 16;
+            if (pct >= 100) snprintf(out, cap, "%s: Native (%dx%d)", name, g_render_w, g_render_h);
+            else if (pct <= 10) snprintf(out, cap, "%s: VHS (%dx%d)", name, rw, rh);
+            else snprintf(out, cap, "%s: %d%% (%dx%d)", name, pct, rw, rh);
         } else if (opt == OPT_FOV) {
             int fov = (int)(g_opts.fov + 0.5f);
             if (fov <= 70) snprintf(out, cap, "%s: %s", name, tr_key_default("options.fov.min", "Minimum"));
