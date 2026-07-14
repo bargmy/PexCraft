@@ -59,22 +59,28 @@ typedef struct AndroidTVDeferredBatch {
     int valid;
 } AndroidTVDeferredBatch;
 
-static GLuint g_android_tv_program = 0;
+static GLuint g_android_tv_program = 0;          /* Lightweight UI/entity shader. */
+static GLuint g_android_tv_terrain_program = 0;  /* Terrain-only lightmap shader. */
 static GLuint g_android_tv_vbo = 0;
 static GLuint g_android_tv_ebo = 0;
-static size_t g_android_tv_dynamic_vbo_capacity = 0;
-static size_t g_android_tv_dynamic_vbo_offset = 0;
 static GLint g_android_tv_a_pos = -1;
 static GLint g_android_tv_a_uv = -1;
 static GLint g_android_tv_a_color = -1;
-static GLint g_android_tv_a_light = -1;
 static GLint g_android_tv_u_mvp = -1;
 static GLint g_android_tv_u_tex = -1;
 static GLint g_android_tv_u_use_tex = -1;
 static GLint g_android_tv_u_alpha_enabled = -1;
 static GLint g_android_tv_u_alpha_ref = -1;
-static GLint g_android_tv_u_lightmap = -1;
-static GLint g_android_tv_u_use_lightmap = -1;
+
+static GLint g_android_tv_terrain_a_pos = -1;
+static GLint g_android_tv_terrain_a_uv = -1;
+static GLint g_android_tv_terrain_a_color = -1;
+static GLint g_android_tv_terrain_a_light = -1;
+static GLint g_android_tv_terrain_u_mvp = -1;
+static GLint g_android_tv_terrain_u_tex = -1;
+static GLint g_android_tv_terrain_u_alpha_enabled = -1;
+static GLint g_android_tv_terrain_u_alpha_ref = -1;
+static GLint g_android_tv_terrain_u_lightmap = -1;
 
 static int g_android_tv_texture_enabled = 1;
 static int g_android_tv_blend_enabled = 1;
@@ -96,7 +102,6 @@ static int g_android_tv_applied_depth = -1;
 static int g_android_tv_applied_cull = -1;
 static int g_android_tv_applied_use_tex = -1;
 static int g_android_tv_applied_alpha = -1;
-static int g_android_tv_applied_lightmap = -1;
 static GLuint g_android_tv_applied_tex = (GLuint)~0u;
 static GLfloat g_android_tv_applied_alpha_ref = -1.0f;
 static AndroidTVMat4 g_android_tv_applied_mvp;
@@ -204,8 +209,56 @@ static GLuint android_tv_compile_shader(GLenum type, const char *src) {
     return sh;
 }
 
+static GLuint android_tv_link_program(const char *vs_src, const char *fs_src, const char *label) {
+    GLuint v = android_tv_compile_shader(GL_VERTEX_SHADER, vs_src);
+    GLuint f = android_tv_compile_shader(GL_FRAGMENT_SHADER, fs_src);
+    if (!v || !f) {
+        if (v) glDeleteShader(v);
+        if (f) glDeleteShader(f);
+        return 0;
+    }
+    GLuint program = glCreateProgram();
+    glAttachShader(program, v);
+    glAttachShader(program, f);
+    glLinkProgram(program);
+    glDeleteShader(v);
+    glDeleteShader(f);
+    GLint ok = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[1024]; GLsizei len = 0;
+        glGetProgramInfoLog(program, sizeof(log), &len, log);
+        fprintf(stderr, "Android TV GLES %s program link failed: %s\n", label ? label : "", log);
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
 static int gles2_renderer_init(void) {
-    const char *vs =
+    /* Keep the menu, text, GUI, entities and compatibility geometry on the
+       small one-texture shader.  v9 routed every pixel through the terrain
+       lightmap shader; several low-end GLES2 drivers compile that uber-shader
+       into a very slow path even while the lightmap branch is disabled. */
+    const char *ui_vs =
+        "attribute vec3 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "attribute vec4 a_color;\n"
+        "uniform mat4 u_mvp;\n"
+        "varying vec2 v_uv;\n"
+        "varying vec4 v_color;\n"
+        "void main(){ gl_Position = u_mvp * vec4(a_pos, 1.0); v_uv = a_uv; v_color = a_color; }\n";
+    const char *ui_fs =
+        "precision mediump float;\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform int u_use_tex;\n"
+        "uniform int u_alpha_enabled;\n"
+        "uniform float u_alpha_ref;\n"
+        "varying vec2 v_uv;\n"
+        "varying vec4 v_color;\n"
+        "void main(){ vec4 c = v_color; if(u_use_tex == 1) c *= texture2D(u_tex, v_uv); if(u_alpha_enabled == 1 && c.a <= u_alpha_ref) discard; gl_FragColor = c; }\n";
+
+    const char *terrain_vs =
         "attribute vec3 a_pos;\n"
         "attribute vec2 a_uv;\n"
         "attribute vec4 a_color;\n"
@@ -221,46 +274,40 @@ static int gles2_renderer_init(void) {
         "  float skyL = a_light.z * 15.9375;\n"
         "  v_light_uv = (vec2(blockL, skyL) + vec2(0.5)) / 16.0;\n"
         "}\n";
-    const char *fs =
+    const char *terrain_fs =
         "precision mediump float;\n"
         "uniform sampler2D u_tex;\n"
         "uniform sampler2D u_lightmap;\n"
-        "uniform int u_use_tex;\n"
-        "uniform int u_use_lightmap;\n"
         "uniform int u_alpha_enabled;\n"
         "uniform float u_alpha_ref;\n"
         "varying vec2 v_uv;\n"
         "varying vec4 v_color;\n"
         "varying vec2 v_light_uv;\n"
-        "void main(){ vec4 c = v_color; if(u_use_tex == 1) c *= texture2D(u_tex, v_uv); if(u_use_lightmap == 1) c.rgb *= texture2D(u_lightmap, v_light_uv).rgb; if(u_alpha_enabled == 1 && c.a <= u_alpha_ref) discard; gl_FragColor = c; }\n";
-    GLuint v = android_tv_compile_shader(GL_VERTEX_SHADER, vs);
-    GLuint f = android_tv_compile_shader(GL_FRAGMENT_SHADER, fs);
-    if (!v || !f) return 0;
-    g_android_tv_program = glCreateProgram();
-    glAttachShader(g_android_tv_program, v);
-    glAttachShader(g_android_tv_program, f);
-    glLinkProgram(g_android_tv_program);
-    glDeleteShader(v);
-    glDeleteShader(f);
-    GLint ok = 0;
-    glGetProgramiv(g_android_tv_program, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024]; GLsizei len = 0;
-        glGetProgramInfoLog(g_android_tv_program, sizeof(log), &len, log);
-        fprintf(stderr, "Android TV GLES program link failed: %s\n", log);
-        return 0;
-    }
+        "void main(){ vec4 c = v_color * texture2D(u_tex, v_uv); c.rgb *= texture2D(u_lightmap, v_light_uv).rgb; if(u_alpha_enabled == 1 && c.a <= u_alpha_ref) discard; gl_FragColor = c; }\n";
+
+    g_android_tv_program = android_tv_link_program(ui_vs, ui_fs, "UI");
+    g_android_tv_terrain_program = android_tv_link_program(terrain_vs, terrain_fs, "terrain");
+    if (!g_android_tv_program || !g_android_tv_terrain_program) return 0;
+
     g_android_tv_a_pos = glGetAttribLocation(g_android_tv_program, "a_pos");
     g_android_tv_a_uv = glGetAttribLocation(g_android_tv_program, "a_uv");
     g_android_tv_a_color = glGetAttribLocation(g_android_tv_program, "a_color");
-    g_android_tv_a_light = glGetAttribLocation(g_android_tv_program, "a_light");
     g_android_tv_u_mvp = glGetUniformLocation(g_android_tv_program, "u_mvp");
     g_android_tv_u_tex = glGetUniformLocation(g_android_tv_program, "u_tex");
     g_android_tv_u_use_tex = glGetUniformLocation(g_android_tv_program, "u_use_tex");
     g_android_tv_u_alpha_enabled = glGetUniformLocation(g_android_tv_program, "u_alpha_enabled");
     g_android_tv_u_alpha_ref = glGetUniformLocation(g_android_tv_program, "u_alpha_ref");
-    g_android_tv_u_lightmap = glGetUniformLocation(g_android_tv_program, "u_lightmap");
-    g_android_tv_u_use_lightmap = glGetUniformLocation(g_android_tv_program, "u_use_lightmap");
+
+    g_android_tv_terrain_a_pos = glGetAttribLocation(g_android_tv_terrain_program, "a_pos");
+    g_android_tv_terrain_a_uv = glGetAttribLocation(g_android_tv_terrain_program, "a_uv");
+    g_android_tv_terrain_a_color = glGetAttribLocation(g_android_tv_terrain_program, "a_color");
+    g_android_tv_terrain_a_light = glGetAttribLocation(g_android_tv_terrain_program, "a_light");
+    g_android_tv_terrain_u_mvp = glGetUniformLocation(g_android_tv_terrain_program, "u_mvp");
+    g_android_tv_terrain_u_tex = glGetUniformLocation(g_android_tv_terrain_program, "u_tex");
+    g_android_tv_terrain_u_alpha_enabled = glGetUniformLocation(g_android_tv_terrain_program, "u_alpha_enabled");
+    g_android_tv_terrain_u_alpha_ref = glGetUniformLocation(g_android_tv_terrain_program, "u_alpha_ref");
+    g_android_tv_terrain_u_lightmap = glGetUniformLocation(g_android_tv_terrain_program, "u_lightmap");
+
     glGenBuffers(1, &g_android_tv_vbo);
     glGenBuffers(1, &g_android_tv_ebo);
     glGenTextures(1, &g_android_tv_lightmap_tex);
@@ -274,12 +321,16 @@ static int gles2_renderer_init(void) {
     memset(initial_lightmap, 255, sizeof(initial_lightmap));
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, initial_lightmap);
     glActiveTexture(GL_TEXTURE0);
+
     android_tv_mat_identity(&g_android_tv_model_stack[0]);
     android_tv_mat_identity(&g_android_tv_proj_stack[0]);
+
     glUseProgram(g_android_tv_program);
     if (g_android_tv_u_tex >= 0) glUniform1i(g_android_tv_u_tex, 0);
-    if (g_android_tv_u_lightmap >= 0) glUniform1i(g_android_tv_u_lightmap, 1);
-    if (g_android_tv_u_use_lightmap >= 0) glUniform1i(g_android_tv_u_use_lightmap, 0);
+    glUseProgram(g_android_tv_terrain_program);
+    if (g_android_tv_terrain_u_tex >= 0) glUniform1i(g_android_tv_terrain_u_tex, 0);
+    if (g_android_tv_terrain_u_lightmap >= 0) glUniform1i(g_android_tv_terrain_u_lightmap, 1);
+    glUseProgram(g_android_tv_program);
     return 1;
 }
 
@@ -294,7 +345,7 @@ static void android_tv_apply_mvp(const AndroidTVMat4 *mvp) {
 
 static void android_tv_apply_state_values(int tex_enabled, int blend_enabled, int depth_enabled,
                                           int alpha_enabled, int cull_enabled, GLuint tex,
-                                          GLfloat alpha_ref, int use_lightmap) {
+                                          GLfloat alpha_ref) {
     if (!g_android_tv_applied_valid || g_android_tv_applied_blend != blend_enabled) {
         if (blend_enabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
         g_android_tv_applied_blend = blend_enabled;
@@ -326,15 +377,6 @@ static void android_tv_apply_state_values(int tex_enabled, int blend_enabled, in
         if (g_android_tv_u_alpha_ref >= 0) glUniform1f(g_android_tv_u_alpha_ref, alpha_ref);
         g_android_tv_applied_alpha_ref = alpha_ref;
     }
-    if (!g_android_tv_applied_valid || g_android_tv_applied_lightmap != use_lightmap) {
-        if (g_android_tv_u_use_lightmap >= 0) glUniform1i(g_android_tv_u_use_lightmap, use_lightmap ? 1 : 0);
-        g_android_tv_applied_lightmap = use_lightmap;
-    }
-    if (use_lightmap && g_android_tv_lightmap_tex) {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, g_android_tv_lightmap_tex);
-        glActiveTexture(GL_TEXTURE0);
-    }
     g_android_tv_applied_valid = 1;
 }
 
@@ -347,7 +389,7 @@ static void android_tv_apply_state_for_batch(const AndroidTVBatch *b) {
     GLuint tex = b ? b->tex : g_android_tv_bound_tex;
     GLfloat alpha_ref = b ? b->alpha_ref : g_android_tv_alpha_ref;
     android_tv_apply_state_values(tex_enabled, blend_enabled, depth_enabled, alpha_enabled,
-                                  cull_enabled, tex, alpha_ref, 0);
+                                  cull_enabled, tex, alpha_ref);
 }
 
 static void android_tv_draw_raw_mvp(const AndroidTVVertex *v, GLsizei count, GLenum mode,
@@ -356,27 +398,33 @@ static void android_tv_draw_raw_mvp(const AndroidTVVertex *v, GLsizei count, GLe
     glUseProgram(g_android_tv_program);
     android_tv_apply_mvp(mvp);
     android_tv_apply_state_for_batch(state);
+
+    /* v9 orphaned a fixed 2 MiB buffer at frame start and could orphan it
+       again after indexed draws.  Some low-end Android GLES drivers serialize
+       those allocations, making even the title screen crawl.  One exact
+       streaming upload per compatible batch is both smaller and predictable. */
     glBindBuffer(GL_ARRAY_BUFFER, g_android_tv_vbo);
-    size_t upload_bytes = (size_t)count * sizeof(AndroidTVVertex);
-    if (g_android_tv_dynamic_vbo_capacity < upload_bytes) {
-        size_t cap = g_android_tv_dynamic_vbo_capacity ? g_android_tv_dynamic_vbo_capacity : (size_t)2 * 1024 * 1024;
-        while (cap < upload_bytes) cap *= 2;
-        g_android_tv_dynamic_vbo_capacity = cap;
-        g_android_tv_dynamic_vbo_offset = 0;
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)cap, NULL, GL_STREAM_DRAW);
-    } else if (g_android_tv_dynamic_vbo_offset + upload_bytes > g_android_tv_dynamic_vbo_capacity) {
-        /* Orphan at most when the retained frame buffer wraps, rather than for
-           every text/entity batch. */
-        g_android_tv_dynamic_vbo_offset = 0;
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)g_android_tv_dynamic_vbo_capacity, NULL, GL_STREAM_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)((size_t)count * sizeof(AndroidTVVertex)),
+                 v, GL_STREAM_DRAW);
+    if (g_android_tv_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)g_android_tv_a_pos);
+        glVertexAttribPointer((GLuint)g_android_tv_a_pos, 3, GL_FLOAT, GL_FALSE,
+                              sizeof(AndroidTVVertex),
+                              (const GLvoid*)(uintptr_t)offsetof(AndroidTVVertex, x));
     }
-    size_t upload_offset = g_android_tv_dynamic_vbo_offset;
-    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)upload_offset, (GLsizeiptr)upload_bytes, v);
-    g_android_tv_dynamic_vbo_offset += (upload_bytes + 15u) & ~(size_t)15u;
-    if (g_android_tv_a_pos >= 0) { glEnableVertexAttribArray((GLuint)g_android_tv_a_pos); glVertexAttribPointer((GLuint)g_android_tv_a_pos, 3, GL_FLOAT, GL_FALSE, sizeof(AndroidTVVertex), (const GLvoid*)(uintptr_t)(upload_offset + offsetof(AndroidTVVertex, x))); }
-    if (g_android_tv_a_uv >= 0) { glEnableVertexAttribArray((GLuint)g_android_tv_a_uv); glVertexAttribPointer((GLuint)g_android_tv_a_uv, 2, GL_FLOAT, GL_FALSE, sizeof(AndroidTVVertex), (const GLvoid*)(uintptr_t)(upload_offset + offsetof(AndroidTVVertex, u))); }
-    if (g_android_tv_a_color >= 0) { glEnableVertexAttribArray((GLuint)g_android_tv_a_color); glVertexAttribPointer((GLuint)g_android_tv_a_color, 4, GL_FLOAT, GL_FALSE, sizeof(AndroidTVVertex), (const GLvoid*)(uintptr_t)(upload_offset + offsetof(AndroidTVVertex, r))); }
-    if (g_android_tv_a_light >= 0) { glDisableVertexAttribArray((GLuint)g_android_tv_a_light); glVertexAttrib4f((GLuint)g_android_tv_a_light, 1.0f, 0.0f, 1.0f, 0.0f); }
+    if (g_android_tv_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)g_android_tv_a_uv);
+        glVertexAttribPointer((GLuint)g_android_tv_a_uv, 2, GL_FLOAT, GL_FALSE,
+                              sizeof(AndroidTVVertex),
+                              (const GLvoid*)(uintptr_t)offsetof(AndroidTVVertex, u));
+    }
+    if (g_android_tv_a_color >= 0) {
+        glEnableVertexAttribArray((GLuint)g_android_tv_a_color);
+        glVertexAttribPointer((GLuint)g_android_tv_a_color, 4, GL_FLOAT, GL_FALSE,
+                              sizeof(AndroidTVVertex),
+                              (const GLvoid*)(uintptr_t)offsetof(AndroidTVVertex, r));
+    }
     glDrawArrays(mode, 0, count);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
@@ -615,12 +663,10 @@ static AndroidTVVertex android_tv_vertex_from_arrays(unsigned int idx) {
 
 static void pex_android_tv_begin_frame(void) {
     pex_android_tv_flush();
-    if (!g_android_tv_vbo) return;
-    if (!g_android_tv_dynamic_vbo_capacity) g_android_tv_dynamic_vbo_capacity = (size_t)2 * 1024 * 1024;
-    g_android_tv_dynamic_vbo_offset = 0;
-    glBindBuffer(GL_ARRAY_BUFFER, g_android_tv_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)g_android_tv_dynamic_vbo_capacity, NULL, GL_STREAM_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /* External SDL/driver work may change bindings between frames.  Reset only
+       the tiny state cache; do not allocate or orphan GPU memory here. */
+    g_android_tv_applied_valid = 0;
+    g_android_tv_applied_mvp_valid = 0;
 }
 
 static void pex_android_tv_glClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { pex_android_tv_flush(); glClearColor(r,g,b,a); }
@@ -864,17 +910,38 @@ static AndroidTVStaticMesh *pex_android_tv_static_mesh_create(const PexVertex *v
 
 static void pex_android_tv_static_mesh_begin(GLuint texture, int alpha_test, int blend, int cull) {
     pex_android_tv_flush();
-    glUseProgram(g_android_tv_program);
+    if (!g_android_tv_terrain_program) return;
+
+    glUseProgram(g_android_tv_terrain_program);
     AndroidTVMat4 mvp;
     android_tv_make_mvp(&mvp);
-    android_tv_apply_mvp(&mvp);
-    android_tv_apply_state_values(texture != 0, blend, g_android_tv_depth_enabled,
-                                  alpha_test, cull, texture, g_android_tv_alpha_ref, 1);
+    if (g_android_tv_terrain_u_mvp >= 0)
+        glUniformMatrix4fv(g_android_tv_terrain_u_mvp, 1, GL_FALSE, mvp.m);
+    if (g_android_tv_terrain_u_alpha_enabled >= 0)
+        glUniform1i(g_android_tv_terrain_u_alpha_enabled, alpha_test ? 1 : 0);
+    if (g_android_tv_terrain_u_alpha_ref >= 0)
+        glUniform1f(g_android_tv_terrain_u_alpha_ref, g_android_tv_alpha_ref);
+
+    if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (g_android_tv_depth_enabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, g_android_tv_lightmap_tex);
+    glActiveTexture(GL_TEXTURE0);
+
     if (cull) glFrontFace(GL_CW);
-    if (g_android_tv_a_pos >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_a_pos);
-    if (g_android_tv_a_uv >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_a_uv);
-    if (g_android_tv_a_color >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_a_color);
-    if (g_android_tv_a_light >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_a_light);
+    if (g_android_tv_terrain_a_pos >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_terrain_a_pos);
+    if (g_android_tv_terrain_a_uv >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_terrain_a_uv);
+    if (g_android_tv_terrain_a_color >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_terrain_a_color);
+    if (g_android_tv_terrain_a_light >= 0) glEnableVertexAttribArray((GLuint)g_android_tv_terrain_a_light);
+
+    /* The terrain shader has its own program and bindings.  Force the compact
+       UI state cache to reapply its values on the next compatibility draw. */
+    g_android_tv_applied_valid = 0;
+    g_android_tv_applied_mvp_valid = 0;
     g_android_tv_static_pass_active = 1;
 }
 
@@ -883,10 +950,18 @@ static void pex_android_tv_static_mesh_draw(AndroidTVStaticMesh *mesh) {
     for (AndroidTVStaticMeshBatch *b = mesh->first; b; b = b->next) {
         glBindBuffer(GL_ARRAY_BUFFER, b->vbo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, b->ibo);
-        if (g_android_tv_a_pos >= 0) glVertexAttribPointer((GLuint)g_android_tv_a_pos, 3, GL_FLOAT, GL_FALSE, sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, x));
-        if (g_android_tv_a_uv >= 0) glVertexAttribPointer((GLuint)g_android_tv_a_uv, 2, GL_FLOAT, GL_FALSE, sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, u));
-        if (g_android_tv_a_color >= 0) glVertexAttribPointer((GLuint)g_android_tv_a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, color));
-        if (g_android_tv_a_light >= 0) glVertexAttribPointer((GLuint)g_android_tv_a_light, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, light));
+        if (g_android_tv_terrain_a_pos >= 0)
+            glVertexAttribPointer((GLuint)g_android_tv_terrain_a_pos, 3, GL_FLOAT, GL_FALSE,
+                                  sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, x));
+        if (g_android_tv_terrain_a_uv >= 0)
+            glVertexAttribPointer((GLuint)g_android_tv_terrain_a_uv, 2, GL_FLOAT, GL_FALSE,
+                                  sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, u));
+        if (g_android_tv_terrain_a_color >= 0)
+            glVertexAttribPointer((GLuint)g_android_tv_terrain_a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE,
+                                  sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, color));
+        if (g_android_tv_terrain_a_light >= 0)
+            glVertexAttribPointer((GLuint)g_android_tv_terrain_a_light, 4, GL_UNSIGNED_BYTE, GL_TRUE,
+                                  sizeof(PexVertex), (const GLvoid*)(uintptr_t)offsetof(PexVertex, light));
         glDrawElements(GL_TRIANGLES, b->index_count, GL_UNSIGNED_SHORT, (const GLvoid*)0);
     }
 }
@@ -896,7 +971,10 @@ static void pex_android_tv_static_mesh_end(void) {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glFrontFace(GL_CCW);
+    glActiveTexture(GL_TEXTURE0);
     g_android_tv_static_pass_active = 0;
+    g_android_tv_applied_valid = 0;
+    g_android_tv_applied_mvp_valid = 0;
 }
 
 static int android_tv_draw_elements_fast(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) {
@@ -923,7 +1001,6 @@ static int android_tv_draw_elements_fast(GLenum mode, GLsizei count, GLenum type
 
     glBindBuffer(GL_ARRAY_BUFFER, g_android_tv_vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(((size_t)max_idx + 1u) * (size_t)stride), base, GL_DYNAMIC_DRAW);
-    g_android_tv_dynamic_vbo_offset = g_android_tv_dynamic_vbo_capacity;
     if (g_android_tv_a_pos >= 0) {
         glEnableVertexAttribArray((GLuint)g_android_tv_a_pos);
         glVertexAttribPointer((GLuint)g_android_tv_a_pos, 3, GL_FLOAT, GL_FALSE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, x));
@@ -936,7 +1013,6 @@ static int android_tv_draw_elements_fast(GLenum mode, GLsizei count, GLenum type
         glEnableVertexAttribArray((GLuint)g_android_tv_a_color);
         glVertexAttribPointer((GLuint)g_android_tv_a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const GLvoid*)(uintptr_t)offsetof(PexVertex, color));
     }
-    if (g_android_tv_a_light >= 0) { glDisableVertexAttribArray((GLuint)g_android_tv_a_light); glVertexAttrib4f((GLuint)g_android_tv_a_light, 1.0f, 0.0f, 1.0f, 0.0f); }
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_android_tv_ebo);
     GLenum draw_type = type;
@@ -993,5 +1069,6 @@ static void gles2_renderer_shutdown(void) {
     if (g_android_tv_lightmap_tex) { glDeleteTextures(1, &g_android_tv_lightmap_tex); g_android_tv_lightmap_tex = 0; }
     if (g_android_tv_ebo) { glDeleteBuffers(1, &g_android_tv_ebo); g_android_tv_ebo = 0; }
     if (g_android_tv_vbo) { glDeleteBuffers(1, &g_android_tv_vbo); g_android_tv_vbo = 0; }
+    if (g_android_tv_terrain_program) { glDeleteProgram(g_android_tv_terrain_program); g_android_tv_terrain_program = 0; }
     if (g_android_tv_program) { glDeleteProgram(g_android_tv_program); g_android_tv_program = 0; }
 }

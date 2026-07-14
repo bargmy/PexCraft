@@ -40,9 +40,7 @@ static void pex_gl_suppress_immediate(int on) { (void)on; }
 
 static void apply_vsync_setting(void) {
     if (!g_hwnd) return;
-    int interval = g_opts.anaglyph ? 1 : 0;
-    if (interval && SDL_GL_SetSwapInterval(-1) == 0) return;
-    SDL_GL_SetSwapInterval(interval);
+    SDL_GL_SetSwapInterval((g_opts.anaglyph && g_opts.max_fps > 0) ? 1 : 0);
 }
 
 static void refresh_window_size_after_mode(void) {

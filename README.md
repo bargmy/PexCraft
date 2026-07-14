@@ -105,3 +105,17 @@ The Android active world window is 320 blocks wide. This preserves the normal
 arrays from about 405 MiB to about 125 MiB. Mesh worker counts and queues scale down
 on low-core shared-memory devices. Android TV requests a true 1080p surface instead
 of allowing SDL to silently allocate a 4K high-density backbuffer.
+
+## Android GLES title-screen regression repair (v10)
+
+The Android and Android TV compatibility renderer now keeps menu, text, GUI,
+entities, and other compatibility geometry on a lightweight one-texture GLES2
+shader.  The terrain lightmap shader is used only while drawing retained terrain
+meshes.  This avoids the severe title-screen slowdown seen on some low-end
+GLES2 drivers after the v9 all-purpose shader change.
+
+The renderer also no longer allocates/orphans a fixed 2 MiB streaming VBO at the
+start of every frame.  Deferred compatibility batches perform one exact-size
+stream upload when flushed, while retained terrain meshes continue to stay in
+persistent GPU buffers.  Android V-Sync now follows the same V-Sync and FPS-limit
+condition as the desktop SDL path.
