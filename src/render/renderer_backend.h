@@ -73,6 +73,8 @@ typedef struct PexRendererBackend {
 
     PexTextureHandle (*create_texture)(const PexTextureDesc *desc);
     void (*destroy_texture)(PexTextureHandle handle);
+    int  (*update_texture_region)(PexTextureHandle handle, int x, int y, int width, int height,
+                                  const uint32_t *rgba_pixels, int source_pitch_bytes);
 
     PexMeshHandle (*upload_mesh)(const PexMesh *mesh);
     int  (*update_mesh)(PexMeshHandle handle, const PexMesh *mesh);

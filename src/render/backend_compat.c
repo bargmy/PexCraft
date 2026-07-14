@@ -280,7 +280,7 @@ static HRESULT compat_d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
 }
 
 static void compat_d3d11_set_latency_for_unlimited_fps(void) {
-    int desired = (g_opts.max_fps <= 0) ? 8 : 1;
+    int desired = 1; /* Keep presentation responsive and prevent bursty 8-frame queue stalls. */
     g_d3d11.frame_latency = desired;
     g_d3d11.frame_latency_set = 0;
 #if defined(_WIN32)

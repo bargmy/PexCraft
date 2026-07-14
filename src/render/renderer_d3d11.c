@@ -174,7 +174,7 @@ static HRESULT d3d11_create_swap_chain(DXGI_SWAP_CHAIN_DESC *base_desc,
 }
 
 static void d3d11_set_latency_for_unlimited_fps(void) {
-    int desired = (g_opts.max_fps <= 0) ? 8 : 1;
+    int desired = 1; /* Keep presentation responsive and prevent bursty 8-frame queue stalls. */
     g_pxr_d3d11.frame_latency = desired;
     g_pxr_d3d11.frame_latency_set = 0;
 #if defined(_WIN32)
@@ -594,6 +594,22 @@ static void d3d11_destroy_texture(PexTextureHandle handle) {
     memset(&g_pxr_d3d11.textures[handle], 0, sizeof(g_pxr_d3d11.textures[handle]));
 }
 
+static int d3d11_update_texture_region(PexTextureHandle handle, int x, int y, int width, int height,
+                                       const uint32_t *rgba_pixels, int source_pitch_bytes) {
+    if (!g_pxr_d3d11.ctx || handle == 0 || handle >= PEX_RENDERER_MAX_TEXTURES ||
+        !rgba_pixels || width <= 0 || height <= 0) return 0;
+    PexD3D11TextureNative *t = &g_pxr_d3d11.textures[handle];
+    if (!t->tex || x < 0 || y < 0 || x + width > t->width || y + height > t->height) return 0;
+    if (source_pitch_bytes <= 0) source_pitch_bytes = width * (int)sizeof(uint32_t);
+    D3D11_BOX box;
+    box.left = (UINT)x; box.top = (UINT)y; box.front = 0;
+    box.right = (UINT)(x + width); box.bottom = (UINT)(y + height); box.back = 1;
+    ID3D11DeviceContext_UpdateSubresource(g_pxr_d3d11.ctx, (ID3D11Resource*)t->tex, 0, &box,
+                                          rgba_pixels, (UINT)source_pitch_bytes, 0);
+    g_pxr_d3d11.stats.texture_uploads++;
+    return 1;
+}
+
 static uint32_t d3d11_next_pow2(uint32_t v, uint32_t minv) {
     uint32_t c = minv;
     while (c < v && c < 0x80000000u) c <<= 1;
@@ -868,6 +884,7 @@ static PexRendererBackend g_renderer_d3d11_native = {
     d3d11_end_frame,
     d3d11_create_texture,
     d3d11_destroy_texture,
+    d3d11_update_texture_region,
     d3d11_upload_mesh,
     d3d11_update_mesh,
     d3d11_destroy_mesh,

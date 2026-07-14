@@ -319,26 +319,34 @@ static void end_high_res_timer(void) {
 }
 
 static void sleep_for_max_fps(double frame_start_time) {
+    static double next_deadline = 0.0;
+    static int last_limit = 0;
     double sleep_start_time = now_seconds();
     if (g_opts.max_fps <= 0) {
-        /* Unlimited must mean uncapped.  Sleep(1) often becomes a ~15.6 ms
-           scheduler wait on Windows, which feels exactly like a 60 FPS/vsync
-           cap even when swap interval is disabled. */
+        next_deadline = 0.0;
+        last_limit = 0;
         g_sleep_ms_last = (now_seconds() - sleep_start_time) * 1000.0;
         return;
     }
     double target = 1.0 / (double)g_opts.max_fps;
+    double now = now_seconds();
+    if (last_limit != g_opts.max_fps || next_deadline <= 0.0 ||
+        now > next_deadline + target * 3.0 || next_deadline > now + target * 2.0) {
+        next_deadline = frame_start_time + target;
+        last_limit = g_opts.max_fps;
+    }
     for (;;) {
-        double elapsed = now_seconds() - frame_start_time;
-        double remaining = target - elapsed;
+        now = now_seconds();
+        double remaining = next_deadline - now;
         if (remaining <= 0.0) break;
-        if (remaining > 0.003) {
-            DWORD ms = (DWORD)(remaining * 1000.0) - 1;
-            Sleep(ms > 0 ? ms : 0);
-        } else {
+        if (remaining > 0.0025) {
+            DWORD ms = (DWORD)(remaining * 1000.0);
+            Sleep(ms > 1 ? ms - 1 : 0);
+        } else if (remaining > 0.0005) {
             Sleep(0);
         }
     }
+    next_deadline += target;
     g_sleep_ms_last = (now_seconds() - sleep_start_time) * 1000.0;
 }
 

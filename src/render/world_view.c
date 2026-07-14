@@ -8,6 +8,8 @@ static void apply_hurt_camera_effect(float partial);
 static void apply_portal_camera_effect(float partial);
 static void update_portal_texture_animation(void);
 static void update_liquid_texture_animation(void);
+static PexRendererBackend *flat_direct_backend(void);
+static void flat_direct_update_terrain_region(int x, int y, int width, int height, const unsigned char *rgba);
 static void draw_portal_overlay(void);
 static int flat_section_needs_mesh_rebuild(int sy, int cz, int cx);
 
@@ -1087,7 +1089,6 @@ static int g_portal_uploaded_frame = -1;
 static unsigned char *g_portal_uploaded_rgba = NULL;
 static int g_portal_uploaded_w = 0;
 static int g_portal_uploaded_h = 0;
-static int g_portal_anim_terrain_dirty = 0;
 
 static int pex_portal_clamp_u8(int v) {
     if (v < 0) return 0;
@@ -1195,19 +1196,13 @@ static void update_portal_texture_animation(void) {
     }
 #if defined(PEX_PLATFORM_LINUX_SDL2)
     pex_portal_upload_frame_subrect(tx, ty, src);
-    /* Linux/SDL2 renders the atlas texture directly, so there is no separate
-       backend copy to invalidate. */
 #else
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_terrain.w, tex_terrain.h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, tex_terrain.rgba);
-    stivufine_rebuild_terrain_mipmaps();
-    g_portal_anim_terrain_dirty = 1;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, tx, ty, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, src);
 #endif
+    /* Native D3D terrain meshes use a separate backend texture. Update only
+       the animated cell instead of destroying and recreating the full atlas. */
+    flat_direct_update_terrain_region(tx, ty, 16, 16, src);
     g_portal_uploaded_frame = frame;
     g_portal_uploaded_rgba = tex_terrain.rgba;
     g_portal_uploaded_w = tex_terrain.w;
@@ -1346,7 +1341,9 @@ static void pex_upload_animated_terrain_tile(int tile, int tile_size,
     if (tw <= 0 || th <= 0) return;
     if (tx + tw * tile_size > tex_terrain.w || ty + th * tile_size > tex_terrain.h) return;
 
-    unsigned char *upload = (unsigned char *)malloc((size_t)tw * (size_t)th * 4u);
+    unsigned char stack_upload[16 * 16 * 4];
+    size_t upload_bytes = (size_t)tw * (size_t)th * 4u;
+    unsigned char *upload = upload_bytes <= sizeof(stack_upload) ? stack_upload : (unsigned char *)malloc(upload_bytes);
     if (!upload) return;
     for (int y = 0; y < th; ++y) {
         int sy = (y * 16) / th;
@@ -1358,14 +1355,9 @@ static void pex_upload_animated_terrain_tile(int tile, int tile_size,
     }
 
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
-    /* Java TextureWaterFlowFX/TextureLavaFlowFX use tileSize=2.  Duplicate the
-       generated 16x16 frame into all four atlas cells so the rotated flowing
-       top-face UVs cannot sample unrelated neighbouring block textures. */
+    /* Upload only the changed cells. The old implementation regenerated the
+       complete terrain mip chain four times per animation tick. */
     for (int oy = 0; oy < tile_size; ++oy) {
         for (int ox = 0; ox < tile_size; ++ox) {
             int dx = tx + ox * tw;
@@ -1375,13 +1367,16 @@ static void pex_upload_animated_terrain_tile(int tile, int tile_size,
                        upload + (size_t)y * (size_t)tw * 4u,
                        (size_t)tw * 4u);
             }
-            glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, tw, th,
-                            GL_RGBA, GL_UNSIGNED_BYTE, upload);
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+            if (tw == 16 && th == 16) pex_portal_upload_frame_subrect(dx, dy, upload);
+            else glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, tw, th, GL_RGBA, GL_UNSIGNED_BYTE, upload);
+#else
+            glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, tw, th, GL_RGBA, GL_UNSIGNED_BYTE, upload);
+#endif
+            flat_direct_update_terrain_region(dx, dy, tw, th, upload);
         }
     }
-    free(upload);
-    stivufine_rebuild_terrain_mipmaps();
-    g_portal_anim_terrain_dirty = 1;
+    if (upload != stack_upload) free(upload);
 }
 
 static void update_liquid_texture_animation(void) {
@@ -1559,6 +1554,7 @@ static PexGLBindBufferProc g_flat_glBindBuffer = NULL;
 static PexGLBufferDataProc g_flat_glBufferData = NULL;
 static int g_flat_gl_vbo_checked = 0;
 static int g_flat_gl_vbo_available = 0;
+static int g_flat_gl_light_upload_budget = 0;
 
 static int flat_gl_vbo_supported(void) {
     if (!g_flat_gl_vbo_checked) {
@@ -1578,6 +1574,7 @@ static int flat_gl_vbo_supported(void) {
     }
     return g_flat_gl_vbo_available;
 }
+static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m);
 #endif
 
 static FlatGLCpuMesh g_flat_section_gl_cpu_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
@@ -1603,6 +1600,14 @@ static int async_section_mesh_cancel_requested(void) {
 static PexTextureHandle g_flat_direct_terrain_texture = 0;
 static unsigned char *g_flat_direct_terrain_rgba = NULL;
 static int g_flat_direct_terrain_w = 0, g_flat_direct_terrain_h = 0;
+
+static void flat_direct_update_terrain_region(int x, int y, int width, int height, const unsigned char *rgba) {
+    PexRendererBackend *rb = flat_direct_backend();
+    if (!rb || !rb->update_texture_region || !g_flat_direct_terrain_texture || !rgba) return;
+    rb->update_texture_region(g_flat_direct_terrain_texture, x, y, width, height,
+                              (const uint32_t*)rgba, width * 4);
+}
+
 
 static PexRendererBackend *flat_direct_backend(void) {
 #if defined(PEX_PLATFORM_PSP)
@@ -2416,6 +2421,11 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
     m->origin_x = origin_x;
     m->origin_z = origin_z;
     m->valid = 1;
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    /* Install GPU buffers while processing the bounded mesh-result queue, not
+       on the first draw after a camera turn. */
+    flat_gl_cpu_mesh_upload_vbo(m);
+#endif
     memset(b, 0, sizeof(*b));
 }
 
@@ -2453,24 +2463,33 @@ static void flat_gl_cpu_mesh_refresh_lightmap(FlatGLCpuMesh *m) {
 #if defined(PEX_PLATFORM_LINUX_SDL2)
 static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m) {
     if (!m || !m->valid || !m->v || !m->i || !flat_gl_vbo_supported()) return 0;
-    flat_gl_cpu_mesh_refresh_lightmap(m);
-    const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
-    unsigned int light_version = m->lit_v ? m->lit_lightmap_version : 0;
+    unsigned int wanted_light_version = flat_current_lightmap_version();
+    int needs_vertex_upload = !m->vbo_uploaded || m->vbo_lightmap_version != wanted_light_version;
+    if (needs_vertex_upload && m->vbo_uploaded && g_flat_gl_light_upload_budget <= 0) {
+        /* Keep drawing the previous daylight colors until this mesh reaches the
+           bounded refresh queue. Updating hundreds of VBOs in one frame caused
+           periodic day/night hitches. */
+        needs_vertex_upload = 0;
+    }
     if (!m->vbo) g_flat_glGenBuffers(1, &m->vbo);
     if (!m->ibo) g_flat_glGenBuffers(1, &m->ibo);
     if (!m->vbo || !m->ibo) return 0;
-    if (!m->vbo_uploaded || m->vbo_lightmap_version != light_version) {
+    if (needs_vertex_upload) {
+        flat_gl_cpu_mesh_refresh_lightmap(m);
+        const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
+        unsigned int light_version = m->lit_v ? m->lit_lightmap_version : 0;
         g_flat_glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
         g_flat_glBufferData(GL_ARRAY_BUFFER, (PexGLsizeiptr)((size_t)m->vcount * sizeof(PexVertex)), draw_v, GL_STATIC_DRAW);
         m->vbo_lightmap_version = light_version;
         m->vbo_uploaded = 1;
+        if (g_flat_gl_light_upload_budget > 0) g_flat_gl_light_upload_budget--;
     }
     g_flat_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
     if (!m->ibo_uploaded) {
         g_flat_glBufferData(GL_ELEMENT_ARRAY_BUFFER, (PexGLsizeiptr)((size_t)m->icount * sizeof(uint32_t)), m->i, GL_STATIC_DRAW);
         m->ibo_uploaded = 1;
     }
-    return 1;
+    return m->vbo_uploaded && m->ibo_uploaded;
 }
 #endif
 
@@ -2581,10 +2600,6 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
 static PexTextureHandle flat_direct_terrain_handle(void) {
     PexRendererBackend *rb = flat_direct_backend();
     if (!rb || !tex_terrain.rgba || tex_terrain.w <= 0 || tex_terrain.h <= 0) return 0;
-    if (g_portal_anim_terrain_dirty) {
-        g_flat_direct_terrain_rgba = NULL;
-        g_portal_anim_terrain_dirty = 0;
-    }
     if (g_flat_direct_terrain_texture && g_flat_direct_terrain_rgba == tex_terrain.rgba &&
         g_flat_direct_terrain_w == tex_terrain.w && g_flat_direct_terrain_h == tex_terrain.h) {
         return g_flat_direct_terrain_texture;
@@ -8827,6 +8842,9 @@ static void draw_translucent_sections_direct(const FlatRenderSectionRef *refs, i
 }
 
 static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
+#if defined(PEX_PLATFORM_LINUX_SDL2)
+    g_flat_gl_light_upload_budget = 8;
+#endif
     GLint old_shade_model = pex_gl_save_shade_model();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -10075,11 +10093,11 @@ static void draw_flat_test_world(void) {
         flat_mark_all_chunks_dirty();
     }
 
-#if defined(PEX_PLATFORM_WII)
+#if defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WASM)
     flat_flush_pending_lighting();
 #else
-    /* Desktop streaming/lighting commits are serviced off the render thread. */
-    if (g_mp_connected) flat_flush_pending_lighting();
+    /* Never start, wake, or run lighting work from the render path. Every
+       terrain-edit/streaming path already signals the dedicated worker. */
 #endif
 
     double prof_part = profile_begin();

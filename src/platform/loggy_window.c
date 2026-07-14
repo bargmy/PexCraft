@@ -335,7 +335,7 @@ static int loggy_init(void) {
         return 0;
     }
     g_loggy.window_id = SDL_GetWindowID(g_loggy.window);
-    g_loggy.renderer = SDL_CreateRenderer(g_loggy.window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    g_loggy.renderer = SDL_CreateRenderer(g_loggy.window, -1, SDL_RENDERER_ACCELERATED);
     if (!g_loggy.renderer) g_loggy.renderer = SDL_CreateRenderer(g_loggy.window, -1, SDL_RENDERER_SOFTWARE);
     if (!g_loggy.renderer) {
         fprintf(stderr, "--loggy: SDL_CreateRenderer failed: %s\n", SDL_GetError());

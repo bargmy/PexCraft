@@ -283,6 +283,29 @@ static void d3d9_destroy_texture(PexTextureHandle handle) {
     memset(&g_pxr_d3d9.textures[handle], 0, sizeof(g_pxr_d3d9.textures[handle]));
 }
 
+static int d3d9_update_texture_region(PexTextureHandle handle, int x, int y, int width, int height,
+                                      const uint32_t *rgba_pixels, int source_pitch_bytes) {
+    if (handle == 0 || handle >= PEX_RENDERER_MAX_TEXTURES || !rgba_pixels || width <= 0 || height <= 0) return 0;
+    PexD3D9TextureNative *t = &g_pxr_d3d9.textures[handle];
+    if (!t->tex || x < 0 || y < 0 || x + width > t->width || y + height > t->height) return 0;
+    if (source_pitch_bytes <= 0) source_pitch_bytes = width * (int)sizeof(uint32_t);
+    RECT rect = { x, y, x + width, y + height };
+    D3DLOCKED_RECT lr;
+    if (FAILED(IDirect3DTexture9_LockRect(t->tex, 0, &lr, &rect, 0))) return 0;
+    const unsigned char *src_row = (const unsigned char*)rgba_pixels;
+    for (int row = 0; row < height; ++row) {
+        DWORD *dst = (DWORD*)((unsigned char*)lr.pBits + row * lr.Pitch);
+        const unsigned char *src = src_row + row * source_pitch_bytes;
+        for (int col = 0; col < width; ++col) {
+            const unsigned char *p = src + col * 4;
+            dst[col] = ((DWORD)p[3] << 24) | ((DWORD)p[0] << 16) | ((DWORD)p[1] << 8) | (DWORD)p[2];
+        }
+    }
+    IDirect3DTexture9_UnlockRect(t->tex, 0);
+    g_pxr_d3d9.stats.texture_uploads++;
+    return 1;
+}
+
 static uint32_t pxr_next_pow2_u32(uint32_t v, uint32_t minv) {
     uint32_t c = minv;
     while (c < v && c < 0x80000000u) c <<= 1;
@@ -501,6 +524,7 @@ static PexRendererBackend g_renderer_d3d9_native = {
     d3d9_end_frame,
     d3d9_create_texture,
     d3d9_destroy_texture,
+    d3d9_update_texture_region,
     d3d9_upload_mesh,
     d3d9_update_mesh,
     d3d9_destroy_mesh,

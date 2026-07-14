@@ -73,16 +73,3 @@ text fields open the built-in virtual keyboard on every controller platform.
 The Xbox UWP target polls physical controllers through `Windows.Gaming.Input` and
 keeps CoreWindow Gamepad virtual keys as a media-remote fallback when no physical
 controller is connected.
-
-## Protocol-47 wall movement, combat targeting, and sneak toggle
-
-The protocol-47 movement path now keeps the player position and collision AABB in
-Java-style double precision, uses the exact float-derived 1.8.8 player dimensions,
-and performs the original velocity-only four-corner `pushOutOfBlocks` check. This
-removes local wall-edge position gaps without snapping or teleporting the player.
-
-Java/Bedrock hub player capacity is now 128 while the legacy PXNET snapshot remains
-wire-compatible at 16 entries. Entity attacks use the authoritative packet position,
-the 1.8.8 expanded player hitbox, and the vanilla three-block survival reach instead
-of the separately smoothed render model. On non-PSP gamepads, B toggles sneak until B
-is pressed again; left-stick sneak remains a held input.

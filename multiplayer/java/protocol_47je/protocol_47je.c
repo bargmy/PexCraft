@@ -18,6 +18,12 @@
 #define J47_SCORE_ENTRY_MAX 4096
 #define J47_BLOCK_UPDATE_CACHE_MAX 8192
 #define J47_TITLE_TEXT_MAX 1024
+#define J47_PENDING_CHUNK_MAX 256
+#if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
+#define J47_ASYNC_INFLATE 0
+#else
+#define J47_ASYNC_INFLATE 1
+#endif
 
 
 /* The Java adapter is unity-included after game/mobs.c and before
@@ -220,6 +226,8 @@ typedef struct PexJava47Session {
     unsigned char *rx;
     size_t rx_len;
     size_t rx_cap;
+    unsigned char *inflate_buf;
+    size_t inflate_cap;
     unsigned char *tx;
     size_t tx_len;
     size_t tx_pos;
@@ -252,6 +260,46 @@ typedef struct PexJava47Session {
 } PexJava47Session;
 
 static PexJava47Session g_j47;
+
+typedef struct J47PendingChunk {
+    int used;
+    int cx, cz;
+    int full;
+    unsigned int mask;
+    int has_sky;
+    int empty_means_unload;
+    unsigned int snapshot_serial;
+    int next_section;
+    unsigned char *data;
+    size_t len;
+} J47PendingChunk;
+
+static J47PendingChunk g_j47_pending_chunks[J47_PENDING_CHUNK_MAX];
+static int g_j47_pending_chunk_head = 0;
+static int g_j47_pending_chunk_count = 0;
+
+#if J47_ASYNC_INFLATE
+typedef struct J47InflateWorker {
+    CRITICAL_SECTION cs;
+    int initialized;
+    HANDLE event;
+    HANDLE thread;
+    volatile LONG stop;
+    int has_job;
+    int busy;
+    int done;
+    int ok;
+    unsigned char *compressed;
+    size_t compressed_len;
+    size_t compressed_cap;
+    unsigned char *output;
+    size_t output_len;
+    size_t output_cap;
+    size_t requested_output_len;
+} J47InflateWorker;
+static J47InflateWorker g_j47_inflate_worker;
+#endif
+
 static CRITICAL_SECTION g_j47_tx_cs;
 static int g_j47_tx_cs_ready = 0;
 
@@ -1329,12 +1377,15 @@ static int j47_rx_reserve(size_t add) {
 
 static int j47_receive_available(void) {
     unsigned char temp[32768];
+    size_t received_this_frame = 0;
     for (;;) {
+        if (received_this_frame >= 512u * 1024u) return 1;
         int n = recv(g_j47.socket, (char *)temp, sizeof(temp), 0);
         if (n > 0) {
             if (!j47_rx_reserve((size_t)n)) { j47_fail("Java receive buffer overflow"); return 0; }
             memcpy(g_j47.rx + g_j47.rx_len, temp, (size_t)n);
             g_j47.rx_len += (size_t)n;
+            received_this_frame += (size_t)n;
             continue;
         }
         if (n == 0) {
@@ -2595,23 +2646,98 @@ static void j47_set_block_state(int x, int y, int z, int state) {
     j47_apply_block_state_visible(x, y, z, state);
 }
 
-static void j47_unload_chunk(int cx, int cz) {
-    int lcx = (cx * 16 - g_flat_world_origin_x) / 16;
-    int lcz = (cz * 16 - g_flat_world_origin_z) / 16;
-    if (!flat_local_chunk_valid(lcx, lcz)) return;
-    for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) {
-        for (int z = 0; z < 16; z++) {
-            for (int x = 0; x < 16; x++) {
-                int wx = cx * 16 + x, wz = cz * 16 + z;
-                int yi = flat_y_index(y), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
-                g_flat_blocks[yi][zi][xi] = 0;
-                g_flat_meta[yi][zi][xi] = 0;
-                g_flat_levels[yi][zi][xi] = 0;
-                g_flat_block_light[yi][zi][xi] = 0;
-                g_flat_sky_light[yi][zi][xi] = 0;
+static void j47_pending_chunks_clear(void) {
+    for (int i = 0; i < J47_PENDING_CHUNK_MAX; ++i) {
+        free(g_j47_pending_chunks[i].data);
+        memset(&g_j47_pending_chunks[i], 0, sizeof(g_j47_pending_chunks[i]));
+    }
+    g_j47_pending_chunk_head = 0;
+    g_j47_pending_chunk_count = 0;
+}
+
+static int j47_chunk_section_count(unsigned int mask) {
+    int count = 0;
+    for (int sy = 0; sy < 16; ++sy) if (mask & (1u << sy)) count++;
+    return count;
+}
+
+static int j47_chunk_section_ordinal(unsigned int mask, int sy) {
+    int ordinal = 0;
+    for (int i = 0; i < sy; ++i) if (mask & (1u << i)) ordinal++;
+    return ordinal;
+}
+
+static size_t j47_chunk_expected_bytes(unsigned int mask, int has_sky, int full) {
+    size_t count = (size_t)j47_chunk_section_count(mask);
+    return count * 8192u + count * 2048u + (has_sky ? count * 2048u : 0u) + (full ? 256u : 0u);
+}
+
+static void j47_pending_chunk_drop_oldest(void) {
+    if (g_j47_pending_chunk_count <= 0) return;
+    J47PendingChunk *old = &g_j47_pending_chunks[g_j47_pending_chunk_head];
+    free(old->data);
+    memset(old, 0, sizeof(*old));
+    g_j47_pending_chunk_head = (g_j47_pending_chunk_head + 1) % J47_PENDING_CHUNK_MAX;
+    g_j47_pending_chunk_count--;
+}
+
+static int j47_queue_chunk(int cx, int cz, int full, unsigned int mask,
+                           const unsigned char *data, size_t len, int has_sky,
+                           int empty_means_unload, unsigned int snapshot_serial) {
+    size_t expected = j47_chunk_expected_bytes(mask, has_sky, full);
+    if (!(full && mask == 0 && empty_means_unload) && len < expected) return 0;
+
+    /* A newer complete snapshot for the same chunk supersedes an older queued
+       snapshot that has not finished installing. This keeps movement through a
+       busy hub from building an unbounded stale chunk backlog. */
+    if (full) {
+        /* Replace the newest queued snapshot for this chunk. Older queued
+           snapshots, if any, will install first; no stale same-chunk snapshot
+           can remain after the replacement and overwrite the newer data. */
+        for (int n = g_j47_pending_chunk_count - 1; n >= 0; --n) {
+            int idx = (g_j47_pending_chunk_head + n) % J47_PENDING_CHUNK_MAX;
+            J47PendingChunk *q = &g_j47_pending_chunks[idx];
+            if (q->used && q->cx == cx && q->cz == cz) {
+                unsigned char *copy = NULL;
+                if (len) {
+                    copy = (unsigned char*)malloc(len);
+                    if (!copy) return 0;
+                    memcpy(copy, data, len);
+                }
+                free(q->data);
+                memset(q, 0, sizeof(*q));
+                q->used = 1; q->cx = cx; q->cz = cz; q->full = full; q->mask = mask;
+                q->has_sky = has_sky; q->empty_means_unload = empty_means_unload;
+                q->snapshot_serial = snapshot_serial; q->data = copy; q->len = len;
+                return 1;
             }
         }
     }
+
+    if (g_j47_pending_chunk_count >= J47_PENDING_CHUNK_MAX) {
+        /* Prefer current nearby data over an old queued snapshot. Packet-level
+           block updates remain cached and are replayed after installation. */
+        j47_pending_chunk_drop_oldest();
+    }
+    int idx = (g_j47_pending_chunk_head + g_j47_pending_chunk_count) % J47_PENDING_CHUNK_MAX;
+    J47PendingChunk *q = &g_j47_pending_chunks[idx];
+    memset(q, 0, sizeof(*q));
+    if (len) {
+        q->data = (unsigned char*)malloc(len);
+        if (!q->data) return 0;
+        memcpy(q->data, data, len);
+    }
+    q->used = 1; q->cx = cx; q->cz = cz; q->full = full; q->mask = mask;
+    q->has_sky = has_sky; q->empty_means_unload = empty_means_unload;
+    q->snapshot_serial = snapshot_serial; q->len = len;
+    g_j47_pending_chunk_count++;
+    return 1;
+}
+
+static void j47_mark_chunk_unloaded_metadata(int cx, int cz) {
+    int lcx = (cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (cz * 16 - g_flat_world_origin_z) / 16;
+    if (!flat_local_chunk_valid(lcx, lcz)) return;
     g_flat_world_chunk_generated[lcz][lcx] = 0;
     g_flat_world_chunk_valid[lcz][lcx] = 0;
     g_flat_chunk_light_ready[lcz][lcx] = 0;
@@ -2622,86 +2748,107 @@ static void j47_unload_chunk(int cx, int cz) {
     for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
         g_flat_section_dirty[sy][lcz][lcx] = 0;
         g_flat_section_valid[sy][lcz][lcx] = 0;
+        flat_note_section_mesh_changed(sy, lcz, lcx);
     }
     g_flat_renderer_sort_dirty = 1;
 }
 
-static void j47_install_chunk(int cx, int cz, int full, unsigned int mask, const unsigned char *data, size_t len, int has_sky, int empty_means_unload) {
-    if (full && mask == 0 && empty_means_unload) {
-        j47_unload_chunk(cx, cz);
-        return;
-    }
-    size_t pos = 0;
-    int lcx = (cx * 16 - g_flat_world_origin_x) / 16;
-    int lcz = (cz * 16 - g_flat_world_origin_z) / 16;
+static void j47_apply_pending_chunk_section(J47PendingChunk *q, int sy) {
+    if (!q || sy < 0 || sy >= 16) return;
+    int lcx = (q->cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (q->cz * 16 - g_flat_world_origin_z) / 16;
     int visible = flat_local_chunk_valid(lcx, lcz);
-    if (full && visible) {
-        for (int y = FLAT_WORLD_Y_MIN; y <= FLAT_WORLD_Y_MAX; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
-            int wx = cx * 16 + x, wz = cz * 16 + z;
-            int yi = flat_y_index(y), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
-            g_flat_blocks[yi][zi][xi] = 0; g_flat_meta[yi][zi][xi] = 0; g_flat_levels[yi][zi][xi] = 0;
-            g_flat_block_light[yi][zi][xi] = 0; g_flat_sky_light[yi][zi][xi] = has_sky ? 15 : 0;
-        }
-    }
-    for (int sy = 0; sy < 16; sy++) if (mask & (1u << sy)) {
-        if (pos + 8192 > len) return;
-        const unsigned char *states = data + pos; pos += 8192;
-        if (visible) for (int ly = 0; ly < 16; ly++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
-            int idx = (ly << 8) | (z << 4) | x;
-            int state = states[idx * 2] | (states[idx * 2 + 1] << 8);
+    int present = (q->mask & (1u << sy)) != 0;
+    if (!visible || (!present && !q->full)) return;
+
+    int section_count = j47_chunk_section_count(q->mask);
+    int ordinal = present ? j47_chunk_section_ordinal(q->mask, sy) : 0;
+    size_t states_total = (size_t)section_count * 8192u;
+    size_t block_total = (size_t)section_count * 2048u;
+    const unsigned char *states = present ? q->data + (size_t)ordinal * 8192u : NULL;
+    const unsigned char *block_light = present ? q->data + states_total + (size_t)ordinal * 2048u : NULL;
+    const unsigned char *sky_light = (present && q->has_sky) ?
+        q->data + states_total + block_total + (size_t)ordinal * 2048u : NULL;
+
+    for (int i = 0; i < 4096; ++i) {
+        int x = i & 15, z = (i >> 4) & 15, ly = (i >> 8) & 15;
+        int wx = q->cx * 16 + x, wy = sy * 16 + ly, wz = q->cz * 16 + z;
+        int yi = flat_y_index(wy), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
+        if (present) {
+            int state = states[i * 2] | (states[i * 2 + 1] << 8);
             int id = BLOCK_STONE, meta = 0;
             j47_translate_block_state_parts((state >> 4) & 0xfff, state & 15, &id, &meta);
-            int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
-            int yi = flat_y_index(wy), zi = flat_storage_z_index(wz), xi = flat_storage_index(wx);
             g_flat_blocks[yi][zi][xi] = (unsigned char)id;
             g_flat_meta[yi][zi][xi] = (unsigned char)meta;
             g_flat_levels[yi][zi][xi] = block_is_liquid(id) ? (unsigned char)meta : 0;
+            g_flat_block_light[yi][zi][xi] = (unsigned char)((block_light[i >> 1] >> ((i & 1) * 4)) & 15);
+            g_flat_sky_light[yi][zi][xi] = q->has_sky ?
+                (unsigned char)((sky_light[i >> 1] >> ((i & 1) * 4)) & 15) : 0;
+        } else {
+            g_flat_blocks[yi][zi][xi] = 0;
+            g_flat_meta[yi][zi][xi] = 0;
+            g_flat_levels[yi][zi][xi] = 0;
+            g_flat_block_light[yi][zi][xi] = 0;
+            g_flat_sky_light[yi][zi][xi] = q->has_sky ? 15 : 0;
         }
     }
-    for (int sy = 0; sy < 16; sy++) if (mask & (1u << sy)) {
-        if (pos + 2048 > len) return;
-        if (visible) for (int i = 0; i < 4096; i++) {
-            int nib = (data[pos + (i >> 1)] >> ((i & 1) * 4)) & 15;
-            int x = i & 15, z = (i >> 4) & 15, ly = (i >> 8) & 15;
-            int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
-            g_flat_block_light[flat_y_index(wy)][flat_storage_z_index(wz)][flat_storage_index(wx)] = (unsigned char)nib;
-        }
-        pos += 2048;
-    }
-    if (has_sky) for (int sy = 0; sy < 16; sy++) if (mask & (1u << sy)) {
-        if (pos + 2048 > len) return;
-        if (visible) for (int i = 0; i < 4096; i++) {
-            int nib = (data[pos + (i >> 1)] >> ((i & 1) * 4)) & 15;
-            int x = i & 15, z = (i >> 4) & 15, ly = (i >> 8) & 15;
-            int wx = cx * 16 + x, wy = sy * 16 + ly, wz = cz * 16 + z;
-            g_flat_sky_light[flat_y_index(wy)][flat_storage_z_index(wz)][flat_storage_index(wx)] = (unsigned char)nib;
-        }
-        pos += 2048;
-    }
-    if (full && pos + 256 <= len) pos += 256;
-    if (visible) {
-        g_flat_chunk_section_non_empty_mask[lcz][lcx] = (unsigned short)mask;
+}
+
+static void j47_finish_pending_chunk(J47PendingChunk *q) {
+    int lcx = (q->cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (q->cz * 16 - g_flat_world_origin_z) / 16;
+    int visible = flat_local_chunk_valid(lcx, lcz);
+    if (q->full && q->mask == 0 && q->empty_means_unload) {
+        j47_mark_chunk_unloaded_metadata(q->cx, q->cz);
+    } else if (visible) {
+        if (q->full) g_flat_chunk_section_non_empty_mask[lcz][lcx] = (unsigned short)q->mask;
+        else g_flat_chunk_section_non_empty_mask[lcz][lcx] |= (unsigned short)q->mask;
         for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; sy++) {
+            if (!q->full && !(q->mask & (1u << sy))) continue;
             g_flat_section_dirty[sy][lcz][lcx] = 1;
             g_flat_section_valid[sy][lcz][lcx] = 0;
             flat_note_section_mesh_changed(sy, lcz, lcx);
         }
-        /* This chunk snapshot is newer than every block update already
-           parsed before it. Retire those older cached records for the sections
-           replaced by the snapshot; later S22/S23 packets will be cached and
-           applied in normal TCP order. */
+        /* Discard only updates older than this snapshot. Newer updates were
+           already parsed while installation was time-sliced, so replay them
+           after the final section to preserve exact TCP ordering. */
         for (int i = 0; i < J47_BLOCK_UPDATE_CACHE_MAX; ++i) {
             J47BlockUpdate *u = &g_j47.block_updates[i];
-            if (!u->used || (u->x >> 4) != cx || (u->z >> 4) != cz) continue;
-            if (full || (mask & (1u << ((unsigned)u->y >> 4)))) u->used = 0;
+            if (!u->used || (u->x >> 4) != q->cx || (u->z >> 4) != q->cz) continue;
+            int replaced = q->full || (q->mask & (1u << ((unsigned)u->y >> 4)));
+            if (!replaced) continue;
+            if (u->serial <= q->snapshot_serial) u->used = 0;
+            else j47_apply_block_state_visible(u->x, u->y, u->z, u->state);
         }
         g_flat_renderer_sort_dirty = 1;
-        pex_net_mark_chunk_ready(cx, cz);
+        pex_net_mark_chunk_ready(q->cx, q->cz);
     }
-    g_j47.chunks_received++;
-    if (!g_j47.world_ready && g_j47.position_received && g_j47.chunks_received >= 1) {
-        g_j47.world_ready = 1;
-        g_j47.progress = 100;
+    if (!(q->full && q->mask == 0 && q->empty_means_unload)) {
+        g_j47.chunks_received++;
+        if (!g_j47.world_ready && g_j47.position_received && g_j47.chunks_received >= 1) {
+            g_j47.world_ready = 1;
+            g_j47.progress = 100;
+        }
+    }
+}
+
+static void j47_pump_pending_chunks(double budget_seconds) {
+    double started = now_seconds();
+    int sections_done = 0;
+    while (g_j47_pending_chunk_count > 0) {
+        J47PendingChunk *q = &g_j47_pending_chunks[g_j47_pending_chunk_head];
+        if (!q->used) { j47_pending_chunk_drop_oldest(); continue; }
+        while (q->next_section < 16 && !q->full && !(q->mask & (1u << q->next_section))) q->next_section++;
+        if (q->next_section < 16) {
+            j47_apply_pending_chunk_section(q, q->next_section++);
+            sections_done++;
+        }
+        if (q->next_section >= 16) {
+            j47_finish_pending_chunk(q);
+            j47_pending_chunk_drop_oldest();
+        }
+        if (sections_done >= 1 && now_seconds() - started >= budget_seconds) break;
+        if (sections_done >= 4) break;
     }
 }
 
@@ -3686,10 +3833,10 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
         case 0x1E:{int32_t id=0;if(j47_r_varint(r,&id)){int effect=j47_r_u8(r);if(!r->failed&&id==g_j47.local_entity_id&&effect>0&&effect<PEX_POTION_MAX){g_player_potion_effects[effect].duration=0;g_player_potion_effects[effect].amplifier=0;}}break;}
         case 0x1F:{g_player_xp_progress=j47_r_float(r);int32_t level,total;j47_r_varint(r,&level);j47_r_varint(r,&total);g_player_xp_level=level;g_player_xp_total=total;break;}
         case 0x20:j47_handle_entity_properties(r);break;
-        case 0x21:{j47_commit_pending_respawn_dimension();int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos)j47_install_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0,1);break;}
+        case 0x21:{j47_commit_pending_respawn_dimension();int cx=j47_r_be32(r),cz=j47_r_be32(r),full=j47_r_u8(r);unsigned mask=j47_r_be16(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&(size_t)n<=r->len-r->pos){if(!j47_queue_chunk(cx,cz,full,mask,r->data+r->pos,(size_t)n,g_j47.dimension==0,1,g_j47.packet_serial))j47_fail("Could not queue Java chunk");}break;}
         case 0x22:{int cx=j47_r_be32(r),cz=j47_r_be32(r);int32_t n;if(j47_r_varint(r,&n)&&n>=0&&n<100000)for(int i=0;i<n;i++){int packed=j47_r_be16(r);int32_t state;j47_r_varint(r,&state);int x=cx*16+((packed>>12)&15),z=cz*16+((packed>>8)&15),y=packed&255;j47_set_block_state(x,y,z,state);}break;}
         case 0x23:{int x=0,y=0,z=0;int32_t s;if(j47_read_block_pos(r,&x,&y,&z)&&j47_r_varint(r,&s))j47_set_block_state(x,y,z,s);break;}
-        case 0x26:{j47_commit_pending_respawn_dimension();int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=0;for(int sy=0;sy<16;sy++)if(mask[i]&(1u<<sy))bytes+=8192+2048+(has_sky?2048:0);bytes+=256;if(bytes>r->len-r->pos){r->failed=1;break;}j47_install_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky,0);r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
+        case 0x26:{j47_commit_pending_respawn_dimension();int has_sky=j47_r_u8(r);int32_t n;if(!j47_r_varint(r,&n)||n<0||n>1024)break;int*cx=malloc((size_t)n*sizeof(int));int*cz=malloc((size_t)n*sizeof(int));unsigned short*mask=malloc((size_t)n*sizeof(unsigned short));if(!cx||!cz||!mask){free(cx);free(cz);free(mask);break;}for(int i=0;i<n;i++){cx[i]=j47_r_be32(r);cz[i]=j47_r_be32(r);mask[i]=j47_r_be16(r);}for(int i=0;i<n&&!r->failed;i++){size_t bytes=j47_chunk_expected_bytes(mask[i],has_sky,1);if(bytes>r->len-r->pos){r->failed=1;break;}if(!j47_queue_chunk(cx[i],cz[i],1,mask[i],r->data+r->pos,bytes,has_sky,0,g_j47.packet_serial)){j47_fail("Could not queue Java bulk chunk");break;}r->pos+=bytes;}free(cx);free(cz);free(mask);break;}
         case 0x2B:{int reason=j47_r_u8(r);float v=j47_r_float(r);if(reason==3){g_game_mode=(int)v==1?1:0;g_pending_game_mode=g_game_mode;g_j47.game_mode=g_game_mode;if(!g_game_mode)g_creative_flying=0;g_j47.last_abilities_flags=-1;}break;}
         case 0x2D:{
             memset(&g_j47.window,0,sizeof(g_j47.window));
@@ -3778,6 +3925,141 @@ static void j47_handle_play_packet(int packet_id, J47Reader *r) {
     }
 }
 
+
+static void j47_handle_packet(const unsigned char *data,size_t len);
+#if J47_ASYNC_INFLATE
+static DWORD WINAPI j47_inflate_worker_proc(LPVOID unused) {
+    (void)unused;
+    for (;;) {
+        WaitForSingleObject(g_j47_inflate_worker.event, INFINITE);
+        EnterCriticalSection(&g_j47_inflate_worker.cs);
+        int stop = InterlockedCompareExchange(&g_j47_inflate_worker.stop, 0, 0) != 0;
+        int have = !stop && g_j47_inflate_worker.has_job;
+        size_t compressed_len = g_j47_inflate_worker.compressed_len;
+        size_t requested = g_j47_inflate_worker.requested_output_len;
+        g_j47_inflate_worker.has_job = 0;
+        g_j47_inflate_worker.busy = have;
+        LeaveCriticalSection(&g_j47_inflate_worker.cs);
+        if (stop) break;
+        if (!have) continue;
+
+        int ok = 0;
+        if (requested > 0 && requested <= J47_PACKET_MAX) {
+            if (requested > g_j47_inflate_worker.output_cap) {
+                unsigned char *nb = (unsigned char*)realloc(g_j47_inflate_worker.output, requested);
+                if (nb) {
+                    g_j47_inflate_worker.output = nb;
+                    g_j47_inflate_worker.output_cap = requested;
+                }
+            }
+            if (g_j47_inflate_worker.output && g_j47_inflate_worker.output_cap >= requested) {
+                uLongf outlen = (uLongf)requested;
+                int zr = uncompress(g_j47_inflate_worker.output, &outlen,
+                                    g_j47_inflate_worker.compressed, (uLong)compressed_len);
+                ok = (zr == Z_OK && outlen == (uLongf)requested);
+            }
+        }
+        EnterCriticalSection(&g_j47_inflate_worker.cs);
+        g_j47_inflate_worker.output_len = ok ? requested : 0;
+        g_j47_inflate_worker.ok = ok;
+        g_j47_inflate_worker.busy = 0;
+        g_j47_inflate_worker.done = 1;
+        LeaveCriticalSection(&g_j47_inflate_worker.cs);
+    }
+    EnterCriticalSection(&g_j47_inflate_worker.cs);
+    g_j47_inflate_worker.busy = 0;
+    g_j47_inflate_worker.has_job = 0;
+    LeaveCriticalSection(&g_j47_inflate_worker.cs);
+    return 0;
+}
+
+static int j47_inflate_worker_ensure(void) {
+    if (g_j47_inflate_worker.initialized) return g_j47_inflate_worker.thread != NULL;
+    memset(&g_j47_inflate_worker, 0, sizeof(g_j47_inflate_worker));
+    InitializeCriticalSection(&g_j47_inflate_worker.cs);
+    g_j47_inflate_worker.event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (g_j47_inflate_worker.event) {
+        g_j47_inflate_worker.thread = CreateThread(NULL, 0x100000, j47_inflate_worker_proc, NULL, 0, NULL);
+        if (g_j47_inflate_worker.thread) SetThreadPriority(g_j47_inflate_worker.thread, THREAD_PRIORITY_BELOW_NORMAL);
+    }
+    g_j47_inflate_worker.initialized = 1;
+    return g_j47_inflate_worker.thread != NULL;
+}
+
+static int j47_inflate_worker_pending(void) {
+    if (!g_j47_inflate_worker.initialized) return 0;
+    EnterCriticalSection(&g_j47_inflate_worker.cs);
+    int pending = g_j47_inflate_worker.has_job || g_j47_inflate_worker.busy || g_j47_inflate_worker.done;
+    LeaveCriticalSection(&g_j47_inflate_worker.cs);
+    return pending;
+}
+
+static int j47_inflate_worker_submit(const unsigned char *compressed, size_t compressed_len, size_t output_len) {
+    if (!compressed || compressed_len == 0 || output_len == 0 || output_len > J47_PACKET_MAX) return 0;
+    if (!j47_inflate_worker_ensure()) return 0;
+    EnterCriticalSection(&g_j47_inflate_worker.cs);
+    if (g_j47_inflate_worker.has_job || g_j47_inflate_worker.busy || g_j47_inflate_worker.done) {
+        LeaveCriticalSection(&g_j47_inflate_worker.cs);
+        return 0;
+    }
+    if (compressed_len > g_j47_inflate_worker.compressed_cap) {
+        size_t cap = g_j47_inflate_worker.compressed_cap ? g_j47_inflate_worker.compressed_cap : 65536u;
+        while (cap < compressed_len) cap *= 2u;
+        unsigned char *nb = (unsigned char*)realloc(g_j47_inflate_worker.compressed, cap);
+        if (!nb) { LeaveCriticalSection(&g_j47_inflate_worker.cs); return 0; }
+        g_j47_inflate_worker.compressed = nb;
+        g_j47_inflate_worker.compressed_cap = cap;
+    }
+    memcpy(g_j47_inflate_worker.compressed, compressed, compressed_len);
+    g_j47_inflate_worker.compressed_len = compressed_len;
+    g_j47_inflate_worker.requested_output_len = output_len;
+    g_j47_inflate_worker.ok = 0;
+    g_j47_inflate_worker.output_len = 0;
+    g_j47_inflate_worker.has_job = 1;
+    LeaveCriticalSection(&g_j47_inflate_worker.cs);
+    SetEvent(g_j47_inflate_worker.event);
+    return 1;
+}
+
+static int j47_inflate_worker_consume(void) {
+    if (!g_j47_inflate_worker.initialized) return 1;
+    EnterCriticalSection(&g_j47_inflate_worker.cs);
+    if (!g_j47_inflate_worker.done) {
+        LeaveCriticalSection(&g_j47_inflate_worker.cs);
+        return 1;
+    }
+    int ok = g_j47_inflate_worker.ok;
+    const unsigned char *output = g_j47_inflate_worker.output;
+    size_t output_len = g_j47_inflate_worker.output_len;
+    g_j47_inflate_worker.done = 0;
+    LeaveCriticalSection(&g_j47_inflate_worker.cs);
+    if (!ok || !output || output_len == 0) {
+        j47_fail("Invalid Java compressed packet");
+        return 0;
+    }
+    j47_handle_packet(output, output_len);
+    return g_j47.state != PEX_JAVA47_FAILED;
+}
+
+static void j47_inflate_worker_shutdown(void) {
+    if (!g_j47_inflate_worker.initialized) return;
+    InterlockedExchange(&g_j47_inflate_worker.stop, 1);
+    if (g_j47_inflate_worker.event) SetEvent(g_j47_inflate_worker.event);
+    if (g_j47_inflate_worker.thread) {
+        WaitForSingleObject(g_j47_inflate_worker.thread, INFINITE);
+        CloseHandle(g_j47_inflate_worker.thread);
+    }
+    if (g_j47_inflate_worker.event) CloseHandle(g_j47_inflate_worker.event);
+    free(g_j47_inflate_worker.compressed);
+    free(g_j47_inflate_worker.output);
+    DeleteCriticalSection(&g_j47_inflate_worker.cs);
+    memset(&g_j47_inflate_worker, 0, sizeof(g_j47_inflate_worker));
+}
+#else
+static int j47_inflate_worker_pending(void) { return 0; }
+static void j47_inflate_worker_shutdown(void) { }
+#endif
+
 static void j47_handle_packet(const unsigned char *data,size_t len){
     J47Reader r;int32_t id=-1;j47_reader_init(&r,data,len);if(!j47_r_varint(&r,&id))return;
     ++g_j47.packet_serial;
@@ -3791,24 +4073,52 @@ static void j47_handle_packet(const unsigned char *data,size_t len){
 }
 
 static int j47_process_rx(void){
+#if J47_ASYNC_INFLATE
+    if (!j47_inflate_worker_consume()) return 0;
+    /* Preserve packet order: while one compressed frame is being inflated,
+       later frames remain buffered in the socket receive stream. */
+    if (j47_inflate_worker_pending()) return 1;
+#endif
     size_t consumed=0;
     int packet_count=0;
     double started=now_seconds();
-    while(consumed<g_j47.rx_len){int32_t frame_len=0;size_t prefix=0;int vr=j47_peek_varint(g_j47.rx+consumed,g_j47.rx_len-consumed,&frame_len,&prefix);if(vr==0)break;if(vr<0||frame_len<0||frame_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java packet length");return 0;}if(g_j47.rx_len-consumed-prefix<(size_t)frame_len)break;
-        const unsigned char*frame=g_j47.rx+consumed+prefix;size_t flen=(size_t)frame_len;
-        if(g_j47.compression_threshold>=0){J47Reader rr;int32_t raw_len=0;j47_reader_init(&rr,frame,flen);if(!j47_r_varint(&rr,&raw_len)){j47_fail("Invalid compressed Java packet");return 0;}if(raw_len==0)j47_handle_packet(frame+rr.pos,flen-rr.pos);else{if(raw_len<g_j47.compression_threshold||raw_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java decompressed length");return 0;}unsigned char*out=malloc((size_t)raw_len);if(!out){j47_fail("Out of memory decoding Java packet");return 0;}uLongf outlen=(uLongf)raw_len;int zr=uncompress(out,&outlen,frame+rr.pos,(uLong)(flen-rr.pos));if(zr!=Z_OK||outlen!=(uLongf)raw_len){free(out);j47_fail("Invalid Java compressed packet");return 0;}j47_handle_packet(out,(size_t)outlen);free(out);}}
-        else j47_handle_packet(frame,flen);
+    while(consumed<g_j47.rx_len){
+        int32_t frame_len=0; size_t prefix=0;
+        int vr=j47_peek_varint(g_j47.rx+consumed,g_j47.rx_len-consumed,&frame_len,&prefix);
+        if(vr==0)break;
+        if(vr<0||frame_len<0||frame_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java packet length");return 0;}
+        if(g_j47.rx_len-consumed-prefix<(size_t)frame_len)break;
+        const unsigned char*frame=g_j47.rx+consumed+prefix; size_t flen=(size_t)frame_len;
+        if(g_j47.compression_threshold>=0){
+            J47Reader rr; int32_t raw_len=0; j47_reader_init(&rr,frame,flen);
+            if(!j47_r_varint(&rr,&raw_len)){j47_fail("Invalid compressed Java packet");return 0;}
+            if(raw_len==0){
+                j47_handle_packet(frame+rr.pos,flen-rr.pos);
+            }else{
+                if(raw_len<g_j47.compression_threshold||raw_len>(int)J47_PACKET_MAX){j47_fail("Invalid Java decompressed length");return 0;}
+#if J47_ASYNC_INFLATE
+                if(!j47_inflate_worker_submit(frame+rr.pos,flen-rr.pos,(size_t)raw_len)){
+                    j47_fail("Could not queue Java packet decompression");return 0;
+                }
+                consumed += prefix + flen;
+                break;
+#else
+                if((size_t)raw_len>g_j47.inflate_cap){size_t cap=g_j47.inflate_cap?g_j47.inflate_cap:65536u;while(cap<(size_t)raw_len)cap*=2u;unsigned char*nb=(unsigned char*)realloc(g_j47.inflate_buf,cap);if(!nb){j47_fail("Out of memory decoding Java packet");return 0;}g_j47.inflate_buf=nb;g_j47.inflate_cap=cap;}
+                uLongf outlen=(uLongf)raw_len;
+                int zr=uncompress(g_j47.inflate_buf,&outlen,frame+rr.pos,(uLong)(flen-rr.pos));
+                if(zr!=Z_OK||outlen!=(uLongf)raw_len){j47_fail("Invalid Java compressed packet");return 0;}
+                j47_handle_packet(g_j47.inflate_buf,(size_t)outlen);
+#endif
+            }
+        } else j47_handle_packet(frame,flen);
         if(g_j47.state==PEX_JAVA47_FAILED) return 0;
         consumed += prefix + flen;
         packet_count++;
-        /* A busy BedWars lobby can produce hundreds of entity/tab packets in
-           one socket read. Processing the entire backlog before the game tick
-           starves local movement, so bound play-state work per rendered frame
-           while leaving the remaining complete frames buffered. */
         if(!g_j47.peer_closed && g_j47.state==PEX_JAVA47_PLAY &&
-           (packet_count>=4096 || now_seconds()-started>=0.010))break;
+           (packet_count>=512 || now_seconds()-started>=0.002))break;
     }
-    if(consumed){memmove(g_j47.rx,g_j47.rx+consumed,g_j47.rx_len-consumed);g_j47.rx_len-=consumed;}return 1;
+    if(consumed){memmove(g_j47.rx,g_j47.rx+consumed,g_j47.rx_len-consumed);g_j47.rx_len-=consumed;}
+    return 1;
 }
 
 
@@ -4226,13 +4536,14 @@ int pex_java47_tick(void){
     if(!j47_flush_tx())return 0;
     if(!j47_receive_available())return 0;
     if(!j47_process_rx())return 0;
+    j47_pump_pending_chunks(g_j47.world_ready ? 0.0010 : 0.0030);
     if (g_j47.last_world_origin_x != g_flat_world_origin_x ||
         g_j47.last_world_origin_z != g_flat_world_origin_z) {
         g_j47.last_world_origin_x = g_flat_world_origin_x;
         g_j47.last_world_origin_z = g_flat_world_origin_z;
         j47_reapply_cached_block_updates();
     }
-    if(g_j47.peer_closed){
+    if(g_j47.peer_closed && !j47_inflate_worker_pending()){
         /* If a valid disconnect packet was buffered, j47_process_rx() has
            already converted it into the real server-provided reason.  Reach
            this fallback only when the peer closed without such a packet. */
@@ -4247,8 +4558,10 @@ void pex_java47_disconnect(void){
     g_player_capabilities_server_authoritative=0;
     if(g_j47.socket!=INVALID_SOCKET)closesocket(g_j47.socket);
     j47_clear_remote_entities();
+    j47_pending_chunks_clear();
+    j47_inflate_worker_shutdown();
     free_texture(&g_j47_local_skin);
-    free(g_j47.rx);free(g_j47.tx);memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.state=PEX_JAVA47_IDLE;
+    free(g_j47.rx);free(g_j47.inflate_buf);free(g_j47.tx);memset(&g_j47,0,sizeof(g_j47));g_j47.socket=INVALID_SOCKET;g_j47.compression_threshold=-1;g_j47.state=PEX_JAVA47_IDLE;
 }
 
 int pex_java47_is_active(void){return g_j47.active||g_j47.state==PEX_JAVA47_PLAY;}

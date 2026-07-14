@@ -527,6 +527,7 @@ static PexRendererBackend g_psp_gu_backend = {
     psp_backend_end_frame,
     psp_backend_create_texture,
     psp_backend_destroy_texture,
+    NULL,
     psp_backend_upload_mesh,
     psp_backend_update_mesh,
     psp_backend_destroy_mesh,
