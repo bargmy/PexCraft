@@ -1517,6 +1517,11 @@ typedef struct FlatDirectMeshBuilder {
        back-face culling only for meshes whose emitters are one-sided. */
     int uses_alpha_test;
     int two_sided;
+    /* Android keeps real terrain layers instead of promoting an entire 16^3
+       section to the most expensive state because it contains one flower or
+       glass block. These are index boundaries inside the combined pass-0 mesh. */
+    uint32_t opaque_icount_end;
+    uint32_t alpha_one_sided_icount_end;
 } FlatDirectMeshBuilder;
 
 typedef struct FlatGLCpuMesh {
@@ -1532,7 +1537,9 @@ typedef struct FlatGLCpuMesh {
     int ibo_uploaded;
 #endif
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    AndroidTVStaticMesh *android_mesh;
+    /* pass 0: [0]=opaque/cull, [1]=cutout/cull, [2]=cutout/two-sided.
+       pass 1 uses [2] for translucent liquid/portal geometry. */
+    AndroidTVStaticMesh *android_mesh[3];
 #endif
     unsigned int version;
     unsigned int lit_lightmap_version;
@@ -2200,7 +2207,9 @@ static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
     }
 #endif
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    if (m->android_mesh) pex_android_tv_static_mesh_destroy(m->android_mesh);
+    for (int group = 0; group < 3; ++group) {
+        if (m->android_mesh[group]) pex_android_tv_static_mesh_destroy(m->android_mesh[group]);
+    }
 #endif
     free(m->v);
     free(m->lit_v);
@@ -2430,18 +2439,46 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
     m->alpha_test = b->uses_alpha_test ? 1 : 0;
     m->two_sided = b->two_sided ? 1 : 0;
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    /* Convert and upload once while consuming the already-bounded mesh result
-       queue. The old path rebuilt 16-bit windows and streamed all section data
-       through glBufferData on every visible frame. */
-    m->android_mesh = pex_android_tv_static_mesh_create(b->v, b->vcount, b->i, b->icount);
-    if (m->android_mesh) {
+    /* Upload true terrain layers. A single plant must not force every stone face
+       in the section through alpha discard or disable culling. Pass 1 remains a
+       single two-sided translucent mesh. */
+    int gpu_ok = 1;
+    if (pass == 0) {
+        uint32_t opaque_end = b->opaque_icount_end;
+        uint32_t alpha_one_end = b->alpha_one_sided_icount_end;
+        if (opaque_end > b->icount) opaque_end = b->icount;
+        if (alpha_one_end < opaque_end) alpha_one_end = opaque_end;
+        if (alpha_one_end > b->icount) alpha_one_end = b->icount;
+        if (opaque_end > 0) {
+            m->android_mesh[0] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, 0, opaque_end);
+            if (!m->android_mesh[0]) gpu_ok = 0;
+        }
+        if (alpha_one_end > opaque_end) {
+            m->android_mesh[1] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, opaque_end, alpha_one_end - opaque_end);
+            if (!m->android_mesh[1]) gpu_ok = 0;
+        }
+        if (b->icount > alpha_one_end) {
+            m->android_mesh[2] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, alpha_one_end, b->icount - alpha_one_end);
+            if (!m->android_mesh[2]) gpu_ok = 0;
+        }
+    } else {
+        m->android_mesh[2] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, 0, b->icount);
+        if (!m->android_mesh[2]) gpu_ok = 0;
+    }
+    if (gpu_ok) {
         free(b->v);
         free(b->i);
         m->v = NULL;
         m->i = NULL;
     } else {
-        /* Keep the previous CPU-array route as a correctness fallback on drivers
-           that fail a buffer allocation. */
+        /* A partially uploaded section would silently lose one terrain layer.
+           Destroy partial GPU state and retain the complete CPU mesh instead. */
+        for (int group = 0; group < 3; ++group) {
+            if (m->android_mesh[group]) {
+                pex_android_tv_static_mesh_destroy(m->android_mesh[group]);
+                m->android_mesh[group] = NULL;
+            }
+        }
         m->v = b->v;
         m->i = b->i;
     }
@@ -2475,7 +2512,7 @@ static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
     return m->valid &&
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-           (m->android_mesh || (m->v && m->i)) &&
+           ((m->android_mesh[0] || m->android_mesh[1] || m->android_mesh[2]) || (m->v && m->i)) &&
 #else
            ((m->list != 0) || (m->v && m->i)) &&
 #endif
@@ -2637,7 +2674,9 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
 #else
     if (!m || !m->valid || m->icount < 3) return;
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    if (m->android_mesh) { pex_android_tv_static_mesh_draw(m->android_mesh); return; }
+    for (int group = 0; group < 3; ++group) {
+        if (m->android_mesh[group]) { pex_android_tv_static_mesh_draw(m->android_mesh[group]); return; }
+    }
 #endif
     if (m->list && flat_display_lists_supported()) { glCallList(m->list); return; }
     if (!m->v || !m->i) return;
@@ -7048,6 +7087,9 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
+
+    /* Layer 0: genuinely opaque, one-sided geometry. This is the dominant world
+       surface and must retain early depth rejection/back-face culling on GLES. */
     for (int y = y0; y <= y1 && !cancelled; y++) {
         for (int z = z0; z <= z1; z++) {
             if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
@@ -7055,9 +7097,8 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
                 if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) { has1 = 1; continue; }
-                if (id == BLOCK_GLASS || id == BLOCK_ICE) has_alpha_texture = 1;
-                if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
                 if (block_is_liquid(id)) { if (flat_separate_liquid_pass_enabled()) { has1 = 1; continue; } }
+                if (id == BLOCK_GLASS || id == BLOCK_ICE || id == BLOCK_SNOW_LAYER) { has_alpha_texture = 1; continue; }
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
                 if (block_uses_cross_plant_model(id)) { has_cutout = 1; continue; }
                 if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) { has_cutout = 1; continue; }
@@ -7072,20 +7113,11 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             }
         }
     }
-    if (!cancelled && has_special) {
-        for (int y = y0; y <= y1 && !cancelled; y++) {
-            for (int z = z0; z <= z1; z++) {
-                if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
-                for (int x = x0; x <= x1; x++) {
-                    int id = flat_get_block(x, y, z);
-                    if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) { draw_special_block_model(id, x, y, z); has0 = 1; }
-                }
-            }
-        }
-    }
-    if (!cancelled && has_cutout) {
-        glDisable(GL_BLEND);
-        glDepthMask(GL_TRUE);
+    mb0.opaque_icount_end = mb0.icount;
+
+    /* Layer 1: alpha-tested but still one-sided geometry. Glass, leaves, snow
+       and grass overlays need discard, but not double-sided rasterization. */
+    if (!cancelled && (has_alpha_texture || has_cutout)) {
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.5f);
         for (int y = y0; y <= y1 && !cancelled; y++) {
@@ -7094,7 +7126,13 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 for (int x = x0; x <= x1; x++) {
                     int id = flat_get_block(x, y, z);
                     if (!id) continue;
-                    if (block_uses_cross_plant_model(id)) { emit_cross_plant_block(id, x, y, z); if (stivufine_better_snow_cross_target(id)) emit_better_snow_overlay_if(x, y, z, 2.0f / 16.0f); has0 = 1; continue; }
+                    if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
+                    if (id == BLOCK_GLASS || id == BLOCK_ICE) {
+                        for (int face = 0; face < 6; face++) {
+                            if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
+                        }
+                        continue;
+                    }
                     if (id == BLOCK_LEAVES && flat_fancy_cutout_terrain_enabled()) {
                         for (int face = 0; face < 6; face++) {
                             if (flat_face_exposed_for_block(id, x, y, z, face)) { emit_world_block_face(id, x, y, z, face); has0 = 1; }
@@ -7110,9 +7148,36 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
         }
         glDisable(GL_ALPHA_TEST);
     }
-    /* Keep the visual result of the old all-alpha/two-sided terrain pass, but
-       record the minimum state each section actually needs. Most stone/ground
-       sections can now use early depth rejection and back-face culling. */
+    mb0.alpha_one_sided_icount_end = mb0.icount;
+
+    /* Layer 2: truly two-sided cutout/special models. Crossed plants and the
+       legacy special emitters stay visually identical without penalizing the
+       opaque stone/ground portion of the section. */
+    if (!cancelled && (has_special || has_cutout)) {
+        glEnable(GL_ALPHA_TEST);
+        glAlphaFunc(GL_GREATER, 0.5f);
+        for (int y = y0; y <= y1 && !cancelled; y++) {
+            for (int z = z0; z <= z1; z++) {
+                if (async_section_mesh_cancel_requested()) { cancelled = 1; break; }
+                for (int x = x0; x <= x1; x++) {
+                    int id = flat_get_block(x, y, z);
+                    if (!id) continue;
+                    if (block_uses_special_model(id) && id != BLOCK_PORTAL && id != BLOCK_END_PORTAL) {
+                        draw_special_block_model(id, x, y, z); has0 = 1; continue;
+                    }
+                    if (block_uses_cross_plant_model(id)) {
+                        emit_cross_plant_block(id, x, y, z);
+                        if (stivufine_better_snow_cross_target(id)) emit_better_snow_overlay_if(x, y, z, 2.0f / 16.0f);
+                        has0 = 1;
+                    }
+                }
+            }
+        }
+        glDisable(GL_ALPHA_TEST);
+    }
+
+    /* Non-Android backends still consume the combined builder, so retain the
+       conservative aggregate flags there. Android uses the real index ranges. */
     if (has_cutout || has_special || has_alpha_texture) mb0.uses_alpha_test = 1;
     if (has_cutout || has_special) mb0.two_sided = 1;
     glColor4f(1,1,1,1);
@@ -7413,11 +7478,15 @@ static int async_mesh_worker_gpu_prebuild_enabled(void) { return 0; }
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
 #define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 6
 #define ASYNC_SECTION_MESH_WORKER_COUNT 1
-#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-/* Cheap TV SoCs usually have four modest cores and shared CPU/GPU memory.
-   Large desktop queues retain many section snapshots/results and four workers
-   can starve the render thread. Keep enough work in flight to hide meshing
-   without occupying every core or hoarding tens of MiB. */
+#elif defined(PEX_PLATFORM_ANDROID_TV)
+/* TV boxes often expose four slow cores that share thermal and memory bandwidth
+   with the GPU. One low-priority mesher and short queues keep the renderer fed
+   without evicting terrain buffers or starving the GL thread. */
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 24
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 4
+#define ASYNC_SECTION_MESH_WORKER_COUNT 1
+#elif defined(PEX_PLATFORM_ANDROID)
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 48
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 8
 #define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 8
@@ -7732,11 +7801,11 @@ static void async_section_mesh_init(void) {
     g_async_section_mesh_stop = 0;
     g_async_section_mesh_worker_count = 0;
     int desired_workers = ASYNC_SECTION_MESH_WORKER_COUNT;
-#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    desired_workers = 1;
+#elif defined(PEX_PLATFORM_ANDROID)
     {
         int cpu_count = SDL_GetCPUCount();
-        /* Leave at least two logical cores for rendering, networking, audio, and
-           the OS compositor. Dual/quad-core TV boxes use one mesh worker. */
         desired_workers = (cpu_count >= 6) ? 2 : 1;
     }
 #endif
@@ -8965,28 +9034,32 @@ static int flat_android_section_mesh_visible(const FlatRenderSectionRef *ref, in
            flat_gl_cpu_mesh_drawable(sy, cz, cx, pass);
 }
 
+static int flat_android_mesh_has_gpu(const FlatGLCpuMesh *m) {
+    return m && (m->android_mesh[0] || m->android_mesh[1] || m->android_mesh[2]);
+}
+
 static void flat_android_draw_static_group(const FlatRenderSectionRef *refs, int count, int pass,
-                                           int alpha_test, int two_sided, int reverse) {
+                                           int group, int alpha_test, int two_sided, int reverse) {
     int found = 0;
     for (int n = 0; n < count; ++n) {
         int i = reverse ? (count - 1 - n) : n;
         if (!flat_android_section_mesh_visible(&refs[i], pass)) continue;
         FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[refs[i].sy][refs[i].cz][refs[i].cx][pass];
-        if (m->android_mesh && m->alpha_test == alpha_test && m->two_sided == two_sided) {
-            found = 1;
-            break;
-        }
+        if (group >= 0 && group < 3 && m->android_mesh[group]) { found = 1; break; }
     }
     if (!found) return;
 
-    pex_android_tv_static_mesh_begin(tex_terrain.id, alpha_test, pass == 1, !two_sided);
+    float sun = flat_light_sun_brightness(1.0f);
+    float gamma = g_opts.sf_gamma;
+    float light_base = flat_light_table_base();
+    pex_android_tv_static_mesh_begin(tex_terrain.id, alpha_test, pass == 1, !two_sided,
+                                     sun, gamma, light_base);
     for (int n = 0; n < count; ++n) {
         int i = reverse ? (count - 1 - n) : n;
         if (!flat_android_section_mesh_visible(&refs[i], pass)) continue;
         FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[refs[i].sy][refs[i].cz][refs[i].cx][pass];
-        if (m->android_mesh && m->alpha_test == alpha_test && m->two_sided == two_sided) {
-            pex_android_tv_static_mesh_draw(m->android_mesh);
-        }
+        if (group >= 0 && group < 3 && m->android_mesh[group])
+            pex_android_tv_static_mesh_draw(m->android_mesh[group]);
     }
     pex_android_tv_static_mesh_end();
 }
@@ -8999,7 +9072,7 @@ static void flat_android_draw_cpu_fallbacks(const FlatRenderSectionRef *refs, in
         int i = reverse ? (count - 1 - n) : n;
         if (!flat_android_section_mesh_visible(&refs[i], pass)) continue;
         FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[refs[i].sy][refs[i].cz][refs[i].cx][pass];
-        if (!m->android_mesh) flat_gl_draw_cpu_mesh(m);
+        if (!flat_android_mesh_has_gpu(m)) flat_gl_draw_cpu_mesh(m);
     }
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -9009,11 +9082,10 @@ static void flat_android_draw_cpu_fallbacks(const FlatRenderSectionRef *refs, in
 
 static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    /* GLES terrain is resident in static VBO/IBO batches. Keep four coarse
-       groups so opaque sections avoid fragment discard and one-sided block
+    /* GLES terrain is resident in static VBO/IBO batches. Keep three real
+       layers so opaque geometry avoids fragment discard and one-sided block
        meshes can use back-face culling. This retains the same geometry and
        textures; it only removes work that cannot affect the image. */
-    flat_android_update_lightmap_texture();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glDisable(GL_BLEND);
@@ -9022,10 +9094,9 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
     glDepthMask(GL_TRUE);
     glAlphaFunc(GL_GREATER, 0.5f);
 
-    flat_android_draw_static_group(refs, count, 0, 0, 0, 0);
-    flat_android_draw_static_group(refs, count, 0, 0, 1, 0);
-    flat_android_draw_static_group(refs, count, 0, 1, 0, 0);
-    flat_android_draw_static_group(refs, count, 0, 1, 1, 0);
+    flat_android_draw_static_group(refs, count, 0, 0, 0, 0, 0); /* opaque, culled */
+    flat_android_draw_static_group(refs, count, 0, 1, 1, 0, 0); /* cutout, culled */
+    flat_android_draw_static_group(refs, count, 0, 2, 1, 1, 0); /* cutout, two-sided */
 
     /* Allocation failure fallback. It is normally empty after installation. */
     glDisable(GL_CULL_FACE);
@@ -9077,7 +9148,6 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
 static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, int count) {
     if (!flat_separate_liquid_pass_enabled()) return;
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    flat_android_update_lightmap_texture();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     glDisable(GL_ALPHA_TEST);
@@ -9090,8 +9160,7 @@ static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, i
 
     /* Liquid/portal geometry remains two-sided and is kept in back-to-front
        section order exactly as before. */
-    flat_android_draw_static_group(refs, count, 1, 0, 1, 1);
-    flat_android_draw_static_group(refs, count, 1, 1, 1, 1);
+    flat_android_draw_static_group(refs, count, 1, 2, 0, 1, 1);
     flat_android_draw_cpu_fallbacks(refs, count, 1, 1);
 
     glDepthMask(GL_TRUE);

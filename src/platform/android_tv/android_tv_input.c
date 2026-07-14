@@ -96,6 +96,7 @@ static void pex_android_tv_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD
     pex_gamepad_copy_edges(p, &oldpads[slot]);
     p->connected = 1;
     p->slot = slot;
+    p->is_tv_remote = 1;
     snprintf(p->name, sizeof(p->name), "Android TV remote");
     snprintf(p->kind, sizeof(p->kind), "TV remote");
 
@@ -103,6 +104,13 @@ static void pex_android_tv_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD
     p->dpad_down = pex_android_tv_key_down(PEX_ATV_DPAD_DOWN);
     p->dpad_left = pex_android_tv_key_down(PEX_ATV_DPAD_LEFT);
     p->dpad_right = pex_android_tv_key_down(PEX_ATV_DPAD_RIGHT);
+
+    /* A television remote is not an XInput controller. Its directional pad is
+       the only practical gameplay movement input, so expose it as the left
+       stick while retaining D-pad bits for menu navigation. The controller-only
+       chat/F5/fly shortcuts explicitly ignore this synthetic device. */
+    p->lx = p->dpad_left ? -1.0f : (p->dpad_right ? 1.0f : 0.0f);
+    p->ly = p->dpad_up ? -1.0f : (p->dpad_down ? 1.0f : 0.0f);
 
     /* Match the existing Xbox/SDL gamepad abstraction:
        A=OK/jump/select, B=blue/back/sneak, Y=yellow/inventory,

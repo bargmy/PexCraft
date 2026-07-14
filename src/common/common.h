@@ -745,6 +745,7 @@ typedef struct PexGamepadState {
     char kind[48];
     int is_xbox;
     int is_dualshock;
+    int is_tv_remote; /* synthetic Android TV remote, never XInput gameplay D-pad */
     float lx, ly, rx, ry, lt, rt;
     int a, b, x, y;
     int lb, rb, back, start, guide;

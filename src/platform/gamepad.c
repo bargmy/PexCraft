@@ -126,6 +126,7 @@ static void pex_tv_remote_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD_
     pex_gamepad_copy_edges(p, &oldpads[slot]);
     p->connected = 1;
     p->slot = slot;
+    p->is_tv_remote = 1;
 #if defined(PEX_PLATFORM_LGWEBOS)
     snprintf(p->name, sizeof(p->name), "LG webOS remote");
 #elif defined(PEX_PLATFORM_XBOX_UWP)
@@ -139,6 +140,11 @@ static void pex_tv_remote_append_remote_pad(PexGamepadState oldpads[PEX_GAMEPAD_
     p->dpad_down = pex_tv_remote_action_down(PEX_TV_REMOTE_DOWN);
     p->dpad_left = pex_tv_remote_action_down(PEX_TV_REMOTE_LEFT);
     p->dpad_right = pex_tv_remote_action_down(PEX_TV_REMOTE_RIGHT);
+    /* Remote arrows are gameplay movement, never the Xbox-only chat/F5/fly
+       shortcuts. Keep D-pad bits for menu focus and mirror them to the virtual
+       left stick only while the game is in-world. */
+    p->lx = p->dpad_left ? -1.0f : (p->dpad_right ? 1.0f : 0.0f);
+    p->ly = p->dpad_up ? -1.0f : (p->dpad_down ? 1.0f : 0.0f);
     p->a = pex_tv_remote_action_down(PEX_TV_REMOTE_OK);
     p->back = pex_tv_remote_action_down(PEX_TV_REMOTE_BACK);
     p->rt = pex_tv_remote_action_down(PEX_TV_REMOTE_BREAK) ? 1.0f : 0.0f;
@@ -722,8 +728,11 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->lx < -PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
     if (p->lx >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
     if (p->b && !p->prev_b) g_gamepad_sneak_toggled = !g_gamepad_sneak_toggled;
-    if (p->a || (g_creative_flying && p->dpad_up)) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1; /* jump/fly up */
-    if (g_gamepad_sneak_toggled || p->ls || (g_creative_flying && p->dpad_down))
+    /* Legacy-console D-pad shortcuts belong only to a real Xbox/XInput pad.
+       Android TV remotes and generic keyboard/navigation sources may use arrow
+       directions for movement, but must never trigger fly/chat/F5 actions. */
+    if (p->a || (p->is_xbox && g_creative_flying && p->dpad_up)) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1; /* jump/fly up */
+    if (g_gamepad_sneak_toggled || p->ls || (p->is_xbox && g_creative_flying && p->dpad_down))
         g_gamepad_vk_state[g_opts.keys[5] & 511] = 1; /* B toggle, LS hold, or fly down */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;         /* break/attack */
@@ -1265,13 +1274,13 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
        pex_gamepad_rebuild_virtual_keys above), Left opens chat, and Right
        cycles the third-person camera exactly like F5.  It never walks or
        changes hotbar slots. */
-    if (p->dpad_left && !p->prev_dpad_left) {
+    if (p->is_xbox && p->dpad_left && !p->prev_dpad_left) {
         g_chat_input[0] = 0;
         g_suppress_next_chat_char = 0;
         set_screen(SCREEN_CHAT);
         return;
     }
-    if (p->dpad_right && !p->prev_dpad_right) third_person_view_cycle();
+    if (p->is_xbox && p->dpad_right && !p->prev_dpad_right) third_person_view_cycle();
     if (p->y && !p->prev_y) {
         set_screen(player_is_creative() ? SCREEN_CREATIVE : SCREEN_INVENTORY);
         return;
