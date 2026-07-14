@@ -1,5 +1,19 @@
 /* Split from original monolithic main.c. Included by src/main.c unity build. */
 
+static int pex_render_distance_max_option(void) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* The Android 20x20 active chunk ring needs a hidden neighbor ring for
+       meshing, lighting and collision. Seven visible chunks leaves room for
+       that safety data on both sides; larger values are not representable
+       without exposing edge slots as if they were complete terrain. */
+    int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 3;
+    if (max_chunks < 2) max_chunks = 2;
+    return max_chunks;
+#else
+    return 32;
+#endif
+}
+
 static char *trim(char *s) {
     while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
     char *e = s + strlen(s);
@@ -16,7 +30,11 @@ static void set_default_options(void) {
     g_opts.sound = 1.0f;
     g_opts.sensitivity = 0.5f;
     g_opts.invert_mouse = 0;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    g_opts.render_distance = pex_render_distance_max_option();
+#else
     g_opts.render_distance = 8;
+#endif
     g_opts.gui_scale = 0; /* Auto, matching GameSettings.guiScale */
     g_opts.view_bobbing = 1;
     g_opts.anaglyph = 0; /* V-Sync */
@@ -656,8 +674,9 @@ static float get_stivufine_option_float(StivuFineOptionId opt) {
     if (opt == SF_RENDER_DISTANCE_FINE) {
         int c = g_opts.render_distance;
         if (c < 2) c = 2;
-        if (c > 32) c = 32;
-        return (float)(c - 2) / 30.0f;
+        int max_c = pex_render_distance_max_option();
+        if (c > max_c) c = max_c;
+        return max_c > 2 ? (float)(c - 2) / (float)(max_c - 2) : 0.0f;
     }
     if (opt == SF_AO_LEVEL) return g_opts.sf_ao_level;
     if (opt == SF_GAMMA) return g_opts.sf_gamma;
@@ -1002,7 +1021,10 @@ static void load_options(void) {
     { int af = g_opts.sf_af_level; if (!(af==1||af==2||af==4||af==8||af==16)) g_opts.sf_af_level = 1; }
     if (g_opts.gui_scale < 0 || g_opts.gui_scale > 3) g_opts.gui_scale = 0;
     if (g_opts.render_distance < 2) g_opts.render_distance = 8;
-    if (g_opts.render_distance > 32) g_opts.render_distance = 32;
+    {
+        int max_c = pex_render_distance_max_option();
+        if (g_opts.render_distance > max_c) g_opts.render_distance = max_c;
+    }
     if (g_opts.max_fps < 0) g_opts.max_fps = 0;
     if (g_opts.max_fps > MAX_FPS_CAP) g_opts.max_fps = MAX_FPS_CAP;
     if (g_opts.fov <= 1.0f) g_opts.fov = 70.0f + g_opts.fov * 40.0f;
@@ -1113,8 +1135,9 @@ static float get_option_float(OptionId opt) {
     if (opt == OPT_RENDER_DISTANCE) {
         int c = g_opts.render_distance;
         if (c < 2) c = 2;
-        if (c > 32) c = 32;
-        return (float)(c - 2) / 30.0f;
+        int max_c = pex_render_distance_max_option();
+        if (c > max_c) c = max_c;
+        return max_c > 2 ? (float)(c - 2) / (float)(max_c - 2) : 0.0f;
     }
     if (opt == OPT_RENDER_RESOLUTION) {
         int pct = g_opts.render_scale_percent;
@@ -1149,7 +1172,11 @@ static void set_option_float(OptionId opt, float v) {
     if (opt == OPT_MUSIC) g_opts.music = v;
     else if (opt == OPT_SOUND) g_opts.sound = v;
     else if (opt == OPT_SENSITIVITY) g_opts.sensitivity = v;
-    else if (opt == OPT_RENDER_DISTANCE) g_opts.render_distance = 2 + (int)(v * 30.0f + 0.5f);
+    else if (opt == OPT_RENDER_DISTANCE) {
+        int max_c = pex_render_distance_max_option();
+        g_opts.render_distance = 2 + (int)(v * (float)(max_c - 2) + 0.5f);
+        if (g_opts.render_distance > max_c) g_opts.render_distance = max_c;
+    }
     else if (opt == OPT_FOV) g_opts.fov = 70.0f + v * 40.0f;
     else if (opt == OPT_RENDER_RESOLUTION) {
         int step = (int)(v * 9.0f + 0.5f);
@@ -1178,7 +1205,8 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
         if (opt == OPT_RENDER_DISTANCE) {
             int c = g_opts.render_distance;
             if (c < 2) c = 2;
-            if (c > 32) c = 32;
+            int max_c = pex_render_distance_max_option();
+            if (c > max_c) c = max_c;
             snprintf(out, cap, "%s: %d chunks", name, c);
         } else if (opt == OPT_SENSITIVITY) {
             if (v <= 0.0f) snprintf(out, cap, "%s: *yawn*", name);
@@ -1229,7 +1257,12 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
 
 static void bump_option(OptionId opt, int delta) {
     if (opt == OPT_INVERT_MOUSE) g_opts.invert_mouse = !g_opts.invert_mouse;
-    else if (opt == OPT_RENDER_DISTANCE) { g_opts.render_distance += delta; if (g_opts.render_distance < 2) g_opts.render_distance = 2; if (g_opts.render_distance > 32) g_opts.render_distance = 32; }
+    else if (opt == OPT_RENDER_DISTANCE) {
+        int max_c = pex_render_distance_max_option();
+        g_opts.render_distance += delta;
+        if (g_opts.render_distance < 2) g_opts.render_distance = 2;
+        if (g_opts.render_distance > max_c) g_opts.render_distance = max_c;
+    }
     else if (opt == OPT_VIEW_BOBBING) g_opts.view_bobbing = !g_opts.view_bobbing;
     else if (opt == OPT_ANAGLYPH) { g_opts.anaglyph = !g_opts.anaglyph; apply_vsync_setting(); }
     else if (opt == OPT_DIFFICULTY) g_opts.difficulty = (g_opts.difficulty + delta) & 3;

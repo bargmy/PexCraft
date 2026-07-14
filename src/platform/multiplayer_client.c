@@ -1601,7 +1601,7 @@ static void net_request_chunks_around_player(int force) {
     int cz = pex_net_floor_chunk_coord(g_player_z);
     int radius = 0;
     if (g_mp_world_ready) {
-        radius = stream_render_radius();
+        radius = stream_load_radius();
         if (radius < 1) radius = 1;
         if (radius > 8) radius = 8;
     }

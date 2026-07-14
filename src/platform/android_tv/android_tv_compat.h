@@ -309,11 +309,16 @@ typedef struct WIN32_FIND_DATAA {
 } WIN32_FIND_DATAA;
 
 typedef enum PexHandleKind { PEX_HANDLE_NONE, PEX_HANDLE_DIR, PEX_HANDLE_THREAD, PEX_HANDLE_EVENT } PexHandleKind;
+typedef struct PexThreadCompletion {
+    volatile int finished;
+    volatile int refs;
+} PexThreadCompletion;
 typedef struct PexHandle {
     PexHandleKind kind;
     DIR *dir;
     char dir_path[4096];
     pthread_t thread;
+    PexThreadCompletion *thread_completion;
     int thread_joined;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -362,17 +367,34 @@ static inline void EnterCriticalSection(CRITICAL_SECTION *cs) { pthread_mutex_lo
 static inline void LeaveCriticalSection(CRITICAL_SECTION *cs) { pthread_mutex_unlock(cs); }
 
 typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
-typedef struct PexThreadStart { LPTHREAD_START_ROUTINE fn; LPVOID arg; } PexThreadStart;
+typedef struct PexThreadStart { LPTHREAD_START_ROUTINE fn; LPVOID arg; PexThreadCompletion *completion; } PexThreadStart;
+static inline void pex_thread_completion_release(PexThreadCompletion *completion) {
+    if (completion && __sync_sub_and_fetch(&completion->refs, 1) == 0) free(completion);
+}
 static inline void *pex_thread_trampoline(void *p) {
     PexThreadStart *ts = (PexThreadStart*)p;
-    LPTHREAD_START_ROUTINE fn = ts->fn; LPVOID arg = ts->arg; free(ts);
-    return (void*)(uintptr_t)fn(arg);
+    LPTHREAD_START_ROUTINE fn = ts->fn;
+    LPVOID arg = ts->arg;
+    PexThreadCompletion *completion = ts->completion;
+    free(ts);
+    DWORD result = fn(arg);
+    /* Android lacks a portable pthread_tryjoin_np.  Keep completion in a small
+       ref-counted object so zero-time Win32-style polling can observe exit even
+       when a caller has already closed/detached the thread handle. */
+    __sync_lock_test_and_set(&completion->finished, 1);
+    pex_thread_completion_release(completion);
+    return (void*)(uintptr_t)result;
 }
 static inline HANDLE CreateThread(void *sa, size_t stack, LPTHREAD_START_ROUTINE fn, LPVOID arg, DWORD flags, DWORD *tid) {
     (void)sa; (void)flags; if (tid) *tid = 0;
     HANDLE h = (HANDLE)calloc(1, sizeof(*h)); if (!h) return NULL;
-    PexThreadStart *ts = (PexThreadStart*)malloc(sizeof(*ts)); if (!ts) { free(h); return NULL; }
-    ts->fn = fn; ts->arg = arg; h->kind = PEX_HANDLE_THREAD;
+    PexThreadCompletion *completion = (PexThreadCompletion*)calloc(1, sizeof(*completion));
+    if (!completion) { free(h); return NULL; }
+    PexThreadStart *ts = (PexThreadStart*)malloc(sizeof(*ts));
+    if (!ts) { free(completion); free(h); return NULL; }
+    completion->refs = 2; /* one reference for the handle, one for the pthread */
+    ts->fn = fn; ts->arg = arg; ts->completion = completion;
+    h->kind = PEX_HANDLE_THREAD; h->thread_completion = completion;
     pthread_attr_t attr; pthread_attr_t *attrp = NULL;
     if (stack > 0 && pthread_attr_init(&attr) == 0) {
         size_t min_stack = stack < 262144u ? 262144u : stack;
@@ -380,7 +402,7 @@ static inline HANDLE CreateThread(void *sa, size_t stack, LPTHREAD_START_ROUTINE
     }
     int pr = pthread_create(&h->thread, attrp, pex_thread_trampoline, ts);
     if (attrp) pthread_attr_destroy(attrp);
-    if (pr != 0) { free(ts); free(h); return NULL; }
+    if (pr != 0) { free(ts); free(completion); free(h); return NULL; }
     return h;
 }
 static inline HANDLE CreateEventA(void *sa, BOOL manual_reset, BOOL initial_state, const char *name) {
@@ -395,8 +417,23 @@ static inline BOOL SetEvent(HANDLE h) {
 static inline DWORD WaitForSingleObject(HANDLE h, DWORD ms) {
     if (!h || h == INVALID_HANDLE_VALUE) return WAIT_TIMEOUT;
     if (h->kind == PEX_HANDLE_THREAD) {
-        if (ms == 0) return h->thread_joined ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
-        if (!h->thread_joined) { pthread_join(h->thread, NULL); h->thread_joined = 1; }
+        if (h->thread_joined) return WAIT_OBJECT_0;
+        if (ms == 0) {
+            if (!h->thread_completion || !__sync_val_compare_and_swap(&h->thread_completion->finished, 0, 0)) return WAIT_TIMEOUT;
+        } else if (ms == INFINITE) {
+            if (pthread_join(h->thread, NULL) != 0) return WAIT_TIMEOUT;
+            h->thread_joined = 1;
+            return WAIT_OBJECT_0;
+        } else {
+            DWORD waited = 0;
+            while (!h->thread_completion || !__sync_val_compare_and_swap(&h->thread_completion->finished, 0, 0)) {
+                if (waited >= ms) return WAIT_TIMEOUT;
+                SDL_Delay(1);
+                waited++;
+            }
+        }
+        if (pthread_join(h->thread, NULL) != 0) return WAIT_TIMEOUT;
+        h->thread_joined = 1;
         return WAIT_OBJECT_0;
     }
     if (h->kind == PEX_HANDLE_EVENT) {
@@ -411,8 +448,11 @@ static inline DWORD WaitForSingleObject(HANDLE h, DWORD ms) {
 static inline BOOL CloseHandle(HANDLE h) {
     if (!h || h == INVALID_HANDLE_VALUE) return FALSE;
     if (h->kind == PEX_HANDLE_DIR && h->dir) closedir(h->dir);
-    else if (h->kind == PEX_HANDLE_THREAD && !h->thread_joined) { pthread_detach(h->thread); }
-    else if (h->kind == PEX_HANDLE_EVENT) { pthread_cond_destroy(&h->cond); pthread_mutex_destroy(&h->mutex); }
+    else if (h->kind == PEX_HANDLE_THREAD) {
+        if (!h->thread_joined) pthread_detach(h->thread);
+        pex_thread_completion_release(h->thread_completion);
+        h->thread_completion = NULL;
+    } else if (h->kind == PEX_HANDLE_EVENT) { pthread_cond_destroy(&h->cond); pthread_mutex_destroy(&h->mutex); }
     free(h); return TRUE;
 }
 static inline BOOL FindClose(HANDLE h) { return CloseHandle(h); }

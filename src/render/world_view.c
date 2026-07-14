@@ -624,7 +624,11 @@ static int generated_render_radius(void) {
     /* The active world window must contain player +/- render radius plus a small
        safety ring for chunk/section edge rebuilds.  Values above this cap would
        only show outside the generated in-memory terrain window. */
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 3;
+#else
     int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 2;
+#endif
     if (max_chunks < 2) max_chunks = 2;
     if (chunks > max_chunks) chunks = max_chunks;
     return chunks;
@@ -1608,6 +1612,8 @@ static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m);
 #endif
 
 static FlatGLCpuMesh g_flat_section_gl_cpu_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
+/* Avoid a >1 MiB render-thread stack frame during world-window remaps. */
+static FlatGLCpuMesh g_flat_section_gl_cpu_mesh_remap_scratch[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
 static int g_flat_gl_cpu_mesh_origin_x = 0x7fffffff;
 static int g_flat_gl_cpu_mesh_origin_z = 0x7fffffff;
 
@@ -2362,8 +2368,9 @@ static void flat_cpu_mesh_remap_shift(int old_origin_x, int old_origin_z,
     if (old_origin_x == new_origin_x && old_origin_z == new_origin_z) return;
     if (flat_direct_backend()) return;
 
-    FlatGLCpuMesh old_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
-    memcpy(old_mesh, g_flat_section_gl_cpu_mesh, sizeof(old_mesh));
+    FlatGLCpuMesh (*old_mesh)[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2] =
+        g_flat_section_gl_cpu_mesh_remap_scratch;
+    memcpy(old_mesh, g_flat_section_gl_cpu_mesh, sizeof(g_flat_section_gl_cpu_mesh));
     memset(g_flat_section_gl_cpu_mesh, 0, sizeof(g_flat_section_gl_cpu_mesh));
 
     int old_base_cx = floor_div16(old_origin_x);
@@ -2439,22 +2446,142 @@ static void flat_gl_cpu_mesh_check_origin(void) {
     }
 }
 
-static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirectMeshBuilder *b, int skip, unsigned int version, int origin_x, int origin_z) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static size_t flat_android_mesh_gpu_bytes(const FlatGLCpuMesh *m) {
+    size_t total = 0;
+    if (!m) return 0;
+    for (int group = 0; group < 3; ++group) total += pex_android_tv_static_mesh_bytes(m->android_mesh[group]);
+    return total;
+}
+
+static int flat_android_mesh_gpu_batches(const FlatGLCpuMesh *m) {
+    int total = 0;
+    if (!m) return 0;
+    for (int group = 0; group < 3; ++group) total += pex_android_tv_static_mesh_batches(m->android_mesh[group]);
+    return total;
+}
+
+static size_t flat_android_builder_gpu_estimate(const FlatDirectMeshBuilder *b) {
+    if (!b) return 0;
+    size_t vb = (size_t)b->vcount * sizeof(PexVertex);
+    size_t ib = (size_t)b->icount * sizeof(GLushort);
+    return vb > SIZE_MAX - ib ? SIZE_MAX : vb + ib;
+}
+
+static int flat_android_builder_batch_estimate(const FlatDirectMeshBuilder *b, int pass) {
+    if (!b || b->icount < 3) return 0;
+    uint32_t ranges[3] = {0, 0, 0};
+    int range_count = 0;
+    if (pass == 0) {
+        uint32_t opaque_end = b->opaque_icount_end > b->icount ? b->icount : b->opaque_icount_end;
+        uint32_t alpha_end = b->alpha_one_sided_icount_end;
+        if (alpha_end < opaque_end) alpha_end = opaque_end;
+        if (alpha_end > b->icount) alpha_end = b->icount;
+        if (opaque_end) ranges[range_count++] = opaque_end;
+        if (alpha_end > opaque_end) ranges[range_count++] = alpha_end - opaque_end;
+        if (b->icount > alpha_end) ranges[range_count++] = b->icount - alpha_end;
+    } else {
+        ranges[range_count++] = b->icount;
+    }
+    int batches = 0;
+    for (int i = 0; i < range_count; ++i) batches += (int)((ranges[i] + 65531u) / 65532u);
+    /* Index-span splits can add batches even when triangle count is low. */
+    int vertex_batches = (int)((b->vcount + 65534u) / 65535u);
+    if (batches < vertex_batches) batches = vertex_batches;
+    return batches > 0 ? batches : 1;
+}
+
+static void flat_android_evict_section_meshes(int sy, int cz, int cx) {
+    for (int pass = 0; pass < 2; ++pass) {
+        FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
+        if (flat_android_mesh_gpu_bytes(m) || flat_android_mesh_gpu_batches(m)) flat_gl_cpu_mesh_free(m);
+    }
+    g_flat_section_valid[sy][cz][cx] = 0;
+    g_flat_section_dirty[sy][cz][cx] = 1;
+    g_flat_section_mesh_building[sy][cz][cx] = 0;
+    g_flat_section_building_mesh_version[sy][cz][cx] = 0;
+    g_flat_section_building_light_version[sy][cz][cx] = 0;
+}
+
+/* Make room before asking a vendor GLES driver to allocate.  Some Xiaomi-era
+   drivers abort the process on overcommit instead of returning a recoverable
+   GL_OUT_OF_MEMORY, so never let resident terrain approach an unbounded count. */
+static int flat_android_reserve_gpu_mesh(size_t need_bytes, int need_batches,
+                                         int protect_sy, int protect_cz, int protect_cx) {
+    size_t budget = pex_android_tv_static_mesh_budget();
+    int batch_limit = pex_android_tv_static_mesh_batch_limit();
+    if (need_bytes > budget || need_batches > batch_limit) return 0;
+
+    int player_cx = floor_div16((int)floorf(g_player_x)) - floor_div16(g_flat_world_origin_x);
+    int player_cz = floor_div16((int)floorf(g_player_z)) - floor_div16(g_flat_world_origin_z);
+    int guard = FLAT_RENDER_SECTIONS_Y * FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS + 1;
+    while ((pex_android_tv_static_mesh_bytes_used() > budget - need_bytes ||
+            pex_android_tv_static_mesh_batches_used() > batch_limit - need_batches) && guard-- > 0) {
+        int best_sy = -1, best_cz = -1, best_cx = -1;
+        long long best_score = -1;
+        for (int sy = 0; sy < FLAT_RENDER_SECTIONS_Y; ++sy) {
+            for (int cz = 0; cz < FLAT_RENDER_CHUNKS; ++cz) {
+                for (int cx = 0; cx < FLAT_RENDER_CHUNKS; ++cx) {
+                    if (sy == protect_sy && cz == protect_cz && cx == protect_cx) continue;
+                    FlatGLCpuMesh *m0 = &g_flat_section_gl_cpu_mesh[sy][cz][cx][0];
+                    FlatGLCpuMesh *m1 = &g_flat_section_gl_cpu_mesh[sy][cz][cx][1];
+                    if (!flat_android_mesh_gpu_bytes(m0) && !flat_android_mesh_gpu_bytes(m1)) continue;
+                    long long dx = (long long)cx - player_cx;
+                    long long dz = (long long)cz - player_cz;
+                    long long dy = (long long)sy - (long long)((g_player_y - FLAT_WORLD_Y_MIN) / 16.0f);
+                    long long score = dx * dx * 16 + dz * dz * 16 + dy * dy;
+                    int radius = generated_render_radius() + 1;
+                    if (llabs(dx) > radius || llabs(dz) > radius) score += (1LL << 40);
+                    if (score > best_score) { best_score = score; best_sy = sy; best_cz = cz; best_cx = cx; }
+                }
+            }
+        }
+        if (best_sy < 0) break;
+        flat_android_evict_section_meshes(best_sy, best_cz, best_cx);
+    }
+    return pex_android_tv_static_mesh_bytes_used() <= budget - need_bytes &&
+           pex_android_tv_static_mesh_batches_used() <= batch_limit - need_batches;
+}
+#endif
+
+static int flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirectMeshBuilder *b, int skip, unsigned int version, int origin_x, int origin_z) {
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
     if (g_loggy_enabled && !skip && b) {
         g_loggy_mesh_installs++;
         g_loggy_mesh_install_vertices += (int)b->vcount;
         g_loggy_mesh_install_indices += (int)b->icount;
     }
-    flat_gl_cpu_mesh_free(m);
-    if (skip || !b || b->vcount == 0 || b->icount == 0) return;
+    if (skip || !b || b->vcount == 0 || b->icount == 0) {
+        flat_gl_cpu_mesh_free(m);
+        if (b) { free(b->v); free(b->i); memset(b, 0, sizeof(*b)); }
+        return 1;
+    }
 
-    m->alpha_test = b->uses_alpha_test ? 1 : 0;
-    m->two_sided = b->two_sided ? 1 : 0;
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    /* Upload true terrain layers. A single plant must not force every stone face
-       in the section through alpha discard or disable culling. Pass 1 remains a
-       single two-sided translucent mesh. */
+    /* Upload transactionally.  Do not throw away a valid old section until all
+       new layer buffers have been accepted by GLES. */
+    FlatGLCpuMesh next;
+    memset(&next, 0, sizeof(next));
+    next.alpha_test = b->uses_alpha_test ? 1 : 0;
+    next.two_sided = b->two_sided ? 1 : 0;
+    next.vcount = b->vcount;
+    next.icount = b->icount;
+    next.version = version;
+    next.origin_x = origin_x;
+    next.origin_z = origin_z;
+
+    size_t need_bytes = flat_android_builder_gpu_estimate(b);
+    int need_batches = flat_android_builder_batch_estimate(b, pass);
+    if (!flat_android_reserve_gpu_mesh(need_bytes, need_batches, sy, cz, cx)) {
+        /* The mesh being replaced is reclaimable.  Release it only if the rest
+           of the cache could not make enough room, then try the reservation once. */
+        if (flat_android_mesh_gpu_bytes(m) || flat_android_mesh_gpu_batches(m)) flat_gl_cpu_mesh_free(m);
+        if (!flat_android_reserve_gpu_mesh(need_bytes, need_batches, sy, cz, cx)) {
+            free(b->v); free(b->i); memset(b, 0, sizeof(*b));
+            return 0;
+        }
+    }
+
     int gpu_ok = 1;
     if (pass == 0) {
         uint32_t opaque_end = b->opaque_icount_end;
@@ -2463,39 +2590,41 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
         if (alpha_one_end < opaque_end) alpha_one_end = opaque_end;
         if (alpha_one_end > b->icount) alpha_one_end = b->icount;
         if (opaque_end > 0) {
-            m->android_mesh[0] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, 0, opaque_end);
-            if (!m->android_mesh[0]) gpu_ok = 0;
+            next.android_mesh[0] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, 0, opaque_end);
+            if (!next.android_mesh[0]) gpu_ok = 0;
         }
-        if (alpha_one_end > opaque_end) {
-            m->android_mesh[1] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, opaque_end, alpha_one_end - opaque_end);
-            if (!m->android_mesh[1]) gpu_ok = 0;
+        if (gpu_ok && alpha_one_end > opaque_end) {
+            next.android_mesh[1] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, opaque_end, alpha_one_end - opaque_end);
+            if (!next.android_mesh[1]) gpu_ok = 0;
         }
-        if (b->icount > alpha_one_end) {
-            m->android_mesh[2] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, alpha_one_end, b->icount - alpha_one_end);
-            if (!m->android_mesh[2]) gpu_ok = 0;
+        if (gpu_ok && b->icount > alpha_one_end) {
+            next.android_mesh[2] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, alpha_one_end, b->icount - alpha_one_end);
+            if (!next.android_mesh[2]) gpu_ok = 0;
         }
     } else {
-        m->android_mesh[2] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, 0, b->icount);
-        if (!m->android_mesh[2]) gpu_ok = 0;
+        next.android_mesh[2] = pex_android_tv_static_mesh_create_range(b->v, b->vcount, b->i, 0, b->icount);
+        if (!next.android_mesh[2]) gpu_ok = 0;
     }
-    if (gpu_ok) {
-        free(b->v);
-        free(b->i);
-        m->v = NULL;
-        m->i = NULL;
-    } else {
-        /* A partially uploaded section would silently lose one terrain layer.
-           Destroy partial GPU state and retain the complete CPU mesh instead. */
-        for (int group = 0; group < 3; ++group) {
-            if (m->android_mesh[group]) {
-                pex_android_tv_static_mesh_destroy(m->android_mesh[group]);
-                m->android_mesh[group] = NULL;
-            }
-        }
-        m->v = b->v;
-        m->i = b->i;
+
+    if (!gpu_ok) {
+        flat_gl_cpu_mesh_free(&next);
+        free(b->v); free(b->i); memset(b, 0, sizeof(*b));
+        /* Keep the old valid mesh when possible; caller leaves this section dirty
+           and retries after the eviction/upload cooldown instead of crashing. */
+        return 0;
     }
+
+    flat_gl_cpu_mesh_free(m);
+    *m = next;
+    m->valid = 1;
+    free(b->v);
+    free(b->i);
+    memset(b, 0, sizeof(*b));
+    return 1;
 #else
+    flat_gl_cpu_mesh_free(m);
+    m->alpha_test = b->uses_alpha_test ? 1 : 0;
+    m->two_sided = b->two_sided ? 1 : 0;
     m->list = gl_compile_flat_mesh_list(b);
     if (m->list) {
         free(b->v);
@@ -2506,7 +2635,6 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
         m->v = b->v;
         m->i = b->i;
     }
-#endif
     m->vcount = b->vcount;
     m->icount = b->icount;
     m->version = version;
@@ -2514,11 +2642,11 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
     m->origin_z = origin_z;
     m->valid = 1;
 #if defined(PEX_PLATFORM_LINUX_SDL2)
-    /* Install GPU buffers while processing the bounded mesh-result queue, not
-       on the first draw after a camera turn. */
     flat_gl_cpu_mesh_upload_vbo(m);
 #endif
     memset(b, 0, sizeof(*b));
+    return 1;
+#endif
 }
 
 static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
@@ -7519,10 +7647,13 @@ static int async_mesh_worker_gpu_prebuild_enabled(void) { return 0; }
 #define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 2
 #define ASYNC_SECTION_MESH_WORKER_COUNT 1
 #elif defined(PEX_PLATFORM_ANDROID)
-#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 12
-#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
-#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 4
-#define ASYNC_SECTION_MESH_WORKER_COUNT 2
+/* Regular phones share the same native heap/GPU memory pressure as TV boxes.
+   One mesher avoids two simultaneous large section allocations on vendor
+   drivers/devices with tighter per-process native limits. */
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 6
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 2
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 2
+#define ASYNC_SECTION_MESH_WORKER_COUNT 1
 #else
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 192
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 32
@@ -8105,8 +8236,9 @@ static void async_section_mesh_install_ready(int max_uploads) {
                 flat_direct_upload_builder(r.sy, install_cz, install_cx, 0, &r.mb0);
                 flat_direct_upload_builder(r.sy, install_cz, install_cx, 1, &r.mb1);
             } else {
-                flat_gl_cpu_mesh_install(r.sy, install_cz, install_cx, 0, &r.mb0, r.skip0, r.version, g_flat_world_origin_x, g_flat_world_origin_z);
-                flat_gl_cpu_mesh_install(r.sy, install_cz, install_cx, 1, &r.mb1, r.skip1, r.version, g_flat_world_origin_x, g_flat_world_origin_z);
+                int ok0 = flat_gl_cpu_mesh_install(r.sy, install_cz, install_cx, 0, &r.mb0, r.skip0, r.version, g_flat_world_origin_x, g_flat_world_origin_z);
+                int ok1 = flat_gl_cpu_mesh_install(r.sy, install_cz, install_cx, 1, &r.mb1, r.skip1, r.version, g_flat_world_origin_x, g_flat_world_origin_z);
+                installed = ok0 && ok1;
             }
             g_flat_section_mesh_building[r.sy][install_cz][install_cx] = 0;
             g_flat_section_building_mesh_version[r.sy][install_cz][install_cx] = 0;

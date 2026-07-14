@@ -3342,6 +3342,29 @@ static int floor_div16(int v) {
 static int stream_render_radius(void) {
     int chunks = g_opts.render_distance;
     if (chunks < 2) chunks = 2;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* Keep one complete hidden-neighbor ring around the maximum visible area.
+       The Android active window is 20 chunks wide, so seven visible chunks is
+       the largest symmetric radius that still leaves safe edge storage. */
+    int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 3;
+#else
+    int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 2;
+#endif
+    if (max_chunks < 2) max_chunks = 2;
+    if (chunks > max_chunks) chunks = max_chunks;
+    return chunks;
+}
+
+static int stream_load_radius(void) {
+    /* Rendering can be tiny, but the engine still needs invisible neighboring
+       chunks for 18x18 mesh snapshots, cross-chunk light propagation, collision
+       queries and the world-loading handoff. Previously distance 2 requested and
+       generated only a 5x5 island; Xiaomi devices exposed the resulting race/edge
+       accesses while distance 7 happened to keep enough neighbors resident. */
+    int chunks = stream_render_radius() + 1;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    if (chunks < 4) chunks = 4;
+#endif
     int max_chunks = (FLAT_RENDER_CHUNKS / 2) - 2;
     if (max_chunks < 2) max_chunks = 2;
     if (chunks > max_chunks) chunks = max_chunks;
@@ -3349,7 +3372,7 @@ static int stream_render_radius(void) {
 }
 
 static int stream_window_margin_blocks(void) {
-    int margin = stream_render_radius() * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK;
+    int margin = stream_load_radius() * FLAT_RENDER_CHUNK + FLAT_RENDER_CHUNK;
     int max_margin = FLAT_WORLD_SIZE / 2 - FLAT_RENDER_CHUNK;
     if (max_margin < FLAT_RENDER_CHUNK * 3) max_margin = FLAT_RENDER_CHUNK * 3;
     if (margin > max_margin) margin = max_margin;
@@ -3693,7 +3716,7 @@ static int stream_initial_load_radius(void) {
 #elif defined(PEX_PLATFORM_PSP)
     return 3;
 #elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
-    int r = stream_render_radius();
+    int r = stream_load_radius();
     if (r > 4) r = 4;
     return r;
 #else
@@ -11178,34 +11201,34 @@ static void stream_destroy_mesh_handle(unsigned int h) {
 static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
                                                     int new_origin_x, int new_origin_z) {
     pex_logf_trace("chunk render remap origin old=%d,%d new=%d,%d", old_origin_x, old_origin_z, new_origin_x, new_origin_z);
-    GLuint old_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    GLuint old_liquid_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_dirty[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_world_cx[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_world_cz[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_light_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    LONG old_light_repair_state[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    unsigned int old_light_versions[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_initial_preload[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    unsigned short old_section_masks[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    GLuint old_section_lists[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
-    int old_section_dirty[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    unsigned int old_section_versions[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    unsigned int old_section_light_versions[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_section_valid[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
-    int old_section_skip[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
-    unsigned int old_section_direct_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
-    GLuint reusable_section_lists[FLAT_RENDER_SECTIONS_Y * FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS][2];
+    static GLuint old_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static GLuint old_liquid_lists[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_dirty[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_has_liquid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_generated[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_world_cx[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_world_cz[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_light_ready[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_light_valid[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static LONG old_light_repair_state[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static unsigned int old_light_versions[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_initial_preload[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_modified[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_light_due[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static unsigned short old_section_masks[FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static GLuint old_section_lists[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
+    static int old_section_dirty[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static unsigned int old_section_versions[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static unsigned int old_section_light_versions[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_section_valid[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS];
+    static int old_section_skip[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
+    static unsigned int old_section_direct_mesh[FLAT_RENDER_SECTIONS_Y][FLAT_RENDER_CHUNKS][FLAT_RENDER_CHUNKS][2];
+    static GLuint reusable_section_lists[FLAT_RENDER_SECTIONS_Y * FLAT_RENDER_CHUNKS * FLAT_RENDER_CHUNKS][2];
     int reusable_section_count = 0;
     int reusable_section_index = 0;
-    GLuint reusable_lists[STREAM_GEN_QUEUE_MAX];
-    GLuint reusable_liquid_lists[STREAM_GEN_QUEUE_MAX];
+    static GLuint reusable_lists[STREAM_GEN_QUEUE_MAX];
+    static GLuint reusable_liquid_lists[STREAM_GEN_QUEUE_MAX];
     int reusable_count = 0;
     int reusable_index = 0;
 
@@ -11382,7 +11405,6 @@ static void stream_remap_render_chunks(int old_origin_x, int old_origin_z,
     g_flat_world_geometry_dirty = 0;
     g_flat_section_geometry_dirty = 0;
 }
-
 static void stream_remap_block_storage(int old_origin_x, int old_origin_z,
                                                        int new_origin_x, int new_origin_z) {
     /*
@@ -11661,7 +11683,7 @@ static int stream_queue_visible_chunks_internal(int clear_existing, int max_add)
     if (pcx >= FLAT_RENDER_CHUNKS) pcx = FLAT_RENDER_CHUNKS - 1;
     if (pcz >= FLAT_RENDER_CHUNKS) pcz = FLAT_RENDER_CHUNKS - 1;
 
-    int radius = stream_render_radius();
+    int radius = stream_load_radius();
     stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, radius);
     added = g_stream_gen_queue_count - before_total;
     if (max_add > 0 && added >= max_add) goto done;
@@ -11712,7 +11734,7 @@ static void stream_queue_missing_chunks(int old_origin_x, int old_origin_z) {
 
     int base_cx = floor_div16(g_flat_world_origin_x);
     int base_cz = floor_div16(g_flat_world_origin_z);
-    stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, stream_render_radius());
+    stream_queue_chunk_safety(base_cx, base_cz, pcx, pcz, stream_load_radius());
 
     /* Queue only chunks that are newly exposed by the window shift.  The old
        version regenerated the entire 256x256 window synchronously here, which

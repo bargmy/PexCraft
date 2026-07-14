@@ -36,12 +36,15 @@ typedef struct AndroidTVList { AndroidTVBatch *first, *last; } AndroidTVList;
 typedef struct AndroidTVStaticMeshBatch {
     GLuint vbo, ibo;
     GLsizei index_count;
+    size_t gpu_bytes;
     struct AndroidTVStaticMeshBatch *next;
 } AndroidTVStaticMeshBatch;
 
 typedef struct AndroidTVStaticMesh {
     AndroidTVStaticMeshBatch *first, *last;
     uint32_t vertex_count, index_count;
+    size_t gpu_bytes;
+    int batch_count;
 } AndroidTVStaticMesh;
 
 typedef struct AndroidTVDeferredBatch {
@@ -114,6 +117,7 @@ typedef struct AndroidTVPanoramaFx {
 
 static AndroidTVWorldTarget g_android_tv_world_target;
 static AndroidTVPanoramaFx g_android_tv_panorama_fx;
+static Uint32 g_android_tv_world_target_retry_after_ms = 0;
 
 /* Small GL-state cache.  The compatibility layer used to redundantly submit the
    complete pipeline for every chunk section and every glyph. */
@@ -165,6 +169,59 @@ static int g_android_tv_texcoord_array_enabled = 0;
 static int g_android_tv_color_array_enabled = 0;
 static GLushort *g_android_tv_index16_tmp = NULL;
 static int g_android_tv_index16_cap = 0;
+
+/* Low-end Android GLES drivers can terminate the process instead of recovering
+   cleanly when thousands of terrain buffers exhaust shared graphics memory.
+   Keep PexCraft below a conservative residency/object budget and treat every
+   upload as fallible.  World code evicts far meshes before retrying. */
+#if defined(PEX_PLATFORM_ANDROID_TV)
+#define PEX_ANDROID_TERRAIN_GPU_BUDGET_DEFAULT (32u * 1024u * 1024u)
+#else
+#define PEX_ANDROID_TERRAIN_GPU_BUDGET_DEFAULT (24u * 1024u * 1024u)
+#endif
+#define PEX_ANDROID_TERRAIN_GPU_BUDGET_MIN     (8u * 1024u * 1024u)
+#define PEX_ANDROID_TERRAIN_BATCH_LIMIT        1024
+#define PEX_ANDROID_TERRAIN_BATCH_INDEX_MAX    65532u
+#define PEX_ANDROID_TERRAIN_BATCH_SPAN_MAX     65535u
+static size_t g_android_tv_static_gpu_bytes = 0;
+static size_t g_android_tv_static_gpu_budget = PEX_ANDROID_TERRAIN_GPU_BUDGET_DEFAULT;
+static int g_android_tv_static_gpu_batches = 0;
+static Uint32 g_android_tv_static_retry_after_ms = 0;
+static unsigned int g_android_tv_static_upload_failures = 0;
+
+static void android_tv_drain_gl_errors(void) {
+    for (int i = 0; i < 16; ++i) {
+        if (glGetError() == GL_NO_ERROR) break;
+    }
+}
+
+static int android_tv_upload_error(void) {
+    GLenum first = glGetError();
+    if (first == GL_NO_ERROR) return 0;
+    for (int i = 0; i < 15; ++i) if (glGetError() == GL_NO_ERROR) break;
+    g_android_tv_static_upload_failures++;
+    if (g_android_tv_static_upload_failures <= 4u || (g_android_tv_static_upload_failures & 63u) == 0u) {
+        fprintf(stderr, "PexCraft Android GLES terrain allocation failed: error=0x%x resident=%lu budget=%lu batches=%d\n",
+                (unsigned)first, (unsigned long)g_android_tv_static_gpu_bytes,
+                (unsigned long)g_android_tv_static_gpu_budget, g_android_tv_static_gpu_batches);
+    }
+    g_android_tv_static_retry_after_ms = SDL_GetTicks() + 250u;
+    /* If the driver rejected an allocation below our nominal cap, lower the cap
+       to the already-resident amount so the world evicts before the next try. */
+    if (g_android_tv_static_gpu_bytes > PEX_ANDROID_TERRAIN_GPU_BUDGET_MIN) {
+        size_t reduced = g_android_tv_static_gpu_bytes * 3u / 4u;
+        if (reduced < PEX_ANDROID_TERRAIN_GPU_BUDGET_MIN) reduced = PEX_ANDROID_TERRAIN_GPU_BUDGET_MIN;
+        if (reduced < g_android_tv_static_gpu_budget) g_android_tv_static_gpu_budget = reduced;
+    }
+    return 1;
+}
+
+static size_t pex_android_tv_static_mesh_bytes_used(void) { return g_android_tv_static_gpu_bytes; }
+static size_t pex_android_tv_static_mesh_budget(void) { return g_android_tv_static_gpu_budget; }
+static int pex_android_tv_static_mesh_batches_used(void) { return g_android_tv_static_gpu_batches; }
+static int pex_android_tv_static_mesh_batch_limit(void) { return PEX_ANDROID_TERRAIN_BATCH_LIMIT; }
+static size_t pex_android_tv_static_mesh_bytes(const AndroidTVStaticMesh *mesh) { return mesh ? mesh->gpu_bytes : 0; }
+static int pex_android_tv_static_mesh_batches(const AndroidTVStaticMesh *mesh) { return mesh ? mesh->batch_count : 0; }
 
 static void android_tv_mat_identity(AndroidTVMat4 *m) {
     memset(m->m, 0, sizeof(m->m));
@@ -551,8 +608,25 @@ static void android_tv_world_target_destroy(void) {
 
 static int android_tv_world_target_ensure(int width, int height) {
     AndroidTVWorldTarget *fx = &g_android_tv_world_target;
+    if ((Sint32)(SDL_GetTicks() - g_android_tv_world_target_retry_after_ms) < 0) return 0;
     if (width < 16) width = 16;
     if (height < 16) height = 16;
+
+    /* Never ask a driver for an attachment larger than its advertised limit.
+       Preserve aspect ratio if a very high-density phone reports a 4K+ drawable. */
+    GLint max_tex = 0, max_rb = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
+    glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &max_rb);
+    int max_dim = max_tex > 0 ? max_tex : 2048;
+    if (max_rb > 0 && max_rb < max_dim) max_dim = max_rb;
+    if (max_dim < 16) max_dim = 16;
+    if (width > max_dim || height > max_dim) {
+        float scale = fminf((float)max_dim / (float)width, (float)max_dim / (float)height);
+        width = (int)floorf((float)width * scale);
+        height = (int)floorf((float)height * scale);
+        if (width < 16) width = 16;
+        if (height < 16) height = 16;
+    }
     if (fx->fbo && fx->color_tex && fx->depth_rb && fx->program &&
         fx->width == width && fx->height == height) return 1;
 
@@ -572,12 +646,14 @@ static int android_tv_world_target_ensure(int width, int height) {
     fx->a_pos = glGetAttribLocation(fx->program, "a_pos");
     fx->a_uv = glGetAttribLocation(fx->program, "a_uv");
     fx->u_tex = glGetUniformLocation(fx->program, "u_tex");
+    android_tv_drain_gl_errors();
     glGenBuffers(1, &fx->vbo);
     glGenFramebuffers(1, &fx->fbo);
     glGenTextures(1, &fx->color_tex);
     glGenRenderbuffers(1, &fx->depth_rb);
-    if (!fx->vbo || !fx->fbo || !fx->color_tex || !fx->depth_rb) {
+    if (android_tv_upload_error() || !fx->vbo || !fx->fbo || !fx->color_tex || !fx->depth_rb) {
         android_tv_world_target_destroy();
+        g_android_tv_world_target_retry_after_ms = SDL_GetTicks() + 5000u;
         return 0;
     }
 
@@ -587,9 +663,19 @@ static int android_tv_world_target_ensure(int width, int height) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    if (android_tv_upload_error()) {
+        android_tv_world_target_destroy();
+        g_android_tv_world_target_retry_after_ms = SDL_GetTicks() + 5000u;
+        return 0;
+    }
 
     glBindRenderbuffer(GL_RENDERBUFFER, fx->depth_rb);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width, height);
+    if (android_tv_upload_error()) {
+        android_tv_world_target_destroy();
+        g_android_tv_world_target_retry_after_ms = SDL_GetTicks() + 5000u;
+        return 0;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, fx->fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->color_tex, 0);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fx->depth_rb);
@@ -600,6 +686,7 @@ static int android_tv_world_target_ensure(int width, int height) {
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         fprintf(stderr, "Android GLES scaled-world framebuffer incomplete: 0x%x\n", (unsigned)status);
         android_tv_world_target_destroy();
+        g_android_tv_world_target_retry_after_ms = SDL_GetTicks() + 5000u;
         return 0;
     }
     fx->width = width;
@@ -1213,6 +1300,9 @@ static void pex_android_tv_static_mesh_destroy(AndroidTVStaticMesh *mesh) {
         AndroidTVStaticMeshBatch *next = b->next;
         if (b->ibo) glDeleteBuffers(1, &b->ibo);
         if (b->vbo) glDeleteBuffers(1, &b->vbo);
+        if (b->gpu_bytes <= g_android_tv_static_gpu_bytes) g_android_tv_static_gpu_bytes -= b->gpu_bytes;
+        else g_android_tv_static_gpu_bytes = 0;
+        if (g_android_tv_static_gpu_batches > 0) g_android_tv_static_gpu_batches--;
         free(b);
         b = next;
     }
@@ -1223,6 +1313,8 @@ static AndroidTVStaticMesh *pex_android_tv_static_mesh_create_range(const PexVer
                                                                      const uint32_t *indices, uint32_t first_index,
                                                                      uint32_t index_count) {
     if (!vertices || !indices || vertex_count == 0 || index_count < 3) return NULL;
+    if (first_index > UINT32_MAX - index_count) return NULL;
+    if ((Sint32)(SDL_GetTicks() - g_android_tv_static_retry_after_ms) < 0) return NULL;
     pex_android_tv_flush();
     AndroidTVStaticMesh *mesh = (AndroidTVStaticMesh*)calloc(1, sizeof(*mesh));
     if (!mesh) return NULL;
@@ -1241,27 +1333,59 @@ static AndroidTVStaticMesh *pex_android_tv_static_mesh_create_range(const PexVer
             if (tmax >= vertex_count) { pex_android_tv_static_mesh_destroy(mesh); return NULL; }
             uint32_t nmin = min_idx == UINT32_MAX || tmin < min_idx ? tmin : min_idx;
             uint32_t nmax = tmax > max_idx ? tmax : max_idx;
-            if (out_count && nmax - nmin > 65535u) break;
+            if (out_count && (nmax - nmin > PEX_ANDROID_TERRAIN_BATCH_SPAN_MAX ||
+                              out_count + 3u > PEX_ANDROID_TERRAIN_BATCH_INDEX_MAX)) break;
             min_idx = nmin; max_idx = nmax; out_count += 3u; tri += 3u;
         }
         if (!out_count || min_idx == UINT32_MAX) {
             if (tri == first) tri += 3u;
             continue;
         }
-        GLushort *rebased = (GLushort*)malloc((size_t)out_count * sizeof(*rebased));
+        uint32_t span = max_idx - min_idx + 1u;
+        size_t vertex_bytes = (size_t)span * sizeof(PexVertex);
+        size_t index_bytes = (size_t)out_count * sizeof(GLushort);
+        if (vertex_bytes > SIZE_MAX - index_bytes) { pex_android_tv_static_mesh_destroy(mesh); return NULL; }
+        size_t batch_bytes = vertex_bytes + index_bytes;
+        if (batch_bytes > g_android_tv_static_gpu_budget ||
+            g_android_tv_static_gpu_bytes > g_android_tv_static_gpu_budget - batch_bytes ||
+            g_android_tv_static_gpu_batches >= PEX_ANDROID_TERRAIN_BATCH_LIMIT) {
+            pex_android_tv_static_mesh_destroy(mesh);
+            return NULL;
+        }
+
+        GLushort *rebased = (GLushort*)malloc(index_bytes);
         AndroidTVStaticMeshBatch *batch = (AndroidTVStaticMeshBatch*)calloc(1, sizeof(*batch));
         if (!rebased || !batch) { free(rebased); free(batch); pex_android_tv_static_mesh_destroy(mesh); return NULL; }
         for (uint32_t i = 0; i < out_count; ++i) rebased[i] = (GLushort)(indices[first + i] - min_idx);
+
+        android_tv_drain_gl_errors();
         glGenBuffers(1, &batch->vbo);
         glGenBuffers(1, &batch->ibo);
-        if (!batch->vbo || !batch->ibo) { free(rebased); free(batch); pex_android_tv_static_mesh_destroy(mesh); return NULL; }
-        uint32_t span = max_idx - min_idx + 1u;
+        if (android_tv_upload_error() || !batch->vbo || !batch->ibo) {
+            if (batch->ibo) glDeleteBuffers(1, &batch->ibo);
+            if (batch->vbo) glDeleteBuffers(1, &batch->vbo);
+            free(rebased); free(batch); pex_android_tv_static_mesh_destroy(mesh); return NULL;
+        }
         glBindBuffer(GL_ARRAY_BUFFER, batch->vbo);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)span * sizeof(PexVertex)), vertices + min_idx, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vertex_bytes, vertices + min_idx, GL_STATIC_DRAW);
+        if (android_tv_upload_error()) {
+            glDeleteBuffers(1, &batch->ibo); glDeleteBuffers(1, &batch->vbo);
+            free(rebased); free(batch); pex_android_tv_static_mesh_destroy(mesh); return NULL;
+        }
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, batch->ibo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((size_t)out_count * sizeof(GLushort)), rebased, GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)index_bytes, rebased, GL_STATIC_DRAW);
         free(rebased);
+        if (android_tv_upload_error()) {
+            glDeleteBuffers(1, &batch->ibo); glDeleteBuffers(1, &batch->vbo);
+            free(batch); pex_android_tv_static_mesh_destroy(mesh); return NULL;
+        }
+
         batch->index_count = (GLsizei)out_count;
+        batch->gpu_bytes = batch_bytes;
+        mesh->gpu_bytes += batch_bytes;
+        mesh->batch_count++;
+        g_android_tv_static_gpu_bytes += batch_bytes;
+        g_android_tv_static_gpu_batches++;
         if (!mesh->first) mesh->first = batch; else mesh->last->next = batch;
         mesh->last = batch;
     }
@@ -1436,4 +1560,10 @@ static void gles2_renderer_shutdown(void) {
     if (g_android_tv_vbo) { glDeleteBuffers(1, &g_android_tv_vbo); g_android_tv_vbo = 0; }
     if (g_android_tv_terrain_program) { glDeleteProgram(g_android_tv_terrain_program); g_android_tv_terrain_program = 0; }
     if (g_android_tv_program) { glDeleteProgram(g_android_tv_program); g_android_tv_program = 0; }
+    g_android_tv_static_gpu_bytes = 0;
+    g_android_tv_static_gpu_batches = 0;
+    g_android_tv_static_gpu_budget = PEX_ANDROID_TERRAIN_GPU_BUDGET_DEFAULT;
+    g_android_tv_static_retry_after_ms = 0;
+    g_android_tv_static_upload_failures = 0;
+    g_android_tv_world_target_retry_after_ms = 0;
 }

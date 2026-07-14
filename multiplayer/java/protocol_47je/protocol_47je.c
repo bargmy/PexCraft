@@ -19,6 +19,13 @@
 #define J47_BLOCK_UPDATE_CACHE_MAX 8192
 #define J47_TITLE_TEXT_MAX 1024
 #define J47_PENDING_CHUNK_MAX 1024
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+#define J47_PENDING_CHUNK_BYTES_SOFT_MAX (24u * 1024u * 1024u)
+#define J47_PENDING_CHUNK_BYTES_HARD_MAX (64u * 1024u * 1024u)
+#else
+#define J47_PENDING_CHUNK_BYTES_SOFT_MAX (96u * 1024u * 1024u)
+#define J47_PENDING_CHUNK_BYTES_HARD_MAX (192u * 1024u * 1024u)
+#endif
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
 #define J47_ASYNC_INFLATE 0
 #else
@@ -277,6 +284,7 @@ typedef struct J47PendingChunk {
 static J47PendingChunk g_j47_pending_chunks[J47_PENDING_CHUNK_MAX];
 static int g_j47_pending_chunk_head = 0;
 static int g_j47_pending_chunk_count = 0;
+static size_t g_j47_pending_chunk_bytes = 0;
 
 #if J47_ASYNC_INFLATE
 typedef struct J47InflateWorker {
@@ -2653,6 +2661,7 @@ static void j47_pending_chunks_clear(void) {
     }
     g_j47_pending_chunk_head = 0;
     g_j47_pending_chunk_count = 0;
+    g_j47_pending_chunk_bytes = 0;
 }
 
 static int j47_chunk_section_count(unsigned int mask) {
@@ -2675,6 +2684,8 @@ static size_t j47_chunk_expected_bytes(unsigned int mask, int has_sky, int full)
 static void j47_pending_chunk_drop_oldest(void) {
     if (g_j47_pending_chunk_count <= 0) return;
     J47PendingChunk *old = &g_j47_pending_chunks[g_j47_pending_chunk_head];
+    if (old->len <= g_j47_pending_chunk_bytes) g_j47_pending_chunk_bytes -= old->len;
+    else g_j47_pending_chunk_bytes = 0;
     free(old->data);
     memset(old, 0, sizeof(*old));
     g_j47_pending_chunk_head = (g_j47_pending_chunk_head + 1) % J47_PENDING_CHUNK_MAX;
@@ -2684,6 +2695,8 @@ static void j47_pending_chunk_drop_oldest(void) {
 static void j47_pending_chunk_remove_logical(int logical_index) {
     if (logical_index < 0 || logical_index >= g_j47_pending_chunk_count) return;
     int idx = (g_j47_pending_chunk_head + logical_index) % J47_PENDING_CHUNK_MAX;
+    if (g_j47_pending_chunks[idx].len <= g_j47_pending_chunk_bytes) g_j47_pending_chunk_bytes -= g_j47_pending_chunks[idx].len;
+    else g_j47_pending_chunk_bytes = 0;
     free(g_j47_pending_chunks[idx].data);
     for (int n = logical_index; n + 1 < g_j47_pending_chunk_count; ++n) {
         int dst = (g_j47_pending_chunk_head + n) % J47_PENDING_CHUNK_MAX;
@@ -2704,6 +2717,51 @@ static void j47_pending_chunk_rotate_oldest(void) {
     g_j47_pending_chunks[tail] = temp;
 }
 
+/* Forward declarations allow the queue-pressure path to commit one complete
+   processable snapshot immediately. This is rare, happens only during a large
+   initial server burst, and is preferable to either native-heap overcommit or
+   silently discarding a chunk that protocol 47 may never resend. */
+static void j47_apply_pending_chunk_section(J47PendingChunk *q, int sy);
+static void j47_finish_pending_chunk(J47PendingChunk *q);
+static int j47_pending_chunk_processable(const J47PendingChunk *q);
+
+static int j47_pending_chunk_force_commit_one(void) {
+    for (int n = 0; n < g_j47_pending_chunk_count; ++n) {
+        int idx = (g_j47_pending_chunk_head + n) % J47_PENDING_CHUNK_MAX;
+        J47PendingChunk *q = &g_j47_pending_chunks[idx];
+        if (!q->used || !j47_pending_chunk_processable(q)) continue;
+        while (q->next_section < 16 && !q->full && !(q->mask & (1u << q->next_section)))
+            q->next_section++;
+        while (q->next_section < 16) {
+            j47_apply_pending_chunk_section(q, q->next_section++);
+            while (q->next_section < 16 && !q->full && !(q->mask & (1u << q->next_section)))
+                q->next_section++;
+        }
+        j47_finish_pending_chunk(q);
+        j47_pending_chunk_remove_logical(n);
+        return 1;
+    }
+    return 0;
+}
+
+static int j47_pending_chunk_make_room(size_t incoming_len, int incoming_cx, int incoming_cz) {
+    (void)incoming_cx; (void)incoming_cz;
+    if (incoming_len > J47_PENDING_CHUNK_BYTES_HARD_MAX) return 0;
+    while (g_j47_pending_chunk_count >= J47_PENDING_CHUNK_MAX ||
+           incoming_len > J47_PENDING_CHUNK_BYTES_SOFT_MAX ||
+           g_j47_pending_chunk_bytes > J47_PENDING_CHUNK_BYTES_SOFT_MAX - incoming_len) {
+        if (j47_pending_chunk_force_commit_one()) continue;
+        /* Some servers send snapshots just outside the current storage ring.
+           They cannot be committed yet, but may be retained up to a hard cap.
+           Never drop them silently: that was the source of permanent holes. */
+        if (g_j47_pending_chunk_count < J47_PENDING_CHUNK_MAX &&
+            g_j47_pending_chunk_bytes <= J47_PENDING_CHUNK_BYTES_HARD_MAX - incoming_len)
+            return 1;
+        return 0;
+    }
+    return 1;
+}
+
 static int j47_queue_chunk(int cx, int cz, int full, unsigned int mask,
                            const unsigned char *data, size_t len, int has_sky,
                            int empty_means_unload, unsigned int snapshot_serial) {
@@ -2722,10 +2780,10 @@ static int j47_queue_chunk(int cx, int cz, int full, unsigned int mask,
         }
     }
 
-    /* Never silently discard a server chunk. A dropped snapshot cannot be
-       requested again in protocol 47 and becomes a permanent hole after the
-       local world window moves. Fail visibly instead of corrupting the world. */
-    if (g_j47_pending_chunk_count >= J47_PENDING_CHUNK_MAX) return 0;
+    /* Bound native heap residency. Some servers ignore the requested view
+       distance during the initial burst; commit queued in-window snapshots under
+       pressure rather than retaining hundreds of MiB or dropping world data. */
+    if (!j47_pending_chunk_make_room(len, cx, cz)) return 0;
     int idx = (g_j47_pending_chunk_head + g_j47_pending_chunk_count) % J47_PENDING_CHUNK_MAX;
     J47PendingChunk *q = &g_j47_pending_chunks[idx];
     memset(q, 0, sizeof(*q));
@@ -2738,6 +2796,7 @@ static int j47_queue_chunk(int cx, int cz, int full, unsigned int mask,
     q->has_sky = has_sky; q->empty_means_unload = empty_means_unload;
     q->snapshot_serial = snapshot_serial; q->len = len;
     g_j47_pending_chunk_count++;
+    g_j47_pending_chunk_bytes += len;
     return 1;
 }
 
@@ -3568,8 +3627,17 @@ static int j47_send_client_identity(void) {
     J47Writer settings;
     j47_writer_init(&settings, 64);
     j47_w_string(&settings, "en_US");
-    int view_distance = FLAT_RENDER_CHUNKS / 2 - 1;
-    if (view_distance < 1) view_distance = 1;
+    /* The visible distance and the loaded distance are intentionally different.
+       Section meshing samples an 18x18 border and lighting/collision crosses chunk
+       edges, so a tiny visible radius still requires hidden neighbor chunks. */
+    int view_distance = g_opts.render_distance + 1;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    if (view_distance < 4) view_distance = 4;
+#endif
+    int storage_limit = FLAT_RENDER_CHUNKS / 2 - 2;
+    if (storage_limit < 2) storage_limit = 2;
+    if (view_distance > storage_limit) view_distance = storage_limit;
+    if (view_distance < 2) view_distance = 2;
     if (view_distance > 8) view_distance = 8;
     j47_w_u8(&settings, view_distance);
     j47_w_u8(&settings, 0);       /* full chat */
