@@ -1512,6 +1512,11 @@ typedef struct FlatDirectMeshBuilder {
     uint32_t color;
     uint32_t light;
     int light_resolved;
+    /* Captured fixed-function requirements. Android uses these flags to keep
+       fully opaque terrain out of the alpha-discard shader and to enable
+       back-face culling only for meshes whose emitters are one-sided. */
+    int uses_alpha_test;
+    int two_sided;
 } FlatDirectMeshBuilder;
 
 typedef struct FlatGLCpuMesh {
@@ -1526,9 +1531,14 @@ typedef struct FlatGLCpuMesh {
     int vbo_uploaded;
     int ibo_uploaded;
 #endif
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    AndroidTVStaticMesh *android_mesh;
+#endif
     unsigned int version;
     unsigned int lit_lightmap_version;
     int origin_x, origin_z;
+    int alpha_test;
+    int two_sided;
     int valid;
 } FlatGLCpuMesh;
 
@@ -2025,8 +2035,16 @@ static void pex_world_gl_end_guard(void) {
     if (!g_flat_direct_builder) glEnd();
 }
 
-static void pex_world_gl_enable_guard(GLenum cap) { if (!g_flat_direct_builder) glEnable(cap); }
-static void pex_world_gl_disable_guard(GLenum cap) { if (!g_flat_direct_builder) glDisable(cap); }
+static void pex_world_gl_enable_guard(GLenum cap) {
+    if (!g_flat_direct_builder) { glEnable(cap); return; }
+    if (cap == GL_ALPHA_TEST) g_flat_direct_builder->uses_alpha_test = 1;
+}
+static void pex_world_gl_disable_guard(GLenum cap) {
+    if (!g_flat_direct_builder) { glDisable(cap); return; }
+    /* Special/crossed geometry deliberately disables culling. Remember that
+       requirement instead of applying it while a worker is only capturing. */
+    if (cap == GL_CULL_FACE) g_flat_direct_builder->two_sided = 1;
+}
 static void pex_world_gl_bind_texture_guard(GLenum target, GLuint tex) { if (!g_flat_direct_builder) glBindTexture(target, tex); }
 static void pex_world_gl_alpha_func_guard(GLenum func, GLfloat ref) { if (!g_flat_direct_builder) glAlphaFunc(func, ref); }
 static void pex_world_gl_depth_mask_guard(GLboolean flag) { if (!g_flat_direct_builder) glDepthMask(flag); }
@@ -2180,6 +2198,9 @@ static void flat_gl_cpu_mesh_free(FlatGLCpuMesh *m) {
         if (m->vbo) g_flat_glDeleteBuffers(1, &m->vbo);
         if (m->ibo) g_flat_glDeleteBuffers(1, &m->ibo);
     }
+#endif
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    if (m->android_mesh) pex_android_tv_static_mesh_destroy(m->android_mesh);
 #endif
     free(m->v);
     free(m->lit_v);
@@ -2405,6 +2426,26 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
     }
     flat_gl_cpu_mesh_free(m);
     if (skip || !b || b->vcount == 0 || b->icount == 0) return;
+
+    m->alpha_test = b->uses_alpha_test ? 1 : 0;
+    m->two_sided = b->two_sided ? 1 : 0;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* Convert and upload once while consuming the already-bounded mesh result
+       queue. The old path rebuilt 16-bit windows and streamed all section data
+       through glBufferData on every visible frame. */
+    m->android_mesh = pex_android_tv_static_mesh_create(b->v, b->vcount, b->i, b->icount);
+    if (m->android_mesh) {
+        free(b->v);
+        free(b->i);
+        m->v = NULL;
+        m->i = NULL;
+    } else {
+        /* Keep the previous CPU-array route as a correctness fallback on drivers
+           that fail a buffer allocation. */
+        m->v = b->v;
+        m->i = b->i;
+    }
+#else
     m->list = gl_compile_flat_mesh_list(b);
     if (m->list) {
         free(b->v);
@@ -2415,6 +2456,7 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
         m->v = b->v;
         m->i = b->i;
     }
+#endif
     m->vcount = b->vcount;
     m->icount = b->icount;
     m->version = version;
@@ -2431,7 +2473,13 @@ static void flat_gl_cpu_mesh_install(int sy, int cz, int cx, int pass, FlatDirec
 
 static int flat_gl_cpu_mesh_drawable(int sy, int cz, int cx, int pass) {
     FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[sy][cz][cx][pass];
-    return m->valid && ((m->list != 0) || (m->v && m->i)) && m->vcount > 0 && m->icount > 0 &&
+    return m->valid &&
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+           (m->android_mesh || (m->v && m->i)) &&
+#else
+           ((m->list != 0) || (m->v && m->i)) &&
+#endif
+           m->vcount > 0 && m->icount > 0 &&
            m->origin_x == g_flat_world_origin_x && m->origin_z == g_flat_world_origin_z;
 }
 
@@ -2459,6 +2507,30 @@ static void flat_gl_cpu_mesh_refresh_lightmap(FlatGLCpuMesh *m) {
     }
     m->lit_lightmap_version = version;
 }
+
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static void flat_android_update_lightmap_texture(void) {
+    static unsigned int uploaded_version = 0;
+    unsigned int version = flat_current_lightmap_version();
+    if (uploaded_version == version) return;
+
+    unsigned char rgba[16 * 16 * 4];
+    for (int sky = 0; sky < 16; ++sky) {
+        for (int block = 0; block < 16; ++block) {
+            float r, g, b;
+            int packed = (sky << 20) | (block << 4);
+            flat_lightmap_color(packed, &r, &g, &b);
+            int off = (sky * 16 + block) * 4;
+            rgba[off + 0] = (unsigned char)(r * 255.0f + 0.5f);
+            rgba[off + 1] = (unsigned char)(g * 255.0f + 0.5f);
+            rgba[off + 2] = (unsigned char)(b * 255.0f + 0.5f);
+            rgba[off + 3] = 255;
+        }
+    }
+    pex_android_tv_update_lightmap(rgba, version);
+    uploaded_version = version;
+}
+#endif
 
 #if defined(PEX_PLATFORM_LINUX_SDL2)
 static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m) {
@@ -2564,6 +2636,9 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
     (void)m;
 #else
     if (!m || !m->valid || m->icount < 3) return;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    if (m->android_mesh) { pex_android_tv_static_mesh_draw(m->android_mesh); return; }
+#endif
     if (m->list && flat_display_lists_supported()) { glCallList(m->list); return; }
     if (!m->v || !m->i) return;
 #if defined(PEX_PLATFORM_LINUX_SDL2)
@@ -6963,7 +7038,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
     if (z1 >= origin_z + FLAT_WORLD_SIZE) z1 = origin_z + FLAT_WORLD_SIZE - 1;
     if (y1 > FLAT_WORLD_Y_MAX) y1 = FLAT_WORLD_Y_MAX;
 
-    int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0;
+    int has0 = 0, has1 = 0, has_special = 0, has_cutout = 0, has_alpha_texture = 0;
     int cancelled = 0;
     FlatDirectMeshBuilder mb0, mb1;
     memset(&mb0, 0, sizeof(mb0));
@@ -6980,6 +7055,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
                 int id = flat_get_block(x, y, z);
                 if (!id) continue;
                 if (id == BLOCK_PORTAL || id == BLOCK_END_PORTAL) { has1 = 1; continue; }
+                if (id == BLOCK_GLASS || id == BLOCK_ICE) has_alpha_texture = 1;
                 if (id == BLOCK_SNOW_LAYER) { emit_snow_layer_block(x, y, z); has0 = 1; continue; }
                 if (block_is_liquid(id)) { if (flat_separate_liquid_pass_enabled()) { has1 = 1; continue; } }
                 if (block_uses_special_model(id)) { has_special = 1; continue; }
@@ -7034,6 +7110,11 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
         }
         glDisable(GL_ALPHA_TEST);
     }
+    /* Keep the visual result of the old all-alpha/two-sided terrain pass, but
+       record the minimum state each section actually needs. Most stone/ground
+       sections can now use early depth rejection and back-face culling. */
+    if (has_cutout || has_special || has_alpha_texture) mb0.uses_alpha_test = 1;
+    if (has_cutout || has_special) mb0.two_sided = 1;
     glColor4f(1,1,1,1);
     flat_direct_end();
     if (cancelled || async_section_mesh_cancel_requested()) {
@@ -7058,6 +7139,7 @@ static void rebuild_flat_section_mesh(int sy, int cx, int cz) {
             }
         }
     }
+    mb1.two_sided = 1;
     glColor4f(1,1,1,1);
     flat_direct_end();
     if (cancelled || async_section_mesh_cancel_requested()) {
@@ -7324,13 +7406,22 @@ static volatile LONG g_async_section_mesh_upload_state = ASYNC_MESH_WORKER_UNUSE
 static int async_mesh_worker_gpu_prebuild_enabled(void) { return 0; }
 
 #if defined(PEX_PLATFORM_PSP)
-/* PSP has far less RAM than desktop.  Keep the async mesh queue intentionally
+/* PSP has far less RAM than desktop. Keep the async mesh queue intentionally
    small; a single job snapshot is about 29 KB and each finished section can own
    a sizeable vertex/index buffer until the render thread adopts it. */
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 12
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
 #define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 6
 #define ASYNC_SECTION_MESH_WORKER_COUNT 1
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+/* Cheap TV SoCs usually have four modest cores and shared CPU/GPU memory.
+   Large desktop queues retain many section snapshots/results and four workers
+   can starve the render thread. Keep enough work in flight to hide meshing
+   without occupying every core or hoarding tens of MiB. */
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 48
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 8
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 8
+#define ASYNC_SECTION_MESH_WORKER_COUNT 2
 #else
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 192
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 32
@@ -7640,14 +7731,29 @@ static void async_section_mesh_init(void) {
     if (!g_async_section_mesh_event || (async_mesh_worker_gpu_prebuild_enabled() && !g_async_section_mesh_upload_event)) return;
     g_async_section_mesh_stop = 0;
     g_async_section_mesh_worker_count = 0;
-    for (int i = 0; i < ASYNC_SECTION_MESH_WORKER_COUNT && i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
+    int desired_workers = ASYNC_SECTION_MESH_WORKER_COUNT;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    {
+        int cpu_count = SDL_GetCPUCount();
+        /* Leave at least two logical cores for rendering, networking, audio, and
+           the OS compositor. Dual/quad-core TV boxes use one mesh worker. */
+        desired_workers = (cpu_count >= 6) ? 2 : 1;
+    }
+#endif
+    for (int i = 0; i < desired_workers && i < (int)ARRAY_COUNT(g_async_section_mesh_threads); ++i) {
 #if defined(PEX_PLATFORM_PSP)
         g_async_section_mesh_threads[i] = CreateThread(NULL, 0x20000, async_section_mesh_worker_proc, (LPVOID)(intptr_t)(i + 1), 0, NULL);
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+        g_async_section_mesh_threads[i] = CreateThread(NULL, 0x100000, async_section_mesh_worker_proc, (LPVOID)(intptr_t)(i + 1), 0, NULL);
 #else
         g_async_section_mesh_threads[i] = CreateThread(NULL, 0x400000, async_section_mesh_worker_proc, (LPVOID)(intptr_t)(i + 1), 0, NULL);
 #endif
         if (g_async_section_mesh_threads[i]) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+            SetThreadPriority(g_async_section_mesh_threads[i], THREAD_PRIORITY_BELOW_NORMAL);
+#else
             SetThreadPriority(g_async_section_mesh_threads[i], THREAD_PRIORITY_NORMAL);
+#endif
             g_async_section_mesh_worker_count++;
         }
     }
@@ -8850,7 +8956,85 @@ static void draw_translucent_sections_direct(const FlatRenderSectionRef *refs, i
     }
 }
 
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+static int flat_android_section_mesh_visible(const FlatRenderSectionRef *ref, int pass) {
+    int cx = ref->cx, cz = ref->cz, sy = ref->sy;
+    return flat_chunk_light_ready(cx, cz) &&
+           g_flat_section_valid[sy][cz][cx] &&
+           !g_flat_section_skip_pass[sy][cz][cx][pass] &&
+           flat_gl_cpu_mesh_drawable(sy, cz, cx, pass);
+}
+
+static void flat_android_draw_static_group(const FlatRenderSectionRef *refs, int count, int pass,
+                                           int alpha_test, int two_sided, int reverse) {
+    int found = 0;
+    for (int n = 0; n < count; ++n) {
+        int i = reverse ? (count - 1 - n) : n;
+        if (!flat_android_section_mesh_visible(&refs[i], pass)) continue;
+        FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[refs[i].sy][refs[i].cz][refs[i].cx][pass];
+        if (m->android_mesh && m->alpha_test == alpha_test && m->two_sided == two_sided) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) return;
+
+    pex_android_tv_static_mesh_begin(tex_terrain.id, alpha_test, pass == 1, !two_sided);
+    for (int n = 0; n < count; ++n) {
+        int i = reverse ? (count - 1 - n) : n;
+        if (!flat_android_section_mesh_visible(&refs[i], pass)) continue;
+        FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[refs[i].sy][refs[i].cz][refs[i].cx][pass];
+        if (m->android_mesh && m->alpha_test == alpha_test && m->two_sided == two_sided) {
+            pex_android_tv_static_mesh_draw(m->android_mesh);
+        }
+    }
+    pex_android_tv_static_mesh_end();
+}
+
+static void flat_android_draw_cpu_fallbacks(const FlatRenderSectionRef *refs, int count, int pass, int reverse) {
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    for (int n = 0; n < count; ++n) {
+        int i = reverse ? (count - 1 - n) : n;
+        if (!flat_android_section_mesh_visible(&refs[i], pass)) continue;
+        FlatGLCpuMesh *m = &g_flat_section_gl_cpu_mesh[refs[i].sy][refs[i].cz][refs[i].cx][pass];
+        if (!m->android_mesh) flat_gl_draw_cpu_mesh(m);
+    }
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+}
+#endif
+
 static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, int count) {
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    /* GLES terrain is resident in static VBO/IBO batches. Keep four coarse
+       groups so opaque sections avoid fragment discard and one-sided block
+       meshes can use back-face culling. This retains the same geometry and
+       textures; it only removes work that cannot affect the image. */
+    flat_android_update_lightmap_texture();
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE);
+    glAlphaFunc(GL_GREATER, 0.5f);
+
+    flat_android_draw_static_group(refs, count, 0, 0, 0, 0);
+    flat_android_draw_static_group(refs, count, 0, 0, 1, 0);
+    flat_android_draw_static_group(refs, count, 0, 1, 0, 0);
+    flat_android_draw_static_group(refs, count, 0, 1, 1, 0);
+
+    /* Allocation failure fallback. It is normally empty after installation. */
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_ALPHA_TEST);
+    flat_android_draw_cpu_fallbacks(refs, count, 0, 0);
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(1,1,1,1);
+    return;
+#else
 #if defined(PEX_PLATFORM_LINUX_SDL2)
     g_flat_gl_light_upload_budget = 8;
 #endif
@@ -8858,16 +9042,9 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     /* Java EntityRenderer.renderWorld() switches terrain to GL_SMOOTH when
-       ambient occlusion/smooth lighting is active.  The C mesh stores block
-       light/AO as per-vertex colors; real OpenGL must interpolate those colors
-       or block faces collapse into the diagonal dark triangles seen in the
-       OpenGL screenshots. */
+       ambient occlusion/smooth lighting is active. The C mesh stores block
+       light/AO as per-vertex colors; real OpenGL must interpolate those colors. */
     pex_gl_shade_model_smooth();
-    /* The captured terrain mesh reuses the old immediate-mode face emitters.
-       Their quad winding is not consistent enough for OpenGL back-face culling,
-       even though the D3D backends draw the same mesh fine without culling.
-       Culling here removed random mountain/terrain faces and made OpenGL look
-       like x-ray.  Keep depth test/write on, but render both sides. */
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
@@ -8894,10 +9071,34 @@ static void draw_flat_section_passes_gl_cpu(const FlatRenderSectionRef *refs, in
     pex_gl_restore_shade_model(old_shade_model);
     glDisable(GL_ALPHA_TEST);
     glColor4f(1,1,1,1);
+#endif
 }
 
 static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, int count) {
     if (!flat_separate_liquid_pass_enabled()) return;
+#if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+    flat_android_update_lightmap_texture();
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    /* Liquid/portal geometry remains two-sided and is kept in back-to-front
+       section order exactly as before. */
+    flat_android_draw_static_group(refs, count, 1, 0, 1, 1);
+    flat_android_draw_static_group(refs, count, 1, 1, 1, 1);
+    flat_android_draw_cpu_fallbacks(refs, count, 1, 1);
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glColor4f(1,1,1,1);
+    return;
+#else
     GLint old_shade_model = pex_gl_save_shade_model();
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
@@ -8929,6 +9130,7 @@ static void draw_translucent_sections_gl_cpu(const FlatRenderSectionRef *refs, i
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glColor4f(1,1,1,1);
+#endif
 }
 
 static void draw_flat_section_passes(const FlatRenderSectionRef *refs, int count) {

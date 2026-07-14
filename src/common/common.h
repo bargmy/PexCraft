@@ -1619,6 +1619,18 @@ static double g_system_info_last_time = -10.0;
 #define MAX_DROP_ENTITIES 64
 #define MAX_FALLING_BLOCK_ENTITIES 64
 #endif
+#elif defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
+/* Mobile GPUs share system RAM with the CPU. The desktop 576x256x576 dense
+   block/meta/liquid/light window reserves roughly 405 MiB before any meshes,
+   textures, networking, or driver memory. A 320-wide window still supports the
+   default eight-chunk view distance (plus the two-chunk streaming border) while
+   cutting those five arrays to about 125 MiB. This changes storage capacity,
+   not the rendered look at the default setting. */
+#define FLAT_WORLD_SIZE 320
+#define FLAT_WORLD_Y_MIN 0
+#define FLAT_WORLD_Y_MAX 255
+#define MAX_DROP_ENTITIES 128
+#define MAX_FALLING_BLOCK_ENTITIES PEX_NET_MAX_FALLING_BLOCKS
 #else
 #define FLAT_WORLD_SIZE 576
 #define FLAT_WORLD_Y_MIN 0

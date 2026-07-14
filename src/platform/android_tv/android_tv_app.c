@@ -12,7 +12,7 @@ static int init_gl(SDL_Window *window) {
     g_glrc = SDL_GL_CreateContext(g_hwnd);
     if (!g_glrc) return 0;
     SDL_GL_MakeCurrent(g_hwnd, g_glrc);
-    SDL_GL_SetSwapInterval(1);
+    apply_vsync_setting();
 
     if (!gles2_renderer_init()) return 0;
     glClearColor(0,0,0,0);
@@ -32,14 +32,17 @@ static int pex_renderer_backend_init(SDL_Window *window) {
     g_selected_renderer_backend = RENDERER_OPENGL;
     return init_gl(window);
 }
-static int pex_renderer_begin_frame(void) { return 1; }
-static void pex_renderer_present(void) { SDL_GL_SwapWindow(g_hwnd); }
+static int pex_renderer_begin_frame(void) { pex_android_tv_begin_frame(); return 1; }
+static void pex_renderer_present(void) { pex_android_tv_flush(); SDL_GL_SwapWindow(g_hwnd); }
 static void pex_renderer_resize(int w, int h) { (void)w; (void)h; }
 static void pex_renderer_shutdown(void) { gles2_renderer_shutdown(); }
 static void pex_gl_suppress_immediate(int on) { (void)on; }
 
 static void apply_vsync_setting(void) {
-    if (g_hwnd) SDL_GL_SetSwapInterval(1);
+    if (!g_hwnd) return;
+    int interval = g_opts.anaglyph ? 1 : 0;
+    if (interval && SDL_GL_SetSwapInterval(-1) == 0) return;
+    SDL_GL_SetSwapInterval(interval);
 }
 
 static void refresh_window_size_after_mode(void) {
@@ -323,7 +326,11 @@ int main(int argc, char **argv) {
     snprintf(g_multiplayer_ip, sizeof(g_multiplayer_ip), "%s", g_opts.last_server);
     snprintf(g_multiplayer_username, sizeof(g_multiplayer_username), "%s", g_opts.username[0] ? g_opts.username : "Player");
 
-    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI;
+    /* Android TV requests a 1920x1080 surface. ALLOW_HIGHDPI can silently
+       turn that into a 4K backbuffer on UHD televisions, quadrupling fragment
+       work without changing the logical UI. Keep the TV render surface at the
+       requested 1080p size; phones retain their native-density path. */
+    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
     g_hwnd = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, flags);
     if (!g_hwnd) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());

@@ -84,3 +84,24 @@ the embedded name, SHA, repository, and commit URL remain empty.
 On the title screen, click `PexCraft 1.2.5` to show or hide the embedded commit
 subject and SHA. Clicking either visible line opens the exact commit URL in the
 platform browser when that platform supports external URLs.
+
+## Android / Android TV low-end renderer path
+
+Android terrain sections are uploaded to retained GLES vertex/index buffers when a
+worker result is installed. Visible frames only bind and draw those buffers; they no
+longer rescan section indices or stream the complete terrain mesh every frame. The
+GLES compatibility layer also batches immediate-mode GUI, text, and entity geometry
+into one retained dynamic ring buffer and caches unchanged pipeline state.
+
+Terrain lighting uses the packed block/sky-light value already stored in each vertex
+and a 16 by 16 shader lightmap, so daylight and gamma changes update one tiny texture
+instead of copying and reuploading every visible section. Opaque, alpha-tested, and
+two-sided section groups are submitted separately, allowing ordinary opaque terrain
+to use early depth rejection and back-face culling without changing block models or
+textures.
+
+The Android active world window is 320 blocks wide. This preserves the normal
+8-chunk view distance plus its streaming border while reducing the five dense world
+arrays from about 405 MiB to about 125 MiB. Mesh worker counts and queues scale down
+on low-core shared-memory devices. Android TV requests a true 1080p surface instead
+of allowing SDL to silently allocate a 4K high-density backbuffer.
