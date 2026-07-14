@@ -1554,6 +1554,14 @@ static PexGamepadState g_gamepads[PEX_GAMEPAD_MAX];
 static int g_gamepad_count = 0;
 static int g_gamepad_primary = -1;
 static int g_gamepad_vk_state[512];
+/* Death/respawn input barrier: held attack/use controls must be released once
+   before they can generate packets again. */
+static int g_gameplay_click_suppressed_until_release = 0;
+#ifdef PEX_PLATFORM_ANDROID_TV
+/* TV-remotes are keyboard/navigation devices, not gamepads. Keep their held
+   gameplay keys separate so they never switch the UI into console mode. */
+static int g_android_tv_remote_vk_state[512];
+#endif
 /* Legacy-console style B-button crouch latch. Keyboard/LS sneak remain held
    inputs; only a rising edge of the gamepad B button changes this state. */
 static int g_gamepad_sneak_toggled = 0;

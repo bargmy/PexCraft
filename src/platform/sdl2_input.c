@@ -66,6 +66,10 @@ static void handle_grabbed_mouse_move(int px, int py) {
 }
 
 static int key_down_vk(int vk) {
+#ifdef PEX_PLATFORM_ANDROID_TV
+    if (vk >= 0 && vk < (int)ARRAY_COUNT(g_android_tv_remote_vk_state) &&
+        g_android_tv_remote_vk_state[vk]) return 1;
+#endif
     if (vk >= 0 && vk < (int)ARRAY_COUNT(g_gamepad_vk_state) && g_gamepad_vk_state[vk]) return 1;
     if (vk == VK_LBUTTON) return g_sdl2_mouse_buttons[1] != 0;
     if (vk == VK_RBUTTON) return g_sdl2_mouse_buttons[3] != 0;

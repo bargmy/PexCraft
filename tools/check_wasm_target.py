@@ -99,8 +99,11 @@ def main() -> int:
     reject(textures, r"xinput_hud_png\.inc|pex_xinput_hud_png", "textures.c")
     reject(textures, r"(?:try_release_texture|load_png_texture)\([^\n]*xinput", "textures.c")
     require(gamepad, "return pex_xinput_hud_active() ? 30 : 0;", "gamepad.c")
-    require(gamepad, "if (p->a || (g_creative_flying && p->dpad_up))", "gamepad.c")
-    require(gamepad, "if (p->b || p->ls || (g_creative_flying && p->dpad_down))", "gamepad.c")
+    # D-pad gameplay shortcuts are intentionally Xbox/XInput-only. Browser
+    # remotes, keyboards, and generic navigation devices must not trigger the
+    # legacy-console fly/chat/F5 mapping.
+    require(gamepad, "if (p->a || (p->is_xbox && g_creative_flying && p->dpad_up))", "gamepad.c")
+    require(gamepad, "if (g_gamepad_sneak_toggled || p->ls || (p->is_xbox && g_creative_flying && p->dpad_down))", "gamepad.c")
     reject(gamepad, r"p->l[xy][^\n]*\|\|\s*p->dpad_", "gamepad.c")
     require(gamepad, "SDL_GameControllerGetAttached", "gamepad.c")
     require(gamepad, "if (attached && total == g_sdl2_last_device_count) return;", "gamepad.c")

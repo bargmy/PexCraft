@@ -144,3 +144,37 @@ calculates both dimensions from the same percentage, renders the 3D world to tha
 size, and linearly scales it to fill the screen. GUI and text stay at native
 resolution. Because only the percentage is stored, moving the same options file
 between 720p, 1080p and 4K displays remains valid.
+
+## Android TV remote, Java chunk retention and death-input repair (v13)
+
+Android TV remotes are handled as ordinary D-pad/keyboard navigation rather than
+being appended to the SDL gamepad list. Remote input no longer switches prompts,
+virtual cursors, chat entry, or inventory layout into console mode. SDL devices
+reported as remotes, CEC adapters, virtual devices, or `Generic Gamepad` are ignored
+on Android TV, while real Xbox/XInput controllers remain on the controller path.
+Mouse, stylus, touchscreen, gamepad, and joystick KeyEvents are excluded from the TV
+remote JNI bridge so a mouse primary click cannot also become OK/jump.
+
+Protocol-47 chunk snapshots that arrive outside the current 320-block Android ring
+are retained until the multiplayer window reaches them. Visible snapshots are
+processed first, newer complete snapshots replace every stale queued copy for the
+same coordinate, and queue pressure can no longer silently discard a server chunk
+and leave a permanent hole.
+
+Entering the death screen now releases attack/use state and blocks mouse, trigger,
+or remote attack controls until the physical buttons have been released once. This
+prevents held or synthetic input from resuming as repeated interaction packets after
+a server respawn.
+
+## WASM validation and regular Android world-entry repair (v14)
+
+The WASM structural validator now enforces the current Xbox/XInput-only D-pad
+shortcuts instead of requiring the removed generic-controller expressions. Browser
+builds therefore keep the remote-safe input behavior while passing the pre-build
+check.
+
+The regular Android GLES renderer is synchronized with the Android TV retained
+terrain API. It now provides ranged terrain-mesh uploads, the seven-argument terrain
+pass setup, split opaque/cutout/two-sided layers, and vertex-shader Java lighting.
+This fixes the Android universal build errors and removes the stale phone-only
+renderer path that failed when a world attempted to install or draw section meshes.

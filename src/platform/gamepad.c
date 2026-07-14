@@ -182,6 +182,25 @@ static int gamepad_sdl2_should_ignore_device(int device_index) {
     if (pex_str_contains_i(name, "accelerometer")) return 1;
     if (pex_str_contains_i(name, "android accelerometer")) return 1;
 #endif
+#ifdef PEX_PLATFORM_ANDROID_TV
+    /* Android TV remotes and HDMI-CEC navigation devices are often exposed by
+       SDL as zero-axis generic joysticks. They are handled through KeyEvent/
+       SOURCE_DPAD and must never switch the game into console-controller mode. */
+    if (pex_str_contains_i(name, "remote") || pex_str_contains_i(name, "cec") ||
+        pex_str_contains_i(name, "keyboard") || pex_str_contains_i(name, "mouse") ||
+        pex_str_contains_i(name, "virtual") ||
+        pex_str_contains_i(name, "generic gamepad")) return 1;
+    if (!SDL_IsGameController(device_index)) {
+        int axes = -1;
+        SDL_Joystick *probe = SDL_JoystickOpen(device_index);
+        if (probe) {
+            axes = SDL_JoystickNumAxes(probe);
+            int buttons = SDL_JoystickNumButtons(probe);
+            SDL_JoystickClose(probe);
+            if (axes < 2 || buttons < 8) return 1;
+        }
+    }
+#endif
     return 0;
 }
 
@@ -228,6 +247,17 @@ static void pex_gamepad_scan_devices(void) {
         if (SDL_IsGameController(i)) {
             SDL_GameController *gc = SDL_GameControllerOpen(i);
             if (!gc) continue;
+#ifdef PEX_PLATFORM_ANDROID_TV
+            /* A TV remote may be assigned SDL's generic controller mapping even
+               though it has only a D-pad and OK button. A real gamepad has an
+               analog joystick; reject D-pad-only mapped devices here. */
+            SDL_Joystick *underlying = SDL_GameControllerGetJoystick(gc);
+            if (!underlying || SDL_JoystickNumAxes(underlying) < 2 ||
+                SDL_JoystickNumButtons(underlying) < 8) {
+                SDL_GameControllerClose(gc);
+                continue;
+            }
+#endif
             g_sdl2_pads[slot] = gc;
             g_sdl2_pad_is_controller[slot] = 1;
             g_sdl2_pad_device_index[slot] = i;
@@ -311,13 +341,8 @@ static void pex_gamepad_platform_poll(PexGamepadState oldpads[PEX_GAMEPAD_MAX]) 
         if (g_gamepad_primary < 0) g_gamepad_primary = g_gamepad_count;
         g_gamepad_count++;
     }
-#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS)
+#if defined(PEX_PLATFORM_LGWEBOS)
     if (g_opts.tv_remote_mapped) pex_tv_remote_append_remote_pad(oldpads);
-    else {
-#ifdef PEX_PLATFORM_ANDROID_TV
-        pex_android_tv_append_remote_pad(oldpads);
-#endif
-    }
 #endif
 #ifdef PEX_PLATFORM_ANDROID
     (void)oldpads; /* Android touch is handled as touch/mouse focus, not as a controller. */
@@ -735,8 +760,10 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (g_gamepad_sneak_toggled || p->ls || (p->is_xbox && g_creative_flying && p->dpad_down))
         g_gamepad_vk_state[g_opts.keys[5] & 511] = 1; /* B toggle, LS hold, or fly down */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
-    if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;         /* break/attack */
-    if (p->lt_down) g_gamepad_vk_state[VK_RBUTTON] = 1;         /* place/use */
+    if (!g_gameplay_click_suppressed_until_release) {
+        if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;     /* break/attack */
+        if (p->lt_down) g_gamepad_vk_state[VK_RBUTTON] = 1;     /* place/use */
+    }
 #endif
 }
 
@@ -1266,9 +1293,11 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->dpad_left && !p->prev_dpad_left) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->dpad_right && !p->prev_dpad_right) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
 #else
-    if (p->rt_down && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
-    if (p->lt_down && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
-    if (!p->lt_down && p->prev_lt) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
+    if (!g_gameplay_click_suppressed_until_release) {
+        if (p->rt_down && !p->prev_rt) { mouse_down(g_gui_w / 2, g_gui_h / 2); mouse_up(g_gui_w / 2, g_gui_h / 2); }
+        if (p->lt_down && !p->prev_lt) mouse_right_down(g_gui_w / 2, g_gui_h / 2);
+        if (!p->lt_down && p->prev_lt) mouse_right_up(g_gui_w / 2, g_gui_h / 2);
+    }
     /* Legacy-console in-game D-pad behavior:
        Up/Down are reserved for vertical Creative-flight movement (handled in
        pex_gamepad_rebuild_virtual_keys above), Left opens chat, and Right
@@ -1289,9 +1318,6 @@ static void pex_gamepad_ingame_update(PexGamepadState *p, double dt) {
     if (p->back && !p->prev_back) set_screen(SCREEN_PAUSE);
     if (p->lb && !p->prev_lb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 8) % 9;
     if (p->rb && !p->prev_rb) g_selected_hotbar_slot = (g_selected_hotbar_slot + 1) % 9;
-#endif
-#ifdef PEX_PLATFORM_ANDROID_TV
-    pex_android_tv_ingame_update();
 #endif
 #ifdef PEX_PLATFORM_ANDROID
     /* Android touch tick runs from pex_gamepad_update even when gamepad focus is off. */
@@ -1322,8 +1348,31 @@ static void pex_gamepad_update(void) {
 #endif
 #endif
 
+#ifdef PEX_PLATFORM_ANDROID_TV
+    /* Process remote input before choosing the active gamepad. A remote press
+       forces mouse/keyboard focus, so a misreported generic SDL device cannot
+       contribute console virtual keys during the same frame. */
+    pex_android_tv_remote_update();
+#endif
     PexGamepadState *active_pad = (g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD) ? p : NULL;
     pex_gamepad_rebuild_virtual_keys(active_pad);
+    if (g_gameplay_click_suppressed_until_release) {
+        int held_click = p && (p->rt_down || p->lt_down);
+#ifdef PEX_PLATFORM_SDL2
+        /* Check the physical mouse state rather than the cleared edge cache.
+           Otherwise the barrier disappears one frame after death while the
+           button is still held, and Android can resume attack/use packets. */
+        {
+            Uint32 mouse_buttons = SDL_GetMouseState(NULL, NULL);
+            held_click = held_click ||
+                (mouse_buttons & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0;
+        }
+#endif
+#ifdef PEX_PLATFORM_ANDROID_TV
+        held_click = held_click || pex_android_tv_click_controls_down();
+#endif
+        if (!held_click) g_gameplay_click_suppressed_until_release = 0;
+    }
 #ifdef PEX_PLATFORM_ANDROID
     android_touch_apply_virtual_keys();
 #endif

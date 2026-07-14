@@ -4,6 +4,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 
 import org.libsdl.app.SDLActivity;
@@ -40,7 +41,7 @@ public class PexCraftActivity extends SDLActivity {
     private static volatile boolean classicCancelRequested = false;
 
 
-    public native boolean nativeOnTvKey(int keyCode, boolean down);
+    public native boolean nativeOnTvKey(int keyCode, boolean down, int source);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -289,15 +290,41 @@ public class PexCraftActivity extends SDLActivity {
             if (down && event.getRepeatCount() == 0) {
                 Log.d(TAG, KeyEvent.keyCodeToString(keyCode) + " = " + keyCode);
             }
-            if (isTvRemoteKey(keyCode)) {
+            if (isTvRemoteKey(keyCode) && isActualTvRemoteEvent(event)) {
                 try {
-                    if (nativeOnTvKey(keyCode, down)) return true;
+                    if (nativeOnTvKey(keyCode, down, event.getSource())) return true;
                 } catch (UnsatisfiedLinkError ignored) {
                     // SDL has not loaded libmain yet; fall through to default handling.
                 }
             }
         }
         return super.dispatchKeyEvent(event);
+    }
+
+
+    private static boolean isActualTvRemoteEvent(KeyEvent event) {
+        int source = event.getSource();
+        // Android mice can synthesize DPAD_CENTER/ENTER for the primary button.
+        // Let SDL receive those as mouse events; otherwise a click also jumps.
+        if ((source & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
+                || (source & InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS
+                || (source & InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN
+                || (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK) {
+            return false;
+        }
+        if ((source & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD) return true;
+        InputDevice device = event.getDevice();
+        if (device == null) return false;
+        int deviceSources = device.getSources();
+        if ((deviceSources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
+                || (deviceSources & InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS
+                || (deviceSources & InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN
+                || (deviceSources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (deviceSources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK) {
+            return false;
+        }
+        return (deviceSources & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD;
     }
 
     private static boolean isTvRemoteKey(int keyCode) {

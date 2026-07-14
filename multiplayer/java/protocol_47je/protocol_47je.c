@@ -18,7 +18,7 @@
 #define J47_SCORE_ENTRY_MAX 4096
 #define J47_BLOCK_UPDATE_CACHE_MAX 8192
 #define J47_TITLE_TEXT_MAX 1024
-#define J47_PENDING_CHUNK_MAX 256
+#define J47_PENDING_CHUNK_MAX 1024
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
 #define J47_ASYNC_INFLATE 0
 #else
@@ -2681,44 +2681,51 @@ static void j47_pending_chunk_drop_oldest(void) {
     g_j47_pending_chunk_count--;
 }
 
+static void j47_pending_chunk_remove_logical(int logical_index) {
+    if (logical_index < 0 || logical_index >= g_j47_pending_chunk_count) return;
+    int idx = (g_j47_pending_chunk_head + logical_index) % J47_PENDING_CHUNK_MAX;
+    free(g_j47_pending_chunks[idx].data);
+    for (int n = logical_index; n + 1 < g_j47_pending_chunk_count; ++n) {
+        int dst = (g_j47_pending_chunk_head + n) % J47_PENDING_CHUNK_MAX;
+        int src = (g_j47_pending_chunk_head + n + 1) % J47_PENDING_CHUNK_MAX;
+        g_j47_pending_chunks[dst] = g_j47_pending_chunks[src];
+    }
+    int tail = (g_j47_pending_chunk_head + g_j47_pending_chunk_count - 1) % J47_PENDING_CHUNK_MAX;
+    memset(&g_j47_pending_chunks[tail], 0, sizeof(g_j47_pending_chunks[tail]));
+    g_j47_pending_chunk_count--;
+}
+
+static void j47_pending_chunk_rotate_oldest(void) {
+    if (g_j47_pending_chunk_count <= 1) return;
+    J47PendingChunk temp = g_j47_pending_chunks[g_j47_pending_chunk_head];
+    memset(&g_j47_pending_chunks[g_j47_pending_chunk_head], 0, sizeof(temp));
+    g_j47_pending_chunk_head = (g_j47_pending_chunk_head + 1) % J47_PENDING_CHUNK_MAX;
+    int tail = (g_j47_pending_chunk_head + g_j47_pending_chunk_count - 1) % J47_PENDING_CHUNK_MAX;
+    g_j47_pending_chunks[tail] = temp;
+}
+
 static int j47_queue_chunk(int cx, int cz, int full, unsigned int mask,
                            const unsigned char *data, size_t len, int has_sky,
                            int empty_means_unload, unsigned int snapshot_serial) {
     size_t expected = j47_chunk_expected_bytes(mask, has_sky, full);
     if (!(full && mask == 0 && empty_means_unload) && len < expected) return 0;
 
-    /* A newer complete snapshot for the same chunk supersedes an older queued
-       snapshot that has not finished installing. This keeps movement through a
-       busy hub from building an unbounded stale chunk backlog. */
+    /* Keep only the newest complete snapshot for a coordinate. The old code
+       replaced one duplicate but could leave another older snapshot behind,
+       allowing stale data to overwrite the newer chunk later. */
     if (full) {
-        /* Replace the newest queued snapshot for this chunk. Older queued
-           snapshots, if any, will install first; no stale same-chunk snapshot
-           can remain after the replacement and overwrite the newer data. */
         for (int n = g_j47_pending_chunk_count - 1; n >= 0; --n) {
             int idx = (g_j47_pending_chunk_head + n) % J47_PENDING_CHUNK_MAX;
             J47PendingChunk *q = &g_j47_pending_chunks[idx];
-            if (q->used && q->cx == cx && q->cz == cz) {
-                unsigned char *copy = NULL;
-                if (len) {
-                    copy = (unsigned char*)malloc(len);
-                    if (!copy) return 0;
-                    memcpy(copy, data, len);
-                }
-                free(q->data);
-                memset(q, 0, sizeof(*q));
-                q->used = 1; q->cx = cx; q->cz = cz; q->full = full; q->mask = mask;
-                q->has_sky = has_sky; q->empty_means_unload = empty_means_unload;
-                q->snapshot_serial = snapshot_serial; q->data = copy; q->len = len;
-                return 1;
-            }
+            if (q->used && q->cx == cx && q->cz == cz)
+                j47_pending_chunk_remove_logical(n);
         }
     }
 
-    if (g_j47_pending_chunk_count >= J47_PENDING_CHUNK_MAX) {
-        /* Prefer current nearby data over an old queued snapshot. Packet-level
-           block updates remain cached and are replayed after installation. */
-        j47_pending_chunk_drop_oldest();
-    }
+    /* Never silently discard a server chunk. A dropped snapshot cannot be
+       requested again in protocol 47 and becomes a permanent hole after the
+       local world window moves. Fail visibly instead of corrupting the world. */
+    if (g_j47_pending_chunk_count >= J47_PENDING_CHUNK_MAX) return 0;
     int idx = (g_j47_pending_chunk_head + g_j47_pending_chunk_count) % J47_PENDING_CHUNK_MAX;
     J47PendingChunk *q = &g_j47_pending_chunks[idx];
     memset(q, 0, sizeof(*q));
@@ -2832,12 +2839,34 @@ static void j47_finish_pending_chunk(J47PendingChunk *q) {
     }
 }
 
+static int j47_pending_chunk_processable(const J47PendingChunk *q) {
+    if (!q || !q->used) return 0;
+    if (q->full && q->mask == 0 && q->empty_means_unload) return 1;
+    int lcx = (q->cx * 16 - g_flat_world_origin_x) / 16;
+    int lcz = (q->cz * 16 - g_flat_world_origin_z) / 16;
+    return flat_local_chunk_valid(lcx, lcz);
+}
+
 static void j47_pump_pending_chunks(double budget_seconds) {
     double started = now_seconds();
     int sections_done = 0;
+    int skipped_in_row = 0;
     while (g_j47_pending_chunk_count > 0) {
         J47PendingChunk *q = &g_j47_pending_chunks[g_j47_pending_chunk_head];
-        if (!q->used) { j47_pending_chunk_drop_oldest(); continue; }
+        if (!q->used) { j47_pending_chunk_drop_oldest(); skipped_in_row = 0; continue; }
+
+        /* The server may send a wider view than Android's active world window.
+           Retain those snapshots and rotate them behind visible work; consuming
+           them while invisible permanently lost the chunk when the player later
+           walked into it. */
+        if (!j47_pending_chunk_processable(q)) {
+            j47_pending_chunk_rotate_oldest();
+            skipped_in_row++;
+            if (skipped_in_row >= g_j47_pending_chunk_count) break;
+            continue;
+        }
+        skipped_in_row = 0;
+
         while (q->next_section < 16 && !q->full && !(q->mask & (1u << q->next_section))) q->next_section++;
         if (q->next_section < 16) {
             j47_apply_pending_chunk_section(q, q->next_section++);

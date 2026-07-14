@@ -53,6 +53,23 @@ static void set_screen(ScreenId s) {
         cancel_sword_item_use();
         g_right_use_button_down = 0;
     }
+    if (s == SCREEN_DEATH) {
+        /* A held mouse/trigger must not survive the transition into the death
+           screen. On Android this could resume as repeated attacks immediately
+           after a server respawn and trip click-rate checks. */
+        world_left_mouse_released();
+        g_air_swing_consumed = 0;
+        g_right_click_delay_timer = 0;
+        g_gameplay_click_suppressed_until_release = 1;
+        g_mouse_down = 0;
+        memset(g_gamepad_vk_state, 0, sizeof(g_gamepad_vk_state));
+#ifdef PEX_PLATFORM_ANDROID_TV
+        memset(g_android_tv_remote_vk_state, 0, sizeof(g_android_tv_remote_vk_state));
+#endif
+#ifdef PEX_PLATFORM_SDL2
+        memset(g_sdl2_mouse_buttons, 0, sizeof(g_sdl2_mouse_buttons));
+#endif
+    }
     if (g_mp_connected && (old_screen == SCREEN_WORKBENCH || old_screen == SCREEN_FURNACE || old_screen == SCREEN_CHEST) && old_screen != s)
         pex_net_send_container_close();
     if (old_screen == SCREEN_FURNACE && s != SCREEN_FURNACE) furnace_close_open_inventory();
@@ -211,7 +228,11 @@ static void pex_ui_text_input_begin_gui_rect(int x, int y, int w, int h) {
 }
 
 static int pex_virtual_keyboard_enabled(void) {
-#if defined(PEX_PLATFORM_ANDROID_TV) || defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    /* Android TV provides a real system IME through SDL_StartTextInput(). A TV
+       remote is not a controller and must not force the couch keyboard. */
+    return 0;
+#elif defined(PEX_PLATFORM_LGWEBOS) || defined(PEX_PLATFORM_XBOX_UWP)
     return 1;
 #else
     /* Desktop players keep native keyboard entry while using mouse/keyboard,
@@ -483,10 +504,16 @@ static int pex_tv_remote_handle_raw_key(int raw_key, int down) {
 }
 
 static ScreenId pex_startup_screen(void) {
+#if defined(PEX_PLATFORM_ANDROID_TV)
+    /* Android remotes have standard KeyEvent codes. Install defaults silently
+       instead of presenting a controller-setup flow on first launch. */
+    if (!g_opts.tv_remote_mapped) pex_tv_remote_apply_defaults();
+#else
     if (pex_tv_remote_platform_enabled() && !g_opts.tv_remote_mapped) {
         pex_tv_remote_map_prepare(SCREEN_TITLE, 1);
         return SCREEN_TV_REMOTE_MAP;
     }
+#endif
     if (!g_opts.name_set) {
         pex_name_screen_prepare(SCREEN_TITLE, 1);
         return SCREEN_SET_NAME;
