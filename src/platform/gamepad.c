@@ -693,7 +693,11 @@ static int pex_xinput_hud_bottom_offset(void) {
 
 static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     memset(g_gamepad_vk_state, 0, sizeof(g_gamepad_vk_state));
-    if (!p || g_screen != SCREEN_INGAME || g_player_dead) return;
+    if (g_player_dead) {
+        g_gamepad_sneak_toggled = 0;
+        return;
+    }
+    if (!p || g_screen != SCREEN_INGAME) return;
 #ifdef PEX_PLATFORM_PSP
     /* PSP gameplay mapping is intentionally different from menu/inventory mapping.
        Menus still use Cross=select, Circle=back, D-pad/analog navigation.
@@ -717,8 +721,10 @@ static void pex_gamepad_rebuild_virtual_keys(PexGamepadState *p) {
     if (p->ly >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[2] & 511] = 1;
     if (p->lx < -PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[1] & 511] = 1;
     if (p->lx >  PEX_GAMEPAD_DEADZONE) g_gamepad_vk_state[g_opts.keys[3] & 511] = 1;
+    if (p->b && !p->prev_b) g_gamepad_sneak_toggled = !g_gamepad_sneak_toggled;
     if (p->a || (g_creative_flying && p->dpad_up)) g_gamepad_vk_state[g_opts.keys[4] & 511] = 1; /* jump/fly up */
-    if (p->b || p->ls || (g_creative_flying && p->dpad_down)) g_gamepad_vk_state[g_opts.keys[5] & 511] = 1; /* sneak/fly down */
+    if (g_gamepad_sneak_toggled || p->ls || (g_creative_flying && p->dpad_down))
+        g_gamepad_vk_state[g_opts.keys[5] & 511] = 1; /* B toggle, LS hold, or fly down */
     /* RT is break/attack. RB must not mirror RT; RB is reserved for hotbar next. */
     if (p->rt_down) g_gamepad_vk_state[VK_LBUTTON] = 1;         /* break/attack */
     if (p->lt_down) g_gamepad_vk_state[VK_RBUTTON] = 1;         /* place/use */
@@ -1303,6 +1309,7 @@ static void pex_gamepad_update(void) {
        controller left gamepad prompts and virtual input latched forever. */
     if (!p && g_input_focus_mode == PEX_INPUT_FOCUS_GAMEPAD)
         pex_input_focus_set(PEX_INPUT_FOCUS_MOUSE);
+    if (!p) g_gamepad_sneak_toggled = 0;
 #endif
 #endif
 
@@ -1331,6 +1338,7 @@ static void pex_gamepad_update(void) {
 }
 
 static void pex_gamepad_shutdown(void) {
+    g_gamepad_sneak_toggled = 0;
 #ifdef PEX_PLATFORM_SDL2
     gamepad_sdl2_close_all();
 #endif

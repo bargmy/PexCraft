@@ -2696,7 +2696,10 @@ static void pex_net_apply_snapshot(const PexNetSnapshot *snap) {
 
     g_mp_player_count = snap->player_count;
     if (g_mp_player_count < 0) g_mp_player_count = 0;
-    if (g_mp_player_count > PEX_NET_MAX_PLAYERS) g_mp_player_count = PEX_NET_MAX_PLAYERS;
+    /* PXNET v6 snapshots retain their original 16-player wire layout even
+       though Java/Bedrock clients can now track a much larger hub locally. */
+    if (g_mp_player_count > PEX_NET_SNAPSHOT_MAX_PLAYERS)
+        g_mp_player_count = PEX_NET_SNAPSHOT_MAX_PLAYERS;
     for (int i = 0; i < g_mp_player_count; i++) {
         g_mp_players[i] = snap->players[i];
         g_mp_prev_players[i] = g_mp_players[i];
@@ -3785,50 +3788,78 @@ static void pex_net_send_player_action(int action, int x, int y, int z, int face
     net_send_action_progress(action, x, y, z, face, block_id, 0);
 }
 
+static int pex_net_ray_remote_player(const PexNetPlayerState *p,
+                                     float lx, float ly, float lz,
+                                     float max_dist, float *out_t) {
+    if (!p || p->player_id <= 0 || max_dist <= 0.0f) return 0;
+
+    /* EntityRenderer.getMouseOver uses the tick-owned entity AABB, not the
+       separately smoothed render model.  Targeting the render position made
+       fast/stuttering players look hittable while C02 was sent for a box that
+       the protocol entity had already left. */
+    const float half_width = 0.30f;
+    const float border = 0.10f;
+    float feet_y = p->y - 1.62f;
+    float mn[3] = {p->x - half_width - border, feet_y - border,
+                   p->z - half_width - border};
+    float mx[3] = {p->x + half_width + border, feet_y + 1.80f + border,
+                   p->z + half_width + border};
+
+    double local_x = (double)g_player_x;
+    double local_feet_y = (double)g_player_y - 1.62;
+    double local_z = (double)g_player_z;
+    if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE)
+        java47_player_network_position(&local_x, &local_feet_y, &local_z);
+    float o[3] = {(float)local_x, (float)(local_feet_y + (double)1.62f), (float)local_z};
+    float d[3] = {lx, ly, lz};
+    float tmin = 0.0f, tmax = max_dist;
+    const float eps = 0.00001f;
+
+    for (int axis = 0; axis < 3; ++axis) {
+        if (fabsf(d[axis]) < eps) {
+            if (o[axis] < mn[axis] || o[axis] > mx[axis]) return 0;
+        } else {
+            float inv = 1.0f / d[axis];
+            float t1 = (mn[axis] - o[axis]) * inv;
+            float t2 = (mx[axis] - o[axis]) * inv;
+            if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+            if (t1 > tmin) tmin = t1;
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) return 0;
+        }
+    }
+    if (tmin < 0.0f || tmin > max_dist) return 0;
+    if (out_t) *out_t = tmin;
+    return 1;
+}
+
+static float pex_net_entity_reach_188(void) {
+    /* In EntityRenderer.getMouseOver, survival entity targeting is discarded
+       past 3 blocks even though block reach is 4.5. Creative extended reach is
+       6 blocks. Sending attacks in the old 3..4.25 range made the animation
+       play locally while a vanilla server correctly rejected the hit. */
+    return player_is_creative() ? 6.0f : 3.0f;
+}
+
 static int pex_net_player_ray_distance(float max_dist, float *out_t) {
     if (out_t) *out_t = 9999.0f;
     if (!g_mp_connected || !g_mp_world_ready || g_player_dead) return 0;
+
+    float reach = pex_net_entity_reach_188();
+    if (max_dist <= 0.0f || max_dist > reach) max_dist = reach;
 
     float lx, ly, lz;
     pex_touch_aware_look_vector(&lx, &ly, &lz);
     int found = 0;
     float best_t = max_dist;
-    if (best_t <= 0.0f) best_t = 5.0f;
 
-    for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
-        PexNetRenderPlayerState *r = &g_mp_render_players[i];
-        if (!r->active || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
-        const PexNetPlayerState *st = pex_net_find_player_state(r->player_id);
-        if (st && st->health <= 0) continue;
+    for (int i = 0; i < g_mp_player_count; ++i) {
+        const PexNetPlayerState *p = &g_mp_players[i];
+        if (p->player_id <= 0 || p->player_id == g_mp_player_id || p->health <= 0) continue;
 
-        float feet_y = r->y - 1.62f;
-        float min_x = r->x - 0.35f, max_x = r->x + 0.35f;
-        float min_y = feet_y, max_y = feet_y + 1.85f;
-        float min_z = r->z - 0.35f, max_z = r->z + 0.35f;
-
-        float o[3] = {g_player_x, g_player_y, g_player_z};
-        float d[3] = {lx, ly, lz};
-        float mn[3] = {min_x, min_y, min_z};
-        float mx[3] = {max_x, max_y, max_z};
-        float tmin = 0.0f, tmax = best_t;
-        const float eps = 0.00001f;
-        int hit = 1;
-        for (int axis = 0; axis < 3; axis++) {
-            if (fabsf(d[axis]) < eps) {
-                if (o[axis] < mn[axis] || o[axis] > mx[axis]) { hit = 0; break; }
-            } else {
-                float inv = 1.0f / d[axis];
-                float t1 = (mn[axis] - o[axis]) * inv;
-                float t2 = (mx[axis] - o[axis]) * inv;
-                if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
-                if (t1 > tmin) tmin = t1;
-                if (t2 < tmax) tmax = t2;
-                if (tmin > tmax) { hit = 0; break; }
-            }
-        }
-        if (!hit || tmin < 0.0f) continue;
-        if (tmin < best_t) {
-            best_t = tmin;
+        float t = best_t;
+        if (pex_net_ray_remote_player(p, lx, ly, lz, best_t, &t) && t < best_t) {
+            best_t = t;
             found = 1;
         }
     }
@@ -3840,61 +3871,35 @@ static int pex_net_player_ray_distance(float max_dist, float *out_t) {
 static int pex_net_try_attack_player(void) {
     if (!g_mp_connected || !g_mp_world_ready || g_mp_player_id <= 0 || g_player_dead) return 0;
 
+    float reach = pex_net_entity_reach_188();
     FlatRayHit block_hit = flat_raycast();
-    float block_dist = 4.25f;
+    float block_dist = reach;
     if (block_hit.hit) {
         float bx = block_hit.hx - g_player_x;
         float by = block_hit.hy - g_player_y;
         float bz = block_hit.hz - g_player_z;
-        block_dist = sqrtf(bx * bx + by * by + bz * bz);
+        float hit_dist = sqrtf(bx * bx + by * by + bz * bz);
+        if (hit_dist < block_dist) block_dist = hit_dist;
     }
-
-    float player_t = 9999.0f;
-    if (!pex_net_player_ray_distance(block_dist, &player_t)) return 0;
 
     float lx, ly, lz;
     pex_touch_aware_look_vector(&lx, &ly, &lz);
     int best_id = 0;
     float best_t = block_dist;
-    for (int i = 0; i < PEX_NET_MAX_PLAYERS; i++) {
-        PexNetRenderPlayerState *r = &g_mp_render_players[i];
-        if (!r->active || r->player_id <= 0 || r->player_id == g_mp_player_id) continue;
-        const PexNetPlayerState *st = pex_net_find_player_state(r->player_id);
-        if (st && st->health <= 0) continue;
+    for (int i = 0; i < g_mp_player_count; ++i) {
+        const PexNetPlayerState *p = &g_mp_players[i];
+        if (p->player_id <= 0 || p->player_id == g_mp_player_id || p->health <= 0) continue;
 
-        float feet_y = r->y - 1.62f;
-        float min_x = r->x - 0.35f, max_x = r->x + 0.35f;
-        float min_y = feet_y, max_y = feet_y + 1.85f;
-        float min_z = r->z - 0.35f, max_z = r->z + 0.35f;
-        float o[3] = {g_player_x, g_player_y, g_player_z};
-        float d[3] = {lx, ly, lz};
-        float mn[3] = {min_x, min_y, min_z};
-        float mx[3] = {max_x, max_y, max_z};
-        float tmin = 0.0f, tmax = best_t;
-        const float eps = 0.00001f;
-        int hit = 1;
-        for (int axis = 0; axis < 3; axis++) {
-            if (fabsf(d[axis]) < eps) {
-                if (o[axis] < mn[axis] || o[axis] > mx[axis]) { hit = 0; break; }
-            } else {
-                float inv = 1.0f / d[axis];
-                float t1 = (mn[axis] - o[axis]) * inv;
-                float t2 = (mx[axis] - o[axis]) * inv;
-                if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
-                if (t1 > tmin) tmin = t1;
-                if (t2 < tmax) tmax = t2;
-                if (tmin > tmax) { hit = 0; break; }
-            }
-        }
-        if (!hit || tmin < 0.0f) continue;
-        if (tmin < best_t) {
-            best_t = tmin;
-            best_id = r->player_id;
+        float t = best_t;
+        if (pex_net_ray_remote_player(p, lx, ly, lz, best_t, &t) && t < best_t) {
+            best_t = t;
+            best_id = p->player_id;
         }
     }
 
     if (best_id <= 0) {
-        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE) return pex_java47_try_attack_mob(block_dist);
+        if (g_mp_join_backend == PEX_MP_JOIN_BACKEND_JAVA_PROTOCOL_47JE)
+            return pex_java47_try_attack_mob(block_dist);
         return 0;
     }
     ItemStack *held = &g_inventory[g_selected_hotbar_slot];

@@ -1538,6 +1538,9 @@ static PexGamepadState g_gamepads[PEX_GAMEPAD_MAX];
 static int g_gamepad_count = 0;
 static int g_gamepad_primary = -1;
 static int g_gamepad_vk_state[512];
+/* Legacy-console style B-button crouch latch. Keyboard/LS sneak remain held
+   inputs; only a rising edge of the gamepad B button changes this state. */
+static int g_gamepad_sneak_toggled = 0;
 static float g_gamepad_virtual_cursor_x = 213.0f;
 static float g_gamepad_virtual_cursor_y = 120.0f;
 static int g_gamepad_virtual_cursor_active = 0;
@@ -3308,6 +3311,7 @@ static void pex_mp_cache_save_request_stop(void);
 static void pex_mp_cache_save_shutdown(void);
 static void pex_net_send_player_state(void);
 static void java47_player_network_position(double *x, double *feet_y, double *z);
+static void java47_player_network_position_reset(double x, double feet_y, double z);
 static void pex_net_send_block_action(int action, int x, int y, int z, int face, int block_id);
 static int pex_net_send_block_interact(int x, int y, int z, int face);
 static int pex_net_send_use_item_air(void);

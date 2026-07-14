@@ -7,7 +7,11 @@
 #define PEX_NET_MAGIC "PXNET10"
 #define PEX_NET_MAGIC_LEN 7
 #define PEX_NET_PROTOCOL_VERSION 6
-#define PEX_NET_MAX_PLAYERS 16
+/* Client-side player tracking must be large enough for Java/Bedrock hubs.
+   Keep the legacy PXNET snapshot wire format at 16 players below so this
+   capacity increase does not change the custom protocol packet size. */
+#define PEX_NET_MAX_PLAYERS 128
+#define PEX_NET_SNAPSHOT_MAX_PLAYERS 16
 #define PEX_NET_MAX_DROPS 64
 #define PEX_NET_MAX_FALLING_BLOCKS 64
 #define PEX_NET_MAX_CHAT 180
@@ -303,7 +307,7 @@ typedef struct PexNetChunkRequest {
 typedef struct PexNetSnapshot {
     uint32_t tick;
     int32_t player_count;
-    PexNetPlayerState players[PEX_NET_MAX_PLAYERS];
+    PexNetPlayerState players[PEX_NET_SNAPSHOT_MAX_PLAYERS];
     int32_t drop_count;
     PexNetDropState drops[PEX_NET_MAX_DROPS];
     int32_t falling_count;
