@@ -1,20 +1,27 @@
 # PEXCRAFT Linux SDL2/OpenGL build.
 # Dependencies on Debian/Ubuntu:
-#   sudo apt install build-essential pkg-config libsdl2-dev libsdl2-image-dev libgl1-mesa-dev libglu1-mesa-dev zlib1g-dev
+#   sudo apt install python3 build-essential pkg-config libsdl2-dev libsdl2-image-dev libgl1-mesa-dev libglu1-mesa-dev zlib1g-dev
 
 CC ?= gcc
+PYTHON ?= python3
+BUILD_INFO_HEADER := build/generated/pex_build_info.h
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 SDL2_image)
 SDL_LIBS := $(shell pkg-config --libs sdl2 SDL2_image)
 LIBS := $(SDL_LIBS) -lGL -lGLU -lz -ldl -lm -pthread
 TARGET := pexcraft_sdl2
 
-.PHONY: all clean run
+.PHONY: all clean run FORCE
 
 all: $(TARGET)
 
-$(TARGET): main_sdl2.c $(wildcard src/*/*.c) src/common/common.h src/platform/sdl2_compat.h
-	$(CC) $(CFLAGS) $(SDL_CFLAGS) main_sdl2.c -o $@ $(LIBS)
+$(BUILD_INFO_HEADER): tools/generate_build_info.py FORCE
+	$(PYTHON) tools/generate_build_info.py --output $@
+
+FORCE:
+
+$(TARGET): main_sdl2.c $(wildcard src/*/*.c) src/common/common.h src/platform/sdl2_compat.h $(BUILD_INFO_HEADER)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -include $(BUILD_INFO_HEADER) main_sdl2.c -o $@ $(LIBS)
 
 run: $(TARGET)
 	./$(TARGET)

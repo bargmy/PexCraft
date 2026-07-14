@@ -68,6 +68,7 @@ static void set_screen(ScreenId s) {
         if (!g_release_title_state_initialized || old_screen != SCREEN_TITLE) {
             release_title_state_enter();
             g_release_title_state_initialized = 1;
+            g_title_build_info_visible = 0;
         }
         if (!g_boot_sequence_done && g_title_enter_time <= 0.0) g_title_enter_time = now_seconds();
         /* Do not clear the title-music state when returning from Options,
@@ -1762,8 +1763,73 @@ static void mouse_right_up(int mx, int my) {
     g_right_use_button_down = 0;
 }
 
+static int pex_build_info_has_text(void) {
+    return PEX_BUILD_COMMIT_NAME[0] || PEX_BUILD_COMMIT_HASH[0];
+}
+
+static int pex_open_external_url(const char *url) {
+    if (!url || !url[0]) return 0;
+#if defined(PEX_PLATFORM_SDL2)
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    return SDL_OpenURL(url) == 0;
+#elif defined(PEX_PLATFORM_LINUX_SDL2)
+    {
+        pid_t pid = fork();
+        if (pid == 0) {
+            execlp("xdg-open", "xdg-open", url, (char *)NULL);
+            _exit(127);
+        }
+        return pid > 0;
+    }
+#else
+    return 0;
+#endif
+#elif defined(PEX_PLATFORM_XBOX_UWP)
+    extern int pex_xbox_uwp_open_url(const char *url);
+    return pex_xbox_uwp_open_url(url);
+#elif defined(_WIN32)
+    return (intptr_t)ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL) > 32;
+#else
+    return 0;
+#endif
+}
+
+static int pex_title_build_info_click(int mx, int my) {
+    int line_x = 2;
+    int name_y = g_gui_h - 30;
+    int hash_y = g_gui_h - 20;
+    int name_w;
+    int hash_w;
+    if (!g_title_build_info_visible || !PEX_BUILD_COMMIT_URL[0]) return 0;
+
+    name_w = PEX_BUILD_COMMIT_NAME[0] ? text_width(PEX_BUILD_COMMIT_NAME) : 0;
+    hash_w = PEX_BUILD_COMMIT_HASH[0] ? text_width(PEX_BUILD_COMMIT_HASH) : 0;
+    if ((name_w > 0 && mx >= line_x && mx < line_x + name_w &&
+         my >= name_y - 1 && my < name_y + 9) ||
+        (hash_w > 0 && mx >= line_x && mx < line_x + hash_w &&
+         my >= hash_y - 1 && my < hash_y + 9)) {
+        pex_sound_play("random.click", 1.0f, 1.0f);
+        pex_open_external_url(PEX_BUILD_COMMIT_URL);
+        return 1;
+    }
+    return 0;
+}
+
 static void mouse_down(int mx, int my) {
     g_mouse_down = 1;
+    if (g_screen == SCREEN_TITLE && g_boot_sequence_done) {
+        int version_x = 2;
+        int version_y = g_gui_h - 10;
+        int version_w = text_width(VERSION_TEXT);
+        if (pex_title_build_info_click(mx, my)) return;
+        if (mx >= version_x && mx < version_x + version_w &&
+            my >= version_y - 1 && my < version_y + 9 &&
+            pex_build_info_has_text()) {
+            g_title_build_info_visible = !g_title_build_info_visible;
+            pex_sound_play("random.click", 1.0f, 1.0f);
+            return;
+        }
+    }
     if (g_screen == SCREEN_CREATIVE) { creative_mouse_click(mx, my, 0); return; }
     if (g_screen == SCREEN_INVENTORY || g_screen == SCREEN_WORKBENCH || g_screen == SCREEN_FURNACE || g_screen == SCREEN_CHEST) { inventory_mouse_click(mx, my, 0); return; }
     if (g_screen == SCREEN_INGAME) {

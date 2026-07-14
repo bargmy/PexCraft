@@ -11,6 +11,9 @@ pkg_check_modules(CURL REQUIRED libcurl)
 
 add_executable(pexcraft_lgwebos ../main_lgwebos.c)
 
+include("${CMAKE_SOURCE_DIR}/../cmake/PexBuildInfo.cmake")
+pex_enable_build_info(pexcraft_lgwebos "${CMAKE_SOURCE_DIR}/..")
+
 target_compile_definitions(pexcraft_lgwebos PRIVATE
     PEX_PLATFORM_LGWEBOS=1
     PEX_PLATFORM_SDL2=1

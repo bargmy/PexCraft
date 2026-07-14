@@ -666,6 +666,12 @@ static void draw_title_screen(float partial) {
     glScalef(s, s, s);
     draw_centered_text(g_splash, 0, -8, 16776960);
     glPopMatrix();
+    if (g_title_build_info_visible) {
+        if (PEX_BUILD_COMMIT_NAME[0])
+            draw_text(PEX_BUILD_COMMIT_NAME, 2, g_gui_h - 30, 16777215);
+        if (PEX_BUILD_COMMIT_HASH[0])
+            draw_text(PEX_BUILD_COMMIT_HASH, 2, g_gui_h - 20, 16777215);
+    }
     draw_text(VERSION_TEXT, 2, g_gui_h - 10, 16777215);
     const char *copy = "Copyright to no one. This is for everyone!";
     draw_text(copy, g_gui_w - text_width(copy) - 2, g_gui_h - 10, 16777215);

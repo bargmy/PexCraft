@@ -35,6 +35,9 @@ endif()
 
 add_library(main SHARED "${REPO_ROOT}/src/main_android.c")
 
+include("${REPO_ROOT}/cmake/PexBuildInfo.cmake")
+pex_enable_build_info(main "${REPO_ROOT}")
+
 target_compile_definitions(main PRIVATE
     PEX_PLATFORM_ANDROID=1
     PEX_PLATFORM_SDL2=1

@@ -54,6 +54,18 @@
 
 #define APP_TITLE "PexCraft"
 #define VERSION_TEXT "PexCraft 1.2.5"
+#ifndef PEX_BUILD_COMMIT_NAME
+#define PEX_BUILD_COMMIT_NAME ""
+#endif
+#ifndef PEX_BUILD_COMMIT_HASH
+#define PEX_BUILD_COMMIT_HASH ""
+#endif
+#ifndef PEX_BUILD_REPOSITORY_URL
+#define PEX_BUILD_REPOSITORY_URL ""
+#endif
+#ifndef PEX_BUILD_COMMIT_URL
+#define PEX_BUILD_COMMIT_URL ""
+#endif
 #define MAX_BUTTONS 64
 #define MAX_LABEL 256
 #define MAX_PATHBUF 1024
@@ -1215,6 +1227,7 @@ static int g_mouse_x = 0, g_mouse_y = 0;
 static int g_mouse_down = 0;
 static int g_running = 1;
 static ScreenId g_screen = SCREEN_TITLE;
+static int g_title_build_info_visible = 0;
 static ScreenId g_parent_screen = SCREEN_TITLE;
 static ScreenId g_language_return_screen = SCREEN_TITLE;
 static Button g_buttons[MAX_BUTTONS];

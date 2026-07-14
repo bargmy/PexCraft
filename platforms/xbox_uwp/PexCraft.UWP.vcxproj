@@ -43,6 +43,7 @@
       <SDLCheck>true</SDLCheck>
       <ExceptionHandling>Sync</ExceptionHandling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <ForcedIncludeFiles>$(ProjectDir)..\..\build\generated\pex_build_info.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <Link>
       <AdditionalDependencies>windowsapp.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;runtimeobject.lib;windowscodecs.lib;ole32.lib;ws2_32.lib;$(ZlibLibrary)</AdditionalDependencies>

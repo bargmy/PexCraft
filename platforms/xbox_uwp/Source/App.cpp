@@ -92,6 +92,19 @@ static std::wstring pex_wide_from_utf8(const char *text) {
     return out;
 }
 
+extern "C" int pex_xbox_uwp_open_url(const char *url) {
+    if (!url || !*url) return 0;
+    try {
+        std::wstring wide = pex_wide_from_utf8(url);
+        if (wide.empty()) return 0;
+        win_system::Launcher::LaunchUriAsync(
+            winrt::Windows::Foundation::Uri(winrt::hstring(wide.c_str())));
+        return 1;
+    } catch (...) {
+        return 0;
+    }
+}
+
 extern "C" int pex_xbox_uwp_http_download_to_memory(const char *url, char **out_data, size_t *out_len, size_t max_len, volatile long *cancel_flag) {
     if (out_data) *out_data = nullptr;
     if (out_len) *out_len = 0;

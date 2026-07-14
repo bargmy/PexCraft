@@ -1,5 +1,7 @@
 @echo off
 setlocal EnableExtensions
+call tools\generate_build_info.bat
+if errorlevel 1 exit /b 1
 
 rem Build the client as a real 64-bit Windows executable using MSYS2 mingw64.
 rem Do not call cc1.exe directly; always call the GCC driver in mingw64\bin.
@@ -30,7 +32,7 @@ if errorlevel 1 (
 set "OUT=pexcraft_x64.exe"
 
 rem -static and -static-libgcc avoid accidental dependency on 32-bit MinGW runtime DLLs in PATH.
-"%CC_X64%" -m64 -std=c99 -O2 -Wall -Wextra -mwindows main.c -o "%OUT%" -static -static-libgcc -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
+"%CC_X64%" -include build/generated/pex_build_info.h -m64 -std=c99 -O2 -Wall -Wextra -mwindows main.c -o "%OUT%" -static -static-libgcc -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
 if errorlevel 1 exit /b 1
 
 if exist "%OBJDUMP_X64%" (

@@ -17,7 +17,9 @@ ifeq ($(wildcard $(PSPSDK)/lib/build.mak),)
 endif
 
 PSP_REAL_WORLD ?= 1
-CFLAGS = -std=c99 -O2 -fno-math-errno -ffast-math -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -DPEX_PSP_LOW_MEMORY=1 -DPEX_PSP_MEMORY_ONLY=1 -DPEX_PSP_BOOT_DEBUG=0 -DPEX_PSP_VERBOSE=0 -DPEX_PSP_PERF=1 -Isrc
+PYTHON ?= python3
+BUILD_INFO_HEADER := build/generated/pex_build_info.h
+CFLAGS = -include $(BUILD_INFO_HEADER) -std=c99 -O2 -fno-math-errno -ffast-math -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -DPEX_PSP_LOW_MEMORY=1 -DPEX_PSP_MEMORY_ONLY=1 -DPEX_PSP_BOOT_DEBUG=0 -DPEX_PSP_VERBOSE=0 -DPEX_PSP_PERF=1 -Isrc
 ifeq ($(PSP_REAL_WORLD),1)
 CFLAGS += -DPEX_PSP_REAL_BETA_GEN=1 -DPEX_PSP_FAST_WORLD=0 -DPEX_PSP_1000_TARGET=0
 else
@@ -31,7 +33,17 @@ LDFLAGS += -Wl,-Map,PEXCRAFT.map
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PEXCRAFT
 
-build/psp_generated/psp_mcrw_assets.o: build/psp_generated/psp_mcrw_assets.S build/psp_generated/psp_mcrw_assets.pak
+
+.PHONY: FORCE
+$(BUILD_INFO_HEADER): tools/generate_build_info.py FORCE
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/generate_build_info.py --output $@
+
+FORCE:
+
+main_psp.o: $(BUILD_INFO_HEADER)
+
+build/psp_generated/psp_mcrw_assets.o: build/psp_generated/psp_mcrw_assets.S build/psp_generated/psp_mcrw_assets.pak $(BUILD_INFO_HEADER)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 include $(PSPSDK)/lib/build.mak

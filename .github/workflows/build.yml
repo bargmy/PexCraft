@@ -129,8 +129,9 @@ jobs:
             echo "Builder:     Windows ${{ matrix.arch }} MinGW / ${{ matrix.msystem }}"
             echo
             gcc --version
+            python tools/generate_build_info.py
 
-            gcc -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
+            gcc -include build/generated/pex_build_info.h -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/${{ matrix.out_exe }} \
               -static -static-libgcc \
               -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
               -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm
@@ -515,8 +516,9 @@ jobs:
             echo
             clang --version
             clang -print-target-triple || true
+            python tools/generate_build_info.py
 
-            clang -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/pexcraft-win-arm64.exe \
+            clang -include build/generated/pex_build_info.h -std=c99 -O2 -Wall -Wextra -mwindows main.c -o build/pexcraft-win-arm64.exe \
               -static \
               -ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 \
               -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm

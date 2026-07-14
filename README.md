@@ -73,3 +73,14 @@ text fields open the built-in virtual keyboard on every controller platform.
 The Xbox UWP target polls physical controllers through `Windows.Gaming.Input` and
 keeps CoreWindow Gamepad virtual keys as a media-remote fallback when no physical
 controller is connected.
+
+## Build commit information
+
+The supported build scripts run `tools/generate_build_info.py` before compiling.
+It reads the checked-out Git commit subject, full SHA, and `origin` repository URL,
+then force-includes an ASCII-safe generated header. When Git metadata is unavailable,
+the embedded name, SHA, repository, and commit URL remain empty.
+
+On the title screen, click `PexCraft 1.2.5` to show or hide the embedded commit
+subject and SHA. Clicking either visible line opens the exact commit URL in the
+platform browser when that platform supports external URLs.

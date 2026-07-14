@@ -4468,6 +4468,13 @@ static int flat_face_exposed_for_block(int id, int x, int y, int z, int face) {
         return (face == 1 || face == 3 || face == 5);
     }
 
+    /* BlockBreakable.shouldSideBeRendered() hides the shared face between
+       adjacent glass blocks.  Treating glass as merely non-occluding made every
+       block in a glass wall keep all six faces, including pairs of coplanar
+       internal quads.  Large windows therefore multiplied vertex work, alpha
+       testing, overdraw, and connected-texture neighbour checks. */
+    if (id == BLOCK_GLASS && n == BLOCK_GLASS) return 0;
+
     /* A snow layer sits directly on the top face of the supporting block.
        Rendering the covered grass/dirt/stone top doubles the visible-surface
        cost across snowy biomes and creates unnecessary overdraw/z pressure.
@@ -4709,8 +4716,10 @@ static int block_texture_resolve(int block_id, int meta, int face) {
         case BLOCK_MELON_STEM:
             return cross_plant_tile_for_block_meta(block_id, meta);
         case BLOCK_WOOL: {
-            /* Java block/item metadata is 0=white ... 15=black, while the
-               classic terrain atlas stores cloth tiles in inverted dye order. */
+            /* The release terrain atlas keeps plain white wool at tile 64
+               (column 0, the fifth row when rows are counted from one).
+               Colored cloth remains in the classic inverted dye strip. */
+            if (meta == 0) return 64;
             int wm = (~meta) & 15;
             return 113 + ((wm & 8) >> 3) + ((wm & 7) * 16);
         }

@@ -12,6 +12,7 @@ ROOT        ?= .
 DEVKITPRO  ?= /opt/devkitpro
 DEVKITPPC  ?= $(DEVKITPRO)/devkitPPC
 PYTHON      ?= python3
+BUILD_INFO_HEADER := build/generated/pex_build_info.h
 
 ifeq ($(strip $(DEVKITPPC)),)
 $(error "Please set DEVKITPPC in your environment. export DEVKITPPC=<path to>devkitPPC")
@@ -30,7 +31,7 @@ ELF2DOL    ?= $(DEVKITPRO)/tools/bin/elf2dol
 # Fallback for unusual installs where wii_rules did not define MACHDEP.
 MACHDEP    ?= -mrvl -mcpu=750 -meabi -mhard-float
 
-CFLAGS := -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1 \
+CFLAGS := -include $(BUILD_INFO_HEADER) -std=gnu99 -O2 -Wall -Wextra -DGEKKO -DHW_RVL -DPEX_PLATFORM_WII=1 \
           $(MACHDEP) \
           -I$(DEVKITPRO)/libogc/include -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/platforms/wii
 LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/$(TARGET).map -L$(DEVKITPRO)/libogc/lib/wii
@@ -47,8 +48,15 @@ NM := $(PREFIX)nm
 MAX_DOL_BYTES ?= 16777216
 MAX_ASSET_PAK_BYTES ?= 6291456
 
-.PHONY: all clean install-sd assets
+.PHONY: all clean install-sd assets FORCE
 all: $(DOL)
+
+$(BUILD_INFO_HEADER): $(ROOT)/tools/generate_build_info.py FORCE
+	@mkdir -p $(dir $@)
+	$(PYTHON) $(ROOT)/tools/generate_build_info.py --root $(ROOT) --output $@
+
+FORCE:
+
 assets: $(WII_ASSET_PAK) $(WII_ASSET_ASM)
 
 $(BUILD) $(GEN):
@@ -61,10 +69,10 @@ $(WII_ASSET_PAK): $(ROOT)/tools/prepare_wii_assets.py | $(GEN)
 $(WII_ASSET_ASM): $(WII_ASSET_PAK)
 	@test -f $@ || $(PYTHON) $(ROOT)/tools/prepare_wii_assets.py $(GEN)/assets $(WII_ASSET_PAK) $(WII_ASSET_ASM)
 
-$(MAIN_OBJ): $(SRC) | $(BUILD)
+$(MAIN_OBJ): $(SRC) $(BUILD_INFO_HEADER) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(WII_ASSET_OBJ): $(WII_ASSET_ASM) $(WII_ASSET_PAK) | $(BUILD)
+$(WII_ASSET_OBJ): $(WII_ASSET_ASM) $(WII_ASSET_PAK) $(BUILD_INFO_HEADER) | $(BUILD)
 	$(CC) $(CFLAGS) -c $(WII_ASSET_ASM) -o $@
 
 $(ELF): $(MAIN_OBJ) $(WII_ASSET_OBJ) | $(BUILD)

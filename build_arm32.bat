@@ -1,5 +1,7 @@
 @echo off
 setlocal EnableExtensions
+call tools\generate_build_info.bat
+if errorlevel 1 exit /b 1
 
 rem Windows ARM32 cross-build helper.
 rem This is intended for llvm-mingw/clang toolchains that provide an armv7-w64-mingw32 target.
@@ -10,7 +12,7 @@ if not defined WIN_ARM32_CC set "WIN_ARM32_CC=%WIN_ARM32_BIN%\armv7-w64-mingw32-
 if not exist "%WIN_ARM32_CC%" set "WIN_ARM32_CC=armv7-w64-mingw32-clang"
 
 set "OUT=pexcraft_win_arm32.exe"
-set "COMMON_FLAGS=-std=c99 -O2 -Wall -Wextra -DPEX_TARGET_WINDOWS_ARM32=1 -mwindows"
+set "COMMON_FLAGS=-include build/generated/pex_build_info.h -std=c99 -O2 -Wall -Wextra -DPEX_TARGET_WINDOWS_ARM32=1 -mwindows"
 set "LIBS=-ld3d11 -ldxgi -ld3dcompiler -ld3d9 -lopengl32 -lglu32 -lgdi32 -luser32 -lshell32 -lole32 -lwindowscodecs -lcomdlg32 -lvorbisfile -lvorbis -logg -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lws2_32 -lz -lm"
 
 echo Using Windows ARM32 compiler: %WIN_ARM32_CC%

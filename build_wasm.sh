@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+python3 tools/generate_build_info.py
 python3 tools/embed_xinput_hud.py
 python3 tools/check_wasm_target.py
 
@@ -39,7 +40,7 @@ python3 tools/prepare_wasm_assets.py --output build/wasm_assets
 rm -rf dist
 mkdir -p dist
 
-"$EMCC" -std=gnu99 -O3 -DNDEBUG main_wasm.c -o "$OUTPUT" \
+"$EMCC" -include build/generated/pex_build_info.h -std=gnu99 -O3 -DNDEBUG main_wasm.c -o "$OUTPUT" \
   -sUSE_SDL=2 \
   -sUSE_SDL_IMAGE=2 \
   -sSDL2_IMAGE_FORMATS='["png"]' \

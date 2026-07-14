@@ -8,6 +8,17 @@ $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
+$buildInfoScript = Join-Path $root "tools\generate_build_info.py"
+$python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+if ($python) {
+    & $python $buildInfoScript --root $root
+} else {
+    $py = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+    if (!$py) { throw "Python 3 is required to generate PexCraft build metadata." }
+    & $py -3 $buildInfoScript --root $root
+}
+if ($LASTEXITCODE -ne 0) { throw "generate_build_info.py failed with $LASTEXITCODE" }
+
 $project = Join-Path $PSScriptRoot "PexCraft.UWP.vcxproj"
 if (!(Test-Path $project)) { throw "missing UWP project: $project" }
 

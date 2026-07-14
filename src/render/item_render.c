@@ -716,7 +716,7 @@ static int block_item_tile_for_id(int id) {
         case BLOCK_DEAD_BUSH: return 55;
         case BLOCK_PISTON: return 107;
         case BLOCK_PISTON_EXTENSION: return 107;
-        case BLOCK_WOOL: return 113;
+        case BLOCK_WOOL: return 64;
         case BLOCK_PISTON_MOVING: return 107;
         case BLOCK_YELLOW_FLOWER: return 13;
         case BLOCK_RED_ROSE: return 12;
