@@ -2,14 +2,48 @@
 
 /* Leave a bigger system/stack reserve on real PSP-1000.  The previous all-but-1MB heap
    could let the client push too close to the 32MB model and hard-power-off on OOM. */
-PSP_HEAP_SIZE_KB(-4096);
+PSP_HEAP_SIZE_KB(-2048);
 /* Multiplayer-only PSP-1000 target: protocol status buffers are heap-backed,
    so the main thread no longer needs the old generator-sized stack. */
-PSP_MAIN_THREAD_STACK_SIZE_KB(256);
+PSP_MAIN_THREAD_STACK_SIZE_KB(1024);
 PSP_MODULE_INFO("PEXCRAFT", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
+PSP_MAIN_THREAD_PRIORITY(32);
+PSP_MAIN_THREAD_NAME("pexcraft_main");
 PSP_DISABLE_AUTOSTART_PTHREAD()
 PSP_DISABLE_NEWLIB_TIMEZONE_SUPPORT()
+
+/* PSPSDK calls exit(main_return_value), and its _exit implementation then calls
+   sceKernelExitGame(). Trap exit in PSP diagnostic builds so a normal return or
+   an unexpected shared-code exit request cannot look like a mysterious crash. */
+static volatile int g_psp_main_entered = 0;
+static volatile int g_psp_main_loop_entered = 0;
+__attribute__((noreturn)) void exit(int status) {
+    pspDebugScreenInit();
+    pspDebugScreenSetBackColor(0x00000000);
+    pspDebugScreenSetTextColor(0xffffffff);
+    pspDebugScreenClear();
+    pspDebugScreenSetXY(0, 0);
+    pspDebugScreenPrintf("PEXCRAFT PSP EXIT TRAP\n");
+    pspDebugScreenPrintf("status=%d main=%d loop=%d running=%d screen=%d\n\n",
+                         status, g_psp_main_entered, g_psp_main_loop_entered,
+                         g_running, g_screen);
+    pspDebugScreenPrintf("The runtime attempted to leave main().\n");
+    pspDebugScreenPrintf("This screen intentionally blocks sceKernelExitGame.\n");
+    pspDebugScreenPrintf("START+SELECT+L+R exits manually.\n");
+    for (;;) {
+        SceCtrlData pad;
+        memset(&pad, 0, sizeof(pad));
+        sceCtrlPeekBufferPositive(&pad, 1);
+        if ((pad.Buttons & PSP_CTRL_START) &&
+            (pad.Buttons & PSP_CTRL_SELECT) &&
+            (pad.Buttons & PSP_CTRL_LTRIGGER) &&
+            (pad.Buttons & PSP_CTRL_RTRIGGER)) {
+            sceKernelExitGame();
+        }
+        sceKernelDelayThread(250000);
+    }
+}
 
 #ifndef PEX_PSP_BOOT_DEBUG
 #define PEX_PSP_BOOT_DEBUG 1
@@ -76,7 +110,7 @@ static void psp_boot_debug_stagef(const char *fmt, ...) {
     g_psp_boot_debug_stage++;
     if (g_psp_gu_debug_screen_ready) psp_redraw_gu_front("working... after GU takeover");
     else psp_boot_debug_redraw("working...");
-    sceKernelDelayThread(g_psp_gu_debug_screen_ready ? 900000 : 350000);
+    sceKernelDelayThread(20000);
 }
 
 static void psp_boot_debug_pause(const char *footer, int usec) {
@@ -131,9 +165,25 @@ static void psp_boot_debug_fail(const char *msg) { (void)msg; psp_boot_debug_hol
 #endif
 
 
-static int psp_exit_callback(int arg1, int arg2, void *common) { (void)arg1; (void)arg2; (void)common; g_running = 0; return 0; }
-static int psp_callback_thread(SceSize args, void *argp) { (void)args; (void)argp; int cbid = sceKernelCreateCallback("Exit Callback", psp_exit_callback, NULL); sceKernelRegisterExitCallback(cbid); sceKernelSleepThreadCB(); return 0; }
-static void psp_setup_callbacks(void) { SceUID thid = sceKernelCreateThread("update_thread", psp_callback_thread, 0x11, 0xFA0, 0, 0); if (thid >= 0) sceKernelStartThread(thid, 0, 0); }
+static int psp_exit_callback(int arg1, int arg2, void *common) {
+    (void)arg1; (void)arg2; (void)common;
+    g_running = 0;
+    return 0;
+}
+static int psp_callback_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    int cbid = sceKernelCreateCallback("Exit Callback", psp_exit_callback, NULL);
+    if (cbid >= 0) sceKernelRegisterExitCallback(cbid);
+    sceKernelSleepThreadCB();
+    return 0;
+}
+static int psp_setup_callbacks(void) {
+    SceUID thid = sceKernelCreateThread("pex_exit_callback", psp_callback_thread,
+                                        0x11, 0x1000, PSP_THREAD_ATTR_USER, 0);
+    if (thid < 0) return (int)thid;
+    int rc = sceKernelStartThread(thid, 0, 0);
+    return rc < 0 ? rc : 0;
+}
 
 static int init_gl(HWND unused) {
     (void)unused;
@@ -145,9 +195,6 @@ static int init_gl(HWND unused) {
     if (!psp_gu_init()) { psp_boot_debug_fail("psp_gu_init failed"); return 0; }
     g_psp_gu_debug_screen_ready = 1;
     psp_redraw_gu_front("GU returned OK. Front-buffer debug console is active.");
-#if PEX_PSP_BOOT_DEBUG
-    sceKernelDelayThread(1200000);
-#endif
     psp_boot_debug_stagef("GU initialized");
     glClearColor(0,0,0,1);
     glDisable(GL_DITHER);
@@ -231,6 +278,7 @@ static void sleep_for_max_fps(double frame_start_time) {
 }
 
 static void main_loop(void) {
+    g_psp_main_loop_entered = 1;
     psp_boot_debug_stagef("main loop entered");
     PEX_PSP_LOGF("MAIN_LOOP enter: screen=%d running=%d", g_screen, g_running);
     g_last_time = now_seconds();
@@ -291,9 +339,6 @@ static void main_loop(void) {
         if (psp_debug_first_frame) {
             psp_debug_first_frame = 0;
             psp_boot_debug_stagef("first frame rendered");
-#if PEX_PSP_BOOT_DEBUG
-            psp_boot_debug_pause("First frame rendered. Entering game in 5 seconds. If it exits after this, the main loop ended cleanly.", 5000000);
-#endif
         }
         sleep_for_max_fps(frame_start_time);
         profile_end_frame();
@@ -306,6 +351,7 @@ static void main_loop(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    g_psp_main_entered = 1;
     pex_log_init();
     pex_install_crash_handlers();
     pex_logf("app main enter: %s", APP_TITLE);
@@ -313,10 +359,9 @@ int main(int argc, char **argv) {
     pspDebugScreenInit();
     PEX_PSP_LOGF("pspDebugScreenInit done");
     psp_boot_debug_stagef("module loaded / main entered");
-    PEX_PSP_LOGF("psp_setup_callbacks begin");
-    psp_setup_callbacks();
-    PEX_PSP_LOGF("psp_setup_callbacks end");
-    psp_boot_debug_stagef("exit callback registered");
+    /* Register the HOME/exit callback only after renderer and UI startup.
+       This prevents a stale/emulator exit callback from clearing g_running
+       before the first frame and makes early boot failures observable. */
     PEX_PSP_LOGF("init_dirs begin");
     init_dirs();
     PEX_PSP_LOGF("init_dirs end: mc=%s save=%s texpack=%s skin=%s", g_mc_dir, g_save_dir, g_texpack_dir, g_skin_dir);
@@ -367,10 +412,11 @@ int main(int argc, char **argv) {
     set_screen(pex_startup_screen());
     PEX_PSP_LOGF("set_screen(SCREEN_TITLE) end: screen=%d", g_screen);
     psp_boot_debug_stagef("title screen selected");
+    int callback_rc = psp_setup_callbacks();
+    PEX_PSP_LOGF("psp_setup_callbacks rc=0x%08x", (unsigned)callback_rc);
+    psp_boot_debug_stagef("exit callback setup rc=0x%08x", (unsigned)callback_rc);
+    g_running = 1;
     psp_redraw_gu_front("Reached title screen setup. Calling main_loop next.");
-#if PEX_PSP_BOOT_DEBUG
-    sceKernelDelayThread(1500000);
-#endif
     PEX_PSP_LOGF("calling main_loop");
     main_loop();
     PEX_PSP_LOGF("main_loop returned; cleanup begin");
