@@ -2,6 +2,18 @@ TARGET = PEXCRAFT
 OBJS = main_psp.o build/psp_generated/psp_mcrw_assets.o
 .DEFAULT_GOAL := all
 
+# Build an unencrypted user PRX and place that module in EBOOT.PBP.  The
+# current PSPSDK plain-ELF path runs psp-fixup-imports on a static executable;
+# with this unity build and section garbage collection that ELF has no PSP NID
+# section, so fixup aborts with "Error, no nid section found".  PRX mode uses
+# prxspecs/linkfile.prx, keeps the module/import metadata, then runs
+# psp-fixup-imports and psp-prxgen in the supported order.
+BUILD_PRX = 1
+
+# This target is specifically for the 32 MiB PSP-1000.  Do not request the
+# expanded user-memory partition used by later PSP models.
+PSP_LARGE_MEMORY = 0
+
 # GitHub Actions Docker shells do not always export PSPDEV/PSPSDK.
 PSPDEV ?= /usr/local/pspdev
 PSPSDK ?= $(PSPDEV)/psp/sdk

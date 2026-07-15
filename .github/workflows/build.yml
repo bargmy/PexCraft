@@ -1559,6 +1559,7 @@ jobs:
           mkdir -p "$app_dir"
           test -s EBOOT.PBP
           cp -f EBOOT.PBP "$app_dir/EBOOT.PBP"
+          cp -f PEXCRAFT.prx "$app_dir/PEXCRAFT.prx" || true
           cp -f PEXCRAFT.elf "$app_dir/PEXCRAFT.elf" || true
           cp -f PEXCRAFT.map "$app_dir/PEXCRAFT.map" || true
           cp -R logs "$package_dir/logs" || true
