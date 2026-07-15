@@ -1511,6 +1511,10 @@ jobs:
             --embed-c src/assets/psp_embedded_classic_pack.c \
             --pak build/psp_generated/psp_mcrw_assets.pak \
             --asm build/psp_generated/psp_mcrw_assets.S
+          # The PSPDEV compiler image intentionally does not ship Python.
+          # Generate this header on the Ubuntu Actions host before Docker.
+          python3 tools/generate_build_info.py \
+            --output build/generated/pex_build_info.h
 
       - name: Build PSP EBOOT
         shell: bash
