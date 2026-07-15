@@ -1531,8 +1531,11 @@ jobs:
             docker run --rm \
               -v "$PWD:/work" \
               -w /work \
+              -e PSPDEV=/usr/local/pspdev \
+              -e PSPSDK=/usr/local/pspdev/psp/sdk \
+              -e PATH=/usr/local/pspdev/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
               pspdev/pspdev:latest \
-              bash -lc 'make -f Makefile.psp clean || true; make -f Makefile.psp'
+              bash -c 'set -eux; command -v psp-gcc; psp-gcc --version; make -f Makefile.psp clean || true; make -f Makefile.psp'
             status=$?
             echo "$status" > build/psp-build-status.txt
             if [ "$status" -eq 0 ]; then
