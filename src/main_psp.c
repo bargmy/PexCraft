@@ -83,6 +83,13 @@ static int write_level_dat(const char *world_dir, const char *world_name, long l
     (void)spawn_z; (void)size_on_disk; return 0;
 }
 static int write_session_lock(const char *world_dir) { (void)world_dir; return 0; }
+/* Legacy singleplayer save helpers referenced by dead unity-build sections.
+   They are tiny PSP-only stubs and are removed from the final EBOOT by
+   --gc-sections because the multiplayer runtime never calls those sections. */
+static int make_dir_recursive(const char *path) { (void)path; return 0; }
+static void base36_i32(int value, char *out, size_t cap) {
+    if (out && cap) snprintf(out, cap, "%d", value);
+}
 #include "assets/pxc_zip_extract.c"
 #include "assets/psp_embedded_classic_pack.c"
 #include "assets/classic_pack_installer_psp.c"

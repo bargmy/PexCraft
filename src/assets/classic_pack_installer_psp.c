@@ -60,6 +60,10 @@ static void pack_install_start(void) {
     pack_install_set_state(CLASSIC_INSTALL_DONE, 100, "Embedded in EBOOT");
 }
 
+static void pack_install_request_cancel(void) {
+    /* Nothing is downloaded or extracted at runtime on PSP. */
+}
+
 static void psp_install_embedded_pack_if_needed(void) {
     g_opts.ignore_classic_resources_warning = 1;
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);

@@ -9623,6 +9623,7 @@ static void draw_passive_mobs(float partial) {
 }
 
 
+#if !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY)
 static void passive_villages_write_nbt_file_125(const char *world_dir) {
     if (!world_dir || !world_dir[0] || strncmp(world_dir, "memory:", 7) == 0) return;
     passive_villages_refresh();
@@ -9681,6 +9682,7 @@ static void passive_villages_write_nbt_file_125(const char *world_dir) {
     write_gzip_store(path, b.data, b.len);
     bb_free(&b);
 }
+#endif
 
 static void passive_villages_write_binary_125(FILE *f) {
     passive_villages_refresh();
@@ -9724,7 +9726,9 @@ static void passive_villages_write_binary_125(FILE *f) {
             fwrite(&door->opening_restriction_counter, sizeof(int), 1, f);
         }
     }
+#if !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY)
     if (g_loaded_world_dir[0]) passive_villages_write_nbt_file_125(g_loaded_world_dir);
+#endif
 }
 
 static void passive_villages_read_binary_125(FILE *f, int save_version) {

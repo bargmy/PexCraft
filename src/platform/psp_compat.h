@@ -28,6 +28,26 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+/* PSPSDK's netdb.h exposes resolver APIs but does not define the POSIX
+   addrinfo structure used by the shared Java 47 client. Complete the forward
+   declaration locally. Set PEX_PSP_HAS_ADDRINFO=1 only for host-side syntax
+   checks or a future SDK that provides the structure itself. */
+#ifndef PEX_PSP_HAS_ADDRINFO
+#define PEX_PSP_HAS_ADDRINFO 0
+#endif
+#if !PEX_PSP_HAS_ADDRINFO
+struct addrinfo {
+    int ai_flags;
+    int ai_family;
+    int ai_socktype;
+    int ai_protocol;
+    socklen_t ai_addrlen;
+    struct sockaddr *ai_addr;
+    char *ai_canonname;
+    struct addrinfo *ai_next;
+};
+#endif
+
 #ifndef PSP_DISPLAY_PIXEL_FORMAT_8888
 #define PSP_DISPLAY_PIXEL_FORMAT_8888 3
 #endif
@@ -347,7 +367,7 @@ static inline int pex_psp_getsockopt(int s, int level, int opt, void *value, soc
 }
 static inline int pex_psp_closesocket(int s) { return pex_psp_net_result(sceNetInetClose(s)); }
 static inline int ioctlsocket(SOCKET s, long cmd, unsigned long *argp) {
-    if (cmd != FIONBIO || !argp) { errno = EINVAL; return -1; }
+    if ((unsigned long)cmd != (unsigned long)FIONBIO || !argp) { errno = EINVAL; return -1; }
     int nonblocking = *argp ? 1 : 0;
     return pex_psp_net_result(sceNetInetSetsockopt(s, SOL_SOCKET, SO_NONBLOCK, &nonblocking, sizeof(nonblocking)));
 }

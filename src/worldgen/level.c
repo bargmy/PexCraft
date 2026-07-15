@@ -4668,7 +4668,8 @@ int worldgen_trace_target(long long seed, const char *kind, int fromBlockX, int 
 }
 
 
-#ifndef PEXCRAFT_WORLDGEN_ARRAYS_ONLY
+#if !defined(PEXCRAFT_WORLDGEN_ARRAYS_ONLY) && \
+    !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY)
 static void nbt_byte_value(BinBuf *b, const char *name, int v) { nbt_tag(b, 1, name); bb_u8(b, (unsigned int)(v & 0xff)); }
 static void nbt_short_value(BinBuf *b, const char *name, int v) { nbt_tag(b, 2, name); bb_u16be(b, (unsigned int)(v & 0xffff)); }
 
@@ -4873,7 +4874,8 @@ static int write_chunk_file(const char *world_dir, int cx, int cz, long long see
 }
 #endif
 
-#ifndef PEXCRAFT_WORLDGEN_ARRAYS_ONLY
+#if !defined(PEXCRAFT_WORLDGEN_ARRAYS_ONLY) && \
+    !(defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY)
 static unsigned long long world_dir_size_quick(const char *path) { return dir_size(path); }
 
 #endif
