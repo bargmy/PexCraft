@@ -1,6 +1,33 @@
 #include "protocol_47je.h"
 #include <zlib.h>
 
+#if defined(PEX_PLATFORM_PSP)
+/* PSP-1000: all limits are deliberately bounded. A vanilla 1.8 chunk fits
+   comfortably under 512 KiB, while allowing desktop-sized queues here would
+   exhaust the console before the render thread can mesh the first burst. */
+#define J47_RX_MAX (512u * 1024u)
+#define J47_TX_MAX (96u * 1024u)
+#define J47_PACKET_MAX (512u * 1024u)
+#define J47_PROFILE_MAX 24
+#define J47_ENTITY_MAX 72
+#define J47_WINDOW_MAX_SLOTS 128
+#define J47_ITEM_NBT_MAX 512
+#define J47_ITEM_NAME_MAX 128
+#define J47_ITEM_LORE_MAX 4
+#define J47_ITEM_LORE_LINE_MAX 128
+#define J47_SKIN_URL_MAX 1
+#define J47_TEAM_MAX 12
+#define J47_TEAM_MEMBER_MAX 32
+#define J47_SCORE_OBJECTIVE_MAX 24
+#define J47_SCORE_ENTRY_MAX 192
+#define J47_BLOCK_UPDATE_CACHE_MAX 384
+#define J47_TITLE_TEXT_MAX 384
+#define J47_PENDING_CHUNK_MAX 4
+#define J47_PENDING_CHUNK_BYTES_SOFT_MAX (512u * 1024u)
+#define J47_PENDING_CHUNK_BYTES_HARD_MAX (1024u * 1024u)
+#define J47_STATUS_JSON_MAX (96u * 1024u)
+#define J47_SERVER_FAVICON 0
+#else
 #define J47_RX_MAX (8u * 1024u * 1024u)
 #define J47_TX_MAX (2u * 1024u * 1024u)
 #define J47_PACKET_MAX (2u * 1024u * 1024u)
@@ -25,6 +52,9 @@
 #else
 #define J47_PENDING_CHUNK_BYTES_SOFT_MAX (96u * 1024u * 1024u)
 #define J47_PENDING_CHUNK_BYTES_HARD_MAX (192u * 1024u * 1024u)
+#endif
+#define J47_STATUS_JSON_MAX (128u * 1024u)
+#define J47_SERVER_FAVICON 1
 #endif
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII) || defined(PEX_PLATFORM_WASM)
 #define J47_ASYNC_INFLATE 0
@@ -374,7 +404,11 @@ static SOCKET j47_connect_timeout(const char *host, int port, int timeout_ms) {
         SOCKET s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (s == INVALID_SOCKET) continue;
         BOOL yes = TRUE;
+#if defined(PEX_PLATFORM_PSP)
+        int sock_buf = 32 * 1024;
+#else
         int sock_buf = 1024 * 1024;
+#endif
         setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&yes, sizeof(yes));
         setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char *)&sock_buf, sizeof(sock_buf));
         setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&sock_buf, sizeof(sock_buf));
@@ -1177,10 +1211,11 @@ int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava4
     J47Reader r;
     j47_reader_init(&r, frame, frame_len);
     int32_t packet_id = -1;
-    char json[131072];
+    char *json = (char *)malloc(J47_STATUS_JSON_MAX);
+    if (!json) { free(frame); closesocket(s); if (out_status) *out_status = st; return 0; }
     json[0] = 0;
-    if (!j47_r_varint(&r, &packet_id) || packet_id != 0 || !j47_r_string(&r, json, sizeof(json))) {
-        free(frame); closesocket(s); if (out_status) *out_status = st; return 0;
+    if (!j47_r_varint(&r, &packet_id) || packet_id != 0 || !j47_r_string(&r, json, J47_STATUS_JSON_MAX)) {
+        free(json); free(frame); closesocket(s); if (out_status) *out_status = st; return 0;
     }
     free(frame);
 
@@ -1193,6 +1228,7 @@ int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava4
     const char *players_object = j47_json_find_key(json, "players");
     if (!version_object || *version_object != '{' ||
         !j47_json_get_int(version_object, "protocol", &st.protocol)) {
+        free(json);
         closesocket(s);
         if (out_status) *out_status = st;
         return 0;
@@ -1205,12 +1241,13 @@ int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava4
         snprintf(st.version, sizeof(st.version), "Java");
     const char *description = j47_json_find_key(json, "description");
     j47_json_collect_text(description ? description : "", st.motd, sizeof(st.motd));
+#if J47_SERVER_FAVICON
     {
-        /* A 1.8 server icon is a top-level data:image/png;base64 string. Decode
-           it during the status probe, but upload it later on the render thread. */
-        char favicon_b64[98304];
+        /* Desktop keeps server icons. PSP-1000 skips the 96 KiB temporary
+           base64 buffer and uses the standard server-list icon instead. */
+        char *favicon_b64 = (char *)malloc(98304u);
         const char *prefix="data:image/png;base64,";
-        if(j47_json_get_string(json,"favicon",favicon_b64,sizeof(favicon_b64))&&
+        if(favicon_b64 && j47_json_get_string(json,"favicon",favicon_b64,98304u)&&
            !strncmp(favicon_b64,prefix,strlen(prefix))){
             size_t png_len=0;
             if(j47_base64_decode(favicon_b64+strlen(prefix),st.favicon_png,sizeof(st.favicon_png),&png_len)&&
@@ -1219,7 +1256,10 @@ int pex_java47_probe_status(const char *host, int port, int timeout_ms, PexJava4
                 st.favicon_png_len=png_len;
             }
         }
+        free(favicon_b64);
     }
+#endif
+    free(json);
 
     int64_t stamp = (int64_t)(now_seconds() * 1000.0);
     J47Writer ping_payload, ping_frame;
@@ -2535,6 +2575,13 @@ static void j47_apply_profile_skin(J47Profile *p) {
 
 static void j47_profile_set_skin_url(J47Profile *p, const char *url) {
     if (!p) return;
+#if defined(PEX_PLATFORM_PSP)
+    (void)url;
+    p->skin_url[0] = 0;
+    p->skin_path[0] = 0;
+    p->skin_state = 0;
+    return;
+#endif
     if (!url || !url[0]) {
         p->skin_url[0] = 0;
         p->skin_path[0] = 0;
@@ -2562,6 +2609,9 @@ static void j47_profile_set_skin_url(J47Profile *p, const char *url) {
 }
 
 static void j47_skin_pump(void) {
+#if defined(PEX_PLATFORM_PSP)
+    return;
+#endif
     if (g_j47_skin_thread && InterlockedCompareExchange(&g_j47_skin_job.done, 0, 0)) {
         CloseHandle(g_j47_skin_thread);
         g_j47_skin_thread = NULL;

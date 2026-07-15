@@ -2,11 +2,7 @@ TARGET = PEXCRAFT
 OBJS = main_psp.o build/psp_generated/psp_mcrw_assets.o
 .DEFAULT_GOAL := all
 
-# The generated asset-object rule below appears before PSPSDK build.mak.
-# Without this default goal, GNU make would build only that first rule.
-
 # GitHub Actions Docker shells do not always export PSPDEV/PSPSDK.
-# Keep this Makefile usable both locally and inside pspdev/pspdev.
 PSPDEV ?= /usr/local/pspdev
 PSPSDK ?= $(PSPDEV)/psp/sdk
 ifeq ($(wildcard $(PSPSDK)/lib/build.mak),)
@@ -16,23 +12,36 @@ ifeq ($(wildcard $(PSPSDK)/lib/build.mak),)
   endif
 endif
 
-PSP_REAL_WORLD ?= 1
 PYTHON ?= python3
 BUILD_INFO_HEADER := build/generated/pex_build_info.h
-CFLAGS = -include $(BUILD_INFO_HEADER) -std=c99 -O2 -fno-math-errno -ffast-math -G0 -Wall -Wextra -DPEX_PLATFORM_PSP=1 -DPEX_PSP_LOW_MEMORY=1 -DPEX_PSP_MEMORY_ONLY=1 -DPEX_PSP_BOOT_DEBUG=0 -DPEX_PSP_VERBOSE=0 -DPEX_PSP_PERF=1 -Isrc
-ifeq ($(PSP_REAL_WORLD),1)
-CFLAGS += -DPEX_PSP_REAL_BETA_GEN=1 -DPEX_PSP_FAST_WORLD=0 -DPEX_PSP_1000_TARGET=0
-else
-CFLAGS += -DPEX_PSP_REAL_BETA_GEN=0 -DPEX_PSP_FAST_WORLD=1 -DPEX_PSP_1000_TARGET=1
-endif
+
+# Dedicated PSP-1000 client profile. This target intentionally contains no
+# local world generator and exposes only the Java Edition protocol 47 client.
+PSP_DEFINES = \
+	-DPEX_PLATFORM_PSP=1 \
+	-DPEX_PSP_1000_TARGET=1 \
+	-DPEX_PSP_LOW_MEMORY=1 \
+	-DPEX_PSP_MEMORY_ONLY=1 \
+	-DPEX_PSP_MULTIPLAYER_ONLY=1 \
+	-DPEX_MP_JAVA47_ONLY=1 \
+	-DPEX_PSP_NO_PANORAMA=1 \
+	-DPEX_PSP_REAL_BETA_GEN=0 \
+	-DPEX_PSP_FAST_WORLD=0 \
+	-DPEX_PSP_BOOT_DEBUG=0 \
+	-DPEX_PSP_VERBOSE=0 \
+	-DPEX_PSP_PERF=1
+
+CFLAGS = -include $(BUILD_INFO_HEADER) -std=c99 -Os -fno-math-errno -ffast-math \
+	-ffunction-sections -fdata-sections -G0 -Wall -Wextra $(PSP_DEFINES) -Isrc
 CXXFLAGS = $(CFLAGS)
 ASFLAGS = $(CFLAGS)
-LIBS = -lpspgum -lpspgu -lpsppower -lpsprtc -lz -lm
-LDFLAGS += -Wl,-Map,PEXCRAFT.map
+
+# pspnet_inet and pspnet_resolver are provided through libpspnet in PSPSDK.
+LIBS = -lpspgum -lpspgu -lpsppower -lpsprtc -lpsputility -lpspnet -lpspnet_apctl -lz -lm
+LDFLAGS += -Wl,--gc-sections -Wl,-Map,PEXCRAFT.map
 
 EXTRA_TARGETS = EBOOT.PBP
-PSP_EBOOT_TITLE = PEXCRAFT
-
+PSP_EBOOT_TITLE = PEXCRAFT PSP-1000 MP
 
 .PHONY: FORCE
 $(BUILD_INFO_HEADER): tools/generate_build_info.py FORCE

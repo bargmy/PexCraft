@@ -1936,6 +1936,7 @@ static void leave_world_to_title(void) {
     }
 }
 
+#if !(defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY)
 static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot) {
     memset(&g_worldgen, 0, sizeof(g_worldgen));
     g_worldgen.active = 1;
@@ -2168,3 +2169,16 @@ static void worldgen_tick(void) {
         finish_prepared_world_entry(g_worldgen.loaded_state);
     }
 }
+#else
+/* Keep the shared UI's static symbols satisfied without initializing any
+   local-world state. The disabled Singleplayer button cannot reach these. */
+static void start_world_generation_in_dir(const char *world_dir, const char *world_name, int slot) {
+    (void)world_dir; (void)world_name; (void)slot;
+    open_notice("Multiplayer only", "Singleplayer is not included in the PSP-1000 build.", "");
+}
+static void start_world_generation(int slot) {
+    (void)slot;
+    start_world_generation_in_dir(NULL, NULL, 0);
+}
+static void worldgen_tick(void) { }
+#endif

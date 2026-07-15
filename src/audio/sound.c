@@ -7,7 +7,13 @@ typedef struct PexSoundEntry {
     char path[MAX_PATHBUF];
 } PexSoundEntry;
 
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+/* PSP currently has no streaming sound backend; do not reserve the desktop
+   1024-entry path table (over 1 MiB) in the PSP-1000 executable. */
+#define PEX_MAX_SOUND_ENTRIES 1
+#else
 #define PEX_MAX_SOUND_ENTRIES 1024
+#endif
 static PexSoundEntry g_pex_sounds[PEX_MAX_SOUND_ENTRIES];
 static int g_pex_sound_count = 0;
 static int g_pex_sound_scanned = 0;

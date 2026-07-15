@@ -69,7 +69,14 @@
 #define MAX_BUTTONS 64
 #define MAX_LABEL 256
 #define MAX_PATHBUF 1024
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+/* The PSP multiplayer client never enumerates or opens local worlds. Keep a
+   single inert slot so shared UI declarations remain source-compatible without
+   reserving the desktop save-browser table in PSP-1000 RAM. */
+#define MAX_WORLD_SAVES 1
+#else
 #define MAX_WORLD_SAVES 256
+#endif
 #define ARRAY_COUNT(a) ((int)(sizeof(a)/sizeof((a)[0])))
 #ifndef PEX_GL_CLAMP_EDGE
 #ifdef GL_CLAMP_TO_EDGE
@@ -1600,14 +1607,20 @@ static double g_system_info_last_time = -10.0;
    low-memory console window so PPSSPP/real PSP and Wii homebrew can load. */
 #if defined(PEX_PLATFORM_PSP) || defined(PEX_PLATFORM_WII)
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET && !(defined(PEX_PSP_REAL_BETA_GEN) && PEX_PSP_REAL_BETA_GEN)
-/* Real PSP-1000 only has 32MB main RAM.  Keep the 128x128 horizontal window
-   for streaming/render-distance behavior, but cap vertical storage to 96 blocks
-   so the three dense block/meta/liquid arrays save about 1.6MB.  The real Beta
-   generator opt-in below needs the full 0..127 vertical range, so it bypasses
-   this legacy safety cap. */
+#if defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+/* PSP-1000 multiplayer keeps a 6x6-chunk (96x96) ring around the player. This
+   fits render distance 2 plus a small streaming margin while retaining the full
+   Java 1.2.5 build height. The five dense world arrays use 5.625 MiB instead of
+   7.5 MiB for the previous 128x96x128 profile. */
+#define FLAT_WORLD_SIZE 96
+#define FLAT_WORLD_Y_MIN 0
+#define FLAT_WORLD_Y_MAX 127
+#else
+/* Legacy PSP-1000 single-player safety profile. */
 #define FLAT_WORLD_SIZE 128
 #define FLAT_WORLD_Y_MIN 0
 #define FLAT_WORLD_Y_MAX 95
+#endif
 #define MAX_DROP_ENTITIES 24
 #define MAX_FALLING_BLOCK_ENTITIES 16
 #else

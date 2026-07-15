@@ -75,7 +75,14 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 #include "render/psp_gu_renderer.c"
 #include "platform/psp_filesystem.c"
 #include "assets/textures.c"
-#include "save/nbt_gzip_save.c"
+/* PSP multiplayer-only: local NBT world save/load is not compiled. Shared
+   legacy save call sites remain in the unity tree but are unreachable here. */
+static int write_level_dat(const char *world_dir, const char *world_name, long long seed,
+                           int spawn_x, int spawn_y, int spawn_z, long long size_on_disk) {
+    (void)world_dir; (void)world_name; (void)seed; (void)spawn_x; (void)spawn_y;
+    (void)spawn_z; (void)size_on_disk; return 0;
+}
+static int write_session_lock(const char *world_dir) { (void)world_dir; return 0; }
 #include "assets/pxc_zip_extract.c"
 #include "assets/psp_embedded_classic_pack.c"
 #include "assets/classic_pack_installer_psp.c"
@@ -100,10 +107,20 @@ static void steve_set_tint(float r, float g, float b);
 static void draw_chat_lines(int force_visible);
 static void draw_ingame_world_view(int with_hand);
 static const char *item_display_name(int id);
+static int item_max_damage(int id);
+static void draw_armor_model_for_slots(const ItemStack armor_slots[4], int allow_leather_dye,
+                                       float head_pivot_y, float leg_pivot_y, float leg_pivot_z,
+                                       float body_pitch, float head_pitch, float head_yaw,
+                                       float right_arm_pitch, float right_arm_yaw, float right_arm_roll,
+                                       float left_arm_pitch, float left_arm_yaw, float left_arm_roll,
+                                       float right_leg_pitch, float left_leg_pitch);
 
 #include "game/inventory.c"
+#include "game/block_logic.c"
+#include "game/dimension_logic.c"
 #include "game/mobs.c"
-#include "platform/psp_multiplayer_stub.c"
+#include "../multiplayer/java/protocol_47je/protocol_47je.c"
+#include "platform/psp_java47_client.c"
 #include "ui/screen_state_input.c"
 #include "ui/gui.c"
 #include "ui/title_menus.c"

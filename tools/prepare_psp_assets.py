@@ -1,199 +1,210 @@
 #!/usr/bin/env python3
-import io, os, struct, sys, zipfile, urllib.request
+"""Build the PSP texture pak from the verified WASM asset staging directory.
+
+The PSP job intentionally calls prepare_wasm_assets.py first. That means both
+builders download the same Minecraft 1.2.5 client.jar, verify the same SHA-1,
+and safely extract the same Release tree. PSP then converts only the textures
+it can use into one binary MCRW pak embedded by .incbin.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import struct
+import sys
+import shutil
+import zipfile
 from pathlib import Path
 
-CLASSIC_PACK_URL = "https://piston-data.mojang.com/v1/objects/93faf3398ebf8008d59852dc3c2b22b909ca8a49/client.jar"
+EXPECTED_SHA1 = "4a2fac7504182a97dcbcd7560c6392d7c8139928"
 
 REQUIRED_MCRW = {
     "gui_background.mcrw", "gui_gui.mcrw", "font_default.mcrw", "terrain.mcrw",
-    "title_black.mcrw", "gui_icons.mcrw", "achievement_bg.mcrw", "gui_slot.mcrw", "gui_inventory.mcrw", "mob_char.mcrw",
+    "title_black.mcrw", "gui_icons.mcrw", "achievement_bg.mcrw", "gui_slot.mcrw",
+    "gui_inventory.mcrw", "mob_char.mcrw",
 }
+
+MAPPING = {
+    "terrain.png": "terrain.mcrw",
+    "gui/gui.png": "gui_gui.mcrw",
+    "gui/background.png": "gui_background.mcrw",
+    "gui/icons.png": "gui_icons.mcrw",
+    "achievement/bg.png": "achievement_bg.mcrw",
+    "gui/slot.png": "gui_slot.mcrw",
+    "gui/inventory.png": "gui_inventory.mcrw",
+    "gui/items.png": "gui_items.mcrw",
+    "font/default.png": "font_default.mcrw",
+    "mob/char.png": "mob_char.mcrw",
+    "gui/crafting.png": "gui_crafting_table.mcrw",
+    "gui/furnace.png": "gui_furnace.mcrw",
+    "gui/container.png": "gui_chest.mcrw",
+    "title/black.png": "title_black.mcrw",
+    "title/mclogo.png": "title_mclogo.mcrw",
+    "title/mojang.png": "title_mojang.mcrw",
+    "environment/clouds.png": "environment_clouds.mcrw",
+    "misc/water.png": "misc_water.mcrw",
+    "misc/shadow.png": "misc_shadow.mcrw",
+    "misc/grasscolor.png": "misc_grasscolor.mcrw",
+    "misc/foliagecolor.png": "misc_foliagecolor.mcrw",
+    "particles.png": "particles.mcrw",
+    "mob/pig.png": "mob_pig.mcrw",
+    "mob/sheep.png": "mob_sheep.mcrw",
+    "mob/sheep_fur.png": "mob_sheep_fur.mcrw",
+    "mob/cow.png": "mob_cow.mcrw",
+    "mob/chicken.png": "mob_chicken.mcrw",
+    "mob/saddle.png": "mob_saddle.mcrw",
+    "mob/creeper.png": "mob_creeper.mcrw",
+    "mob/skeleton.png": "mob_skeleton.mcrw",
+    "mob/spider.png": "mob_spider.mcrw",
+    "mob/zombie.png": "mob_zombie.mcrw",
+    "mob/slime.png": "mob_slime.mcrw",
+    "mob/ghast.png": "mob_ghast.mcrw",
+}
+
 
 def require_pillow():
     try:
         from PIL import Image
         return Image
-    except Exception as e:
-        print("Pillow is required for PNG -> MCRW conversion", e, file=sys.stderr)
-        raise
+    except Exception as exc:
+        raise RuntimeError(f"Pillow is required for PNG -> MCRW conversion: {exc}") from exc
 
-def read_png_rgba(zf, name, Image):
-    with zf.open(name) as f:
-        im = Image.open(io.BytesIO(f.read())).convert('RGBA')
-    return im
 
-def write_mcrw(path, im):
+def verify_wasm_stage(release: Path, manifest: Path) -> None:
+    if not release.is_dir():
+        raise RuntimeError(f"missing WASM Release staging directory: {release}")
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if data.get("sha1") != EXPECTED_SHA1:
+        raise RuntimeError(
+            f"asset manifest SHA-1 mismatch: expected {EXPECTED_SHA1}, got {data.get('sha1')!r}"
+        )
+    missing = [name for name in MAPPING if not (release / name).is_file()]
+    # Some optional old paths can be absent, but the core set must exist.
+    required_sources = [
+        "terrain.png", "gui/gui.png", "gui/icons.png", "achievement/bg.png",
+        "gui/slot.png", "gui/inventory.png", "font/default.png", "mob/char.png",
+    ]
+    hard_missing = [name for name in required_sources if not (release / name).is_file()]
+    if hard_missing:
+        raise RuntimeError("verified stage is missing required PSP textures:\n  " + "\n  ".join(hard_missing))
+    for name in missing:
+        print(f"optional PSP texture absent in 1.2.5 stage: {name}")
+
+
+def write_mcrw(path: Path, image) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    rgba = im.tobytes()
-    with open(path, 'wb') as f:
-        f.write(b'MCRW')
-        f.write(struct.pack('<II', im.width, im.height))
-        f.write(rgba)
-    print(f"mcrw {path} {im.width}x{im.height}")
+    rgba = image.convert("RGBA")
+    with path.open("wb") as output:
+        output.write(b"MCRW")
+        output.write(struct.pack("<II", rgba.width, rgba.height))
+        output.write(rgba.tobytes())
+    print(f"mcrw {path} {rgba.width}x{rgba.height}")
 
-def write_mcrw_pak_and_asm(out_assets, pak_path, asm_path):
-    """Write all generated .mcrw files into one compact binary pak and an
-    assembly wrapper that embeds the pak with .incbin.
 
-    This avoids committing a massive C file full of 0xNN byte literals.
-    The repo stays small; GitHub Actions generates the pak/asm just before
-    the PSP build and links it into EBOOT.PBP.
+def write_metadata_zip_c(embed_c: Path, manifest: Path) -> None:
+    """Keep the legacy installer symbol without duplicating PNGs in the EBOOT.
+
+    The real texture payload is the MCRW .incbin pak. Embedding the extracted PNG
+    tree a second time would cost several precious MiB on PSP-1000.
     """
-    files = sorted([p for p in out_assets.iterdir() if p.is_file() and p.suffix.lower() == '.mcrw'])
+    import io
+    buffer = io.BytesIO()
+    metadata = json.loads(manifest.read_text(encoding="utf-8"))
+    pack_text = (
+        "Minecraft 1.2.5 Release\n"
+        "Verified and staged by tools/prepare_wasm_assets.py\n"
+        f"SHA-1: {metadata.get('sha1', '')}\n"
+        "PSP payload: compact MCRW pak (PNG tree is not duplicated)\n"
+    )
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("pack.txt", pack_text)
+    payload = buffer.getvalue()
+    embed_c.parent.mkdir(parents=True, exist_ok=True)
+    with embed_c.open("w", encoding="utf-8") as output:
+        output.write("/* generated by tools/prepare_psp_assets.py */\n#include <stddef.h>\n")
+        output.write("const unsigned char pexcraft_psp_classic_pack_zip[] = {\n")
+        for offset in range(0, len(payload), 12):
+            output.write("  " + ", ".join(f"0x{byte:02x}" for byte in payload[offset:offset+12]) + ",\n")
+        output.write("};\n")
+        output.write(f"const unsigned int pexcraft_psp_classic_pack_zip_len = {len(payload)}u;\n")
+    print(f"embedded PSP asset metadata: {len(payload)} bytes -> {embed_c}")
+
+
+def write_mcrw_pak_and_asm(out_assets: Path, pak_path: Path, asm_path: Path) -> None:
+    files = sorted(path for path in out_assets.iterdir() if path.is_file() and path.suffix.lower() == ".mcrw")
     pak_path.parent.mkdir(parents=True, exist_ok=True)
     asm_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Pak format, little endian:
-    #   8 bytes magic: b'PXCMCRW1'
-    #   u32 count
-    #   repeated count times:
-    #       u32 name_len
-    #       u32 data_len
-    #       u32 data_offset_from_pak_start
-    #       name bytes, UTF-8, no NUL
-    #   data blobs, 4-byte aligned
-    magic = b'PXCMCRW1'
-    entries_meta = []
-    header_size = 8 + 4
-    for path in files:
-        name_b = path.name.encode('utf-8')
-        header_size += 12 + len(name_b)
+    header_size = 12 + sum(12 + len(path.name.encode("utf-8")) for path in files)
     data_offset = (header_size + 3) & ~3
-    data_blobs = []
-    cur = data_offset
+    entries = []
+    current = data_offset
     for path in files:
-        data = path.read_bytes()
-        name_b = path.name.encode('utf-8')
-        entries_meta.append((name_b, len(data), cur))
-        data_blobs.append(data)
-        cur += len(data)
-        cur = (cur + 3) & ~3
-
-    with open(pak_path, 'wb') as f:
-        f.write(magic)
-        f.write(struct.pack('<I', len(entries_meta)))
-        for name_b, data_len, off in entries_meta:
-            f.write(struct.pack('<III', len(name_b), data_len, off))
-            f.write(name_b)
-        pad = data_offset - f.tell()
-        if pad > 0:
-            f.write(b'\0' * pad)
-        for data in data_blobs:
-            f.write(data)
-            pad = ((f.tell() + 3) & ~3) - f.tell()
-            if pad > 0:
-                f.write(b'\0' * pad)
-
-    # Use an assembly .incbin wrapper. This compiles into a tiny object and
-    # keeps the binary bytes binary instead of expanding them into a huge .c.
-    incbin_path = pak_path.as_posix()
+        blob = path.read_bytes()
+        entries.append((path.name.encode("utf-8"), blob, current))
+        current = (current + len(blob) + 3) & ~3
+    with pak_path.open("wb") as output:
+        output.write(b"PXCMCRW1")
+        output.write(struct.pack("<I", len(entries)))
+        for name, blob, offset in entries:
+            output.write(struct.pack("<III", len(name), len(blob), offset))
+            output.write(name)
+        output.write(b"\0" * (data_offset - output.tell()))
+        for _, blob, _ in entries:
+            output.write(blob)
+            output.write(b"\0" * (((output.tell() + 3) & ~3) - output.tell()))
     asm_path.write_text(
-        '/* generated by tools/prepare_psp_assets.py; do not commit build/ */\n'
-        '    .section .rodata\n'
-        '    .align 4\n'
-        '    .global pexcraft_psp_mcrw_assets_pak_start\n'
-        'pexcraft_psp_mcrw_assets_pak_start:\n'
-        f'    .incbin "{incbin_path}"\n'
-        '    .align 4\n'
-        '    .global pexcraft_psp_mcrw_assets_pak_end\n'
-        'pexcraft_psp_mcrw_assets_pak_end:\n',
-        encoding='utf-8'
+        "/* generated by tools/prepare_psp_assets.py; do not commit build/ */\n"
+        "    .section .rodata\n"
+        "    .align 4\n"
+        "    .global pexcraft_psp_mcrw_assets_pak_start\n"
+        "pexcraft_psp_mcrw_assets_pak_start:\n"
+        f"    .incbin \"{pak_path.as_posix()}\"\n"
+        "    .align 4\n"
+        "    .global pexcraft_psp_mcrw_assets_pak_end\n"
+        "pexcraft_psp_mcrw_assets_pak_end:\n",
+        encoding="utf-8",
     )
-    print(f'packed PSP MCRW assets: {len(files)} files -> {pak_path} ({pak_path.stat().st_size} bytes)')
-    print(f'embedded pak asm wrapper -> {asm_path}')
+    print(f"packed PSP MCRW assets: {len(files)} files -> {pak_path} ({pak_path.stat().st_size} bytes)")
 
 
-def main():
-    out_assets = Path(sys.argv[1] if len(sys.argv) > 1 else 'build/psp_generated/assets')
-    embed_c = Path(sys.argv[2] if len(sys.argv) > 2 else 'src/assets/psp_embedded_classic_pack.c')
-    pak_path = Path(sys.argv[3] if len(sys.argv) > 3 else 'build/psp_generated/psp_mcrw_assets.pak')
-    asm_path = Path(sys.argv[4] if len(sys.argv) > 4 else 'build/psp_generated/psp_mcrw_assets.S')
-    work = Path('build/psp_classic_work')
-    jar = work / 'client.jar'
-    work.mkdir(parents=True, exist_ok=True)
-    if not jar.exists():
-        print('downloading client.jar')
-        try:
-            urllib.request.urlretrieve(CLASSIC_PACK_URL, jar)
-        except Exception as e:
-            print('WARNING: could not download client.jar; embedding existing assets only:', e, file=sys.stderr)
-    Image = require_pillow()
-    mapping = {
-        'terrain.png': 'terrain.mcrw',
-        'gui/gui.png': 'gui_gui.mcrw',
-        'gui/background.png': 'gui_background.mcrw',
-        'gui/icons.png': 'gui_icons.mcrw',
-        'achievement/bg.png': 'achievement_bg.mcrw',
-        'gui/slot.png': 'gui_slot.mcrw',
-        'gui/inventory.png': 'gui_inventory.mcrw',
-        'gui/items.png': 'gui_items.mcrw',
-        'font/default.png': 'font_default.mcrw',
-        'mob/char.png': 'mob_char.mcrw',
-        'gui/crafting.png': 'gui_crafting_table.mcrw',
-        'gui/furnace.png': 'gui_furnace.mcrw',
-        'gui/container.png': 'gui_chest.mcrw',
-        'title/black.png': 'title_black.mcrw',
-        'environment/clouds.png': 'environment_clouds.mcrw',
-        'misc/water.png': 'misc_water.mcrw',
-        'misc/shadow.png': 'misc_shadow.mcrw',
-        'misc/grasscolor.png': 'misc_grasscolor.mcrw',
-        'misc/foliagecolor.png': 'misc_foliagecolor.mcrw',
-        'particles.png': 'particles.mcrw',
-    }
-    # Start with existing fallback assets, then overwrite with Java's assets.
-    src_assets = Path('assets')
-    out_assets.mkdir(parents=True, exist_ok=True)
-    if src_assets.exists():
-        for p in src_assets.iterdir():
-            if p.is_file() and p.suffix.lower() == '.mcrw':
-                (out_assets / p.name).write_bytes(p.read_bytes())
-    classic = work / 'Minecraft Classic'
-    if classic.exists():
-        import shutil; shutil.rmtree(classic)
-    classic.mkdir(parents=True)
-    if jar.exists():
-        with zipfile.ZipFile(jar, 'r') as zf:
-            names = set(zf.namelist())
-            for src, dst in mapping.items():
-                if src not in names:
-                    print('missing in jar:', src)
-                    continue
-                im = read_png_rgba(zf, src, Image)
-                write_mcrw(out_assets / dst, im)
-            # Make an embedded texture-pack zip with the original Java PNG layout.
-            for name in zf.namelist():
-                if name.endswith('/') or name.startswith('META-INF/') or name.endswith('.class'):
-                    continue
-                if name == 'pack.png':
-                    continue
-                if name == 'terrain.png' or name == 'particles.png' or name.startswith(('gui/','font/','mob/','title/','environment/','misc/')):
-                    dest = classic / name
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(zf.read(name))
-    else:
-        print('WARNING: client.jar unavailable; embedded Classic pack zip will contain only pack.txt', file=sys.stderr)
-    (classic / 'pack.txt').write_text('Minecraft Classic\nEmbedded from client.jar for PSP\n', encoding='utf-8')
-    embedded_zip = work / 'psp_embedded_classic_pack.zip'
-    with zipfile.ZipFile(embedded_zip, 'w', zipfile.ZIP_DEFLATED) as out:
-        for p in classic.rglob('*'):
-            if p.is_file():
-                out.write(p, p.relative_to(classic).as_posix())
-    data = embedded_zip.read_bytes()
-    embed_c.parent.mkdir(parents=True, exist_ok=True)
-    with open(embed_c, 'w', encoding='utf-8') as f:
-        f.write('/* generated by tools/prepare_psp_assets.py */\n')
-        f.write('#include <stddef.h>\n')
-        f.write('const unsigned char pexcraft_psp_classic_pack_zip[] = {\n')
-        for i in range(0, len(data), 12):
-            f.write('  ' + ', '.join(f'0x{b:02x}' for b in data[i:i+12]) + ',\n')
-        f.write('};\n')
-        f.write(f'const unsigned int pexcraft_psp_classic_pack_zip_len = {len(data)}u;\n')
-    print(f'embedded classic pack: {len(data)} bytes -> {embed_c}')
-    have = {p.name for p in out_assets.glob('*.mcrw')}
-    missing = sorted(REQUIRED_MCRW - have)
-    if missing:
-        print('WARNING: missing required MCRW assets before embedding:', ', '.join(missing), file=sys.stderr)
-    write_mcrw_pak_and_asm(out_assets, pak_path, asm_path)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--release", type=Path, default=Path("build/psp_wasm_assets/Release"))
+    parser.add_argument("--manifest", type=Path, default=Path("build/psp_wasm_assets/wasm-assets-manifest.json"))
+    parser.add_argument("--out-assets", type=Path, default=Path("build/psp_generated/assets"))
+    parser.add_argument("--embed-c", type=Path, default=Path("src/assets/psp_embedded_classic_pack.c"))
+    parser.add_argument("--pak", type=Path, default=Path("build/psp_generated/psp_mcrw_assets.pak"))
+    parser.add_argument("--asm", type=Path, default=Path("build/psp_generated/psp_mcrw_assets.S"))
+    return parser.parse_args()
 
-if __name__ == '__main__':
-    main()
+
+def main() -> int:
+    args = parse_args()
+    try:
+        verify_wasm_stage(args.release, args.manifest)
+        Image = require_pillow()
+        if args.out_assets.exists():
+            shutil.rmtree(args.out_assets)
+        args.out_assets.mkdir(parents=True, exist_ok=True)
+        # Retain project fallbacks, then overwrite them with verified 1.2.5 files.
+        for path in Path("assets").glob("*.mcrw"):
+            (args.out_assets / path.name).write_bytes(path.read_bytes())
+        for source, target in MAPPING.items():
+            path = args.release / source
+            if not path.is_file():
+                continue
+            with Image.open(path) as image:
+                write_mcrw(args.out_assets / target, image)
+        missing = sorted(REQUIRED_MCRW - {path.name for path in args.out_assets.glob("*.mcrw")})
+        if missing:
+            raise RuntimeError("missing required generated PSP textures: " + ", ".join(missing))
+        write_metadata_zip_c(args.embed_c, args.manifest)
+        write_mcrw_pak_and_asm(args.out_assets, args.pak, args.asm)
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"prepare_psp_assets.py: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

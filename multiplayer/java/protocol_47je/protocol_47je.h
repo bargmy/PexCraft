@@ -6,7 +6,13 @@
 
 #define PEX_JAVA47_PROTOCOL_VERSION 47
 #define PEX_JAVA47_DEFAULT_PORT 25565
+#ifndef PEX_JAVA47_FAVICON_PNG_MAX
+#if defined(PEX_PLATFORM_PSP)
+#define PEX_JAVA47_FAVICON_PNG_MAX 1
+#else
 #define PEX_JAVA47_FAVICON_PNG_MAX 65536
+#endif
+#endif
 
 typedef struct PexJava47Status {
     int ok;

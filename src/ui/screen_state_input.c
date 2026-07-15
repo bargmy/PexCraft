@@ -917,7 +917,12 @@ static void rebuild_screen(void) {
         choose_release_splash(g_splash, sizeof(g_splash));
         if (is_seasonal_splash(seasonal, sizeof(seasonal))) snprintf(g_splash, sizeof(g_splash), "%s", seasonal);
         int y0 = g_gui_h / 4 + 48;
-        add_button(1, g_gui_w / 2 - 100, y0, "Singleplayer");
+        {
+            Button *singleplayer = add_button(1, g_gui_w / 2 - 100, y0, "Singleplayer");
+#if defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+            if (singleplayer) singleplayer->enabled = 0;
+#endif
+        }
 #if defined(PEX_PLATFORM_WASM)
         {
             Button *multiplayer = add_button(2, g_gui_w / 2 - 100, y0 + 24,
@@ -1360,7 +1365,9 @@ static void on_button(Button *b) {
     if (g_screen == SCREEN_TITLE) {
         if (!g_boot_sequence_done && g_title_enter_time > 0.0 && now_seconds() - g_title_enter_time < 3.0) return;
         if (b->id == 0) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_OPTIONS); }
+#if !defined(PEX_PSP_MULTIPLAYER_ONLY) || !PEX_PSP_MULTIPLAYER_ONLY
         else if (b->id == 1) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_WORLD_SELECT); }
+#endif
         else if (b->id == 2) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_MULTIPLAYER); }
         else if (b->id == 3) { g_parent_screen = SCREEN_TITLE; set_screen(SCREEN_TEXPACK); }
         else if (b->id == 5) { g_language_return_screen = SCREEN_TITLE; set_screen(SCREEN_LANGUAGE); }

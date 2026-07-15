@@ -15,6 +15,18 @@
 #include <psputils.h>
 #include <psprtc.h>
 #include <psppower.h>
+#include <psputility.h>
+#include <psputility_netmodules.h>
+#include <pspnet.h>
+#include <pspnet_inet.h>
+#include <pspnet_apctl.h>
+#include <pspnet_resolver.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 #ifndef PSP_DISPLAY_PIXEL_FORMAT_8888
 #define PSP_DISPLAY_PIXEL_FORMAT_8888 3
@@ -76,6 +88,8 @@ typedef int GLsizei;
 typedef float GLfloat;
 typedef double GLdouble;
 typedef unsigned char GLubyte;
+typedef unsigned short GLushort;
+typedef void GLvoid;
 typedef unsigned int GLbitfield;
 typedef unsigned char GLboolean;
 
@@ -106,6 +120,7 @@ typedef unsigned char GLboolean;
 #define GL_SRC_COLOR 0x0300
 #define GL_ONE 1
 #define GL_ZERO 0
+#define GL_EQUAL 0x0202
 #define GL_LEQUAL 0x0203
 #define GL_LESS 0x0201
 #define GL_GEQUAL 0x0206
@@ -121,6 +136,13 @@ typedef unsigned char GLboolean;
 #define GL_CLAMP 0x2900
 #define GL_RGBA 0x1908
 #define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_SHORT 0x1403
+#define GL_UNSIGNED_INT 0x1405
+#define GL_FLOAT 0x1406
+#define GL_VERTEX_ARRAY 0x8074
+#define GL_NORMAL_ARRAY 0x8075
+#define GL_COLOR_ARRAY 0x8076
+#define GL_TEXTURE_COORD_ARRAY 0x8078
 #define GL_VENDOR 0x1F00
 #define GL_RENDERER 0x1F01
 #define GL_VERSION 0x1F02
@@ -131,6 +153,7 @@ typedef unsigned char GLboolean;
 #define GL_FOG_COLOR 0x0B66
 #define GL_FOG_DENSITY 0x0B62
 #define GL_EXP 0x0800
+#define GL_EXP2 0x0801
 #define GL_MODELVIEW_MATRIX 0x0BA6
 #define GL_PROJECTION_MATRIX 0x0BA7
 #define GL_TEXTURE_ENV 0x2300
@@ -229,7 +252,9 @@ typedef char WCHAR;
 #define PEX_PSP_MEMORY_ONLY 1
 #endif
 
-/* Networking is intentionally disabled for the PSP port for now. */
+/* WinSock-shaped wrappers over the native PSP TCP/IP stack. The first network
+   use attaches to the first configured infrastructure profile. This keeps all
+   Java 47 code shared with desktop while avoiding pthread/newlib socket glue. */
 typedef int SOCKET;
 typedef struct WSADATA { int unused; } WSADATA;
 #define INVALID_SOCKET (-1)
@@ -238,13 +263,142 @@ typedef struct WSADATA { int unused; } WSADATA;
 #define WSAEINPROGRESS EINPROGRESS
 #define WSAEALREADY EALREADY
 #define WSAEACCES EACCES
-#define closesocket(s) ((void)(s),0)
+
+#ifndef FIONBIO
+#define FIONBIO 0x8004667eL
+#endif
+
+static int g_pex_psp_net_initialized = 0;
+static int g_pex_psp_net_connected = 0;
+
+static inline int pex_psp_net_wait_for_profile(void) {
+    int state = 0;
+    if (sceNetApctlGetState(&state) >= 0 && state == PSP_NET_APCTL_STATE_GOT_IP) return 0;
+    for (int profile = 1; profile <= 23; ++profile) {
+        int rc = sceNetApctlConnect(profile);
+        if (rc < 0) continue;
+        for (int tries = 0; tries < 160; ++tries) {
+            state = 0;
+            rc = sceNetApctlGetState(&state);
+            if (rc < 0) break;
+            if (state == PSP_NET_APCTL_STATE_GOT_IP) return 0;
+            sceKernelDelayThread(50000);
+        }
+        sceNetApctlDisconnect();
+    }
+    return -1;
+}
+
+static inline int pex_psp_network_start(void) {
+    if (g_pex_psp_net_connected) return 0;
+    if (!g_pex_psp_net_initialized) {
+        int rc = sceUtilityLoadNetModule(PSP_NET_MODULE_COMMON);
+        if (rc < 0) return rc;
+        rc = sceUtilityLoadNetModule(PSP_NET_MODULE_INET);
+        if (rc < 0) return rc;
+        rc = sceNetInit(128 * 1024, 0x20, 4096, 0x20, 4096);
+        if (rc < 0) return rc;
+        rc = sceNetInetInit();
+        if (rc < 0) return rc;
+        rc = sceNetResolverInit();
+        if (rc < 0) return rc;
+        rc = sceNetApctlInit(10 * 1024, 0x30);
+        if (rc < 0) return rc;
+        g_pex_psp_net_initialized = 1;
+    }
+    if (pex_psp_net_wait_for_profile() != 0) return -1;
+    g_pex_psp_net_connected = 1;
+    return 0;
+}
+
 static inline int WSAGetLastError(void) { return errno; }
-static inline int WSAStartup(WORD ver, void *data) { (void)ver; (void)data; return 1; }
+static inline int pex_psp_net_result(int rc) {
+    if (rc < 0) errno = sceNetInetGetErrno();
+    return rc;
+}
+static inline int WSAStartup(WORD ver, void *data) {
+    (void)ver; (void)data;
+    return pex_psp_network_start() == 0 ? 0 : 1;
+}
 static inline int WSACleanup(void) { return 0; }
 static inline unsigned long PEX_MAKEWORD(int a, int b) { return ((unsigned long)((a) & 0xff) | ((unsigned long)((b) & 0xff) << 8)); }
 #define MAKEWORD(a,b) PEX_MAKEWORD((a),(b))
-static inline int ioctlsocket(SOCKET s, long cmd, unsigned long *argp) { (void)s; (void)cmd; (void)argp; return -1; }
+
+static inline int pex_psp_socket(int domain, int type, int protocol) {
+    return pex_psp_net_result(sceNetInetSocket(domain, type, protocol));
+}
+static inline int pex_psp_connect(int s, const struct sockaddr *addr, socklen_t len) {
+    return pex_psp_net_result(sceNetInetConnect(s, addr, len));
+}
+static inline int pex_psp_send(int s, const void *buf, size_t len, int flags) {
+    return pex_psp_net_result(sceNetInetSend(s, buf, len, flags));
+}
+static inline int pex_psp_recv(int s, void *buf, size_t len, int flags) {
+    return pex_psp_net_result(sceNetInetRecv(s, buf, len, flags));
+}
+static inline int pex_psp_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
+    return pex_psp_net_result(sceNetInetSelect(nfds, readfds, writefds, exceptfds, (struct SceNetInetTimeval *)timeout));
+}
+static inline int pex_psp_setsockopt(int s, int level, int opt, const void *value, socklen_t len) {
+    return pex_psp_net_result(sceNetInetSetsockopt(s, level, opt, value, len));
+}
+static inline int pex_psp_getsockopt(int s, int level, int opt, void *value, socklen_t *len) {
+    return pex_psp_net_result(sceNetInetGetsockopt(s, level, opt, value, len));
+}
+static inline int pex_psp_closesocket(int s) { return pex_psp_net_result(sceNetInetClose(s)); }
+static inline int ioctlsocket(SOCKET s, long cmd, unsigned long *argp) {
+    if (cmd != FIONBIO || !argp) { errno = EINVAL; return -1; }
+    int nonblocking = *argp ? 1 : 0;
+    return pex_psp_net_result(sceNetInetSetsockopt(s, SOL_SOCKET, SO_NONBLOCK, &nonblocking, sizeof(nonblocking)));
+}
+
+static inline int pex_psp_getaddrinfo(const char *host, const char *service,
+                                      const struct addrinfo *hints, struct addrinfo **out) {
+    if (!host || !host[0] || !out) return EINVAL;
+    *out = NULL;
+    struct in_addr addr;
+    if (inet_aton(host, &addr) == 0) {
+        unsigned char resolver_buf[1024] __attribute__((aligned(16)));
+        int rid = -1;
+        int rc = sceNetResolverCreate(&rid, resolver_buf, sizeof(resolver_buf));
+        if (rc < 0) return EHOSTUNREACH;
+        rc = sceNetResolverStartNtoA(rid, host, &addr, 2, 3);
+        sceNetResolverDelete(rid);
+        if (rc < 0) return EHOSTUNREACH;
+    }
+    struct addrinfo *ai = (struct addrinfo *)calloc(1, sizeof(*ai));
+    struct sockaddr_in *sin = (struct sockaddr_in *)calloc(1, sizeof(*sin));
+    if (!ai || !sin) { free(ai); free(sin); return ENOMEM; }
+    sin->sin_family = AF_INET;
+    sin->sin_port = htons((unsigned short)(service ? atoi(service) : 0));
+    sin->sin_addr = addr;
+    ai->ai_family = AF_INET;
+    ai->ai_socktype = hints && hints->ai_socktype ? hints->ai_socktype : SOCK_STREAM;
+    ai->ai_protocol = hints ? hints->ai_protocol : IPPROTO_TCP;
+    ai->ai_addrlen = sizeof(*sin);
+    ai->ai_addr = (struct sockaddr *)sin;
+    *out = ai;
+    return 0;
+}
+static inline void pex_psp_freeaddrinfo(struct addrinfo *ai) {
+    while (ai) {
+        struct addrinfo *next = ai->ai_next;
+        free(ai->ai_addr);
+        free(ai);
+        ai = next;
+    }
+}
+
+#define socket      pex_psp_socket
+#define connect     pex_psp_connect
+#define send        pex_psp_send
+#define recv        pex_psp_recv
+#define select      pex_psp_select
+#define setsockopt  pex_psp_setsockopt
+#define getsockopt  pex_psp_getsockopt
+#define closesocket pex_psp_closesocket
+#define getaddrinfo pex_psp_getaddrinfo
+#define freeaddrinfo pex_psp_freeaddrinfo
 
 static inline void pex_normalize_path(char *dst, size_t cap, const char *src) {
     if (!dst || cap == 0) return;

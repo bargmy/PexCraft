@@ -7631,12 +7631,18 @@ static volatile LONG g_async_section_mesh_upload_state = ASYNC_MESH_WORKER_UNUSE
 static int async_mesh_worker_gpu_prebuild_enabled(void) { return 0; }
 
 #if defined(PEX_PLATFORM_PSP)
-/* PSP has far less RAM than desktop. Keep the async mesh queue intentionally
-   small; a single job snapshot is about 29 KB and each finished section can own
-   a sizeable vertex/index buffer until the render thread adopts it. */
+/* PSP has far less RAM than desktop. A single job snapshot is about 29 KiB and
+   completed sections retain vertex/index buffers until the render thread adopts
+   them. Keep only one result in flight on PSP-1000. */
+#if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
+#define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 3
+#define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 1
+#define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 1
+#else
 #define ASYNC_SECTION_MESH_JOB_QUEUE_MAX 12
 #define ASYNC_SECTION_MESH_UPLOAD_QUEUE_MAX 4
 #define ASYNC_SECTION_MESH_RESULT_QUEUE_MAX 6
+#endif
 #define ASYNC_SECTION_MESH_WORKER_COUNT 1
 #elif defined(PEX_PLATFORM_ANDROID_TV)
 /* TV boxes often expose four slow cores that share thermal and memory bandwidth

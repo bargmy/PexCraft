@@ -10341,6 +10341,11 @@ static void apply_player_fluid_velocity(int is_water) {
 }
 
 static void update_liquids(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+    /* Protocol 47 servers own fluid and random block simulation. Local ticking
+       causes client/server divergence and retains a large fluid work array. */
+    return;
+#else
     /* Do not freeze liquid/block simulation just because far render-distance
        chunks are streaming in the background.  Only pause if terrain in the
        player's immediate neighborhood is still pending, where simulation would
@@ -10497,6 +10502,8 @@ static void update_liquids(void) {
     }
 
     (void)moved;
+#endif
+
 }
 
 
@@ -10685,9 +10692,17 @@ typedef struct StreamAsyncResult {
     unsigned char *blocklight;
 } StreamAsyncResult;
 
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+/* Server chunks are authoritative in the PSP client. Keep only tiny inert
+   queues for shared streaming code and never reserve desktop generator rings. */
+#define STREAM_ASYNC_MAX_WORKERS 1
+#define STREAM_ASYNC_JOB_RING 2
+#define STREAM_ASYNC_RESULT_RING 2
+#else
 #define STREAM_ASYNC_MAX_WORKERS 4
 #define STREAM_ASYNC_JOB_RING 128
 #define STREAM_ASYNC_RESULT_RING 128
+#endif
 
 static CRITICAL_SECTION g_stream_async_cs;
 static int g_stream_async_initialized = 0;

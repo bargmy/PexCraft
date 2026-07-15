@@ -8,10 +8,10 @@
 #define PEX_PSP_SCR_HEIGHT 272
 #if defined(PEX_PSP_1000_TARGET) && PEX_PSP_1000_TARGET
 #define PEX_PSP_MAX_TEXTURES 128
-#define PEX_PSP_MAX_IMM_VERTS 32768
-#define PEX_PSP_LIST_COUNT 1024
-#define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 2048
-#define PEX_PSP_GU_LIST_WORDS 131072
+#define PEX_PSP_MAX_IMM_VERTS 16384
+#define PEX_PSP_LIST_COUNT 768
+#define PEX_PSP_MAX_IMMEDIATE_DRAW_VERTS 1024
+#define PEX_PSP_GU_LIST_WORDS 65536
 #else
 #define PEX_PSP_MAX_TEXTURES 1024
 #define PEX_PSP_MAX_IMM_VERTS 98304
@@ -655,4 +655,25 @@ static void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, 
 }
 static void glDeleteTextures(GLsizei n, const GLuint *tex){ for(int i=0;i<n;i++){ GLuint id=tex[i]; if(id<PEX_PSP_MAX_TEXTURES){ if (!g_psp_textures[id].in_vram) free(g_psp_textures[id].pixels); memset(&g_psp_textures[id],0,sizeof(g_psp_textures[id])); } } }
 static void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei w, GLsizei h){ (void)target;(void)level;(void)xoff;(void)yoff;(void)x;(void)y;(void)w;(void)h; /* PSP path avoids backbuffer copies; title snapshot is disabled. */ }
+/* Shared CPU-array fallback calls are compiled for every backend. PSP terrain
+   never reaches them because flat_direct_backend() owns section meshes, but
+   concrete stubs avoid unresolved OpenGL symbols in the EBOOT. */
+static void glEnableClientState(GLenum array){ (void)array; }
+static void glDisableClientState(GLenum array){ (void)array; }
+static void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ (void)size;(void)type;(void)stride;(void)ptr; }
+static void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ (void)size;(void)type;(void)stride;(void)ptr; }
+static void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr){ (void)size;(void)type;(void)stride;(void)ptr; }
+static void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices){ (void)mode;(void)count;(void)type;(void)indices; }
+static void glShadeModel(GLenum mode){ (void)mode; }
+static void glFrontFace(GLenum mode){ (void)mode; }
+static void glPolygonOffset(GLfloat factor, GLfloat units){ (void)factor;(void)units; }
+static void glNormal3f(GLfloat x, GLfloat y, GLfloat z){ (void)x;(void)y;(void)z; }
+static void glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a){
+    glColor4f((float)r/255.0f,(float)g/255.0f,(float)b/255.0f,(float)a/255.0f);
+}
+static void glTexParameterf(GLenum target, GLenum pname, GLfloat param){ glTexParameteri(target,pname,(GLint)param); }
+static void glTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLsizei w, GLsizei h, GLenum fmt, GLenum type, const GLvoid *pixels){
+    (void)target;(void)level;(void)xoff;(void)yoff;(void)w;(void)h;(void)fmt;(void)type;(void)pixels;
+}
+static GLenum glGetError(void){ return 0; }
 static const GLubyte *glGetString(GLenum name){ if(name==GL_VENDOR)return (const GLubyte*)"Sony"; if(name==GL_RENDERER)return (const GLubyte*)"PSP Graphics Engine (GU)"; if(name==GL_VERSION)return (const GLubyte*)"PSP GU fixed-function"; return (const GLubyte*)""; }

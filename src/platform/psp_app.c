@@ -3,10 +3,13 @@
 /* Leave a bigger system/stack reserve on real PSP-1000.  The previous all-but-1MB heap
    could let the client push too close to the 32MB model and hard-power-off on OOM. */
 PSP_HEAP_SIZE_KB(-4096);
-/* Terrain/world generation has large helper structs; 512KB avoids silent PSP-1000 stack overflow. */
-PSP_MAIN_THREAD_STACK_SIZE_KB(512);
+/* Multiplayer-only PSP-1000 target: protocol status buffers are heap-backed,
+   so the main thread no longer needs the old generator-sized stack. */
+PSP_MAIN_THREAD_STACK_SIZE_KB(256);
 PSP_MODULE_INFO("PEXCRAFT", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
+PSP_DISABLE_AUTOSTART_PTHREAD()
+PSP_DISABLE_NEWLIB_TIMEZONE_SUPPORT()
 
 #ifndef PEX_PSP_BOOT_DEBUG
 #define PEX_PSP_BOOT_DEBUG 1
@@ -28,7 +31,7 @@ static void psp_boot_debug_redraw(const char *footer) {
     pspDebugScreenPrintf("PEXCRAFT PSP BOOT DEBUG\n");
     pspDebugScreenPrintf("-----------------------\n");
     pspDebugScreenPrintf("Stage: %d\n", g_psp_boot_debug_stage);
-    pspDebugScreenPrintf("RAM-only: yes   Network: disabled\n");
+    pspDebugScreenPrintf("PSP-1000 MP only   Java protocol 47\n");
     pspDebugScreenPrintf("Screen: 480x272  Renderer: PSP GU\n\n");
     int first = g_psp_boot_debug_count > 14 ? g_psp_boot_debug_count - 14 : 0;
     for (int i = first; i < g_psp_boot_debug_count; ++i) {
@@ -202,7 +205,9 @@ static void pex_join_save_thread_for_exit(void) {
 }
 
 static void save_world_state_for_exit(void) {
+#if !defined(PEX_PSP_MULTIPLAYER_ONLY) || !PEX_PSP_MULTIPLAYER_ONLY
     pex_stats_flush();
+#endif
     if (world_quit_is_active()) return;
 #if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MEMORY_ONLY) && PEX_PSP_MEMORY_ONLY
     pex_join_save_thread_for_exit();
@@ -244,6 +249,11 @@ static void main_loop(void) {
         if (psp_verbose_frame <= 20) PEX_PSP_LOGF("FRAME %u: pex_gamepad_update end", psp_verbose_frame);
         profile_add_time(PROF_PUMP, prof_start);
 
+        /* Java 47 owns world delivery and must be pumped even while the
+           connecting screen is visible. Keep it outside the 20 Hz tick loop. */
+        pex_net_poll();
+        pex_net_update_smoothing();
+
         double frame_start_time = now_seconds();
         double t = frame_start_time;
         double dt = t - g_last_time;
@@ -257,13 +267,13 @@ static void main_loop(void) {
             double tick_start = profile_begin();
             g_ticks++;
             if (g_screen == SCREEN_TITLE) tick_title_blocks();
+#if !defined(PEX_PSP_MULTIPLAYER_ONLY) || !PEX_PSP_MULTIPLAYER_ONLY
             if (g_screen == SCREEN_GENERATING) {
                 double t_worldgen = profile_begin();
-                PEX_PSP_LOGF("FRAME %u: worldgen_tick begin", psp_verbose_frame);
                 worldgen_tick();
-                PEX_PSP_LOGF("FRAME %u: worldgen_tick end", psp_verbose_frame);
                 profile_add_time(PROF_WORLDGEN_TICK, t_worldgen);
             }
+#endif
             if (g_screen == SCREEN_TEXPACK_INSTALL) pack_install_tick();
             if (g_screen == SCREEN_INGAME || g_screen == SCREEN_CHAT ||
                 g_screen == SCREEN_INVENTORY || g_screen == SCREEN_CREATIVE || g_screen == SCREEN_WORKBENCH ||
@@ -318,15 +328,15 @@ int main(int argc, char **argv) {
     /* PSP gameplay default: 60 FPS gives PPSSPP/real PSP smoother pacing;
        terrain workers are now low-priority async threads, so they should use
        leftover time instead of blocking user_main. */
-    g_opts.render_distance = 4;
+    g_opts.render_distance = 2;
     g_opts.fancy_graphics = 0;
-    g_opts.max_fps = 60;
+    g_opts.max_fps = 30;
     g_opts.anaglyph = 0;
     g_opts.show_fps = 1;
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = RENDERER_OPENGL;
     PEX_PSP_LOGF("load_options end/forced PSP: user=%s fps=%d renderer=%d rd=%d fancy=%d", g_opts.username, g_opts.max_fps, g_selected_renderer_backend, g_opts.render_distance, g_opts.fancy_graphics);
-    psp_boot_debug_stagef("RAM options loaded; PSP-safe graphics forced");
+    psp_boot_debug_stagef("PSP-1000 multiplayer profile loaded");
     PEX_PSP_LOGF("embedded classic pack prepare begin");
     psp_install_embedded_pack_if_needed();
     PEX_PSP_LOGF("embedded classic pack prepare end");

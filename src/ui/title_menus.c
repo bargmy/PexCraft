@@ -22,7 +22,9 @@ static void tick_title_blocks(void) {
        screen is active, not while the separate boot/Mojang screen is still
        covering it.  Keeping the timer at zero until the first real title frame
        makes first startup and post-world-return enter the same panorama state. */
+#if !(defined(PEX_PSP_NO_PANORAMA) && PEX_PSP_NO_PANORAMA)
     if (g_boot_sequence_done && g_release_panorama_timer < 0x3fffffff) ++g_release_panorama_timer;
+#endif
     init_title_blocks();
     for (int x = 0; x < TITLE_COLS; x++) {
         for (int y = 0; y < TITLE_ROWS; y++) {
@@ -212,9 +214,10 @@ static void draw_title_logo_3d(float partial) {
 }
 
 
+static int g_release_panorama_boot_reset_done = 0;
+#if !(defined(PEX_PSP_NO_PANORAMA) && PEX_PSP_NO_PANORAMA)
 static GLuint g_release_panorama_viewport_tex = 0;
 static int g_release_panorama_alloc_size = 0;
-static int g_release_panorama_boot_reset_done = 0;
 #if defined(PEX_PLATFORM_WASM)
 static double g_release_wasm_panorama_last_update = -1000.0;
 static int g_release_wasm_panorama_valid = 0;
@@ -663,6 +666,16 @@ static void draw_release_skybox(float partial) {
     glEnd();
 }
 
+#else
+/* PSP-1000 build: the complete six-face panorama/copy/blur implementation is
+   removed by the preprocessor, so it cannot allocate a viewport texture or
+   emit any GU commands. */
+static void release_title_state_enter(void) {
+    g_release_panorama_timer = 0;
+    g_release_panorama_boot_reset_done = g_boot_sequence_done ? 1 : 0;
+}
+#endif
+
 static void draw_release_minecraft_logo(void) {
     if (!tex_title_logo.id) return;
     const int logo_anchor_w = 274;
@@ -707,7 +720,12 @@ static void draw_title_screen(float partial) {
         }
     }
 
+#if defined(PEX_PSP_NO_PANORAMA) && PEX_PSP_NO_PANORAMA
+    (void)partial;
+    draw_default_bg();
+#else
     draw_release_skybox(partial);
+#endif
     draw_gradient(0, 0, g_gui_w, g_gui_h, (int)0x80FFFFFFu, 0x00FFFFFF);
     draw_gradient(0, 0, g_gui_w, g_gui_h, 0x00000000, (int)0x80000000u);
     draw_release_minecraft_logo();

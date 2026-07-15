@@ -10,11 +10,19 @@
 /* Client-side player tracking must be large enough for Java/Bedrock hubs.
    Keep the legacy PXNET snapshot wire format at 16 players below so this
    capacity increase does not change the custom protocol packet size. */
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+#define PEX_NET_MAX_PLAYERS 40
+#define PEX_NET_SNAPSHOT_MAX_PLAYERS 16
+#define PEX_NET_MAX_DROPS 24
+#define PEX_NET_MAX_FALLING_BLOCKS 16
+#define PEX_NET_MAX_CHAT 120
+#else
 #define PEX_NET_MAX_PLAYERS 128
 #define PEX_NET_SNAPSHOT_MAX_PLAYERS 16
 #define PEX_NET_MAX_DROPS 64
 #define PEX_NET_MAX_FALLING_BLOCKS 64
 #define PEX_NET_MAX_CHAT 180
+#endif
 #define PEX_NET_WORLD_SIZE 256
 #define PEX_NET_WORLD_HEIGHT 256
 #define PEX_NET_CHUNK_SIZE 16
@@ -25,7 +33,11 @@
 #define PEX_NET_CHEST_SLOTS 54
 #define PEX_NET_INVENTORY_SLOTS 36
 #define PEX_NET_CRAFT_GRID_SLOTS 9
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+#define PEX_NET_MAX_CHUNK_HASHES 16
+#else
 #define PEX_NET_MAX_CHUNK_HASHES 128
+#endif
 
 enum {
     PEX_C2S_HELLO = 1,
@@ -94,7 +106,12 @@ enum {
    them clear. */
 #define PEX_PLAYER_FLAG_INVISIBLE 2
 #define PEX_PLAYER_FLAG_HIDE_NAMETAG 4
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+/* PSP uses the embedded Steve texture and never transports RGBA skins. */
+#define PEX_NET_SKIN_MAX_BYTES 1
+#else
 #define PEX_NET_SKIN_MAX_BYTES (64 * 64 * 4)
+#endif
 
 typedef struct PexNetPacketHeader {
     uint16_t type;

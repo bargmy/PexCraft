@@ -7859,6 +7859,12 @@ static void passive_mobs_push_collisions_125(void) {
 }
 
 static void update_passive_mobs(void) {
+#if defined(PEX_PLATFORM_PSP) && defined(PEX_PSP_MULTIPLAYER_ONLY) && PEX_PSP_MULTIPLAYER_ONLY
+    /* Remote entities are updated by Protocol 47. Keep rendering/model helpers,
+       but compile all local spawning, village scanning, AI and collision ticks
+       out of the PSP-1000 client call graph. */
+    return;
+#else
     /* Multiplayer mobs are server-authoritative. protocol_47je updates their
        transforms directly, so local spawning, AI and collision simulation
        must stay disabled while the renderer remains active. */
@@ -7936,6 +7942,8 @@ static void update_passive_mobs(void) {
     g_passive_perf_last_active = active_count;
     g_passive_perf_last_path_budget_left = g_passive_pathfind_budget;
     g_prof_mob_spawn_probe_budget_last = g_passive_spawn_probe_budget;
+#endif
+
 }
 
 static Texture *passive_mob_texture_for_type(int type) {
