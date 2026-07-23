@@ -977,7 +977,7 @@ static void rebuild_screen(void) {
     } else if (g_screen == SCREEN_OPTIONS_MORE) {
         const OptionId video_options[] = {
             OPT_GRAPHICS, OPT_RENDER_DISTANCE, OPT_VIEW_BOBBING, OPT_LIMIT_FRAMERATE,
-            OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDER_RESOLUTION, OPT_RENDERER
+            OPT_ANAGLYPH, OPT_FULLSCREEN, OPT_SHOW_FPS, OPT_RENDER_RESOLUTION, OPT_SHADERS, OPT_RENDERER
         };
         const StivuFineOptionId sf_video_options[] = {
             SF_AO_LEVEL, SF_GUI_SCALE
@@ -999,6 +999,13 @@ static void rebuild_screen(void) {
 #if !defined(PEX_PLATFORM_ANDROID) && !defined(PEX_PLATFORM_ANDROID_TV)
             if (opt == OPT_RENDER_RESOLUTION) b->enabled = 0;
 #endif
+            if (opt == OPT_SHADERS) {
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+                b->enabled = pex_shaders_platform_supported() && g_selected_renderer_backend == RENDERER_OPENGL;
+#else
+                b->enabled = 0;
+#endif
+            }
         }
         for (int i = 0; i < ARRAY_COUNT(sf_video_options); i++) {
             StivuFineOptionId opt = sf_video_options[i];

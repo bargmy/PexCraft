@@ -45,6 +45,7 @@ static void set_default_options(void) {
     g_opts.fullscreen = 0;
     g_opts.show_fps = 0;
     g_opts.render_scale_percent = 100;
+    g_opts.shaders = 0;
     g_opts.renderer_backend = RENDERER_OPENGL;
     g_selected_renderer_backend = g_opts.renderer_backend;
 #ifdef PEX_PLATFORM_PSP
@@ -968,6 +969,7 @@ static void load_options(void) {
         else if (!strcmp(k, "fullscreen") || !strcmp(k, "enableFullscreen")) g_opts.fullscreen = !strcmp(v, "true");
         else if (!strcmp(k, "showFps") || !strcmp(k, "showFPSCounter")) g_opts.show_fps = !strcmp(v, "true");
         else if (!strcmp(k, "renderScalePercent") || !strcmp(k, "rendererResolutionPercent")) g_opts.render_scale_percent = atoi(v);
+        else if (!strcmp(k, "shaders")) g_opts.shaders = (!strcmp(v, "true") || !strcmp(v, "1") || !strcmp(v, "yes"));
         else if (!strcmp(k, "renderer") || !strcmp(k, "rendererBackend")) g_opts.renderer_backend = parse_renderer_backend(v);
         else if (!strcmp(k, "ignoreClassicResourcesWarning") || !strcmp(k, "ignoreClassicPackWarning")) g_opts.ignore_classic_resources_warning = !strcmp(v, "true");
         else if (!strcmp(k, "downloadClassicTextures")) g_opts.download_classic_textures = !strcmp(v, "true");
@@ -1051,6 +1053,11 @@ static void load_options(void) {
     snprintf(g_opts.skin, sizeof(g_opts.skin), "%s", CLASSIC_PACK_NAME);
 #endif
     g_selected_renderer_backend = g_opts.renderer_backend;
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (g_opts.renderer_backend != RENDERER_OPENGL) g_opts.shaders = 0;
+#else
+    g_opts.shaders = 0;
+#endif
     if (g_opts.max_fps <= 0) g_opts.anaglyph = 0;
     if (!g_opts.username[0]) snprintf(g_opts.username, sizeof(g_opts.username), "Player");
     if (!g_opts.language[0]) snprintf(g_opts.language, sizeof(g_opts.language), "en_US");
@@ -1107,6 +1114,7 @@ static void save_options(void) {
     fprintf(f, "fullscreen:%s\n", g_opts.fullscreen ? "true" : "false");
     fprintf(f, "showFps:%s\n", g_opts.show_fps ? "true" : "false");
     fprintf(f, "renderScalePercent:%d\n", g_opts.render_scale_percent);
+    fprintf(f, "shaders:%s\n", g_opts.shaders ? "true" : "false");
     fprintf(f, "renderer:%s\n", renderer_backend_keys[(g_opts.renderer_backend >= 0 && g_opts.renderer_backend < RENDERER_COUNT) ? g_opts.renderer_backend : RENDERER_OPENGL]);
     fprintf(f, "ignoreClassicResourcesWarning:%s\n", g_opts.ignore_classic_resources_warning ? "true" : "false");
     fprintf(f, "downloadClassicTextures:%s\n", g_opts.download_classic_textures ? "true" : "false");
@@ -1243,6 +1251,7 @@ static void get_option_label(OptionId opt, char *out, size_t cap) {
         /* Max FPS is a slider, not boolean. */
         else if (opt == OPT_FULLSCREEN) val = g_opts.fullscreen;
         else if (opt == OPT_SHOW_FPS) val = g_opts.show_fps;
+        else if (opt == OPT_SHADERS) val = g_opts.shaders;
         snprintf(out, cap, "%s: %s", name, val ? tr("ON") : tr("OFF"));
     } else if (opt == OPT_RENDER_DISTANCE) {
         snprintf(out, cap, "%s: %d chunks", name, g_opts.render_distance);
@@ -1269,6 +1278,14 @@ static void bump_option(OptionId opt, int delta) {
     else if (opt == OPT_GRAPHICS) { g_opts.fancy_graphics = !g_opts.fancy_graphics; flat_mark_all_chunks_dirty(); }
     else if (opt == OPT_FULLSCREEN) { set_fullscreen_enabled(!g_opts.fullscreen); return; }
     else if (opt == OPT_SHOW_FPS) g_opts.show_fps = !g_opts.show_fps;
+    else if (opt == OPT_SHADERS) {
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+        if (!pex_shaders_platform_supported() || g_selected_renderer_backend != RENDERER_OPENGL) g_opts.shaders = 0;
+        else { g_opts.shaders = !g_opts.shaders; pex_shaders_option_changed(); flat_mark_all_chunks_dirty(); }
+#else
+        g_opts.shaders = 0;
+#endif
+    }
     else if (opt == OPT_RENDERER) {
 #if defined(PEX_PLATFORM_SDL2) || defined(PEX_PLATFORM_PSP)
         (void)delta;

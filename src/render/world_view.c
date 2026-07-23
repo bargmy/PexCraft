@@ -346,6 +346,9 @@ static void apply_sky_camera_rotation(float partial) {
 }
 
 static void draw_sky_only(void) {
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active()) pex_shaders_bind_sky_basic();
+#endif
     if (g_current_dimension == -1) {
         setup_world_projection();
         glDisable(GL_DEPTH_TEST);
@@ -421,6 +424,9 @@ static void draw_sky_only(void) {
     if (g_opts.sf_sky) draw_sunrise_sunset_fan(g_frame_partial);
 
     glEnable(GL_TEXTURE_2D);
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active()) pex_shaders_bind_sky_textured();
+#endif
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
     glPushMatrix();
     {
@@ -486,6 +492,9 @@ static void draw_sky_only(void) {
         }
 
         glDisable(GL_TEXTURE_2D);
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+        if (pex_shaders_active()) pex_shaders_bind_sky_basic();
+#endif
         {
             float star = sky_star_brightness(g_frame_partial) * rain_alpha;
             if (g_opts.sf_stars && star > 0.0f) {
@@ -1550,6 +1559,7 @@ typedef struct FlatGLCpuMesh {
 #if defined(PEX_PLATFORM_LINUX_SDL2)
     GLuint vbo, ibo;
     unsigned int vbo_lightmap_version;
+    int vbo_shader_mode;
     int vbo_uploaded;
     int ibo_uploaded;
 #endif
@@ -2122,9 +2132,34 @@ static void flat_direct_vertex(float x, float y, float z, float u, float v) {
     b->v[idx].u = u; b->v[idx].v = v;
     b->v[idx].color = b->color;
     b->v[idx].light = b->light;
+    {
+        int block = (int)((b->light >> 4) & 15u);
+        int sky = (int)((b->light >> 20) & 15u);
+        b->v[idx].light_u = ((float)(block * 16 + 8)) / 256.0f;
+        b->v[idx].light_v = ((float)(sky * 16 + 8)) / 256.0f;
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+        b->v[idx].entity_id = pex_shaders_get_mesh_entity();
+#else
+        b->v[idx].entity_id = 0.0f;
+#endif
+        b->v[idx].normal_x = 0.0f; b->v[idx].normal_y = 1.0f; b->v[idx].normal_z = 0.0f;
+        b->v[idx].tangent_x = 1.0f; b->v[idx].tangent_y = 0.0f; b->v[idx].tangent_z = 0.0f; b->v[idx].tangent_w = 1.0f;
+        b->v[idx].mid_u = u; b->v[idx].mid_v = v;
+    }
     b->quad_cursor++;
     if (b->quad_cursor == 4) {
         uint32_t q0 = idx - 3, q1 = idx - 2, q2 = idx - 1, q3 = idx;
+        PexVertex *a = &b->v[q0], *c = &b->v[q1], *d = &b->v[q2];
+        float e1x=c->x-a->x, e1y=c->y-a->y, e1z=c->z-a->z;
+        float e2x=d->x-a->x, e2y=d->y-a->y, e2z=d->z-a->z;
+        float nx=e1y*e2z-e1z*e2y, ny=e1z*e2x-e1x*e2z, nz=e1x*e2y-e1y*e2x;
+        float nl=sqrtf(nx*nx+ny*ny+nz*nz); if(nl>1.0e-7f){nx/=nl;ny/=nl;nz/=nl;} else {nx=0;ny=1;nz=0;}
+        float du1=c->u-a->u,dv1=c->v-a->v,du2=d->u-a->u,dv2=d->v-a->v;
+        float det=du1*dv2-du2*dv1,tx=1,ty=0,tz=0;
+        if(fabsf(det)>1.0e-8f){float r=1.0f/det;tx=(e1x*dv2-e2x*dv1)*r;ty=(e1y*dv2-e2y*dv1)*r;tz=(e1z*dv2-e2z*dv1)*r;float tl=sqrtf(tx*tx+ty*ty+tz*tz);if(tl>1.0e-7f){tx/=tl;ty/=tl;tz/=tl;}}
+        float mu=(b->v[q0].u+b->v[q1].u+b->v[q2].u+b->v[q3].u)*0.25f;
+        float mv=(b->v[q0].v+b->v[q1].v+b->v[q2].v+b->v[q3].v)*0.25f;
+        for(uint32_t qi=q0;qi<=q3;qi++){b->v[qi].normal_x=nx;b->v[qi].normal_y=ny;b->v[qi].normal_z=nz;b->v[qi].tangent_x=tx;b->v[qi].tangent_y=ty;b->v[qi].tangent_z=tz;b->v[qi].tangent_w=1.0f;b->v[qi].mid_u=mu;b->v[qi].mid_v=mv;}
         b->i[b->icount++] = q0; b->i[b->icount++] = q1; b->i[b->icount++] = q2;
         b->i[b->icount++] = q0; b->i[b->icount++] = q2; b->i[b->icount++] = q3;
         b->quad_cursor = 0;
@@ -2713,8 +2748,9 @@ static void flat_android_update_lightmap_texture(void) {
 #if defined(PEX_PLATFORM_LINUX_SDL2)
 static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m) {
     if (!m || !m->valid || !m->v || !m->i || !flat_gl_vbo_supported()) return 0;
-    unsigned int wanted_light_version = flat_current_lightmap_version();
-    int needs_vertex_upload = !m->vbo_uploaded || m->vbo_lightmap_version != wanted_light_version;
+    int shader_mode = pex_shaders_use_original_vertex_colors();
+    unsigned int wanted_light_version = shader_mode ? 0u : flat_current_lightmap_version();
+    int needs_vertex_upload = !m->vbo_uploaded || m->vbo_lightmap_version != wanted_light_version || m->vbo_shader_mode != shader_mode;
     if (needs_vertex_upload && m->vbo_uploaded && g_flat_gl_light_upload_budget <= 0) {
         /* Keep drawing the previous daylight colors until this mesh reaches the
            bounded refresh queue. Updating hundreds of VBOs in one frame caused
@@ -2725,12 +2761,13 @@ static int flat_gl_cpu_mesh_upload_vbo(FlatGLCpuMesh *m) {
     if (!m->ibo) g_flat_glGenBuffers(1, &m->ibo);
     if (!m->vbo || !m->ibo) return 0;
     if (needs_vertex_upload) {
-        flat_gl_cpu_mesh_refresh_lightmap(m);
-        const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
-        unsigned int light_version = m->lit_v ? m->lit_lightmap_version : 0;
+        if (!shader_mode) flat_gl_cpu_mesh_refresh_lightmap(m);
+        const PexVertex *draw_v = shader_mode ? m->v : (m->lit_v ? m->lit_v : m->v);
+        unsigned int light_version = shader_mode ? 0u : (m->lit_v ? m->lit_lightmap_version : 0u);
         g_flat_glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
         g_flat_glBufferData(GL_ARRAY_BUFFER, (PexGLsizeiptr)((size_t)m->vcount * sizeof(PexVertex)), draw_v, GL_STATIC_DRAW);
         m->vbo_lightmap_version = light_version;
+        m->vbo_shader_mode = shader_mode;
         m->vbo_uploaded = 1;
         if (g_flat_gl_light_upload_budget > 0) g_flat_gl_light_upload_budget--;
     }
@@ -2828,7 +2865,9 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
         glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)offsetof(PexVertex, x));
         glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)offsetof(PexVertex, u));
         glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)offsetof(PexVertex, color));
+        pex_shaders_terrain_array_pointers(NULL, 1);
         glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)0);
+        pex_shaders_terrain_arrays_end();
         return;
     }
     /* A per-mesh allocation failure must not leave the previous mesh's buffers
@@ -2839,15 +2878,17 @@ static void flat_gl_draw_cpu_mesh(FlatGLCpuMesh *m) {
         g_flat_glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 #endif
-    flat_gl_cpu_mesh_refresh_lightmap(m);
-    const PexVertex *draw_v = m->lit_v ? m->lit_v : m->v;
+    if (!pex_shaders_use_original_vertex_colors()) flat_gl_cpu_mesh_refresh_lightmap(m);
+    const PexVertex *draw_v = pex_shaders_use_original_vertex_colors() ? m->v : (m->lit_v ? m->lit_v : m->v);
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
     flat_gl_draw_cpu_mesh_android16(m);
 #else
     glVertexPointer(3, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&draw_v[0].x);
     glTexCoordPointer(2, GL_FLOAT, sizeof(PexVertex), (const GLvoid*)&draw_v[0].u);
     glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(PexVertex), (const GLvoid*)&draw_v[0].color);
+    pex_shaders_terrain_array_pointers(draw_v, 0);
     glDrawElements(GL_TRIANGLES, (GLsizei)m->icount, GL_UNSIGNED_INT, (const GLvoid*)m->i);
+    pex_shaders_terrain_arrays_end();
 #endif
 #endif
 }
@@ -3765,6 +3806,9 @@ static int block_uses_special_model(int id);
 static void draw_special_block_model(int id, int x, int y, int z);
 
 static void draw_world_block_id(int id, float x, float y, float z) {
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    pex_shaders_set_mesh_entity((float)id);
+#endif
     if (id == BLOCK_GRASS) draw_grass_block(x, y, z);
     else if (id == BLOCK_STONE) draw_textured_cube_tile(x, y, z, 1);
     else if (id == BLOCK_DIRT) draw_dirt_block(x, y, z);
@@ -6925,6 +6969,9 @@ static void draw_liquid_block(int id, float x, float y, float z) {
 }
 
 static void draw_world_block_exposed(int id, int x, int y, int z) {
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    pex_shaders_set_mesh_entity((float)id);
+#endif
     if (id == 0) return;
     if (id == BLOCK_SNOW_LAYER) { glBegin(GL_QUADS); emit_snow_layer_block(x, y, z); glEnd(); glColor4f(1,1,1,1); return; }
     if (block_is_liquid(id) && flat_separate_liquid_pass_enabled()) { draw_liquid_block(id, (float)x, (float)y, (float)z); return; }
@@ -10502,7 +10549,11 @@ static void psp_fast_draw_world(void) {
     psp_fast_draw_edits(pcx, pcz);
     psp_fast_draw_water(pcx, pcz);
     glEnable(GL_FOG);
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (!pex_shaders_active()) draw_source_clouds();
+#else
     draw_source_clouds();
+#endif
 
     glColor4f(1,1,1,1);
     glDisable(GL_FOG);
@@ -10621,11 +10672,21 @@ static void draw_flat_test_world(void) {
     }
     rebuild_visible_flat_sections(g_flat_visible_sections, visible_count);
     profile_add_time(PROF_MESH_MAIN, prof_part);
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active() && pex_shaders_begin_shadow()) {
+        draw_flat_section_passes(g_flat_visible_sections, visible_count);
+        pex_shaders_end_shadow();
+    }
+    if (pex_shaders_active()) pex_shaders_bind_terrain();
+#endif
     prof_part = profile_begin();
     draw_flat_section_passes(g_flat_visible_sections, visible_count);
     draw_flat_visual_edit_overlays();
     profile_add_time(PROF_WORLD_DRAW, prof_part);
     flat_world_map_leave();
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active()) pex_shaders_bind_entities();
+#endif
 
     prof_part = profile_begin();
     double entity_part = profile_begin();
@@ -10659,6 +10720,9 @@ static void draw_flat_test_world(void) {
     profile_add_time(PROF_WORLD_ENTITIES, prof_part);
 
     prof_part = profile_begin();
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active()) pex_shaders_bind_textured_lit();
+#endif
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, tex_terrain.id);
     draw_dropped_items();
@@ -10667,10 +10731,16 @@ static void draw_flat_test_world(void) {
     profile_add_time(PROF_WORLD_PARTICLES, prof_part);
 
     prof_part = profile_begin();
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active()) { pex_shaders_copy_depth(1); pex_shaders_bind_water(); }
+#endif
     draw_translucent_sections(g_flat_visible_sections, visible_count);
     profile_add_time(PROF_WORLD_TRANSLUCENT, prof_part);
 
     prof_part = profile_begin();
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (pex_shaders_active()) pex_shaders_bind_textured();
+#endif
     draw_block_selection_border();
     draw_remote_break_overlays();
     if (g_breaking_block && flat_get_block(g_break_x, g_break_y, g_break_z) != 0) {
@@ -10682,7 +10752,11 @@ static void draw_flat_test_world(void) {
 
     prof_part = profile_begin();
     glEnable(GL_FOG);
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (!pex_shaders_active()) draw_source_clouds();
+#else
     draw_source_clouds();
+#endif
     profile_add_time(PROF_WORLD_CLOUDS, prof_part);
 
     glColor4f(1,1,1,1);
@@ -10938,6 +11012,21 @@ static int android_world_backdrop_can_cache(void) {
 }
 
 static void draw_ingame_world_view(int with_hand) {
+    int shader_frame = 0;
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+    if (g_opts.shaders) {
+        float sr=0.0f, sg=0.0f, sb=0.0f;
+        if (g_current_dimension == -1) { sr=0.10f; sg=0.01f; sb=0.01f; }
+        else if (g_current_dimension == 1) { sr=0.032f; sg=0.032f; sb=0.032f; }
+        else sky_color_at_time(g_frame_partial, &sr, &sg, &sb);
+        int held_id = stack_empty(&g_equipped_item) ? 0 : g_equipped_item.id;
+        int held_light = (held_id > 0 && world_item_is_block_id(held_id)) ? flat_block_light_value_for_id(held_id) : 0;
+        shader_frame = pex_shaders_begin_world(g_render_w, g_render_h, g_current_dimension, (int)(g_world_time % 24000LL),
+                                                g_frame_partial, g_player_x, render_eye_y(g_frame_partial), g_player_z,
+                                                flat_player_head_in_water(), held_id, held_light, sr, sg, sb,
+                                                world_sun_angle(g_frame_partial));
+    }
+#endif
     int target_mode = 0;
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
     target_mode = pex_android_tv_world_target_begin(g_opts.render_scale_percent,
@@ -10947,12 +11036,18 @@ static void draw_ingame_world_view(int with_hand) {
     if (target_mode != 2) {
         draw_sky_only();
         draw_flat_test_world();
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+        if (shader_frame) { pex_shaders_copy_depth(2); pex_shaders_bind_hand(); }
+#endif
         if (with_hand && !g_third_person_view) draw_first_person_hand();
         if (!g_third_person_view) {
             draw_player_fire_overlay_125();
             draw_in_block_overlay();
         }
         draw_portal_overlay();
+#if (defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2)
+        if (shader_frame) pex_shaders_end_world();
+#endif
     }
 #if defined(PEX_PLATFORM_ANDROID) || defined(PEX_PLATFORM_ANDROID_TV)
     if (target_mode == 1) pex_android_tv_world_target_end(g_render_w, g_render_h);

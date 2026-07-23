@@ -54,6 +54,7 @@ static void d3d11_destroy_mesh_deferred(PexMeshHandle *slot) { if (slot) *slot =
 static void rebuild_screen(void);
 
 #include "platform/sdl2_filesystem.c"
+#include "render/shaders.c"
 #include "assets/textures.c"
 #include "save/nbt_gzip_save.c"
 #include "assets/pxc_zip_extract.c"

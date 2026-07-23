@@ -23,7 +23,27 @@ typedef struct PexVertex {
        Backends that cannot apply the lightmap dynamically ignore this field and
        receive a CPU-lit color at upload time. */
     uint32_t light;
+    /* LIGHT Shaders compatibility attributes. They are ignored by legacy
+       backends, while the desktop OpenGL shader path exposes them as the
+       OptiFine mc_Entity/mc_midTexCoord/at_tangent inputs and lightmap UV. */
+    float light_u, light_v;
+    float normal_x, normal_y, normal_z;
+    float tangent_x, tangent_y, tangent_z, tangent_w;
+    float mid_u, mid_v;
+    float entity_id;
 } PexVertex;
+
+#if !((defined(_WIN32) && !defined(PEX_PLATFORM_XBOX_UWP)) || defined(PEX_PLATFORM_LINUX_SDL2))
+/* Non-desktop builds retain the legacy renderer. These compile-time stubs keep
+   the shared terrain mesh code source-compatible without linking the desktop
+   LIGHT shader runtime. */
+static int pex_shaders_active(void) { return 0; }
+static int pex_shaders_use_original_vertex_colors(void) { return 0; }
+static void pex_shaders_set_mesh_entity(float id) { (void)id; }
+static float pex_shaders_get_mesh_entity(void) { return 0.0f; }
+static void pex_shaders_terrain_array_pointers(const PexVertex *base, int vbo_bound) { (void)base; (void)vbo_bound; }
+static void pex_shaders_terrain_arrays_end(void) { }
+#endif
 
 typedef struct PexMesh {
     const PexVertex *vertices;

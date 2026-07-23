@@ -5,6 +5,7 @@ static int init_gl(HWND hwnd);
 static void scan_texture_packs(void);
 static int load_default_textures(void);
 static void apply_texture_pack_index(int index);
+static void pex_shaders_shutdown(void);
 
 #include "render/renderer_backend.h"
 #include "render/renderer_d3d9.c"
@@ -56,6 +57,7 @@ static void apply_texture_pack_index(int index);
 #define glCopyTexSubImage2D pex_glCopyTexSubImage2D
 
 #include "platform/filesystem.c"
+#include "render/shaders.c"
 #include "assets/textures.c"
 #include "render/cfont.c"
 #include "save/nbt_gzip_save.c"

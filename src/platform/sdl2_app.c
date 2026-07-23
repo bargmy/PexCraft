@@ -49,7 +49,7 @@ static int pex_renderer_backend_init(SDL_Window *window) {
 static int pex_renderer_begin_frame(void) { return 1; }
 static void pex_renderer_present(void) { SDL_GL_SwapWindow(g_hwnd); }
 static void pex_renderer_resize(int w, int h) { (void)w; (void)h; }
-static void pex_renderer_shutdown(void) { }
+static void pex_renderer_shutdown(void) { pex_shaders_shutdown(); }
 static void pex_gl_suppress_immediate(int on) { (void)on; }
 
 static void apply_vsync_setting(void) {

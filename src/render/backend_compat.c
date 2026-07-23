@@ -1425,6 +1425,7 @@ static void pex_renderer_resize(int w, int h) {
 }
 
 static void pex_renderer_shutdown(void) {
+    pex_shaders_shutdown();
     pex_gpu_flush_immediate_stream();
     free(g_gpu_imm.vertices); g_gpu_imm.vertices = NULL; g_gpu_imm.count = g_gpu_imm.cap = g_gpu_imm.active = 0;
     renderer_d3d11_get_backend()->shutdown();
